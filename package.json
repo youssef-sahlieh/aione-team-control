@@ -1,10 +1,10 @@
 {
   "name": "aione-team-control",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
-  "description": "AION Team Control: dashboard on GitHub Pages, Jira proxy on Cloudflare Workers.",
+  "description": "AION Team Control: dashboard on GitHub Pages, Jira proxy on Vercel.",
   "scripts": {
-    "test": "node test/proxy.test.js"
+    "test": "node test/proxy.test.js && node test/accounts.test.js"
   }
 }

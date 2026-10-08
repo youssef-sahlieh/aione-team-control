@@ -2,18 +2,19 @@
 
 - **Dashboard:** https://youssef-sahlieh.github.io/aione-team-control/ (GitHub Pages, publishes itself on every push to `main`)
 - **Jira proxy:** https://aione-team-proxy.vercel.app (Vercel project `aione-team-proxy`, team "aione")
-- **Who can sign in:** youssef@aione.biz and ellen@aione.biz, with the team password.
+- **Who can sign in:** everyone with an account on the **Users** page (administrators only). Youssef and Ellen are administrators.
 
 The proxy's secrets are **Vercel environment variables**: vercel.com → aione-team-proxy → **Settings → Environment Variables**. They can be replaced there but not read back.
 
 | Variable | What it is |
 |---|---|
-| `TEAM_PASSWORD` | The password everyone signs in with |
+| `TEAM_PASSWORD` | Before user accounts are on: the password Youssef and Ellen sign in with. Their first sign-in after the database is added turns it into their own account password. |
 | `SESSION_SECRET` | A long random string that signs the 12-hour sessions |
 | `TEAM_CONFIG` | Team details: people and their Jira IDs, developers and their emails (JSON) |
 | `JIRA_SITE` | The Jira address, like `https://<site>.atlassian.net` |
 | `JIRA_EMAIL` | The Atlassian account the proxy acts as |
 | `JIRA_API_TOKEN` | That account's API token |
+| `KV_REST_API_URL`, `KV_REST_API_TOKEN` | Added by Vercel when you connect the Upstash Redis database (user accounts) |
 | `GMAIL_USER`, `GMAIL_APP_PASSWORD` | Sends the dashboard's emails automatically through a Gmail account |
 | `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET` | Not used now: the Microsoft 365 alternative to Gmail, if an admin ever sets it up |
 
@@ -29,16 +30,29 @@ Once the repository is connected (below), every push to `main` that changes `pro
 
 Until then, deploy by hand from the repository's top folder (not from `proxy/`): `npx vercel deploy --prod`.
 
-## Change the password
+## User accounts
 
-1. Replace `TEAM_PASSWORD` in Vercel, then redeploy.
-2. People already signed in stay signed in for up to 12 hours. To sign everyone out right away, also replace `SESSION_SECRET` with a new long random string.
+Everyone signs in with their own email and password. There are two roles:
 
-Use a long password (16+ characters, or four random words): the sign-in limit (10 tries a minute per address) slows guessing down but can't stop it on its own.
+- **Administrator** (Youssef, Ellen): sees and changes everything, and manages people on the **Users** page (button at the top of the dashboard).
+- **User**: sees only the tickets labelled with their developer name (for example `ai1_bashar`). They can move status, set due dates and comment on those tickets; they can't change developers or assignees, send internal notes, or see other tickets. The proxy enforces this, not just the page.
 
-## Add or remove someone who can sign in
+**Add someone:** Users → fill in name, work email, role, and for a User the developer whose tickets they see → **Add user and send invitation**. They get an email with a link (valid 3 days) to choose their password. If email isn't working, the page shows the link for you to send yourself.
 
-Edit `TEAM_EMAILS` in `proxy/settings.js` and commit (or redeploy by hand). Anyone removed is signed out immediately. If you remove someone who knows the password, change the password too.
+**Forgot password:** anyone can click **Forgot password?** on the sign-in page; a link (valid 1 hour, works once) is emailed to them. Administrators can also press **Send password reset** next to someone on the Users page. Choosing a new password signs that person out everywhere else.
+
+**Change or remove someone:** Users → **Edit** (name, role, developer) or **Remove**. Changes apply immediately, and removed people are signed out right away. You can't remove yourself or the last administrator.
+
+### Switch accounts on (one time)
+
+Accounts are stored in a small free database (Upstash Redis) connected to the proxy:
+
+1. vercel.com → **aione-team-proxy** → **Storage** → **Create Database** → **Upstash for Redis** (Marketplace) → accept the terms, pick the **Free** plan and a region near you, and create it.
+2. Connect it to the **aione-team-proxy** project (all environments). Vercel adds `KV_REST_API_URL` and `KV_REST_API_TOKEN` by itself.
+3. Redeploy the proxy.
+4. Youssef or Ellen signs in once with the current team password. That creates both administrator accounts, with that password; change it with **Forgot password?**.
+
+Until then, Youssef and Ellen sign in with the team password and the Users page explains that accounts aren't on yet.
 
 ## Change the team shown on the dashboard
 

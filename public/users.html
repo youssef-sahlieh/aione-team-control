@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://aione-team-proxy.vercel.app; form-action 'none'; base-uri 'self'">
+<meta name="referrer" content="same-origin">
+<meta name="robots" content="noindex">
+<title>Users · AION Team Control</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="assets/dashboard.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand">
+      <h1>Users</h1>
+      <div class="sub">AION Team Control · who can sign in, and what they see</div>
+    </div>
+    <a class="btn" href="dashboard.html">← Dashboard</a>
+    <span class="me">Signed in as <b id="me">…</b> <button class="btn" id="signout" type="button">Sign out</button></span>
+  </div>
+
+  <div id="pagestate" class="state">Loading users…</div>
+
+  <section class="upanel" id="add" hidden>
+    <h2>Add a user</h2>
+    <p class="uhelp">They get an email with a link to choose their own password. <b>Administrators</b> see and change everything, like you. <b>Users</b> only see the tickets labelled with their developer name (ai1_…) and can move status, set due dates and comment on them.</p>
+    <form class="uform" id="add-form" novalidate>
+      <label class="ufield"><span>Name</span><input class="inp" id="a-name" autocomplete="off" required></label>
+      <label class="ufield"><span>Work email</span><input class="inp" id="a-email" type="email" autocomplete="off" required></label>
+      <div class="ufield"><span>Role</span>
+        <div class="seg" role="group" aria-label="Role" id="a-role">
+          <button type="button" data-role="user" aria-pressed="true">User</button>
+          <button type="button" data-role="admin" aria-pressed="false">Administrator</button>
+        </div>
+      </div>
+      <label class="ufield" id="a-devwrap"><span>Developer (sees only ai1_… tickets)</span>
+        <select class="fsel" id="a-dev"></select>
+      </label>
+      <label class="ufield" id="a-otherwrap" hidden><span>Other developer name</span><input class="inp" id="a-other" placeholder="e.g. bashar.k" autocomplete="off"></label>
+      <div class="uactions"><button class="btn primary" id="a-save" type="submit">Add user and send invitation</button><span class="msg" id="a-msg" role="status"></span></div>
+    </form>
+    <div class="ulink" id="a-link" hidden>
+      <p>Email isn't set up, so send this link to them yourself (it works once, for 3 days):</p>
+      <div class="inline"><input class="inp" id="a-linkval" readonly><button class="btn" id="a-copy" type="button">Copy link</button></div>
+    </div>
+  </section>
+
+  <section class="upanel" id="list" hidden>
+    <h2>Everyone <span class="count" id="count"></span></h2>
+    <div class="ulist" id="rows"></div>
+  </section>
+</div>
+<div class="toast" id="toast" hidden role="status"></div>
+
+<script src="assets/config.js"></script>
+<script type="module" src="assets/users.js"></script>
+</body>
+</html>

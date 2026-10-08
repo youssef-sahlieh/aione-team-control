@@ -5,6 +5,9 @@ import { api, getSession, signOut } from "./session.js";
 
   // Filled in from the proxy's /config after sign-in (see applyConfig).
   let SITE="", PROJECT="", PEOPLE={}, DEVS=[], DEV_EMAIL={}, DEV_COLOR={}, BYID={}, JQL="", ME="", MAIL=false;
+  // Administrators see and change everything. Users see only the tickets labelled ai1_<MY_DEV> (the proxy
+  // enforces this) and can move status, set due dates and comment.
+  let IS_ADMIN=true, MY_DEV="";
   let notifyOn=true; try{ notifyOn=localStorage.getItem("aion.notify")!=="0"; }catch(e){}
   const devK=d=>DEV_COLOR[d]||("k"+(1+[...d].reduce((a,c)=>a+c.charCodeAt(0),0)%8));
   const STATUS_ORDER=["open","pending approval","dev approved","in development","reopened","pending qa","in qa","done review","resolved","closed"];
@@ -14,8 +17,18 @@ import { api, getSession, signOut } from "./session.js";
     SITE=cfg.site; PROJECT=cfg.project; MAIL=!!cfg.mail; PEOPLE=cfg.people||{}; DEVS=cfg.devs||[]; DEV_EMAIL=cfg.devEmails||{}; DEV_COLOR=cfg.devColors||{};
     BYID={}; for(const k in PEOPLE) BYID[PEOPLE[k].id]=k;
     const IDS=Object.values(PEOPLE).map(p=>'"'+p.id+'"').join(",");
-    JQL='project = '+PROJECT+' AND assignee in ('+IDS+') AND issuetype != Epic AND (statusCategory != Done OR updated >= -30d) ORDER BY updated DESC';
-    $("team").textContent=Object.values(PEOPLE).map(p=>p.name).join(" · ");
+    IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||"";
+    document.body.classList.toggle("role-user",!IS_ADMIN);
+    $("users-link").hidden=!(IS_ADMIN&&cfg.accounts);
+    if(IS_ADMIN){
+      JQL='project = '+PROJECT+' AND assignee in ('+IDS+') AND issuetype != Epic AND (statusCategory != Done OR updated >= -30d) ORDER BY updated DESC';
+      $("team").textContent=Object.values(PEOPLE).map(p=>p.name).join(" · ");
+    } else {
+      JQL='project = '+PROJECT+' AND issuetype != Epic AND (statusCategory != Done OR updated >= -30d) ORDER BY updated DESC';
+      $("team").textContent="Your tickets · ai1_"+MY_DEV;
+      if(state.view==="dev"||state.view==="assignee") state.view="list";
+      notifyOn=false;
+    }
   }
   const teamNames=()=>{ const n=Object.values(PEOPLE).map(p=>p.name); return n.length>1?n.slice(0,-1).join(", ")+" or "+n[n.length-1]:n.join(""); };
   let lastLoad=0;
@@ -315,6 +328,7 @@ import { api, getSession, signOut } from "./session.js";
     return tags;
   }
   function devButton(i){
+    if(!IS_ADMIN){ const ds=el("span","devcell c-dev"); i.devs.forEach(d=>ds.appendChild(el("span","dev "+devK(d),d))); return ds; }
     const dc=el("button","devcell c-dev"+(i.devs.length?"":" nodev")); dc.type="button"; dc.title="Assign developers";
     i.devs.forEach(d=>dc.appendChild(el("span","dev "+devK(d),d))); dc.appendChild(el("span","add",i.devs.length?"+":"+ assign"));
     dc.addEventListener("click",e=>{ e.stopPropagation(); devPopover(dc,[i.key],"set"); }); return dc;
@@ -338,15 +352,16 @@ import { api, getSession, signOut } from "./session.js";
     const tags=tagsFor(i,t,state.group!=="epic"); if(tags.childNodes.length) tt.appendChild(tags);
     if((state.focus==="reply"||state.focus==="recent"||state.f.activity==="reply")&&i.last){ const sn=el("span","snip"); sn.dir="auto"; sn.appendChild(el("b",null,i.last.author+" · "+ago(i.last.when)+": ")); sn.append(i.last.text); tt.appendChild(sn); }
     tt.addEventListener("click",()=>openDrawer(i.key)); r.appendChild(tt);
-    const who=el("button","who c-who asg"); who.type="button"; who.title="Change assignee"; who.appendChild(avatar(i)); who.appendChild(el("span",null,i.assignee?PEOPLE[i.assignee].name:i.assigneeName));
-    who.addEventListener("click",e=>{ e.stopPropagation(); assigneePopover(who,[i.key]); }); r.appendChild(who);
+    const who=el(IS_ADMIN?"button":"span","who c-who"+(IS_ADMIN?" asg":"")); who.appendChild(avatar(i)); who.appendChild(el("span",null,i.assignee?PEOPLE[i.assignee].name:i.assigneeName));
+    if(IS_ADMIN){ who.type="button"; who.title="Change assignee"; who.addEventListener("click",e=>{ e.stopPropagation(); assigneePopover(who,[i.key]); }); } r.appendChild(who);
     const rp=el("span","who c-rep"); rp.appendChild(el("span","av k6",initials(i.reporter))); const rn=el("span",null,i.reporter); rn.title=i.reporter; rp.appendChild(rn); r.appendChild(rp);
     r.appendChild(devButton(i));
     const sw=el("span","c-st"); sw.appendChild(statusButton(i)); r.appendChild(sw);
     const dw=el("span","c-due"); dw.appendChild(dueButton(i,t)); r.appendChild(dw);
     { const cr=el("span","upd c-cre",fmtDate(i.created)); cr.title="Created "+i.created; cr.style.fontFamily="var(--mono)"; r.appendChild(cr); }
     r.appendChild(el("span","upd c-upd",ago(i.updated)));
-    { const nb=el("button","notebtn c-note","✉ Internal notes"); nb.type="button"; nb.title="Email the developer directly (not posted in Jira)"; nb.addEventListener("click",e=>{ e.stopPropagation(); notePopover(nb,i.key); }); r.appendChild(nb); }
+    if(IS_ADMIN){ const nb=el("button","notebtn c-note","✉ Internal notes"); nb.type="button"; nb.title="Email the developer directly (not posted in Jira)"; nb.addEventListener("click",e=>{ e.stopPropagation(); notePopover(nb,i.key); }); r.appendChild(nb); }
+    else r.appendChild(el("span","c-note"));
     return r;
   }
 
@@ -449,11 +464,12 @@ import { api, getSession, signOut } from "./session.js";
     if(mode!=="status") r3.appendChild(statusButton(i));
     if(mode!=="dev") r3.appendChild(devButton(i));
     const db=dueButton(i,t); db.classList.add("sp"); r3.appendChild(db); c.appendChild(r3);
-    { const nb=el("button","notebtn","✉ Internal notes"); nb.type="button"; nb.addEventListener("click",e=>{ e.stopPropagation(); notePopover(nb,i.key); }); c.appendChild(nb); }
+    if(IS_ADMIN){ const nb=el("button","notebtn","✉ Internal notes"); nb.type="button"; nb.addEventListener("click",e=>{ e.stopPropagation(); notePopover(nb,i.key); }); c.appendChild(nb); }
     return c;
   }
   async function onDrop(d,target,mode){
     if(d.from===target) return;
+    if(!IS_ADMIN&&mode!=="status") return;
     if(mode==="dev"){
       const ops=d.keys.map(k=>{ const i=issueByKey(k); if(!i) return null; const want=new Set(i.devs);
         if(d.from!=="__none") want.delete(d.from);

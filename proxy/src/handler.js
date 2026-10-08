@@ -12,6 +12,11 @@
 // Settings: ALLOWED_ORIGIN, TEAM_EMAILS, JIRA_PROJECT, MAIL_DOMAIN (see settings.js).
 // Optional: LOGIN_LIMIT, a rate limiter with limit({ key }) -> { success }; otherwise a simple in-memory one.
 // Optional: MAILER, async ({ fromName, replyTo, to, subject, html }) => void. Without it or MS_*, email is off.
+// Optional: STORE, the user database (see users.js). With it, everyone has their own account and role
+//   (admin: everything; user: only the tickets labelled with their developer name). Without it, the
+//   emails in TEAM_EMAILS sign in with TEAM_PASSWORD as admins. The first sign-in with TEAM_PASSWORD
+//   after the database is added creates admin accounts for everyone in TEAM_EMAILS.
+import { ROLES, checkPassword, createLinkToken, deleteUser, getUser, hashPassword, listUsers, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, useLinkToken, validDev, validEmail } from "./users.js";
 
 const enc = new TextEncoder();
 const SESSION_MS = 12 * 3600 * 1000;
@@ -27,7 +32,7 @@ function corsHeaders(env, request) {
   if (origin && origin === env.ALLOWED_ORIGIN) {
     h["Access-Control-Allow-Origin"] = origin;
     h["Access-Control-Allow-Headers"] = "Authorization, Content-Type";
-    h["Access-Control-Allow-Methods"] = "GET, POST, PUT, OPTIONS";
+    h["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS";
     h["Access-Control-Max-Age"] = "86400";
   }
   return h;
@@ -73,23 +78,33 @@ const memoryLimit = {
 
 const teamEmails = (env) => String(env.TEAM_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
 
-export async function makeToken(env, email, now = Date.now()) {
-  const body = b64url(enc.encode(JSON.stringify({ email, exp: now + SESSION_MS })));
+// Sessions carry the account's version (v), so a password reset or removal ends them right away.
+export async function makeToken(env, email, now = Date.now(), v = 0) {
+  const body = b64url(enc.encode(JSON.stringify({ email, v, exp: now + SESSION_MS })));
   return { token: body + "." + b64url(await hmac(env.SESSION_SECRET, body)), expiresAt: now + SESSION_MS };
 }
 
-// Returns the signed-in email, or null when the token is missing, forged, expired or no longer allowed.
+// Returns the signed-in account { email, name, role, dev }, or null when the token is missing, forged,
+// expired, or the account was removed or its password reset since.
 export async function readToken(env, header, now = Date.now()) {
   const m = /^Bearer ([\w-]+)\.([\w-]+)$/.exec(header || "");
   if (!m) return null;
+  let claims;
   try {
     if (!sameBytes(fromB64url(m[2]), await hmac(env.SESSION_SECRET, m[1]))) return null;
-    const { email, exp } = JSON.parse(new TextDecoder().decode(fromB64url(m[1])));
-    if (typeof exp !== "number" || exp < now || !teamEmails(env).includes(email)) return null;
-    return email;
+    claims = JSON.parse(new TextDecoder().decode(fromB64url(m[1])));
   } catch {
     return null;
   }
+  const { email, exp, v } = claims;
+  if (typeof exp !== "number" || exp < now || typeof email !== "string") return null;
+  if (env.STORE) {
+    const u = await getUser(env.STORE, email);
+    if (!u || u.v !== v) return null;
+    return { email: u.email, name: u.name, role: u.role, dev: u.dev || "" };
+  }
+  if (!teamEmails(env).includes(email)) return null;
+  return { email, name: firstName(email), role: "admin", dev: "" };
 }
 
 async function readJson(request) {
@@ -168,6 +183,114 @@ async function sendMail(env, from, b) {
   return fail("mail", res.status === 403 ? "Microsoft refused to send from " + from + ". Check the app's Mail.Send permission and admin consent." : detail || "Outlook answered " + res.status + ".", 502);
 }
 
+// Emails from the app itself (password links). Returns true when sent.
+async function sendSystemMail(env, to, subject, html) {
+  if (typeof env.MAILER !== "function") return false;
+  try {
+    await env.MAILER({ fromName: "AION Team Control", replyTo: undefined, to: [to], subject, html });
+    return true;
+  } catch (err) {
+    console.log("system mail error:", err && err.message);
+    return false;
+  }
+}
+
+const escHtml = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const linkFor = (env, token) => String(env.APP_URL || "").replace(/\/+$/, "") + "/reset.html#t=" + token;
+
+// Emails a one-time password link. purpose "invite": a new account (3 days); "reset": forgotten password (1 hour).
+// Returns { sent, link }; the link is only handed back to an admin when the email couldn't be sent.
+async function sendPasswordLink(env, user, purpose, invitedBy) {
+  const ttl = purpose === "invite" ? 3 * 86400 : 3600;
+  const token = await createLinkToken(env.STORE, user.email, purpose, ttl);
+  const link = linkFor(env, token);
+  const roleText = user.role === "admin" ? "an administrator" : "a developer (ai1_" + user.dev + ")";
+  const html = purpose === "invite"
+    ? "<p>Hi " + escHtml(user.name) + ",</p><p>" + escHtml(invitedBy || "Your team") + " added you to <b>AION Team Control</b> as " + escHtml(roleText) + ". Your sign-in email is <b>" + escHtml(user.email) + "</b>.</p>"
+      + "<p><a href=\"" + escHtml(link) + "\">Choose your password</a></p><p>This link works once and expires in 3 days.</p>"
+    : "<p>Hi " + escHtml(user.name) + ",</p><p>Someone asked to reset the password for your AION Team Control account (<b>" + escHtml(user.email) + "</b>).</p>"
+      + "<p><a href=\"" + escHtml(link) + "\">Choose a new password</a></p><p>This link works once and expires in 1 hour. If you didn't ask for this, you can ignore this email; your password stays the same.</p>";
+  const subject = purpose === "invite" ? "You've been added to AION Team Control" : "Reset your AION Team Control password";
+  const sent = await sendSystemMail(env, user.email, subject, html);
+  return { sent, link };
+}
+
+const clientIp = (request) => request.headers.get("x-real-ip") || (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() || "unknown";
+
+// Counts attempts in the database (shared by every running copy of the proxy). True when over the limit.
+async function overLimit(env, key, max, seconds) {
+  return (await env.STORE.incr("rl:" + key, seconds)) > max;
+}
+
+// First sign-in after the database is added: creates admin accounts for TEAM_EMAILS with TEAM_PASSWORD.
+async function bootstrapAdmins(env, email, password) {
+  const store = env.STORE;
+  if (!env.TEAM_PASSWORD || !teamEmails(env).includes(email)) return false;
+  if (((await store.smembers("users")) || []).length) return false;
+  if (!(await sameSecret(password, env.TEAM_PASSWORD))) return false;
+  const pw = await hashPassword(password);
+  for (const e of teamEmails(env)) await saveUser(store, { email: e, name: firstName(e), role: "admin", dev: "", pw, v: 1, createdAt: new Date().toISOString() });
+  return true;
+}
+
+async function accountRoutes(request, env, url, me) {
+  const path = url.pathname, method = request.method, store = env.STORE;
+  if (!store) return fail("no_store", "User accounts need the database. See SETUP.md.", 501);
+  if (me.role !== "admin") return fail("forbidden", "Only administrators can manage users.", 403);
+
+  if (path === "/users" && method === "GET") return json({ users: (await listUsers(store)).map(publicUser), mail: typeof env.MAILER === "function" });
+
+  if (path === "/users" && method === "POST") {
+    const b = (await readJson(request)) || {};
+    const email = normEmail(b.email), name = String(b.name || "").trim(), role = b.role, dev = normDev(b.dev);
+    if (!validEmail(email)) return fail("bad_request", "Enter a valid email.", 400);
+    if (!name || name.length > 80) return fail("bad_request", "Enter a name.", 400);
+    if (!ROLES.includes(role)) return fail("bad_request", "Choose Administrator or User.", 400);
+    if (role === "user" && !validDev(dev)) return fail("bad_request", "Choose the developer this user sees.", 400);
+    if (dev && !validDev(dev)) return fail("bad_request", "Developer names use letters, numbers, dots and dashes.", 400);
+    if (await getUser(store, email)) return fail("exists", "There's already an account for " + email + ".", 409);
+    const user = { email, name, role, dev: dev || "", pw: null, v: 1, createdAt: new Date().toISOString(), createdBy: me.email };
+    await saveUser(store, user);
+    const { sent, link } = await sendPasswordLink(env, user, "invite", me.name);
+    return json({ user: publicUser(user), invited: sent, ...(sent ? {} : { link }) }, 201);
+  }
+
+  const m = /^\/users\/([^/]+)(\/invite)?$/.exec(path);
+  if (!m) return fail("not_found", "Not found.", 404);
+  const target = await getUser(store, decodeURIComponent(m[1]));
+  if (!target) return fail("not_found", "No such user.", 404);
+
+  if (m[2] && method === "POST") {
+    const { sent, link } = await sendPasswordLink(env, target, target.pw ? "reset" : "invite", me.name);
+    return json({ invited: sent, ...(sent ? {} : { link }) });
+  }
+
+  const admins = (await listUsers(store)).filter((u) => u.role === "admin");
+  if (!m[2] && method === "PUT") {
+    const b = (await readJson(request)) || {};
+    const next = { ...target };
+    if (b.name !== undefined) { next.name = String(b.name).trim(); if (!next.name || next.name.length > 80) return fail("bad_request", "Enter a name.", 400); }
+    if (b.role !== undefined) { if (!ROLES.includes(b.role)) return fail("bad_request", "Choose Administrator or User.", 400); next.role = b.role; }
+    if (b.dev !== undefined) { next.dev = normDev(b.dev); if (next.dev && !validDev(next.dev)) return fail("bad_request", "Developer names use letters, numbers, dots and dashes.", 400); }
+    if (next.role === "user" && !next.dev) return fail("bad_request", "Choose the developer this user sees.", 400);
+    if (target.role === "admin" && next.role !== "admin") {
+      if (target.email === me.email) return fail("bad_request", "You can't remove your own administrator role.", 400);
+      if (admins.length <= 1) return fail("bad_request", "There must be at least one administrator.", 400);
+    }
+    await saveUser(store, next);
+    return json({ user: publicUser(next) });
+  }
+
+  if (!m[2] && method === "DELETE") {
+    if (target.email === me.email) return fail("bad_request", "You can't remove your own account.", 400);
+    if (target.role === "admin" && admins.length <= 1) return fail("bad_request", "There must be at least one administrator.", 400);
+    await deleteUser(store, target.email);
+    return json({ ok: true });
+  }
+
+  return fail("not_found", "Not found.", 404);
+}
+
 function validFields(fields) {
   if (!fields || typeof fields !== "object" || Array.isArray(fields)) return false;
   const keys = Object.keys(fields);
@@ -183,40 +306,94 @@ async function route(request, env, url) {
   const method = request.method;
 
   if (path === "/login" && method === "POST") {
-    const ip = request.headers.get("x-real-ip") || (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() || "unknown";
+    const ip = clientIp(request);
+    const body = (await readJson(request)) || {};
+    const email = normEmail(body.email), password = String(body.password || "");
+    if (env.STORE) {
+      if ((await overLimit(env, "login-ip:" + ip, 10, 60)) || (await overLimit(env, "login-email:" + email, 20, 900))) return fail("rate_limited", "Too many sign-in attempts. Wait a few minutes and try again.", 429);
+      let u = await getUser(env.STORE, email);
+      if (!u && (await bootstrapAdmins(env, email, password))) u = await getUser(env.STORE, email);
+      if (!u || !(await checkPassword(password, u.pw))) return fail("login", "That email and password don't match.", 401);
+      return json({ email: u.email, name: u.name, role: u.role, ...(await makeToken(env, u.email, Date.now(), u.v)) });
+    }
     const { success } = await (env.LOGIN_LIMIT || memoryLimit).limit({ key: ip });
     if (!success) return fail("rate_limited", "Too many sign-in attempts. Wait a minute and try again.", 429);
-    const body = await readJson(request);
-    const email = String((body && body.email) || "").trim().toLowerCase();
-    const passwordOk = await sameSecret((body && body.password) || "", env.TEAM_PASSWORD || "");
+    const passwordOk = await sameSecret(password, env.TEAM_PASSWORD || "");
     if (!env.TEAM_PASSWORD || !passwordOk || !teamEmails(env).includes(email)) return fail("login", "That email and password don't match.", 401);
-    return json({ email, ...(await makeToken(env, email)) });
+    return json({ email, name: firstName(email), role: "admin", ...(await makeToken(env, email)) });
   }
 
-  const email = await readToken(env, request.headers.get("Authorization"));
-  if (!email) return fail("session", "Please sign in again.", 401);
+  // Forgotten password: always answers the same way, so it can't be used to find out who has an account.
+  if (path === "/forgot" && method === "POST") {
+    if (!env.STORE) return fail("no_store", "Password resets need the user database. Ask Youssef for the password.", 501);
+    const email = normEmail(((await readJson(request)) || {}).email);
+    if (!validEmail(email)) return fail("bad_request", "Enter your email.", 400);
+    if ((await overLimit(env, "forgot-ip:" + clientIp(request), 5, 900)) || (await overLimit(env, "forgot-email:" + email, 3, 3600))) return fail("rate_limited", "Too many reset requests. Wait a while and try again.", 429);
+    const u = await getUser(env.STORE, email);
+    if (u) await sendPasswordLink(env, u, "reset");
+    return json({ ok: true });
+  }
+
+  // The password page checks its link first, then sets the new password.
+  if (path === "/reset/check" && method === "POST") {
+    if (!env.STORE) return fail("no_store", "Password resets aren't set up.", 501);
+    const t = await peekLinkToken(env.STORE, ((await readJson(request)) || {}).token);
+    const u = t && (await getUser(env.STORE, t.email));
+    if (!u) return fail("bad_link", "This link has expired or was already used.", 400);
+    return json({ email: u.email, name: u.name, purpose: t.purpose });
+  }
+  if (path === "/reset" && method === "POST") {
+    if (!env.STORE) return fail("no_store", "Password resets aren't set up.", 501);
+    const b = (await readJson(request)) || {};
+    const problem = passwordProblem(b.password);
+    if (problem) return fail("bad_request", problem, 400);
+    if (await overLimit(env, "reset-ip:" + clientIp(request), 20, 900)) return fail("rate_limited", "Too many attempts. Wait a while and try again.", 429);
+    const t = await useLinkToken(env.STORE, b.token);
+    const u = t && (await getUser(env.STORE, t.email));
+    if (!u) return fail("bad_link", "This link has expired or was already used. Ask for a new one.", 400);
+    await saveUser(env.STORE, { ...u, pw: await hashPassword(b.password), v: (u.v || 0) + 1 });
+    return json({ ok: true, email: u.email });
+  }
+
+  const me = await readToken(env, request.headers.get("Authorization"));
+  if (!me) return fail("session", "Please sign in again.", 401);
+  const email = me.email;
+  const isAdmin = me.role === "admin";
+  const devLabel = "ai1_" + me.dev;
+
+  if (path === "/users" || path.startsWith("/users/")) return accountRoutes(request, env, url, me);
 
   const P = env.JIRA_PROJECT;
   const isOurKey = (k) => new RegExp("^" + P + "-\\d+$").test(k);
+  // Users (not admins) only ever see and change tickets labelled with their developer name.
+  const hasDevLabel = (labels) => (labels || []).some((l) => String(l).toLowerCase() === devLabel);
 
   if (path === "/config" && method === "GET") {
     let team = {};
     try { team = JSON.parse(env.TEAM_CONFIG || "{}"); } catch {}
-    return json({ ...team, site: env.JIRA_SITE, project: P, email, mail: mailEnabled(env) });
+    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, mail: isAdmin && mailEnabled(env) });
   }
+
+  if (!isAdmin && (path === "/mail" || path === "/jira/users")) return fail("forbidden", "Only administrators can do that.", 403);
 
   if (path === "/mail" && method === "POST") return sendMail(env, email, await readJson(request));
 
   if (path === "/jira/search" && method === "POST") {
     const b = await readJson(request);
     if (!b || typeof b.jql !== "string" || b.jql.length > 2000 || !Array.isArray(b.fields) || b.fields.length > 30 || !b.fields.every((f) => typeof f === "string")) return fail("bad_request", "Bad search.", 400);
+    let jql = b.jql, fields = b.fields;
+    if (!isAdmin) {
+      const order = /\sORDER\s+BY\s[\s\S]*$/i.exec(jql);
+      jql = 'labels = "' + devLabel + '" AND (' + (order ? jql.slice(0, order.index) : jql) + ")" + (order ? order[0] : "");
+      fields = [...new Set([...fields, "labels"])];
+    }
     const r = await jira(env, "/rest/api/3/search/jql", {
       method: "POST",
-      body: { jql: b.jql, fields: b.fields, maxResults: Math.min(Number(b.maxResults) || 100, 100), expand: "renderedFields", ...(typeof b.nextPageToken === "string" ? { nextPageToken: b.nextPageToken } : {}) }
+      body: { jql, fields, maxResults: Math.min(Number(b.maxResults) || 100, 100), expand: "renderedFields", ...(typeof b.nextPageToken === "string" ? { nextPageToken: b.nextPageToken } : {}) }
     });
     if (!r.ok) return r.res;
-    // Only this project's tickets ever leave the proxy, whatever the search asked for.
-    return json({ ...r.data, issues: (r.data.issues || []).filter((i) => isOurKey(i.key)) });
+    // Only this project's tickets (and for users, only their own) ever leave the proxy, whatever the search asked for.
+    return json({ ...r.data, issues: (r.data.issues || []).filter((i) => isOurKey(i.key) && (isAdmin || hasDevLabel(i.fields && i.fields.labels))) });
   }
 
   if (path === "/jira/users" && method === "GET") {
@@ -228,9 +405,15 @@ async function route(request, env, url) {
   const m = /^\/jira\/issue\/([A-Z][A-Z0-9_]*-\d+)(\/changelog|\/transitions|\/comment)?$/.exec(path);
   if (m && isOurKey(m[1])) {
     const key = m[1], sub = m[2] || "";
+    if (!isAdmin) {
+      const t = await jira(env, "/rest/api/3/issue/" + key + "?fields=labels");
+      if (!t.ok) return t.res;
+      if (!hasDevLabel(t.data.fields && t.data.fields.labels)) return fail("forbidden", "This ticket isn't assigned to you.", 403);
+    }
     if (sub === "" && method === "PUT") {
       const b = await readJson(request);
       if (!b || !validFields(b.fields)) return fail("bad_request", "Only labels, due date and assignee can be changed.", 400);
+      if (!isAdmin && Object.keys(b.fields).some((k) => k !== "duedate")) return fail("forbidden", "Only administrators can change developers and assignees.", 403);
       return pass(await jira(env, "/rest/api/3/issue/" + key, { method: "PUT", body: { fields: b.fields } }));
     }
     if (sub === "/changelog" && method === "GET") return pass(await jira(env, "/rest/api/3/issue/" + key + "?fields=duedate&expand=changelog"));

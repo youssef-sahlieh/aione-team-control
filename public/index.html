@@ -23,8 +23,23 @@
       <div class="field"><label for="password">Password</label><input class="input" id="password" type="password" autocomplete="current-password" required></div>
       <p class="msg err" id="signin-msg" role="alert" hidden></p>
       <button class="btn primary" id="signin-btn" type="submit">Sign in</button>
+      <div class="row"><button class="link" id="forgot-link" type="button">Forgot password?</button></div>
     </form>
   </div><div class="foot">Only approved Aione team members can open this app.</div></div>
+</main>
+
+<main class="auth" id="view-forgot" hidden>
+  <div class="card"><div class="band"></div><div class="cbody">
+    <div class="mark"><span class="logo" aria-hidden="true">Ai1</span><div><b>AION Team Control</b><small>Aione System Ltd</small></div></div>
+    <h1>Reset your password</h1>
+    <p class="lead">Enter your work email. If it has an account, we'll email you a link to choose a new password.</p>
+    <form id="forgot-form" novalidate>
+      <div class="field"><label for="forgot-email">Work email</label><input class="input" id="forgot-email" type="email" autocomplete="username" required></div>
+      <p class="msg" id="forgot-msg" role="status" hidden></p>
+      <button class="btn primary" id="forgot-btn" type="submit">Send reset link</button>
+      <div class="row"><button class="link" id="back-link" type="button">Back to sign in</button></div>
+    </form>
+  </div></div>
 </main>
 
 

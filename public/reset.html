@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://aione-team-proxy.vercel.app; form-action 'none'; base-uri 'self'">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>AION Team Control</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<main class="auth">
+  <div class="card"><div class="band"></div><div class="cbody">
+    <div class="mark"><span class="logo" aria-hidden="true">Ai1</span><div><b>AION Team Control</b><small>Aione System Ltd</small></div></div>
+    <h1 id="title">Choose a password</h1>
+    <p class="lead" id="lead">Checking your link…</p>
+    <form id="reset-form" novalidate hidden>
+      <input type="email" id="username" autocomplete="username" hidden>
+      <div class="field"><label for="password">New password</label><input class="input" id="password" type="password" autocomplete="new-password" minlength="10" required></div>
+      <div class="field"><label for="password2">Type it again</label><input class="input" id="password2" type="password" autocomplete="new-password" required></div>
+      <p class="msg" id="reset-msg" role="alert" hidden></p>
+      <button class="btn primary" id="reset-btn" type="submit">Save password</button>
+    </form>
+    <a class="btn primary signin-link" id="signin-link" href="index.html" hidden>Go to sign in</a>
+  </div><div class="foot">At least 10 characters. A few random words make a strong password that's easy to remember.</div></div>
+</main>
+
+<script src="assets/config.js"></script>
+<script type="module" src="assets/reset.js"></script>
+</body>
+</html>
