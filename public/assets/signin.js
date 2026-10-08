@@ -17,7 +17,7 @@ function showView(name) {
 }
 
 if (getSession()) {
-  location.replace("dashboard.html");
+  location.replace("dashboard.html" + location.hash);
 } else {
   showView("signin");
   if (!proxyReady()) {
@@ -34,7 +34,7 @@ if (getSession()) {
     try {
       const s = await api("/login", { method: "POST", body: { email: $("email").value, password: $("password").value } });
       saveSession(s);
-      location.replace("dashboard.html");
+      location.replace("dashboard.html" + location.hash);
     } catch (err) {
       btn.disabled = false;
       btn.textContent = "Sign in";

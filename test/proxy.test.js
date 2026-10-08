@@ -38,7 +38,7 @@ const tests = [
   ["no token: Jira blocked", async () => { jiraCalls = []; const r = await call("/jira/search", { method: "POST", body: { jql: "project = AION", fields: [] } }); assert.equal(r.status, 401); assert.equal((await r.json()).code, "session"); assert.equal(jiraCalls.length, 0); }],
   ["forged token blocked", async () => { const t = await login(); const [body] = t.split("."); assert.equal((await call("/config", { token: body + ".AAAA" })).status, 401); }],
   ["token from another secret blocked", async () => { const { token } = await makeToken({ ...env, SESSION_SECRET: "other" }, "youssef@aione.biz"); assert.equal(await readToken(env, "Bearer " + token), null); }],
-  ["expired token blocked", async () => { const { token } = await makeToken(env, "youssef@aione.biz", Date.now() - 13 * 3600e3); assert.equal(await readToken(env, "Bearer " + token), null); }],
+  ["expired token blocked", async () => { const { token } = await makeToken(env, "youssef@aione.biz", Date.now() - 25 * 3600e3); assert.equal(await readToken(env, "Bearer " + token), null); }],
   ["token stops working when the email is removed", async () => { const { token } = await makeToken(env, "ellen@aione.biz"); assert.equal(await readToken({ ...env, TEAM_EMAILS: "youssef@aione.biz" }, "Bearer " + token), null); }],
 
   ["config returns team details, site and email", async () => { const d = await (await call("/config", { token: await login() })).json(); assert.equal(d.people.youssef.id, "acc-1"); assert.equal(d.site, env.JIRA_SITE); assert.equal(d.project, "AION"); assert.equal(d.email, "youssef@aione.biz"); }],

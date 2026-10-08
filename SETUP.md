@@ -9,7 +9,7 @@ The proxy's secrets are **Vercel environment variables**: vercel.com → aione-t
 | Variable | What it is |
 |---|---|
 | `TEAM_PASSWORD` | Before user accounts are on: the password Youssef and Ellen sign in with. Their first sign-in after the database is added turns it into their own account password. |
-| `SESSION_SECRET` | A long random string that signs the 12-hour sessions |
+| `SESSION_SECRET` | A long random string that signs the 24-hour sign-ins |
 | `TEAM_CONFIG` | Team details: people and their Jira IDs, developers and their emails (JSON) |
 | `JIRA_SITE` | The Jira address, like `https://<site>.atlassian.net` |
 | `JIRA_EMAIL` | The Atlassian account the proxy acts as |
@@ -32,10 +32,10 @@ Until then, deploy by hand from the repository's top folder (not from `proxy/`):
 
 ## User accounts
 
-Everyone signs in with their own email and password. There are two roles:
+Everyone signs in with their own email and password. The sign-in is remembered in that browser for 24 hours (also in new tabs and after closing it), so links in emails open the ticket straight away; **Sign out** ends it. Avoid staying signed in on a shared computer. There are two roles:
 
 - **Administrator** (Youssef, Ellen): sees and changes everything, and manages people on the **Users** page (button at the top of the dashboard).
-- **User**: sees only the tickets labelled with their developer name (for example `ai1_bashar`). They can move status, set due dates and comment on those tickets; they can't change developers or assignees, send internal notes, or see other tickets. The proxy enforces this, not just the page.
+- **User**: sees only the tickets labelled with their developer name (for example `ai1_bashar`) and assigned to Karim, Youssef or Rami; their Assignee filter always starts with those three. They can move status, set due dates and comment on those tickets; they can't change developers or assignees, send internal notes, or see other tickets. The proxy enforces this, not just the page.
 
 **Add someone:** Users → fill in name, work email, role, and for a User the developer whose tickets they see → **Add user and send invitation**. They get an email with a link (valid 3 days) to choose their password. If email isn't working, the page shows the link for you to send yourself.
 
@@ -59,7 +59,7 @@ Until then, Youssef and Ellen sign in with the team password and the Users page 
 Tickets that live only in AION Team Control, never in Jira. They're numbered **INT-1, INT-2, …**, carry a teal **Internal** tag, and show up in every tile, filter, board and view next to the Jira tickets (filter on them with **Work type → Internal**).
 
 - **Open one:** **+ Internal ticket** above the list. Administrators choose one or more developers; Users always open them for themselves.
-- **Assignee:** every internal ticket is assigned to Karim, Youssef or Rami, like the Jira tickets. It's pre-set to the person opening it when that's one of them; anyone else picks one. Administrators can change it later (click the assignee in the list, or **Change assignee** in the ticket panel).
+- **Assignee:** every internal ticket is assigned to Karim, Youssef or Rami, like the Jira tickets. Youssef is pre-selected; switch to Karim or Rami before creating it if needed. Administrators can change it later (click the assignee in the list, or **Change assignee** in the ticket panel).
 - **Work on it** in the ticket panel like any ticket: move it **Open → In Development → Closed**, set the due date (changes appear in the due date history), comment, and **Edit** the title, description and priority. A ticket stays open until someone closes it.
 - **Attachments:** **+ Add files** in the ticket panel (up to 4 MB each, 20 per ticket). Files are stored with the ticket and only people who can see the ticket can download them. Whoever added a file, or an administrator, can remove it.
 - **Who sees what:** administrators see all internal tickets and can reassign developers or **Delete** one (Users can't delete). A User only sees internal tickets for their own developer name.

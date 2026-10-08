@@ -153,7 +153,7 @@ async function load() {
   devOptions($("a-dev"), $("a-dev").value === OTHER ? "" : $("a-dev").value);
 }
 
-$("signout").addEventListener("click", signOut);
+$("signout").addEventListener("click", () => signOut());
 
 async function start() {
   const s = getSession();

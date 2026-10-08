@@ -24,12 +24,19 @@ import { api, apiFile, getSession, signOut } from "./session.js";
       JQL='project = '+PROJECT+' AND assignee in ('+IDS+') AND issuetype != Epic AND (statusCategory != Done OR updated >= -30d) ORDER BY updated DESC';
       $("team").textContent=Object.values(PEOPLE).map(p=>p.name).join(" · ");
     } else {
-      JQL='project = '+PROJECT+' AND issuetype != Epic AND (statusCategory != Done OR updated >= -30d) ORDER BY updated DESC';
-      $("team").textContent="Your tickets · ai1_"+MY_DEV;
+      // Users: only tickets assigned to Karim, Youssef and Rami (the proxy adds their ai1_ label on top),
+      // with the Assignee filter set to all three by default.
+      JQL='project = '+PROJECT+' AND assignee in ('+IDS+') AND issuetype != Epic AND (statusCategory != Done OR updated >= -30d) ORDER BY updated DESC';
+      CLOSED_EXTRA=' AND assignee in ('+IDS+')';
+      $("team").textContent="Your tickets · ai1_"+MY_DEV+" · assigned to "+Object.values(PEOPLE).map(p=>p.name).join(", ");
       if(state.view==="dev"||state.view==="assignee") state.view="list";
       notifyOn=false;
+      state.f=defaultFilters();
     }
   }
+  let CLOSED_EXTRA="";
+  // The filters a person starts with (and gets back with "Clear all"): Users always see the team's tickets.
+  function defaultFilters(){ const f=F(); if(!IS_ADMIN) Object.keys(PEOPLE).forEach(k=>f.assignee.add(k)); return f; }
   const teamNames=()=>{ const n=Object.values(PEOPLE).map(p=>p.name); return n.length>1?n.slice(0,-1).join(", ")+" or "+n[n.length-1]:n.join(""); };
   let lastLoad=0;
   const NEW_STATUSES=["open","pending approval"];
@@ -64,7 +71,9 @@ import { api, apiFile, getSession, signOut } from "./session.js";
     remove:key=>api("/internal/"+key,{method:"DELETE"})
   };
   const isInt=key=>/^INT-\d+$/.test(key);
-  const ticketUrl=key=>isInt(key)?location.origin+location.pathname+"#"+key:SITE+"/browse/"+key;
+  // Links in emails open the ticket in this dashboard (the sign-in is remembered for 24 hours); Jira tickets also get their Jira link.
+  const dashUrl=key=>location.origin+location.pathname+"#"+key;
+  const ticketUrl=key=>isInt(key)?dashUrl(key):SITE+"/browse/"+key;
   function setDevs(key,want){ const i=issueByKey(key); return isInt(key)?internalApi.update(key,{devs:[...want]}):jira.edit(key,{labels:labelsWith(i?i.labels:[],want)}); }
   const setDue=(key,v)=>isInt(key)?internalApi.update(key,{due:v}):jira.edit(key,{duedate:v});
   const doTransition=(key,id)=>isInt(key)?internalApi.update(key,{status:id}):jira.transition(key,id);
@@ -634,14 +643,14 @@ import { api, apiFile, getSession, signOut } from "./session.js";
       const names=[...chosen].map(devFirstName), subject=subj.value.trim()||("Internal note: "+key);
       if(!MAIL){
         let plain="Hi "+(names.length?names.join(", "):"team")+",\n\n"+text+"\n";
-        if(cc.checked) plain+="\n---\nTicket: "+key+" – "+i.summary+"\n"+ticketUrl(key)+"\nStatus: "+i.status+" · Due: "+(i.due?fmtDate(i.due):"Not set")+" · Assignee: "+(i.assignee?PEOPLE[i.assignee].name:i.assigneeName)+(i.parent?" · Epic: "+i.parent.name:"")+"\n";
+        if(cc.checked) plain+="\n---\nTicket: "+key+" – "+i.summary+"\n"+dashUrl(key)+(isInt(key)?"":"\nIn Jira: "+ticketUrl(key))+"\nStatus: "+i.status+" · Due: "+(i.due?fmtDate(i.due):"Not set")+" · Assignee: "+(i.assignee?PEOPLE[i.assignee].name:i.assigneeName)+(i.parent?" · Epic: "+i.parent.name:"")+"\n";
         plain+="\nThanks,\n"+ME+"\n";
         openEmail(to,subject,plain);
         closePop(); toast("Email opened in Outlook. Check it and press Send there.",to); return;
       }
       send.disabled=true; send.textContent="Sending…"; msg.textContent="";
       let html="<p>Hi "+esc(names.length?names.join(", "):"team")+",</p>"+text.split(/\n{2,}/).map(par=>"<p>"+esc(par).replace(/\n/g,"<br>")+"</p>").join("");
-      if(cc.checked) html+="<hr><p><b>Ticket:</b> <a href=\""+esc(ticketUrl(key))+"\">"+esc(key)+"</a> – "+esc(i.summary)+"<br><b>Status:</b> "+esc(i.status)+" · <b>Due:</b> "+esc(i.due?fmtDate(i.due):"Not set")+" · <b>Assignee:</b> "+esc(i.assignee?PEOPLE[i.assignee].name:i.assigneeName)+(i.parent?" · <b>Epic:</b> "+esc(i.parent.name):"")+"</p>";
+      if(cc.checked) html+="<hr><p><b>Ticket:</b> <a href=\""+esc(dashUrl(key))+"\">"+esc(key)+"</a> – "+esc(i.summary)+(isInt(key)?"":" (<a href=\""+esc(ticketUrl(key))+"\">Jira</a>)")+"<br><b>Status:</b> "+esc(i.status)+" · <b>Due:</b> "+esc(i.due?fmtDate(i.due):"Not set")+" · <b>Assignee:</b> "+esc(i.assignee?PEOPLE[i.assignee].name:i.assigneeName)+(i.parent?" · <b>Epic:</b> "+esc(i.parent.name):"")+"</p>";
       html+="<p>Thanks,<br>"+esc(ME)+"</p>";
       try{ await api("/mail",{method:"POST",body:{to,subject,html}});
         closePop(); toast("Internal note sent to "+to.length+" recipient"+(to.length===1?"":"s"),to);
@@ -713,7 +722,7 @@ import { api, apiFile, getSession, signOut } from "./session.js";
       const keys=byDev[d], items=keys.map(k=>issueByKey(k)).filter(Boolean);
       const subject=keys.length===1?("New Jira assignment: "+keys[0]+(items[0]?" – "+items[0].summary:"")):("New Jira assignments: "+keys.length+" tickets");
       if(MAIL){
-        const rows=items.map(i=>"<tr><td><a href=\""+esc(ticketUrl(i.key))+"\">"+esc(i.key)+"</a></td><td>"+esc(i.summary)+"</td><td>"+esc(i.status)+"</td><td>"+esc(i.due?fmtDate(i.due):"Not set")+"</td><td>"+esc(i.parent?i.parent.name:"")+"</td><td>"+esc(i.reporter)+"</td></tr>").join("");
+        const rows=items.map(i=>"<tr><td><a href=\""+esc(dashUrl(i.key))+"\">"+esc(i.key)+"</a>"+(i.internal?"":" (<a href=\""+esc(ticketUrl(i.key))+"\">Jira</a>)")+"</td><td>"+esc(i.summary)+"</td><td>"+esc(i.status)+"</td><td>"+esc(i.due?fmtDate(i.due):"Not set")+"</td><td>"+esc(i.parent?i.parent.name:"")+"</td><td>"+esc(i.reporter)+"</td></tr>").join("");
         const html="<p>Hi "+esc(devFirstName(d))+",</p><p>You have been assigned as the developer (ai1_"+esc(d)+") on the following Jira "+(keys.length===1?"ticket":"tickets")+":</p>"
           +"<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\"><thead><tr><th>Ticket</th><th>Title</th><th>Status</th><th>Due date</th><th>Epic</th><th>Reporter</th></tr></thead><tbody>"+rows+"</tbody></table>"
           +"<p>Please review "+(keys.length===1?"it":"them")+" and set a due date in Jira based on the development time.</p><p>Thanks,<br>"+esc(ME)+"</p>";
@@ -721,7 +730,7 @@ import { api, apiFile, getSession, signOut } from "./session.js";
         catch(err){ failed.push("ai1_"+d+": "+(err.code==="network"?"the server didn't confirm; ask the developer before resending":err.message)); }
         continue;
       }
-      const rows=items.map(i=>"• "+i.key+" – "+i.summary+"\n  "+ticketUrl(i.key)+"\n  Status: "+i.status+" · Due: "+(i.due?fmtDate(i.due):"Not set")+(i.parent?" · Epic: "+i.parent.name:"")+" · Reporter: "+i.reporter).join("\n\n");
+      const rows=items.map(i=>"• "+i.key+" – "+i.summary+"\n  "+dashUrl(i.key)+"\n  Status: "+i.status+" · Due: "+(i.due?fmtDate(i.due):"Not set")+(i.parent?" · Epic: "+i.parent.name:"")+" · Reporter: "+i.reporter).join("\n\n");
       const body="Hi "+devFirstName(d)+",\n\nYou have been assigned as the developer (ai1_"+d+") on the following Jira "+(keys.length===1?"ticket":"tickets")+":\n\n"+rows
         +"\n\nPlease review "+(keys.length===1?"it":"them")+" and set a due date in Jira based on the development time.\n\nThanks,\n"+ME+"\n";
       links.push({label:"Email ai1_"+d,href:mailtoHref([to],subject,body),title:to+" · "+keys.join(", ")});
@@ -747,7 +756,7 @@ import { api, apiFile, getSession, signOut } from "./session.js";
   async function loadClosed(){
     if(closedBusy) return; const days=state.closedDays; closedBusy=true;
     try{
-      const list=await searchAll('project = '+PROJECT+' AND issuetype != Epic AND statusCategory = Done AND updated >= -'+days+'d ORDER BY updated DESC',FIELDS);
+      const list=await searchAll('project = '+PROJECT+' AND issuetype != Epic AND statusCategory = Done AND updated >= -'+days+'d'+CLOSED_EXTRA+' ORDER BY updated DESC',FIELDS);
       state.closedIssues=list.map(norm); mergeIssues(); if($("pop").hidden&&!drag) render();
     }catch(err){ if(state.focus==="closed") toast("Couldn't load closed tickets",[errorText(err)],true); }
     finally{ closedBusy=false; if(state.closedDays!==days) loadClosed(); }
@@ -768,7 +777,7 @@ import { api, apiFile, getSession, signOut } from "./session.js";
   $("notify").checked=notifyOn; $("notify").addEventListener("change",e=>{ notifyOn=e.target.checked; try{localStorage.setItem("aion.notify",notifyOn?"1":"0");}catch(x){} toast(notifyOn?(MAIL?"Developers will be emailed when assigned.":"You'll be offered an email to developers when you assign them."):"Assignment emails are off."); });
   $("grp").addEventListener("change",e=>{ state.group=e.target.value; try{localStorage.setItem("aion.group",state.group);}catch(x){} render(); });
   $("ftoggle").addEventListener("click",()=>{ state.fopen=!state.fopen; try{localStorage.setItem("aion.fopen",state.fopen?"1":"0");}catch(e){} renderFilters(); });
-  $("fclear").addEventListener("click",()=>{ state.f=F(); state.q=""; $("q").value=""; state.sel.clear(); render(); });
+  $("fclear").addEventListener("click",()=>{ state.f=defaultFilters(); state.q=""; $("q").value=""; state.sel.clear(); render(); });
   let qt=null; $("q").addEventListener("input",e=>{ clearTimeout(qt); qt=setTimeout(()=>{ state.q=e.target.value.trim(); render(); },150); });
 
   const dz={key:null,labels:[],devs:new Set()};
@@ -893,10 +902,10 @@ import { api, apiFile, getSession, signOut } from "./session.js";
     const prio=fld("Priority",el("select","fsel")); INT_PRIORITIES.forEach(x=>prio.appendChild(new Option(x,x))); prio.value=t?t.priority:"Medium";
     let devs=null, due=null, asg=null;
     if(!t){
-      // Assignee: Karim, Youssef or Rami, like the Jira tickets. Pre-set to the person opening it when they're one of them.
+      // Assignee: Karim, Youssef or Rami, like the Jira tickets. Youssef is pre-selected.
       asg=fld("Assignee",el("select","fsel")); asg.appendChild(new Option("Choose…",""));
       Object.keys(PEOPLE).forEach(k=>asg.appendChild(new Option(PEOPLE[k].name,k)));
-      asg.value=Object.keys(PEOPLE).find(k=>PEOPLE[k].name.toLowerCase()===ME.toLowerCase())||"";
+      asg.value=PEOPLE.youssef?"youssef":(Object.keys(PEOPLE)[0]||"");
       if(IS_ADMIN){
         devs=new Set(); const rc=el("div","rcpts");
         allDevs().forEach(d=>{ const c=el("button","fc "+devK(d)); c.type="button"; c.appendChild(el("span","sw")); c.appendChild(el("span",null,"ai1_"+d)); c.setAttribute("aria-pressed","false");
@@ -952,9 +961,9 @@ import { api, apiFile, getSession, signOut } from "./session.js";
 
   setInterval(()=>{ const a=$("auto"); if(!a||!lastLoad) return; const left=Math.max(0,120-Math.round((Date.now()-lastLoad)/1000)); a.textContent="next refresh in "+(left>=60?Math.floor(left/60)+"m "+(left%60)+"s":left+"s");
     if(Date.now()-lastLoad>120000&&document.visibilityState==="visible"&&!batchBusy&&$("pop").hidden&&!drag){ lastLoad=Date.now(); reload(); } },1000);
-  $("signout").addEventListener("click",signOut);
+  $("signout").addEventListener("click",()=>signOut());
   async function start(){
-    const s=getSession(); if(!s){ signOut(); return; }
+    const s=getSession(); if(!s){ signOut(true); return; }
     $("me").textContent=s.email; ME=s.email.split("@")[0].replace(/^./,c=>c.toUpperCase());
     $("today").textContent=fmtDate(todayStr())+" "+todayStr().slice(0,4);
     try{ applyConfig(await api("/config")); }

@@ -20,7 +20,8 @@ import { internalRoutes } from "./internal.js";
 import { ROLES, checkPassword, createLinkToken, deleteUser, getUser, hashPassword, listUsers, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, useLinkToken, validDev, validEmail } from "./users.js";
 
 const enc = new TextEncoder();
-const SESSION_MS = 12 * 3600 * 1000;
+// Sign-ins last 24 hours (the dashboard remembers them in the browser for that long).
+const SESSION_MS = 24 * 3600 * 1000;
 const EDITABLE = new Set(["labels", "duedate", "assignee"]);
 
 const json = (data, status = 200) =>

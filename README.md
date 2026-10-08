@@ -16,7 +16,7 @@ Browser ──► GitHub Pages (dashboard files, public)
             └──► Jira (AION project only)
 ```
 
-- People sign in with their own work email and password (Administrators and Users, managed on the Users page; see SETUP.md). The **proxy** checks them and returns a 12-hour session. Users only reach the tickets labelled with their developer name.
+- People sign in with their own work email and password (Administrators and Users, managed on the Users page; see SETUP.md). The **proxy** checks them and returns a 24-hour session. Users only reach the tickets labelled with their developer name.
 - Every Jira request goes through the proxy with that session. The proxy only reads and changes **AION** tickets, and only labels (developers), due dates, assignee, status and comments.
 - The Jira token, the password, the Jira site and the team details (people, developer emails) are **Vercel environment variables** on the proxy. None of them are in this public repository.
 - Internal notes and new-assignment emails are sent automatically through a Gmail account, named after the signed-in person, with replies going to them at @aione.biz, to @aione.biz addresses only (SETUP.md). Without Gmail set up, they open a ready-made email in Outlook.

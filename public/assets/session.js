@@ -1,27 +1,37 @@
 // Sign-in session and calls to the AION proxy, shared by the sign-in page and the dashboard.
-// The session lasts until the tab is closed or the proxy's 12-hour token runs out.
+// The sign-in is remembered in this browser (all tabs, also after closing it) until the proxy's
+// 24-hour token runs out or the person signs out, so links in emails open straight into the dashboard.
 
 const KEY = "aione-session";
 
 // https in production; http://localhost when testing on this computer.
 export const proxyReady = () => /^(https:\/\/|http:\/\/localhost[:/])/.test(String(window.AIONE_API || ""));
 
+const store = () => { try { return window.localStorage; } catch { return null; } };
+
 export function getSession() {
   try {
-    const s = JSON.parse(sessionStorage.getItem(KEY) || "null");
+    const s = JSON.parse(store().getItem(KEY) || "null");
     if (s && s.token && s.expiresAt > Date.now()) return s;
+    if (s) store().removeItem(KEY);
   } catch {}
   return null;
 }
 
 export function saveSession(s) {
-  try { sessionStorage.setItem(KEY, JSON.stringify(s)); } catch {}
+  try { store().setItem(KEY, JSON.stringify(s)); } catch {}
 }
 
-export function signOut() {
-  try { sessionStorage.removeItem(KEY); } catch {}
-  location.replace("index.html");
+// Back to the sign-in page. A ticket in the address (#AION-123) is kept, so it opens after signing in.
+export function signOut(keepTicket) {
+  try { store().removeItem(KEY); } catch {}
+  location.replace("index.html" + (keepTicket ? location.hash : ""));
 }
+
+// Signing out in one tab signs out the others too.
+window.addEventListener("storage", (e) => {
+  if (e.key === KEY && !e.newValue && !/index\.html$|\/$|reset\.html$/.test(location.pathname)) location.replace("index.html");
+});
 
 export class ApiError extends Error {
   constructor(code, message, status) {
@@ -47,7 +57,7 @@ export async function apiFile(path, { method = "GET", body, type } = {}) {
     let data = null;
     try { data = await res.json(); } catch {}
     const code = (data && data.code) || (res.status === 413 ? "too_large" : "server");
-    if (code === "session") signOut();
+    if (code === "session") signOut(true);
     throw new ApiError(code, (data && data.error) || (res.status === 413 ? "Files can be up to 4 MB." : "HTTP " + res.status), res.status);
   }
   return res;
@@ -69,7 +79,7 @@ export async function api(path, { method = "GET", body } = {}) {
   try { data = await res.json(); } catch {}
   if (!res.ok) {
     const code = (data && data.code) || "server";
-    if (code === "session") signOut();
+    if (code === "session") signOut(true);
     throw new ApiError(code, (data && data.error) || "HTTP " + res.status, res.status);
   }
   return data;
