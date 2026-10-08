@@ -145,6 +145,53 @@ const tests = [
     await call("/users/ellen%40aione.biz", { method: "DELETE", token: a.token });
     assert.equal((await login("ellen@aione.biz", "Team-password-1", "9.9.9.5")).token, undefined);
   }],
+  ["internal tickets: admin opens one for any developer, never touching Jira", async () => {
+    env = makeEnv();
+    const a = await login("youssef@aione.biz", "Team-password-1", "10.0.0.1");
+    for (const [email, dev] of [["bashar.b@aione.biz", "bashar"], ["sondos@aione.biz", "sondos"]]) {
+      mails.length = 0;
+      await call("/users", { method: "POST", token: a.token, body: { email, name: dev, role: "user", dev } });
+      await call("/reset", { method: "POST", body: { token: linkToken(mails[0]), password: "Pass-for-" + dev } });
+    }
+    jiraCalls = [];
+    const r = await call("/internal", { method: "POST", token: a.token, body: { summary: "Set up staging DB", description: "Copy prod", devs: ["ai1_bashar"], due: "2026-11-01", priority: "High" } });
+    assert.equal(r.status, 201);
+    assert.equal(r.data.ticket.key, "INT-1"); assert.equal(r.data.ticket.status, "Open"); assert.equal(r.data.ticket.statusCat, "new");
+    assert.deepEqual(r.data.ticket.devs, ["bashar"]); assert.equal(r.data.ticket.createdBy.name, "Youssef"); assert.equal(r.data.ticket.internal, true);
+    assert.equal(jiraCalls.length, 0, "nothing sent to Jira");
+    assert.equal((await call("/internal", { method: "POST", token: a.token, body: { summary: "No dev", devs: [] } })).status, 400);
+    await call("/internal", { method: "POST", token: a.token, body: { summary: "For Sondos", devs: ["sondos"] } });
+    assert.deepEqual((await call("/internal", { token: a.token })).data.tickets.map((t) => t.key).sort(), ["INT-1", "INT-2"]);
+  }],
+  ["internal tickets: a user sees only theirs and can only open tickets for themselves", async () => {
+    const u = await login("bashar.b@aione.biz", "Pass-for-bashar", "10.0.0.2");
+    assert.deepEqual((await call("/internal", { token: u.token })).data.tickets.map((t) => t.key), ["INT-1"]);
+    const mine = await call("/internal", { method: "POST", token: u.token, body: { summary: "My own task", devs: ["sondos"] } });
+    assert.equal(mine.status, 201); assert.deepEqual(mine.data.ticket.devs, ["bashar"], "always for themselves");
+    assert.equal((await call("/internal/INT-2", { method: "PUT", token: u.token, body: { status: "Closed" } })).status, 404, "someone else's ticket");
+    assert.equal((await call("/internal/INT-1", { method: "PUT", token: u.token, body: { devs: ["sondos"] } })).status, 400, "can't hand it to someone else");
+    assert.equal((await call("/internal/INT-1", { method: "DELETE", token: u.token })).status, 403);
+  }],
+  ["internal tickets: status, due date history, comments, closing", async () => {
+    const u = await login("bashar.b@aione.biz", "Pass-for-bashar", "10.0.0.3");
+    let r = await call("/internal/INT-1", { method: "PUT", token: u.token, body: { status: "In Development", due: "2026-11-05" } });
+    assert.equal(r.data.ticket.status, "In Development");
+    assert.deepEqual(r.data.ticket.dueHistory.map((h) => [h.by, h.from, h.to]), [["bashar", "2026-11-01", "2026-11-05"]]);
+    r = await call("/internal/INT-1/comment", { method: "POST", token: u.token, body: { text: "Started" } });
+    assert.equal(r.data.ticket.comments[0].body, "Started"); assert.equal(r.data.ticket.comments[0].author.email, "bashar.b@aione.biz");
+    r = await call("/internal/INT-1", { method: "PUT", token: u.token, body: { status: "Closed" } });
+    assert.equal(r.data.ticket.statusCat, "done"); assert.ok(r.data.ticket.closedAt);
+    assert.equal((await call("/internal/INT-1", { method: "PUT", token: u.token, body: { status: "Done" } })).status, 400, "unknown status");
+  }],
+  ["internal tickets: admin reassigns developers (reports who was added) and deletes", async () => {
+    const a = await login("ellen@aione.biz", "Team-password-1", "10.0.0.4");
+    const r = await call("/internal/INT-2", { method: "PUT", token: a.token, body: { devs: ["sondos", "ai1_bashar"] } });
+    assert.deepEqual(r.data.added, ["bashar"]);
+    const u = await login("bashar.b@aione.biz", "Pass-for-bashar", "10.0.0.5");
+    assert.ok((await call("/internal", { token: u.token })).data.tickets.some((t) => t.key === "INT-2"), "now visible to Bashar");
+    assert.equal((await call("/internal/INT-2", { method: "DELETE", token: a.token })).status, 200);
+    assert.equal((await call("/internal/INT-2", { token: a.token, method: "PUT", body: { status: "Open" } })).status, 404);
+  }],
   ["invitation link handed to the admin when email isn't set up", async () => {
     env = makeEnv(); delete env.MAILER;
     const a = await login("youssef@aione.biz", "Team-password-1");

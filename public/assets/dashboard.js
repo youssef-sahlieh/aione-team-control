@@ -17,7 +17,7 @@ import { api, getSession, signOut } from "./session.js";
     SITE=cfg.site; PROJECT=cfg.project; MAIL=!!cfg.mail; PEOPLE=cfg.people||{}; DEVS=cfg.devs||[]; DEV_EMAIL=cfg.devEmails||{}; DEV_COLOR=cfg.devColors||{};
     BYID={}; for(const k in PEOPLE) BYID[PEOPLE[k].id]=k;
     const IDS=Object.values(PEOPLE).map(p=>'"'+p.id+'"').join(",");
-    IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||"";
+    IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||""; INTERNAL=!!cfg.accounts; $("new-int").hidden=!INTERNAL;
     document.body.classList.toggle("role-user",!IS_ADMIN);
     $("users-link").hidden=!(IS_ADMIN&&cfg.accounts);
     if(IS_ADMIN){
@@ -52,6 +52,40 @@ import { api, getSession, signOut } from "./session.js";
     f.description=typeof r.description==="string"?r.description:(typeof f.description==="string"?f.description:"");
     if(f.comment){ const rc=(r.comment&&r.comment.comments)||[]; f.comment=Object.assign({},f.comment,{comments:(f.comment.comments||[]).map((c,i)=>Object.assign({},c,{body:rc[i]&&typeof rc[i].body==="string"?rc[i].body:(typeof c.body==="string"?c.body:"")}))}); }
     return Object.assign({},raw,{fields:f});
+  }
+  // Internal tickets (INT-…): kept by the proxy, never in Jira. They're shown with every Jira ticket and
+  // every action below goes to the right place for each kind.
+  let INTERNAL=false, INT={}, INT_STATUSES=[{name:"Open",cat:"new"},{name:"In Development",cat:"indeterminate"},{name:"Closed",cat:"done"}], INT_PRIORITIES=["Highest","High","Medium","Low"];
+  const internalApi={
+    list:()=>api("/internal"),
+    create:b=>api("/internal",{method:"POST",body:b}),
+    update:(key,b)=>api("/internal/"+key,{method:"PUT",body:b}),
+    comment:(key,text)=>api("/internal/"+key+"/comment",{method:"POST",body:{text}}),
+    remove:key=>api("/internal/"+key,{method:"DELETE"})
+  };
+  const isInt=key=>/^INT-\d+$/.test(key);
+  const ticketUrl=key=>isInt(key)?location.origin+location.pathname+"#"+key:SITE+"/browse/"+key;
+  function setDevs(key,want){ const i=issueByKey(key); return isInt(key)?internalApi.update(key,{devs:[...want]}):jira.edit(key,{labels:labelsWith(i?i.labels:[],want)}); }
+  const setDue=(key,v)=>isInt(key)?internalApi.update(key,{due:v}):jira.edit(key,{duedate:v});
+  const doTransition=(key,id)=>isInt(key)?internalApi.update(key,{status:id}):jira.transition(key,id);
+  const doComment=(key,text)=>isInt(key)?internalApi.comment(key,text):jira.comment(key,text);
+  // Same shape as a Jira ticket after norm(), so tiles, filters, boards and history all work unchanged.
+  function normInternal(t){
+    const cm=t.comments||[], last=cm.length?cm[cm.length-1]:null;
+    return { key:t.key, internal:true, summary:t.summary||"(no title)", status:t.status, cat:t.statusCat,
+      assignee:null, assigneeName:"Internal", labels:(t.devs||[]).map(d=>"ai1_"+d), devs:(t.devs||[]).slice(), due:t.due||null,
+      created:(t.created||"").slice(0,10), updated:t.updated||"", priority:t.priority||"", type:"Internal",
+      reporter:(t.createdBy&&t.createdBy.name)||"Unknown", reporterId:null, assigneeId:null, parent:null,
+      last:last?{author:(last.author&&last.author.name)||"Someone", fromTeam:true, when:last.created, text:last.body}:null };
+  }
+  async function loadInternal(){
+    if(!INTERNAL) return;
+    try{
+      const r=await internalApi.list(); INT={};
+      if(r.statuses) INT_STATUSES=r.statuses; if(r.priorities) INT_PRIORITIES=r.priorities;
+      r.tickets.forEach(t=>{ INT[t.key]=t; HIST[t.key]={updated:t.updated,changes:(t.dueHistory||[]).map(h=>({when:h.when,by:h.by,from:h.from,to:h.to}))}; });
+      state.internalIssues=r.tickets.map(normInternal);
+    }catch(err){ toast("Couldn't load internal tickets",[errorText(err)],true); }
   }
   async function searchAll(jql,fields){
     let r=await jira.search(jql,fields); let list=(r.issues||[]).slice(), g=0;
@@ -124,7 +158,7 @@ import { api, getSession, signOut } from "./session.js";
   const needsReply=i=>i.last&&!i.last.fromTeam&&Date.parse(i.updated)>=Date.now()-(typeof state!=="undefined"?state.updDays:3)*dayMs;
 
   const F=()=>({reporter:new Set(),assignee:new Set(),dev:new Set(),status:new Set(),type:new Set(),priority:new Set(),epic:"",due:"any",activity:"any"});
-  const state={issues:null,focus:"open",f:F(),q:"",view:"list",group:"",sel:new Set(),fopen:true,hperiod:7,updDays:3,dueDays:7,closedDays:30,mainIssues:[],closedIssues:[]};
+  const state={issues:null,focus:"open",f:F(),q:"",view:"list",group:"",sel:new Set(),fopen:true,hperiod:7,updDays:3,dueDays:7,closedDays:30,mainIssues:[],closedIssues:[],internalIssues:[]};
   try{ const u=+localStorage.getItem("aion.upd"), d=+localStorage.getItem("aion.due"); if(u>=1&&u<=30) state.updDays=u; if(d>=1&&d<=90) state.dueDays=d; const cd=+localStorage.getItem("aion.closed"); if(cd>=1&&cd<=365) state.closedDays=cd; }catch(e){}
   try{ const v=localStorage.getItem("aion.view"); if(v) state.view=v; if(localStorage.getItem("aion.fopen")==="0") state.fopen=false; const gg=localStorage.getItem("aion.group"); if(gg!==null) state.group=gg; }catch(e){}
 
@@ -316,9 +350,11 @@ import { api, getSession, signOut } from "./session.js";
     return w;
   }
 
-  function keyLink(i){ const a=el("a","key",i.key+" ↗"); a.href=SITE+"/browse/"+i.key; a.target="_blank"; a.rel="noopener"; a.title="Open in Jira"; a.draggable=false; a.addEventListener("click",e=>e.stopPropagation()); return a; }
+  function keyLink(i){
+    if(i.internal){ const b=el("button","key int",i.key); b.type="button"; b.title="Internal ticket (not in Jira)"; b.draggable=false; b.addEventListener("click",e=>{ e.stopPropagation(); openDrawer(i.key); }); return b; } const a=el("a","key",i.key+" ↗"); a.href=ticketUrl(i.key); a.target="_blank"; a.rel="noopener"; a.title="Open in Jira"; a.draggable=false; a.addEventListener("click",e=>e.stopPropagation()); return a; }
   function tagsFor(i,t,withEpic){
     const tags=el("span","tags");
+    if(i.internal) tags.appendChild(el("span","flag int","Internal"));
     if(needsReply(i)) tags.appendChild(el("span","flag k6","needs reply"));
     const age=Math.round(dnum(t)-dnum(i.created)); if(age<=2&&i.cat!=="done") tags.appendChild(el("span","flag k7",age===0?"new today":"new "+age+"d"));
     if(/high|highest|critical|blocker/i.test(i.priority)) tags.appendChild(el("span","flag k2",i.priority));
@@ -352,8 +388,8 @@ import { api, getSession, signOut } from "./session.js";
     const tags=tagsFor(i,t,state.group!=="epic"); if(tags.childNodes.length) tt.appendChild(tags);
     if((state.focus==="reply"||state.focus==="recent"||state.f.activity==="reply")&&i.last){ const sn=el("span","snip"); sn.dir="auto"; sn.appendChild(el("b",null,i.last.author+" · "+ago(i.last.when)+": ")); sn.append(i.last.text); tt.appendChild(sn); }
     tt.addEventListener("click",()=>openDrawer(i.key)); r.appendChild(tt);
-    const who=el(IS_ADMIN?"button":"span","who c-who"+(IS_ADMIN?" asg":"")); who.appendChild(avatar(i)); who.appendChild(el("span",null,i.assignee?PEOPLE[i.assignee].name:i.assigneeName));
-    if(IS_ADMIN){ who.type="button"; who.title="Change assignee"; who.addEventListener("click",e=>{ e.stopPropagation(); assigneePopover(who,[i.key]); }); } r.appendChild(who);
+    const canAsg=IS_ADMIN&&!i.internal; const who=el(canAsg?"button":"span","who c-who"+(canAsg?" asg":"")); who.appendChild(avatar(i)); who.appendChild(el("span",null,i.assignee?PEOPLE[i.assignee].name:i.assigneeName));
+    if(canAsg){ who.type="button"; who.title="Change assignee"; who.addEventListener("click",e=>{ e.stopPropagation(); assigneePopover(who,[i.key]); }); } r.appendChild(who);
     const rp=el("span","who c-rep"); rp.appendChild(el("span","av k6",initials(i.reporter))); const rn=el("span",null,i.reporter); rn.title=i.reporter; rp.appendChild(rn); r.appendChild(rp);
     r.appendChild(devButton(i));
     const sw=el("span","c-st"); sw.appendChild(statusButton(i)); r.appendChild(sw);
@@ -394,13 +430,14 @@ import { api, getSession, signOut } from "./session.js";
     return w;
   }
   async function fetchHistory(key){
+    if(isInt(key)) return ((INT[key]&&INT[key].dueHistory)||[]).map(h=>({when:h.when,by:h.by,from:h.from,to:h.to}));
     const d=await jira.changelog(key); const hs=(d.changelog&&d.changelog.histories)||[]; const out=[];
     hs.forEach(h=>(h.items||[]).forEach(it=>{ if(it.field==="duedate"||it.fieldId==="duedate") out.push({when:h.created,by:(h.author&&h.author.displayName)||"Someone",from:it.from?String(it.from).slice(0,10):null,to:it.to?String(it.to).slice(0,10):null}); }));
     out.sort((a,b)=>a.when<b.when?1:-1); return out;
   }
   async function loadHistory(force){
     if(histBusy||!state.issues) return;
-    const todo=state.issues.filter(i=>i.cat!=="done").filter(i=>force||!HIST[i.key]||HIST[i.key].updated!==i.updated);
+    const todo=state.issues.filter(i=>i.cat!=="done"&&!i.internal).filter(i=>force||!HIST[i.key]||HIST[i.key].updated!==i.updated);
     if(!todo.length) return;
     histBusy=true; histDone=0; histTotal=todo.length; if(state.view==="history") render();
     const q=todo.slice(); const workers=[];
@@ -475,7 +512,7 @@ import { api, getSession, signOut } from "./session.js";
         if(d.from!=="__none") want.delete(d.from);
         if(target!=="__none") want.add(target);
         const same=want.size===i.devs.length&&[...want].every(x=>i.devs.includes(x)); if(same) return null;
-        return {key:k,added:[...want].filter(x=>!i.devs.includes(x)),run:()=>jira.edit(k,{labels:labelsWith(i.labels,want)})};
+        return {key:k,added:[...want].filter(x=>!i.devs.includes(x)),run:()=>setDevs(k,want)};
       }).filter(Boolean);
       if(!ops.length){ toast("Nothing to change."); return; }
       await runBatch(ops,target==="__none"?"Developer removed":"Assigned to ai1_"+target);
@@ -484,7 +521,7 @@ import { api, getSession, signOut } from "./session.js";
       const ops=[], skipped=[];
       for(const k of d.keys){ const i=issueByKey(k); if(i&&i.status===target) continue;
         try{ const trs=await getTransitions(k); const tr=trs.find(x=>x.to&&x.to.name&&x.to.name.toLowerCase()===target.toLowerCase());
-          if(tr) ops.push({key:k,run:()=>jira.transition(k,tr.id)}); else skipped.push(k+": can't go from "+(i?i.status:"its status")+" straight to "+target);
+          if(tr) ops.push({key:k,run:()=>doTransition(k,tr.id)}); else skipped.push(k+": can't go from "+(i?i.status:"its status")+" straight to "+target);
         }catch(err){ skipped.push(k+": "+errorText(err)); } }
       if(ops.length) await runBatch(ops,"Moved to "+target);
       if(skipped.length) setTimeout(()=>toast("Not moved",skipped,true),ops.length?3300:0);
@@ -527,7 +564,7 @@ import { api, getSession, signOut } from "./session.js";
       const ops=keys.map(k=>{ const i=issueByKey(k); const cur=new Set(i?i.devs:[]); let want;
         if(mode==="set") want=new Set(chosen); else if(mode==="add"){ want=new Set(cur); chosen.forEach(d=>want.add(d)); } else want=new Set([...cur].filter(d=>!chosen.has(d)));
         const same=want.size===cur.size&&[...want].every(d=>cur.has(d));
-        return same?null:{key:k,added:[...want].filter(d=>!cur.has(d)),run:()=>jira.edit(k,{labels:labelsWith(i?i.labels:[],want)})}; }).filter(Boolean);
+        return same?null:{key:k,added:[...want].filter(d=>!cur.has(d)),run:()=>setDevs(k,want)}; }).filter(Boolean);
       if(!ops.length){ toast("Nothing to change."); return; }
       await runBatch(ops,mode==="remove"?"Developers removed":"Developers saved"); });
     foot.appendChild(save); p.appendChild(foot); placePop(anchor);
@@ -541,13 +578,13 @@ import { api, getSession, signOut } from "./session.js";
     [["Today",0],["Tomorrow",1],["+3 days",3],["+1 week",7],["+2 weeks",14]].forEach(([l,n])=>{ const b=el("button",null,l); b.type="button"; b.addEventListener("click",()=>{ inp.value=new Date((dnum(t)+n)*dayMs).toISOString().slice(0,10); }); quick.appendChild(b); });
     body.appendChild(inp); body.appendChild(quick); p.appendChild(body);
     const foot=el("div","foot"); const clr=el("button","btn danger","Clear date"); clr.type="button";
-    clr.addEventListener("click",async()=>{ closePop(); await runBatch(keys.map(k=>({key:k,run:()=>jira.edit(k,{duedate:null})})),"Due date cleared"); });
+    clr.addEventListener("click",async()=>{ closePop(); await runBatch(keys.map(k=>({key:k,run:()=>setDue(k,null)})),"Due date cleared"); });
     const save=el("button","btn primary sp","Save"); save.type="button";
-    save.addEventListener("click",async()=>{ const v=inp.value; if(!/^\d{4}-\d{2}-\d{2}$/.test(v)){ inp.focus(); return; } closePop(); await runBatch(keys.map(k=>({key:k,run:()=>jira.edit(k,{duedate:v})})),"Due date set to "+fmtDate(v)); });
+    save.addEventListener("click",async()=>{ const v=inp.value; if(!/^\d{4}-\d{2}-\d{2}$/.test(v)){ inp.focus(); return; } closePop(); await runBatch(keys.map(k=>({key:k,run:()=>setDue(k,v)})),"Due date set to "+fmtDate(v)); });
     foot.appendChild(clr); foot.appendChild(save); p.appendChild(foot); placePop(anchor); inp.focus();
   }
   const initialsOf=n=>String(n||"?").split(/\s+/).filter(Boolean).map(x=>x[0]).join("").slice(0,2).toUpperCase()||"?";
-  function assignOps(keys,id){ return keys.map(k=>{ const i=issueByKey(k); if(i&&i.assigneeId===id) return null; return {key:k,run:()=>jira.edit(k,{assignee:id?{accountId:id}:null})}; }).filter(Boolean); }
+  function assignOps(keys,id){ return keys.map(k=>{ const i=issueByKey(k); if(i&&i.assigneeId===id) return null; if(isInt(k)) return null; return {key:k,run:()=>jira.edit(k,{assignee:id?{accountId:id}:null})}; }).filter(Boolean); }
   async function doAssign(keys,id,name){
     const ops=assignOps(keys,id); if(!ops.length){ toast("Already assigned to "+name+"."); return {ok:0,fail:0}; }
     const r=await runBatch(ops,"Assigned to "+name);
@@ -597,14 +634,14 @@ import { api, getSession, signOut } from "./session.js";
       const names=[...chosen].map(devFirstName), subject=subj.value.trim()||("Internal note: "+key);
       if(!MAIL){
         let plain="Hi "+(names.length?names.join(", "):"team")+",\n\n"+text+"\n";
-        if(cc.checked) plain+="\n---\nTicket: "+key+" – "+i.summary+"\n"+SITE+"/browse/"+key+"\nStatus: "+i.status+" · Due: "+(i.due?fmtDate(i.due):"Not set")+" · Assignee: "+(i.assignee?PEOPLE[i.assignee].name:i.assigneeName)+(i.parent?" · Epic: "+i.parent.name:"")+"\n";
+        if(cc.checked) plain+="\n---\nTicket: "+key+" – "+i.summary+"\n"+ticketUrl(key)+"\nStatus: "+i.status+" · Due: "+(i.due?fmtDate(i.due):"Not set")+" · Assignee: "+(i.assignee?PEOPLE[i.assignee].name:i.assigneeName)+(i.parent?" · Epic: "+i.parent.name:"")+"\n";
         plain+="\nThanks,\n"+ME+"\n";
         openEmail(to,subject,plain);
         closePop(); toast("Email opened in Outlook. Check it and press Send there.",to); return;
       }
       send.disabled=true; send.textContent="Sending…"; msg.textContent="";
       let html="<p>Hi "+esc(names.length?names.join(", "):"team")+",</p>"+text.split(/\n{2,}/).map(par=>"<p>"+esc(par).replace(/\n/g,"<br>")+"</p>").join("");
-      if(cc.checked) html+="<hr><p><b>Ticket:</b> <a href=\""+esc(SITE)+"/browse/"+esc(key)+"\">"+esc(key)+"</a> – "+esc(i.summary)+"<br><b>Status:</b> "+esc(i.status)+" · <b>Due:</b> "+esc(i.due?fmtDate(i.due):"Not set")+" · <b>Assignee:</b> "+esc(i.assignee?PEOPLE[i.assignee].name:i.assigneeName)+(i.parent?" · <b>Epic:</b> "+esc(i.parent.name):"")+"</p>";
+      if(cc.checked) html+="<hr><p><b>Ticket:</b> <a href=\""+esc(ticketUrl(key))+"\">"+esc(key)+"</a> – "+esc(i.summary)+"<br><b>Status:</b> "+esc(i.status)+" · <b>Due:</b> "+esc(i.due?fmtDate(i.due):"Not set")+" · <b>Assignee:</b> "+esc(i.assignee?PEOPLE[i.assignee].name:i.assigneeName)+(i.parent?" · <b>Epic:</b> "+esc(i.parent.name):"")+"</p>";
       html+="<p>Thanks,<br>"+esc(ME)+"</p>";
       try{ await api("/mail",{method:"POST",body:{to,subject,html}});
         closePop(); toast("Internal note sent to "+to.length+" recipient"+(to.length===1?"":"s"),to);
@@ -613,7 +650,9 @@ import { api, getSession, signOut } from "./session.js";
     });
     foot.appendChild(msg); foot.appendChild(send); p.appendChild(foot); placePop(anchor); ta.focus();
   }
-  async function getTransitions(key){ const d=(await jira.transitions(key))||{}; return (d.transitions||[]).filter(x=>x.isAvailable!==false); }
+  async function getTransitions(key){
+    if(isInt(key)){ const t=INT[key]; return INT_STATUSES.filter(s=>!t||s.name!==t.status).map(s=>({id:s.name,name:s.name==="Closed"?"Close":"Move to "+s.name,to:{name:s.name,statusCategory:{key:s.cat}}})); }
+  const d=(await jira.transitions(key))||{}; return (d.transitions||[]).filter(x=>x.isAvailable!==false); }
   async function statusPopover(anchor,keys){
     const p=$("pop"); p.replaceChildren(); p.appendChild(el("h4",null,keys.length===1?"Move "+keys[0]+" to":"Move "+keys.length+" tickets to"));
     const body=el("div","body"); body.appendChild(el("div","note","Loading allowed statuses…")); p.appendChild(body); placePop(anchor); const my=anchor;
@@ -626,7 +665,7 @@ import { api, getSession, signOut } from "./session.js";
       if(!groups.length){ body.appendChild(el("div","note","No status moves are available.")); return; }
       groups.forEach(g=>{ const b=el("button","opt"); b.type="button"; b.appendChild(el("span",null,"→")); b.appendChild(el("span","stbtn "+stK({status:g.name,cat:g.cat}),g.name));
         b.appendChild(el("span","cnt",keys.length>1?g.items.length+" of "+keys.length:g.label));
-        b.addEventListener("click",async()=>{ closePop(); await runBatch(g.items.map(it=>({key:it.key,run:()=>jira.transition(it.key,it.id)})),"Moved to "+g.name);
+        b.addEventListener("click",async()=>{ closePop(); await runBatch(g.items.map(it=>({key:it.key,run:()=>doTransition(it.key,it.id)})),"Moved to "+g.name);
           const sk=keys.length-g.items.length; if(sk>0) setTimeout(()=>toast(sk+" ticket"+(sk===1?"":"s")+" can't move to "+g.name+" from their current status."),3300); });
         body.appendChild(b); });
       placePop(my);
@@ -674,7 +713,7 @@ import { api, getSession, signOut } from "./session.js";
       const keys=byDev[d], items=keys.map(k=>issueByKey(k)).filter(Boolean);
       const subject=keys.length===1?("New Jira assignment: "+keys[0]+(items[0]?" – "+items[0].summary:"")):("New Jira assignments: "+keys.length+" tickets");
       if(MAIL){
-        const rows=items.map(i=>"<tr><td><a href=\""+esc(SITE)+"/browse/"+esc(i.key)+"\">"+esc(i.key)+"</a></td><td>"+esc(i.summary)+"</td><td>"+esc(i.status)+"</td><td>"+esc(i.due?fmtDate(i.due):"Not set")+"</td><td>"+esc(i.parent?i.parent.name:"")+"</td><td>"+esc(i.reporter)+"</td></tr>").join("");
+        const rows=items.map(i=>"<tr><td><a href=\""+esc(ticketUrl(i.key))+"\">"+esc(i.key)+"</a></td><td>"+esc(i.summary)+"</td><td>"+esc(i.status)+"</td><td>"+esc(i.due?fmtDate(i.due):"Not set")+"</td><td>"+esc(i.parent?i.parent.name:"")+"</td><td>"+esc(i.reporter)+"</td></tr>").join("");
         const html="<p>Hi "+esc(devFirstName(d))+",</p><p>You have been assigned as the developer (ai1_"+esc(d)+") on the following Jira "+(keys.length===1?"ticket":"tickets")+":</p>"
           +"<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\"><thead><tr><th>Ticket</th><th>Title</th><th>Status</th><th>Due date</th><th>Epic</th><th>Reporter</th></tr></thead><tbody>"+rows+"</tbody></table>"
           +"<p>Please review "+(keys.length===1?"it":"them")+" and set a due date in Jira based on the development time.</p><p>Thanks,<br>"+esc(ME)+"</p>";
@@ -682,7 +721,7 @@ import { api, getSession, signOut } from "./session.js";
         catch(err){ failed.push("ai1_"+d+": "+(err.code==="network"?"the server didn't confirm; ask the developer before resending":err.message)); }
         continue;
       }
-      const rows=items.map(i=>"• "+i.key+" – "+i.summary+"\n  "+SITE+"/browse/"+i.key+"\n  Status: "+i.status+" · Due: "+(i.due?fmtDate(i.due):"Not set")+(i.parent?" · Epic: "+i.parent.name:"")+" · Reporter: "+i.reporter).join("\n\n");
+      const rows=items.map(i=>"• "+i.key+" – "+i.summary+"\n  "+ticketUrl(i.key)+"\n  Status: "+i.status+" · Due: "+(i.due?fmtDate(i.due):"Not set")+(i.parent?" · Epic: "+i.parent.name:"")+" · Reporter: "+i.reporter).join("\n\n");
       const body="Hi "+devFirstName(d)+",\n\nYou have been assigned as the developer (ai1_"+d+") on the following Jira "+(keys.length===1?"ticket":"tickets")+":\n\n"+rows
         +"\n\nPlease review "+(keys.length===1?"it":"them")+" and set a due date in Jira based on the development time.\n\nThanks,\n"+ME+"\n";
       links.push({label:"Email ai1_"+d,href:mailtoHref([to],subject,body),title:to+" · "+keys.join(", ")});
@@ -702,7 +741,7 @@ import { api, getSession, signOut } from "./session.js";
     if(c==="rate_limited") return "Jira is busy. Wait a moment and try again.";
     if(c==="jira") return "Jira refused: "+(err.message||"unknown error");
     return "Couldn't reach Jira"+(err&&err.message?": "+err.message:"."); }
-  function mergeIssues(){ const m=new Map(); state.mainIssues.forEach(i=>m.set(i.key,i)); state.closedIssues.forEach(i=>{ if(!m.has(i.key)) m.set(i.key,i); }); state.issues=[...m.values()]; }
+  function mergeIssues(){ const m=new Map(); state.mainIssues.forEach(i=>m.set(i.key,i)); state.closedIssues.forEach(i=>{ if(!m.has(i.key)) m.set(i.key,i); }); state.internalIssues.forEach(i=>m.set(i.key,i)); state.issues=[...m.values()]; }
   let closedBusy=false;
   async function loadClosed(){
     if(closedBusy) return; const days=state.closedDays; closedBusy=true;
@@ -715,7 +754,7 @@ import { api, getSession, signOut } from "./session.js";
   let loading=false;
   async function reload(){
     if(loading) return; loading=true;
-    try{ const issues=await searchAll(JQL,FIELDS);
+    try{ const [issues]=await Promise.all([searchAll(JQL,FIELDS),loadInternal()]);
       state.mainIssues=issues.map(norm); mergeIssues(); showState(""); setTimeout(()=>loadClosed(),0);
       lastLoad=Date.now(); $("updated").textContent="updated "+new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
       if($("pop").hidden&&!drag) render();
@@ -741,11 +780,11 @@ import { api, getSession, signOut } from "./session.js";
   const fact=(dt,dd)=>{ const w=el("div"); w.appendChild(el("dt",null,dt)); w.appendChild(el("dd",null,dd||"—")); return w; };
   function openDrawer(key){
     closePop(); dz.key=key; const i=issueByKey(key);
-    $("drawer").hidden=false; $("scrim").hidden=false;
-    $("d-key").textContent=key+" ↗"; $("d-key").href=$("d-open").href=SITE+"/browse/"+key;
+    $("drawer").hidden=false; $("scrim").hidden=false; $("drawer").classList.toggle("is-int",isInt(key));
+    $("d-key").textContent=key+(isInt(key)?"":" ↗"); $("d-key").href=$("d-open").href=ticketUrl(key); if(isInt(key)) $("d-key").removeAttribute("href");
     $("d-title").textContent=i?i.summary:key; $("d-status").textContent=i?i.status:""; $("d-status").className="stbtn "+(i?stK(i):"");
     $("d-facts").replaceChildren(); $("d-desc").replaceChildren(el("span",null,"Loading…")); $("d-comments").replaceChildren(); $("d-ccount").textContent=""; $("d-trans").replaceChildren(el("span","msg","Loading…"));
-    ["d-devmsg","d-duemsg","d-cmsg"].forEach(id=>setMsg(id,"")); $("d-att").replaceChildren(el("span","msg","Loading…")); $("d-acount").textContent=""; $("d-asgname").textContent=i?i.assigneeName:""; $("d-after").replaceChildren(new Option("Keep current assignee","")); $("d-attadd").href=$("d-cattach").href=SITE+"/browse/"+key;
+    ["d-devmsg","d-duemsg","d-cmsg"].forEach(id=>setMsg(id,"")); $("d-att").replaceChildren(el("span","msg","Loading…")); $("d-acount").textContent=""; $("d-asgname").textContent=i?i.assigneeName:""; $("d-after").replaceChildren(new Option("Keep current assignee","")); $("d-attadd").href=$("d-cattach").href=ticketUrl(key);
     dz.labels=i?i.labels.slice():[]; dz.devs=new Set(i?i.devs:[]); renderDevChips(); $("d-due").value=i&&i.due?i.due:"";
     $("d-body").scrollTop=0; $("d-close").focus(); renderDrawerHist(key); loadDetail(key);
   }
@@ -753,11 +792,12 @@ import { api, getSession, signOut } from "./session.js";
     try{ const trs=await getTransitions(key); if(dz.key!==key) return; const box=$("d-trans"); box.replaceChildren();
       if(!trs.length){ box.appendChild(el("span","msg","No moves available from this status.")); return; }
       trs.forEach(tr=>{ const name=(tr.to&&tr.to.name)||tr.name; const b=el("button","stbtn "+stK({status:name,cat:(tr.to&&tr.to.statusCategory&&tr.to.statusCategory.key)||""}),"→ "+name); b.type="button"; b.title=tr.name;
-        b.addEventListener("click",()=>runBatch([{key,run:()=>jira.transition(key,tr.id)}],"Moved to "+name)); box.appendChild(b); });
+        b.addEventListener("click",()=>runBatch([{key,run:()=>doTransition(key,tr.id)}],"Moved to "+name)); box.appendChild(b); });
     }catch(err){ if(dz.key===key) $("d-trans").replaceChildren(el("span","msg err",errorText(err))); }
   }
   async function loadDetail(key){
     loadTransitions(key);
+    if(isInt(key)){ renderInternal(key); return; }
     fetchHistory(key).then(ch=>{ const i=issueByKey(key); HIST[key]={updated:i?i.updated:"",changes:ch}; if(dz.key===key) renderDrawerHist(key); }).catch(()=>{ if(dz.key===key&&!HIST[key]) $("d-hist").replaceChildren(el("span","msg err","Couldn't load the history.")); });
     try{ const list=await searchAll("key = "+key,["summary","description","status","assignee","reporter","labels","duedate","created","updated","priority","issuetype","comment","parent","attachment"]);
       if(dz.key!==key) return; const raw=list[0]; if(!raw){ $("d-desc").replaceChildren(el("span",null,"Ticket not found.")); return; }
@@ -781,6 +821,62 @@ import { api, getSession, signOut } from "./session.js";
         meta.appendChild(rb); cd.appendChild(meta); const b=richNode(c.body); b.classList.add("rich"); b.dir="auto"; cd.appendChild(b); box.appendChild(cd); });
     }catch(err){ if(dz.key===key) $("d-desc").replaceChildren(el("span","msg err",errorText(err))); }
   }
+  // Drawer contents for an internal ticket (all data is already loaded).
+  function renderInternal(key){
+    const t=INT[key]; if(!t){ $("d-desc").replaceChildren(el("span",null,"Ticket not found.")); return; }
+    const ni=normInternal(t);
+    $("d-title").textContent=t.summary; $("d-status").textContent=t.status; $("d-status").className="stbtn "+stK(ni);
+    $("d-facts").replaceChildren(fact("Type","Internal (not in Jira)"),fact("Priority",t.priority),fact("Developers",(t.devs||[]).map(d=>"ai1_"+d).join(", ")),fact("Opened by",t.createdBy&&t.createdBy.name),fact("Created",ago(t.created)),fact("Updated",ago(t.updated)),fact("Due",t.due?fmtDate(t.due):"not set"),fact("Closed",t.closedAt?ago(t.closedAt):""));
+    dz.labels=ni.labels.slice(); dz.devs=new Set(ni.devs); renderDevChips(); $("d-due").value=t.due||"";
+    HIST[key]={updated:t.updated,changes:(t.dueHistory||[]).map(h=>({when:h.when,by:h.by,from:h.from,to:h.to}))}; renderDrawerHist(key);
+    const d=el("div","plain",t.description||""); if(!t.description){ d.textContent="No description."; d.style.color="var(--muted)"; } $("d-desc").replaceChildren(d);
+    const cm=t.comments||[]; $("d-ccount").textContent="("+cm.length+")";
+    const box=$("d-comments"); box.replaceChildren(); if(!cm.length) box.appendChild(el("div","msg","No comments yet."));
+    cm.forEach(c=>{ const name=(c.author&&c.author.name)||"Someone";
+      const cd=el("div","cmt mine"); const meta=el("div","cmeta"); meta.appendChild(el("b",null,name)); meta.appendChild(el("span",null,ago(c.created)));
+      const rb=el("button","linkbtn sp","Reply"); rb.type="button"; rb.addEventListener("click",()=>{ const ta=$("d-reply"); if(!ta.value.trim()) ta.value=name.split(" ")[0]+", "; ta.focus(); });
+      meta.appendChild(rb); cd.appendChild(meta); const b=el("div","plain rich",c.body); b.dir="auto"; cd.appendChild(b); box.appendChild(cd); });
+  }
+  // Form for a new internal ticket, or (with key) for editing one's title, description and priority.
+  function internalPopover(anchor,key){
+    const t=key?INT[key]:null;
+    const p=$("pop"); p.replaceChildren(); p.classList.add("wide");
+    p.appendChild(el("h4",null,t?"Edit "+key:"New internal ticket · not sent to Jira"));
+    const body=el("div","body"); p.appendChild(body);
+    const fld=(label,node)=>{ const f=el("div","fld"); f.appendChild(el("label",null,label)); f.appendChild(node); body.appendChild(f); return node; };
+    const title=fld("Title",el("input","inp")); title.value=t?t.summary:""; title.dir="auto";
+    const desc=fld("Description",el("textarea","inp")); desc.value=t?t.description||"":""; desc.dir="auto"; desc.placeholder="What needs doing…";
+    const prio=fld("Priority",el("select","fsel")); INT_PRIORITIES.forEach(x=>prio.appendChild(new Option(x,x))); prio.value=t?t.priority:"Medium";
+    let devs=null, due=null;
+    if(!t){
+      if(IS_ADMIN){
+        devs=new Set(); const rc=el("div","rcpts");
+        allDevs().forEach(d=>{ const c=el("button","fc "+devK(d)); c.type="button"; c.appendChild(el("span","sw")); c.appendChild(el("span",null,"ai1_"+d)); c.setAttribute("aria-pressed","false");
+          c.addEventListener("click",()=>{ devs.has(d)?devs.delete(d):devs.add(d); c.setAttribute("aria-pressed",String(devs.has(d))); }); rc.appendChild(c); });
+        fld("Developer(s)",rc);
+      } else fld("Developer",el("span","dev "+devK(MY_DEV),"ai1_"+MY_DEV+" (you)"));
+      due=fld("Due date (optional)",el("input","inp")); due.type="date";
+    }
+    const foot=el("div","foot"); const msg=el("span","msg"); const save=el("button","btn primary sp",t?"Save":"Create ticket"); save.type="button";
+    save.addEventListener("click",async()=>{
+      if(!title.value.trim()){ msg.textContent="Write a title."; msg.className="msg err"; title.focus(); return; }
+      if(devs&&!devs.size){ msg.textContent="Pick at least one developer."; msg.className="msg err"; return; }
+      save.disabled=true; msg.textContent="";
+      try{
+        if(t){ await internalApi.update(key,{summary:title.value,description:desc.value,priority:prio.value}); closePop(); toast("Saved."); await reload(); if(dz.key===key) loadDetail(key); return; }
+        const r=await internalApi.create({summary:title.value,description:desc.value,priority:prio.value,devs:devs?[...devs]:[MY_DEV],due:due.value||null});
+        closePop(); toast(r.ticket.key+" created.");
+        await reload(); openDrawer(r.ticket.key);
+        if(IS_ADMIN&&notifyOn&&r.ticket.devs.length) setTimeout(()=>notifyDevs([{key:r.ticket.key,added:r.ticket.devs}]),1500);
+      }catch(err){ save.disabled=false; msg.textContent=errorText(err); msg.className="msg err"; }
+    });
+    foot.appendChild(msg); foot.appendChild(save); p.appendChild(foot); placePop(anchor); title.focus();
+  }
+  $("new-int").addEventListener("click",e=>internalPopover(e.currentTarget));
+  $("d-edit").addEventListener("click",e=>{ if(dz.key&&isInt(dz.key)) internalPopover(e.currentTarget,dz.key); });
+  $("d-del").addEventListener("click",async()=>{ const key=dz.key; if(!key||!isInt(key)) return;
+    if(!confirm("Delete "+key+"? This can't be undone. To finish a ticket, close it instead.")) return;
+    try{ await internalApi.remove(key); closeDrawer(); toast(key+" deleted."); await reload(); }catch(err){ toast("Not deleted",[errorText(err)],true); } });
   function fmtSize(b){ if(b==null) return ""; if(b<1024) return b+" B"; if(b<1048576) return Math.round(b/1024)+" KB"; return (b/1048576).toFixed(1)+" MB"; }
   function renderAttachments(atts){
     const box=$("d-att"); box.replaceChildren(); $("d-acount").textContent="("+atts.length+")";
@@ -799,10 +895,10 @@ import { api, getSession, signOut } from "./session.js";
   $("d-asg").addEventListener("click",e=>{ if(dz.key) assigneePopover(e.currentTarget,[dz.key]); });
   $("d-adddev").addEventListener("click",()=>{ const v=$("d-newdev").value.trim().replace(/^ai1_/i,"").replace(/\s+/g,"").toLowerCase(); if(!v){ setMsg("d-devmsg","Type a name first.",false); return; } dz.devs.add(v); $("d-newdev").value=""; renderDevChips(); setMsg("d-devmsg","Added ai1_"+v+". Press Save developers.",true); });
   $("d-newdev").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("d-adddev").click(); } });
-  $("d-savedevs").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const labels=labelsWith(dz.labels,new Set(dz.devs)); const prev=new Set(dz.labels.filter(isDevLabel).map(devOf)); const r=await runBatch([{key,added:[...dz.devs].filter(d=>!prev.has(d)),run:()=>jira.edit(key,{labels})}],"Developers saved"); setMsg("d-devmsg",r.fail?"Not saved.":"Saved.",!r.fail); });
-  $("d-savedue").addEventListener("click",async()=>{ const key=dz.key, v=$("d-due").value; if(!key) return; if(!/^\d{4}-\d{2}-\d{2}$/.test(v)){ setMsg("d-duemsg","Pick a date first.",false); return; } const r=await runBatch([{key,run:()=>jira.edit(key,{duedate:v})}],"Due date set to "+fmtDate(v)); setMsg("d-duemsg",r.fail?"Not saved.":"Saved.",!r.fail); });
-  $("d-cleardue").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const r=await runBatch([{key,run:()=>jira.edit(key,{duedate:null})}],"Due date cleared"); setMsg("d-duemsg",r.fail?"Not saved.":"Cleared.",!r.fail); });
-  $("d-send").addEventListener("click",async()=>{ const key=dz.key, text=$("d-reply").value.trim(); if(!key) return; if(!text){ setMsg("d-cmsg","Write something first.",false); return; } const after=$("d-after").value; const r=await runBatch([{key,run:()=>jira.comment(key,text)}],"Comment added"); if(!r.fail) $("d-reply").value=""; setMsg("d-cmsg",r.fail?"Not sent.":"Sent.",!r.fail);
+  $("d-savedevs").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const labels=labelsWith(dz.labels,new Set(dz.devs)); const prev=new Set(dz.labels.filter(isDevLabel).map(devOf)); const r=await runBatch([{key,added:[...dz.devs].filter(d=>!prev.has(d)),run:()=>(isInt(key)?internalApi.update(key,{devs:[...dz.devs]}):jira.edit(key,{labels}))}],"Developers saved"); setMsg("d-devmsg",r.fail?"Not saved.":"Saved.",!r.fail); });
+  $("d-savedue").addEventListener("click",async()=>{ const key=dz.key, v=$("d-due").value; if(!key) return; if(!/^\d{4}-\d{2}-\d{2}$/.test(v)){ setMsg("d-duemsg","Pick a date first.",false); return; } const r=await runBatch([{key,run:()=>setDue(key,v)}],"Due date set to "+fmtDate(v)); setMsg("d-duemsg",r.fail?"Not saved.":"Saved.",!r.fail); });
+  $("d-cleardue").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const r=await runBatch([{key,run:()=>setDue(key,null)}],"Due date cleared"); setMsg("d-duemsg",r.fail?"Not saved.":"Cleared.",!r.fail); });
+  $("d-send").addEventListener("click",async()=>{ const key=dz.key, text=$("d-reply").value.trim(); if(!key) return; if(!text){ setMsg("d-cmsg","Write something first.",false); return; } const after=$("d-after").value; const r=await runBatch([{key,run:()=>doComment(key,text)}],"Comment added"); if(!r.fail) $("d-reply").value=""; setMsg("d-cmsg",r.fail?"Not sent.":"Sent.",!r.fail);
     if(!r.fail&&after){ const ix=after.indexOf("|"); const aid=after.slice(0,ix), aname=after.slice(ix+1); const r2=await doAssign([key],aid,aname); setMsg("d-cmsg",r2.fail?"Comment sent, but the assignee didn't change.":"Sent and assigned to "+aname+".",!r2.fail); } });
 
   setInterval(()=>{ const a=$("auto"); if(!a||!lastLoad) return; const left=Math.max(0,120-Math.round((Date.now()-lastLoad)/1000)); a.textContent="next refresh in "+(left>=60?Math.floor(left/60)+"m "+(left%60)+"s":left+"s");
@@ -815,5 +911,6 @@ import { api, getSession, signOut } from "./session.js";
     try{ applyConfig(await api("/config")); }
     catch(err){ showState(errorText(err),true); $("updated").textContent="not connected"; return; }
     await reload();
+    const h=decodeURIComponent(location.hash.slice(1)); if(/^[A-Z][A-Z0-9_]*-\d+$/.test(h)&&issueByKey(h)) openDrawer(h);
   }
   start();

@@ -42,6 +42,7 @@
   <div class="toolbar">
     <h2 id="vtitle">Tickets</h2><span class="count" id="vcount"></span>
     <div class="sp">
+      <button class="btn primary" id="new-int" type="button" hidden>+ Internal ticket</button>
       <label class="tgl admin-only" title="After you assign a developer, offer a ready-made email to them"><input type="checkbox" class="ck" id="notify"> Email developer on assign</label>
       <label class="tgl" id="grpwrap">Group by <select class="fsel auto" id="grp"><option value="">Nothing</option><option value="reporter">Reporter</option><option value="epic">Epic</option><option value="assignee">Assignee</option><option value="dev">Developer</option><option value="status">Status</option></select></label>
       <div class="seg" role="group" aria-label="View">
@@ -75,7 +76,7 @@
     <div class="dtop">
       <a class="key" id="d-key" target="_blank" rel="noopener"></a>
       <span class="stbtn" id="d-status"></span>
-      <span class="sp"><button class="btn note admin-only" id="d-note" type="button">✉ Internal notes</button><a class="btn primary" id="d-open" target="_blank" rel="noopener">Open in Jira ↗</a><button class="btn" id="d-close" type="button">Close</button></span>
+      <span class="sp"><button class="btn note admin-only" id="d-note" type="button">✉ Internal notes</button><button class="btn int-only" id="d-edit" type="button">Edit</button><button class="btn danger admin-only int-only" id="d-del" type="button">Delete</button><a class="btn primary jira-only" id="d-open" target="_blank" rel="noopener">Open in Jira ↗</a><button class="btn" id="d-close" type="button">Close</button></span>
     </div>
     <h2 class="dtitle" id="d-title" dir="auto"></h2>
   </div>
@@ -87,14 +88,14 @@
     <div class="blk"><h3>Due date</h3>
       <div class="inline"><input class="inp" type="date" id="d-due" aria-label="Due date"><button class="btn primary" id="d-savedue" type="button">Save due date</button><button class="btn" id="d-cleardue" type="button">Clear</button><span class="msg" id="d-duemsg"></span></div></div>
     <div class="blk"><h3>Due date history</h3><div id="d-hist"></div></div>
-    <div class="blk admin-only"><h3>Assignee</h3><div class="inline"><span id="d-asgname" class="who"></span><button class="btn" id="d-asg" type="button">Change assignee</button></div></div>
-    <div class="blk"><h3>Attachments <span id="d-acount"></span></h3><div id="d-att" class="atts"></div>
+    <div class="blk admin-only jira-only"><h3>Assignee</h3><div class="inline"><span id="d-asgname" class="who"></span><button class="btn" id="d-asg" type="button">Change assignee</button></div></div>
+    <div class="blk jira-only"><h3>Attachments <span id="d-acount"></span></h3><div id="d-att" class="atts"></div>
       <div class="inline"><a class="btn" id="d-attadd" target="_blank" rel="noopener">+ Add attachment in Jira ↗</a><span class="msg">This page can't upload files; the button opens the ticket in Jira, where you can drop them in.</span></div></div>
     <div class="blk"><h3>Description</h3><div class="desc rich" id="d-desc" dir="auto"></div></div>
     <div class="blk"><h3>Comments <span id="d-ccount"></span></h3><div class="blk" id="d-comments"></div>
       <textarea class="inp" id="d-reply" placeholder="Write a comment or answer…" dir="auto" aria-label="New comment"></textarea>
-      <div class="inline admin-only"><label class="tgl">Then assign to <select class="fsel auto" id="d-after"><option value="">Keep current assignee</option></select></label></div>
-      <div class="inline"><button class="btn primary" id="d-send" type="button">Add comment</button><a class="btn" id="d-cattach" target="_blank" rel="noopener">Attach a file in Jira ↗</a><span class="msg" id="d-cmsg"></span></div></div>
+      <div class="inline admin-only jira-only"><label class="tgl">Then assign to <select class="fsel auto" id="d-after"><option value="">Keep current assignee</option></select></label></div>
+      <div class="inline"><button class="btn primary" id="d-send" type="button">Add comment</button><a class="btn jira-only" id="d-cattach" target="_blank" rel="noopener">Attach a file in Jira ↗</a><span class="msg" id="d-cmsg"></span></div></div>
   </div>
 </aside>
 

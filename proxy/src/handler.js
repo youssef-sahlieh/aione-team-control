@@ -16,6 +16,7 @@
 //   (admin: everything; user: only the tickets labelled with their developer name). Without it, the
 //   emails in TEAM_EMAILS sign in with TEAM_PASSWORD as admins. The first sign-in with TEAM_PASSWORD
 //   after the database is added creates admin accounts for everyone in TEAM_EMAILS.
+import { internalRoutes } from "./internal.js";
 import { ROLES, checkPassword, createLinkToken, deleteUser, getUser, hashPassword, listUsers, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, useLinkToken, validDev, validEmail } from "./users.js";
 
 const enc = new TextEncoder();
@@ -362,6 +363,7 @@ async function route(request, env, url) {
   const devLabel = "ai1_" + me.dev;
 
   if (path === "/users" || path.startsWith("/users/")) return accountRoutes(request, env, url, me);
+  if (path === "/internal" || path.startsWith("/internal/")) return internalRoutes(request, env, url, me);
 
   const P = env.JIRA_PROJECT;
   const isOurKey = (k) => new RegExp("^" + P + "-\\d+$").test(k);

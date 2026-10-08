@@ -54,6 +54,17 @@ Accounts are stored in a small free database (Upstash Redis) connected to the pr
 
 Until then, Youssef and Ellen sign in with the team password and the Users page explains that accounts aren't on yet.
 
+## Internal tickets
+
+Tickets that live only in AION Team Control, never in Jira. They're numbered **INT-1, INT-2, …**, carry a teal **Internal** tag, and show up in every tile, filter, board and view next to the Jira tickets (filter on them with **Work type → Internal**).
+
+- **Open one:** **+ Internal ticket** above the list. Administrators choose one or more developers; Users always open them for themselves.
+- **Work on it** in the ticket panel like any ticket: move it **Open → In Development → Closed**, set the due date (changes appear in the due date history), comment, and **Edit** the title, description and priority. A ticket stays open until someone closes it.
+- **Who sees what:** administrators see all internal tickets and can reassign developers or **Delete** one. A User only sees internal tickets for their own developer name.
+- With "Email developer on assign" on, developers get an email when an administrator opens a ticket for them or adds them to one.
+
+They're stored in the same Upstash Redis database as the user accounts.
+
 ## Change the team shown on the dashboard
 
 Replace `TEAM_CONFIG` in Vercel, then redeploy. It looks like this:
