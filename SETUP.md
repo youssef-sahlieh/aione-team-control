@@ -14,7 +14,8 @@ The proxy's secrets are **Vercel environment variables**: vercel.com → aione-t
 | `JIRA_SITE` | The Jira address, like `https://<site>.atlassian.net` |
 | `JIRA_EMAIL` | The Atlassian account the proxy acts as |
 | `JIRA_API_TOKEN` | That account's API token |
-| `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET` | Optional: lets the proxy send emails through Microsoft 365 |
+| `GMAIL_USER`, `GMAIL_APP_PASSWORD` | Sends the dashboard's emails automatically through a Gmail account |
+| `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET` | Not used now: the Microsoft 365 alternative to Gmail, if an admin ever sets it up |
 
 **After changing a variable, redeploy:** vercel.com → aione-team-proxy → **Deployments** → the latest one → **⋯ → Redeploy**. Variables only take effect on a new deployment.
 
@@ -26,7 +27,7 @@ Once the repository is connected (below), every push to `main` that changes `pro
 
 **Connect the repository (one time):** vercel.com → aione-team-proxy → **Settings → Git → Connect Git Repository**, choose GitHub and `youssef-sahlieh/aione-team-control`. If Vercel asks, install its GitHub app and allow it that repository. The project's **Root Directory** is already set to `proxy`.
 
-Until then, deploy by hand from this folder: `cd proxy` then `npx vercel deploy --prod`.
+Until then, deploy by hand from the repository's top folder (not from `proxy/`): `npx vercel deploy --prod`.
 
 ## Change the password
 
@@ -65,31 +66,26 @@ Atlassian tokens expire (at most a year).
 
 Every change made from the dashboard shows in Jira as made by this account.
 
-## Send emails automatically (optional)
+## Send emails automatically (Gmail)
 
-Without this, "Internal notes" and new-assignment emails open a ready-made email in Outlook that you send yourself. With it, the dashboard sends them straight away from the signed-in person's mailbox (they appear in that person's Sent Items). Emails can only go to @aione.biz addresses. This needs a Microsoft 365 admin.
+"Internal notes" and new-assignment emails are sent automatically through a Gmail account. They arrive as **"Youssef via AION Team Control"** (or Ellen), and pressing Reply in Outlook replies to the person who sent them, at @aione.biz. Emails can only go to @aione.biz addresses. Without the two Gmail variables, the dashboard opens a ready-made email in Outlook instead.
 
-1. Sign in at **entra.microsoft.com** → **Identity → Applications → App registrations → New registration**.
-2. Name it `AION Team Control mail`, choose **Accounts in this organizational directory only**, leave the redirect URI empty, and click **Register**.
-3. On **Overview**, copy the **Application (client) ID** and the **Directory (tenant) ID**.
-4. **Certificates & secrets → New client secret**, longest expiry, **Add**, and copy the **Value** right away.
-5. **API permissions → Add a permission → Microsoft Graph → Application permissions**, tick **Mail.Send**, **Add permissions**, then **Grant admin consent for Aione**.
-6. In Vercel, add `MS_TENANT_ID` (directory ID), `MS_CLIENT_ID` (application ID) and `MS_CLIENT_SECRET` (the value), then redeploy. Reload the dashboard: the note button now says **Send email**.
+**Set it up (once, about 5 minutes):**
 
-Recommended: Mail.Send on its own lets the app send as any mailbox in the company. An Exchange admin can limit it to the people who use the dashboard (Exchange Online PowerShell):
+1. Create a Gmail account for the team, for example `aione.team.control@gmail.com` (or use an existing one).
+2. Turn on 2-Step Verification for it: **myaccount.google.com → Security → 2-Step Verification**. Google only allows app passwords with it on.
+3. Open **https://myaccount.google.com/apppasswords**, type `AION Team Control`, click **Create**, and copy the 16-letter password.
+4. In Vercel, add `GMAIL_USER` (the Gmail address) and `GMAIL_APP_PASSWORD` (the 16 letters), then redeploy. Reload the dashboard: the note button now says **Send email**.
 
-```powershell
-New-DistributionGroup -Name "AION Team Control senders" -Type Security -Members youssef@aione.biz,ellen@aione.biz
-New-ApplicationAccessPolicy -AppId <Application (client) ID> -PolicyScopeGroupId "AION Team Control senders" -AccessRight RestrictAccess -Description "AION Team Control may only send as these people"
-```
+**So emails don't land in Junk:** each person who receives them (the developers) can open one in Outlook and choose **Not junk**, or add the Gmail address under **Settings → Mail → Junk email → Safe senders**. Outlook will mark them as coming from outside the company; that's expected.
 
-To turn automatic emails off again, delete the three `MS_` variables in Vercel and redeploy.
+Gmail allows about 500 emails a day from one account. To stop sending, delete the two `GMAIL_` variables and redeploy. If you change the Gmail account's password, Google cancels its app passwords: create a new one and update `GMAIL_APP_PASSWORD`.
 
 ## If something doesn't work
 
 - **"Can't reach the AION server":** check that https://aione-team-proxy.vercel.app/config answers with `{"code":"session",...}`. If not, open the latest deployment in Vercel for errors.
 - **"Jira didn't accept the proxy's API token":** the token expired or was revoked. Replace it (above).
 - **"Jira refused: …":** Jira itself said no, usually because the Jira account doesn't have permission for that action.
-- **"Microsoft refused to send from …":** Mail.Send isn't granted with admin consent, or an application access policy doesn't include that person.
-- **"Microsoft didn't accept the proxy's app details":** the client secret expired or a Microsoft ID is wrong.
+- **"The email account didn't accept its app password":** the Gmail app password was revoked (for example after a password change). Create a new one and update `GMAIL_APP_PASSWORD`.
+- **Emails don't arrive:** check the recipient's Junk folder, and the Gmail account's **Sent** folder to see whether they went out.
 - **Run the tests yourself:** `npm test` (Node 20+).

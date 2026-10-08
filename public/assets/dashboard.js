@@ -572,7 +572,7 @@ import { api, getSession, signOut } from "./session.js";
     const f3=el("div","fld"); f3.appendChild(el("label",null,"Subject")); const subj=el("input","inp"); subj.value="Internal note: "+key+" – "+i.summary; f3.appendChild(subj); body.appendChild(f3);
     const f4=el("div","fld"); f4.appendChild(el("label",null,"Note")); const ta=el("textarea","inp"); ta.dir="auto"; ta.placeholder="Write your note to the developer…"; f4.appendChild(ta); body.appendChild(f4);
     const f5=el("label","tgl"); f5.style.padding="2px 12px 8px"; const cc=el("input","ck"); cc.type="checkbox"; cc.checked=true; f5.appendChild(cc); f5.append(" Include ticket details and link"); body.appendChild(f5);
-    const foot=el("div","foot"); const msg=el("span","msg"); const send=el("button","btn primary sp",MAIL?"Send email":"Open in Outlook"); send.type="button"; send.title=MAIL?"Sends from your mailbox right away (shows in your Sent Items).":"Opens a ready-made email in your mail app. Check it and press Send there.";
+    const foot=el("div","foot"); const msg=el("span","msg"); const send=el("button","btn primary sp",MAIL?"Send email":"Open in Outlook"); send.type="button"; send.title=MAIL?"Sends right away, in your name. Replies come to your inbox.":"Opens a ready-made email in your mail app. Check it and press Send there.";
     send.addEventListener("click",async()=>{
       const to=[...new Set([...chosen].map(d=>DEV_EMAIL[d]).concat(extra.value.split(/[,;\s]+/).map(x=>x.trim()).filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x))))];
       const text=ta.value.trim();
@@ -593,7 +593,7 @@ import { api, getSession, signOut } from "./session.js";
       try{ await api("/mail",{method:"POST",body:{to,subject,html}});
         closePop(); toast("Internal note sent to "+to.length+" recipient"+(to.length===1?"":"s"),to);
       }catch(err){ send.disabled=false; send.textContent="Send email"; msg.className="msg err";
-        msg.textContent=err.code==="network"?"The server didn't confirm. Check your Sent Items before sending again.":err.message; }
+        msg.textContent=err.code==="network"?"The server didn't confirm. Ask the recipient before sending again.":err.message; }
     });
     foot.appendChild(msg); foot.appendChild(send); p.appendChild(foot); placePop(anchor); ta.focus();
   }
@@ -663,7 +663,7 @@ import { api, getSession, signOut } from "./session.js";
           +"<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\"><thead><tr><th>Ticket</th><th>Title</th><th>Status</th><th>Due date</th><th>Epic</th><th>Reporter</th></tr></thead><tbody>"+rows+"</tbody></table>"
           +"<p>Please review "+(keys.length===1?"it":"them")+" and set a due date in Jira based on the development time.</p><p>Thanks,<br>"+esc(ME)+"</p>";
         try{ await api("/mail",{method:"POST",body:{to:[to],subject,html}}); sent.push("ai1_"+d+" ("+to+") · "+keys.join(", ")); }
-        catch(err){ failed.push("ai1_"+d+": "+(err.code==="network"?"the server didn't confirm, check your Sent Items before resending":err.message)); }
+        catch(err){ failed.push("ai1_"+d+": "+(err.code==="network"?"the server didn't confirm; ask the developer before resending":err.message)); }
         continue;
       }
       const rows=items.map(i=>"• "+i.key+" – "+i.summary+"\n  "+SITE+"/browse/"+i.key+"\n  Status: "+i.status+" · Due: "+(i.due?fmtDate(i.due):"Not set")+(i.parent?" · Epic: "+i.parent.name:"")+" · Reporter: "+i.reporter).join("\n\n");

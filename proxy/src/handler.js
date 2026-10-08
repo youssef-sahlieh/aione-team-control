@@ -1,15 +1,17 @@
 // AION Team Control proxy. Runs on Vercel (see api/proxy.js); the code itself only uses standard web APIs.
 // The dashboard on GitHub Pages can't call Jira itself: Jira blocks browser calls from other sites,
-// and the Jira token must stay secret. This Worker checks the team sign-in, then forwards a fixed
+// and the Jira token must stay secret. This proxy checks the team sign-in, then forwards a fixed
 // set of Jira actions for the one project in JIRA_PROJECT.
 //
-// It also sends the dashboard's emails (internal notes, new-assignment emails) through Microsoft Graph,
-// from the signed-in person's own mailbox, to @MAIL_DOMAIN addresses only.
+// It also sends the dashboard's emails (internal notes, new-assignment emails), to @MAIL_DOMAIN
+// addresses only, either through env.MAILER (a function the host provides, e.g. Gmail; replies go to
+// the signed-in person) or through Microsoft Graph from the signed-in person's own mailbox.
 //
 // Secrets: TEAM_PASSWORD, SESSION_SECRET, TEAM_CONFIG (JSON), JIRA_SITE, JIRA_EMAIL, JIRA_API_TOKEN,
-//          and optionally MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET (without them, email is off).
+//          and optionally MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET.
 // Settings: ALLOWED_ORIGIN, TEAM_EMAILS, JIRA_PROJECT, MAIL_DOMAIN (see settings.js).
 // Optional: LOGIN_LIMIT, a rate limiter with limit({ key }) -> { success }; otherwise a simple in-memory one.
+// Optional: MAILER, async ({ fromName, replyTo, to, subject, html }) => void. Without it or MS_*, email is off.
 
 const enc = new TextEncoder();
 const SESSION_MS = 12 * 3600 * 1000;
@@ -116,7 +118,10 @@ async function jira(env, path, init = {}) {
 }
 const pass = (r) => (r.ok ? json(r.data) : r.res);
 
-const mailEnabled = (env) => !!(env.MS_TENANT_ID && env.MS_CLIENT_ID && env.MS_CLIENT_SECRET);
+const microsoftMail = (env) => !!(env.MS_TENANT_ID && env.MS_CLIENT_ID && env.MS_CLIENT_SECRET);
+const mailEnabled = (env) => typeof env.MAILER === "function" || microsoftMail(env);
+// "youssef@aione.biz" -> "Youssef"
+const firstName = (email) => email.split("@")[0].split(/[._-]/)[0].replace(/^./, (c) => c.toUpperCase());
 
 // Microsoft Graph app token (client credentials), reused until shortly before it expires.
 let graphToken = { value: "", until: 0, tenant: "" };
@@ -141,6 +146,15 @@ async function sendMail(env, from, b) {
   const subject = typeof b.subject === "string" ? b.subject.trim().slice(0, 250) : "";
   const html = typeof b.html === "string" ? b.html : "";
   if (!subject || !html || html.length > 100000) return fail("bad_request", "The email needs a subject and text.", 400);
+  if (typeof env.MAILER === "function") {
+    try {
+      await env.MAILER({ fromName: firstName(from) + " via AION Team Control", replyTo: from, to, subject, html });
+      return json({ ok: true, to });
+    } catch (err) {
+      console.log("mail error:", err && err.message);
+      return fail("mail", /auth|login|credential|535|534/i.test(String(err && err.message)) ? "The email account didn't accept its app password. Check GMAIL_USER and GMAIL_APP_PASSWORD." : "The email didn't send: " + ((err && err.message) || "unknown error"), 502);
+    }
+  }
   const token = await getGraphToken(env);
   if (!token) return fail("mail", "Microsoft didn't accept the proxy's app details. Check MS_TENANT_ID, MS_CLIENT_ID and MS_CLIENT_SECRET.", 502);
   const res = await fetch("https://graph.microsoft.com/v1.0/users/" + encodeURIComponent(from) + "/sendMail", {

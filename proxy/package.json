@@ -2,5 +2,8 @@
   "name": "aione-team-proxy",
   "private": true,
   "type": "module",
-  "description": "AION Team Control Jira proxy, deployed to Vercel from this folder."
+  "description": "AION Team Control Jira proxy, deployed to Vercel from this folder.",
+  "dependencies": {
+    "nodemailer": "10.0.10"
+  }
 }
