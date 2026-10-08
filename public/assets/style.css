@@ -60,3 +60,4 @@ label{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07
 .panel h2{margin:0 0 6px;font-size:18px}
 .panel p{margin:0;color:var(--muted)}
 .steps{margin:10px 0 0;padding-left:20px;color:var(--muted)}
+.panel p.next{margin-top:10px}

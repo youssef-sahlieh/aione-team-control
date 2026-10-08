@@ -1,15 +1,14 @@
 {
   "name": "aione-team-control",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "AION Team Control on Cloudflare Workers, protected by Cloudflare Access (email one-time PIN).",
+  "description": "AION Team Control on GitHub Pages, with Microsoft 365 sign-in.",
   "scripts": {
-    "deploy": "wrangler deploy",
-    "dev": "wrangler dev",
-    "test": "node test/access.test.js"
+    "build": "node scripts/build.js",
+    "test": "node test/auth.test.js"
   },
-  "devDependencies": {
-    "wrangler": "^4.0.0"
+  "dependencies": {
+    "@azure/msal-browser": "4.30.0"
   }
 }
