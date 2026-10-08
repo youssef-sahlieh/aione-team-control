@@ -65,7 +65,12 @@ function cleanDevs(list) {
 const by = (me) => ({ email: me.email, name: me.name });
 
 // Checks and applies the fields in b to ticket t. Returns an error message, or "" when fine.
-function applyFields(t, b, me, creating) {
+// The people a ticket can be assigned to: the team in TEAM_CONFIG (Karim, Youssef, Rami), by key.
+function teamPeople(env) {
+  try { return Object.keys(JSON.parse(env.TEAM_CONFIG || "{}").people || {}); } catch { return []; }
+}
+
+function applyFields(t, b, me, creating, people = []) {
   if (b.summary !== undefined) {
     const s = String(b.summary).trim();
     if (!s || s.length > 200) return "Write a title (up to 200 characters).";
@@ -93,6 +98,11 @@ function applyFields(t, b, me, creating) {
       t.status = b.status;
       t.closedAt = b.status === "Closed" ? now() : null;
     }
+  }
+  if (b.assignee !== undefined) {
+    if (!creating && me.role !== "admin" && b.assignee !== t.assignee) return "Only administrators can change the assignee.";
+    if (people.length && !people.includes(b.assignee)) return "Choose the assignee: " + people.join(", ") + ".";
+    t.assignee = b.assignee;
   }
   if (b.devs !== undefined) {
     const devs = cleanDevs(b.devs);
@@ -122,8 +132,10 @@ export async function internalRoutes(request, env, url, me) {
 
   if (path === "/internal" && method === "POST") {
     const b = (await readJson(request)) || {};
-    const t = { summary: "", description: "", priority: "Medium", due: null, status: "Open", devs: [], comments: [], dueHistory: [] };
-    const err = applyFields(t, { ...b, status: undefined, devs: me.role === "admin" ? b.devs || [] : [me.dev] }, me, true);
+    const t = { summary: "", description: "", priority: "Medium", due: null, status: "Open", assignee: null, devs: [], comments: [], dueHistory: [] };
+    const people = teamPeople(env);
+    if (people.length && b.assignee === undefined) return fail("bad_request", "Choose the assignee: " + people.join(", ") + ".", 400);
+    const err = applyFields(t, { ...b, status: undefined, devs: me.role === "admin" ? b.devs || [] : [me.dev] }, me, true, people);
     if (err) return fail("bad_request", err, 400);
     if (!t.summary) return fail("bad_request", "Write a title.", 400);
     if (me.role === "admin" && !t.devs.length) return fail("bad_request", "Choose at least one developer.", 400);
@@ -198,7 +210,7 @@ export async function internalRoutes(request, env, url, me) {
   if (!m[2] && method === "PUT") {
     const b = (await readJson(request)) || {};
     const before = [...(t.devs || [])];
-    const err = applyFields(t, b, me, false);
+    const err = applyFields(t, b, me, false, teamPeople(env));
     if (err) return fail("bad_request", err, 400);
     if (!t.devs.length) return fail("bad_request", "A ticket needs at least one developer.", 400);
     t.updated = now();

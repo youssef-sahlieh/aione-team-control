@@ -73,9 +73,9 @@ import { api, apiFile, getSession, signOut } from "./session.js";
   function normInternal(t){
     const cm=t.comments||[], last=cm.length?cm[cm.length-1]:null;
     return { key:t.key, internal:true, summary:t.summary||"(no title)", status:t.status, cat:t.statusCat,
-      assignee:null, assigneeName:"Internal", labels:(t.devs||[]).map(d=>"ai1_"+d), devs:(t.devs||[]).slice(), due:t.due||null,
+      assignee:PEOPLE[t.assignee]?t.assignee:null, assigneeName:PEOPLE[t.assignee]?PEOPLE[t.assignee].name:"Unassigned", labels:(t.devs||[]).map(d=>"ai1_"+d), devs:(t.devs||[]).slice(), due:t.due||null,
       created:(t.created||"").slice(0,10), updated:t.updated||"", priority:t.priority||"", type:"Internal",
-      reporter:(t.createdBy&&t.createdBy.name)||"Unknown", reporterId:null, assigneeId:null, parent:null,
+      reporter:(t.createdBy&&t.createdBy.name)||"Unknown", reporterId:null, assigneeId:PEOPLE[t.assignee]?PEOPLE[t.assignee].id:null, parent:null,
       last:last?{author:(last.author&&last.author.name)||"Someone", fromTeam:true, when:last.created, text:last.body}:null };
   }
   async function loadInternal(){
@@ -388,7 +388,7 @@ import { api, apiFile, getSession, signOut } from "./session.js";
     const tags=tagsFor(i,t,state.group!=="epic"); if(tags.childNodes.length) tt.appendChild(tags);
     if((state.focus==="reply"||state.focus==="recent"||state.f.activity==="reply")&&i.last){ const sn=el("span","snip"); sn.dir="auto"; sn.appendChild(el("b",null,i.last.author+" · "+ago(i.last.when)+": ")); sn.append(i.last.text); tt.appendChild(sn); }
     tt.addEventListener("click",()=>openDrawer(i.key)); r.appendChild(tt);
-    const canAsg=IS_ADMIN&&!i.internal; const who=el(canAsg?"button":"span","who c-who"+(canAsg?" asg":"")); who.appendChild(avatar(i)); who.appendChild(el("span",null,i.assignee?PEOPLE[i.assignee].name:i.assigneeName));
+    const canAsg=IS_ADMIN; const who=el(canAsg?"button":"span","who c-who"+(canAsg?" asg":"")); who.appendChild(avatar(i)); who.appendChild(el("span",null,i.assignee?PEOPLE[i.assignee].name:i.assigneeName));
     if(canAsg){ who.type="button"; who.title="Change assignee"; who.addEventListener("click",e=>{ e.stopPropagation(); assigneePopover(who,[i.key]); }); } r.appendChild(who);
     const rp=el("span","who c-rep"); rp.appendChild(el("span","av k6",initials(i.reporter))); const rn=el("span",null,i.reporter); rn.title=i.reporter; rp.appendChild(rn); r.appendChild(rp);
     r.appendChild(devButton(i));
@@ -584,7 +584,7 @@ import { api, apiFile, getSession, signOut } from "./session.js";
     foot.appendChild(clr); foot.appendChild(save); p.appendChild(foot); placePop(anchor); inp.focus();
   }
   const initialsOf=n=>String(n||"?").split(/\s+/).filter(Boolean).map(x=>x[0]).join("").slice(0,2).toUpperCase()||"?";
-  function assignOps(keys,id){ return keys.map(k=>{ const i=issueByKey(k); if(i&&i.assigneeId===id) return null; if(isInt(k)) return null; return {key:k,run:()=>jira.edit(k,{assignee:id?{accountId:id}:null})}; }).filter(Boolean); }
+  function assignOps(keys,id){ return keys.map(k=>{ const i=issueByKey(k); if(i&&i.assigneeId===id) return null; if(isInt(k)) return BYID[id]?{key:k,run:()=>internalApi.update(k,{assignee:BYID[id]})}:null; return {key:k,run:()=>jira.edit(k,{assignee:id?{accountId:id}:null})}; }).filter(Boolean); }
   async function doAssign(keys,id,name){
     const ops=assignOps(keys,id); if(!ops.length){ toast("Already assigned to "+name+"."); return {ok:0,fail:0}; }
     const r=await runBatch(ops,"Assigned to "+name);
@@ -827,9 +827,10 @@ import { api, apiFile, getSession, signOut } from "./session.js";
     const t=INT[key]; if(!t){ $("d-desc").replaceChildren(el("span",null,"Ticket not found.")); return; }
     const ni=normInternal(t);
     $("d-title").textContent=t.summary; $("d-status").textContent=t.status; $("d-status").className="stbtn "+stK(ni);
-    $("d-facts").replaceChildren(fact("Type","Internal (not in Jira)"),fact("Priority",t.priority),fact("Developers",(t.devs||[]).map(d=>"ai1_"+d).join(", ")),fact("Opened by",t.createdBy&&t.createdBy.name),fact("Created",ago(t.created)),fact("Updated",ago(t.updated)),fact("Due",t.due?fmtDate(t.due):"not set"),fact("Closed",t.closedAt?ago(t.closedAt):""));
+    $("d-facts").replaceChildren(fact("Type","Internal (not in Jira)"),fact("Assignee",ni.assigneeName),fact("Priority",t.priority),fact("Developers",(t.devs||[]).map(d=>"ai1_"+d).join(", ")),fact("Opened by",t.createdBy&&t.createdBy.name),fact("Created",ago(t.created)),fact("Updated",ago(t.updated)),fact("Due",t.due?fmtDate(t.due):"not set"),fact("Closed",t.closedAt?ago(t.closedAt):""));
     dz.labels=ni.labels.slice(); dz.devs=new Set(ni.devs); renderDevChips(); $("d-due").value=t.due||"";
     HIST[key]={updated:t.updated,changes:(t.dueHistory||[]).map(h=>({when:h.when,by:h.by,from:h.from,to:h.to}))}; renderDrawerHist(key);
+    { const box=$("d-asgname"); box.replaceChildren(el("span","av "+(ni.assignee?"kp-"+ni.assignee:"k8"),initialsOf(ni.assigneeName)),el("span",null,ni.assigneeName)); }
     const d=el("div","plain",t.description||""); if(!t.description){ d.textContent="No description."; d.style.color="var(--muted)"; } $("d-desc").replaceChildren(d);
     renderIntAttachments(key);
     const cm=t.comments||[]; $("d-ccount").textContent="("+cm.length+")";
@@ -890,8 +891,12 @@ import { api, apiFile, getSession, signOut } from "./session.js";
     const title=fld("Title",el("input","inp")); title.value=t?t.summary:""; title.dir="auto";
     const desc=fld("Description",el("textarea","inp")); desc.value=t?t.description||"":""; desc.dir="auto"; desc.placeholder="What needs doing…";
     const prio=fld("Priority",el("select","fsel")); INT_PRIORITIES.forEach(x=>prio.appendChild(new Option(x,x))); prio.value=t?t.priority:"Medium";
-    let devs=null, due=null;
+    let devs=null, due=null, asg=null;
     if(!t){
+      // Assignee: Karim, Youssef or Rami, like the Jira tickets. Pre-set to the person opening it when they're one of them.
+      asg=fld("Assignee",el("select","fsel")); asg.appendChild(new Option("Choose…",""));
+      Object.keys(PEOPLE).forEach(k=>asg.appendChild(new Option(PEOPLE[k].name,k)));
+      asg.value=Object.keys(PEOPLE).find(k=>PEOPLE[k].name.toLowerCase()===ME.toLowerCase())||"";
       if(IS_ADMIN){
         devs=new Set(); const rc=el("div","rcpts");
         allDevs().forEach(d=>{ const c=el("button","fc "+devK(d)); c.type="button"; c.appendChild(el("span","sw")); c.appendChild(el("span",null,"ai1_"+d)); c.setAttribute("aria-pressed","false");
@@ -904,10 +909,11 @@ import { api, apiFile, getSession, signOut } from "./session.js";
     save.addEventListener("click",async()=>{
       if(!title.value.trim()){ msg.textContent="Write a title."; msg.className="msg err"; title.focus(); return; }
       if(devs&&!devs.size){ msg.textContent="Pick at least one developer."; msg.className="msg err"; return; }
+      if(asg&&!asg.value&&Object.keys(PEOPLE).length){ msg.textContent="Choose the assignee."; msg.className="msg err"; asg.focus(); return; }
       save.disabled=true; msg.textContent="";
       try{
         if(t){ await internalApi.update(key,{summary:title.value,description:desc.value,priority:prio.value}); closePop(); toast("Saved."); await reload(); if(dz.key===key) loadDetail(key); return; }
-        const r=await internalApi.create({summary:title.value,description:desc.value,priority:prio.value,devs:devs?[...devs]:[MY_DEV],due:due.value||null});
+        const r=await internalApi.create({summary:title.value,description:desc.value,priority:prio.value,devs:devs?[...devs]:[MY_DEV],due:due.value||null,...(asg&&asg.value?{assignee:asg.value}:{})});
         closePop(); toast(r.ticket.key+" created.");
         await reload(); openDrawer(r.ticket.key);
         if(IS_ADMIN&&notifyOn&&r.ticket.devs.length) setTimeout(()=>notifyDevs([{key:r.ticket.key,added:r.ticket.devs}]),1500);

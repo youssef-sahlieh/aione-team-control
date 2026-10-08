@@ -59,6 +59,7 @@ Until then, Youssef and Ellen sign in with the team password and the Users page 
 Tickets that live only in AION Team Control, never in Jira. They're numbered **INT-1, INT-2, …**, carry a teal **Internal** tag, and show up in every tile, filter, board and view next to the Jira tickets (filter on them with **Work type → Internal**).
 
 - **Open one:** **+ Internal ticket** above the list. Administrators choose one or more developers; Users always open them for themselves.
+- **Assignee:** every internal ticket is assigned to Karim, Youssef or Rami, like the Jira tickets. It's pre-set to the person opening it when that's one of them; anyone else picks one. Administrators can change it later (click the assignee in the list, or **Change assignee** in the ticket panel).
 - **Work on it** in the ticket panel like any ticket: move it **Open → In Development → Closed**, set the due date (changes appear in the due date history), comment, and **Edit** the title, description and priority. A ticket stays open until someone closes it.
 - **Attachments:** **+ Add files** in the ticket panel (up to 4 MB each, 20 per ticket). Files are stored with the ticket and only people who can see the ticket can download them. Whoever added a file, or an administrator, can remove it.
 - **Who sees what:** administrators see all internal tickets and can reassign developers or **Delete** one (Users can't delete). A User only sees internal tickets for their own developer name.

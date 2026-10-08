@@ -207,6 +207,20 @@ const tests = [
     assert.ok(![...env.STORE._data.keys()].some((k) => k.startsWith("ia:" + att.id)), "its bytes are gone");
     assert.equal((await raw("/internal/INT-1/attachments/" + adminAtt.id, { method: "DELETE", token: a.token })).status, 200, "admin removes any file");
   }],
+  ["internal tickets: assignee is Karim, Youssef or Rami; only admins change it", async () => {
+    env.TEAM_CONFIG = JSON.stringify({ people: { karim: { id: "k" }, youssef: { id: "y" }, rami: { id: "r" } } });
+    const u = await login("bashar.b@aione.biz", "Pass-for-bashar", "10.0.2.1");
+    assert.equal((await call("/internal", { method: "POST", token: u.token, body: { summary: "No assignee" } })).status, 400, "assignee required");
+    assert.equal((await call("/internal", { method: "POST", token: u.token, body: { summary: "Bad", assignee: "bashar" } })).status, 400, "only team members");
+    const r = await call("/internal", { method: "POST", token: u.token, body: { summary: "For Rami", assignee: "rami" } });
+    assert.equal(r.status, 201); assert.equal(r.data.ticket.assignee, "rami");
+    assert.equal((await call("/internal/" + r.data.ticket.key, { method: "PUT", token: u.token, body: { assignee: "karim" } })).status, 400, "user can't reassign");
+    assert.equal((await call("/internal/" + r.data.ticket.key, { method: "PUT", token: u.token, body: { assignee: "rami", status: "In Development" } })).status, 200, "unchanged assignee is fine");
+    const a = await login("youssef@aione.biz", "Team-password-1", "10.0.2.2");
+    const c = await call("/internal/" + r.data.ticket.key, { method: "PUT", token: a.token, body: { assignee: "karim" } });
+    assert.equal(c.data.ticket.assignee, "karim");
+    env.TEAM_CONFIG = "{}";
+  }],
   ["internal tickets: admin reassigns developers (reports who was added) and deletes", async () => {
     const a = await login("ellen@aione.biz", "Team-password-1", "10.0.0.4");
     const r = await call("/internal/INT-2", { method: "PUT", token: a.token, body: { devs: ["sondos", "ai1_bashar"] } });
