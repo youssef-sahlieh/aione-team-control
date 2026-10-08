@@ -19,7 +19,7 @@ Browser ──► GitHub Pages (dashboard files, public)
 - People sign in with their work email and the team password. The **proxy** checks them and returns a 12-hour session.
 - Every Jira request goes through the proxy with that session. The proxy only reads and changes **AION** tickets, and only labels (developers), due dates, assignee, status and comments.
 - The Jira token, the password, the Jira site and the team details (people, developer emails) are **GitHub secrets**, passed to the proxy when it deploys. None of them are in this public repository.
-- Internal notes and new-assignment emails open a ready-made email in Outlook (a `mailto:` link). Nothing is sent until you press Send.
+- Internal notes and new-assignment emails are sent automatically from the signed-in person's Microsoft 365 mailbox, to @aione.biz addresses only, once email is set up (SETUP.md, step 4). Until then they open a ready-made email in Outlook.
 - Changes in Jira are made as the Jira account whose API token the proxy uses.
 
 ## Files

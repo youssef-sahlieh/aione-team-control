@@ -3,8 +3,12 @@
 // and the Jira token must stay secret. This Worker checks the team sign-in, then forwards a fixed
 // set of Jira actions for the one project in JIRA_PROJECT.
 //
-// Secrets: TEAM_PASSWORD, SESSION_SECRET, TEAM_CONFIG (JSON), JIRA_SITE, JIRA_EMAIL, JIRA_API_TOKEN.
-// Vars: ALLOWED_ORIGIN, TEAM_EMAILS, JIRA_PROJECT. Binding (optional): LOGIN_LIMIT rate limiter.
+// It also sends the dashboard's emails (internal notes, new-assignment emails) through Microsoft Graph,
+// from the signed-in person's own mailbox, to @MAIL_DOMAIN addresses only.
+//
+// Secrets: TEAM_PASSWORD, SESSION_SECRET, TEAM_CONFIG (JSON), JIRA_SITE, JIRA_EMAIL, JIRA_API_TOKEN,
+//          and optionally MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET (without them, email is off).
+// Vars: ALLOWED_ORIGIN, TEAM_EMAILS, JIRA_PROJECT, MAIL_DOMAIN. Binding (optional): LOGIN_LIMIT rate limiter.
 
 const enc = new TextEncoder();
 const SESSION_MS = 12 * 3600 * 1000;
@@ -98,6 +102,44 @@ async function jira(env, path, init = {}) {
 }
 const pass = (r) => (r.ok ? json(r.data) : r.res);
 
+const mailEnabled = (env) => !!(env.MS_TENANT_ID && env.MS_CLIENT_ID && env.MS_CLIENT_SECRET);
+
+// Microsoft Graph app token (client credentials), reused until shortly before it expires.
+let graphToken = { value: "", until: 0, tenant: "" };
+async function getGraphToken(env) {
+  if (graphToken.value && graphToken.tenant === env.MS_TENANT_ID && Date.now() < graphToken.until) return graphToken.value;
+  const res = await fetch("https://login.microsoftonline.com/" + encodeURIComponent(env.MS_TENANT_ID) + "/oauth2/v2.0/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "client_credentials", client_id: env.MS_CLIENT_ID, client_secret: env.MS_CLIENT_SECRET, scope: "https://graph.microsoft.com/.default" }).toString()
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.access_token) return null;
+  graphToken = { value: data.access_token, until: Date.now() + (Number(data.expires_in || 3600) - 300) * 1000, tenant: env.MS_TENANT_ID };
+  return graphToken.value;
+}
+
+async function sendMail(env, from, b) {
+  if (!mailEnabled(env)) return fail("mail_off", "Email sending isn't set up.", 501);
+  const domain = "@" + String(env.MAIL_DOMAIN || "").toLowerCase();
+  const to = Array.isArray(b && b.to) ? [...new Set(b.to.map((x) => String(x).trim()))] : [];
+  if (!to.length || to.length > 20 || !to.every((x) => /^[^@\s]+@[^@\s]+$/.test(x) && x.toLowerCase().endsWith(domain))) return fail("bad_request", "Emails can only go to " + domain + " addresses.", 400);
+  const subject = typeof b.subject === "string" ? b.subject.trim().slice(0, 250) : "";
+  const html = typeof b.html === "string" ? b.html : "";
+  if (!subject || !html || html.length > 100000) return fail("bad_request", "The email needs a subject and text.", 400);
+  const token = await getGraphToken(env);
+  if (!token) return fail("mail", "Microsoft didn't accept the proxy's app details. Check MS_TENANT_ID, MS_CLIENT_ID and MS_CLIENT_SECRET.", 502);
+  const res = await fetch("https://graph.microsoft.com/v1.0/users/" + encodeURIComponent(from) + "/sendMail", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify({ message: { subject, body: { contentType: "HTML", content: html }, toRecipients: to.map((address) => ({ emailAddress: { address } })) }, saveToSentItems: true })
+  });
+  if (res.ok) return json({ ok: true, to });
+  const data = await res.json().catch(() => ({}));
+  const detail = data && data.error && data.error.message;
+  return fail("mail", res.status === 403 ? "Microsoft refused to send from " + from + ". Check the app's Mail.Send permission and admin consent." : detail || "Outlook answered " + res.status + ".", 502);
+}
+
 function validFields(fields) {
   if (!fields || typeof fields !== "object" || Array.isArray(fields)) return false;
   const keys = Object.keys(fields);
@@ -133,8 +175,10 @@ async function route(request, env, url) {
   if (path === "/config" && method === "GET") {
     let team = {};
     try { team = JSON.parse(env.TEAM_CONFIG || "{}"); } catch {}
-    return json({ ...team, site: env.JIRA_SITE, project: P, email });
+    return json({ ...team, site: env.JIRA_SITE, project: P, email, mail: mailEnabled(env) });
   }
+
+  if (path === "/mail" && method === "POST") return sendMail(env, email, await readJson(request));
 
   if (path === "/jira/search" && method === "POST") {
     const b = await readJson(request);

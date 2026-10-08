@@ -4,14 +4,14 @@
 import { api, getSession, signOut } from "./session.js";
 
   // Filled in from the proxy's /config after sign-in (see applyConfig).
-  let SITE="", PROJECT="", PEOPLE={}, DEVS=[], DEV_EMAIL={}, DEV_COLOR={}, BYID={}, JQL="", ME="";
+  let SITE="", PROJECT="", PEOPLE={}, DEVS=[], DEV_EMAIL={}, DEV_COLOR={}, BYID={}, JQL="", ME="", MAIL=false;
   let notifyOn=true; try{ notifyOn=localStorage.getItem("aion.notify")!=="0"; }catch(e){}
   const devK=d=>DEV_COLOR[d]||("k"+(1+[...d].reduce((a,c)=>a+c.charCodeAt(0),0)%8));
   const STATUS_ORDER=["open","pending approval","dev approved","in development","reopened","pending qa","in qa","done review","resolved","closed"];
   const stIdx=s=>{ const i=STATUS_ORDER.indexOf(s.toLowerCase()); return i<0?99:i; };
   const FIELDS=["summary","status","assignee","labels","duedate","created","updated","priority","issuetype","comment","parent","reporter"];
   function applyConfig(cfg){
-    SITE=cfg.site; PROJECT=cfg.project; PEOPLE=cfg.people||{}; DEVS=cfg.devs||[]; DEV_EMAIL=cfg.devEmails||{}; DEV_COLOR=cfg.devColors||{};
+    SITE=cfg.site; PROJECT=cfg.project; MAIL=!!cfg.mail; PEOPLE=cfg.people||{}; DEVS=cfg.devs||[]; DEV_EMAIL=cfg.devEmails||{}; DEV_COLOR=cfg.devColors||{};
     BYID={}; for(const k in PEOPLE) BYID[PEOPLE[k].id]=k;
     const IDS=Object.values(PEOPLE).map(p=>'"'+p.id+'"').join(",");
     JQL='project = '+PROJECT+' AND assignee in ('+IDS+') AND issuetype != Epic AND (statusCategory != Done OR updated >= -30d) ORDER BY updated DESC';
@@ -570,18 +570,28 @@ import { api, getSession, signOut } from "./session.js";
     const f3=el("div","fld"); f3.appendChild(el("label",null,"Subject")); const subj=el("input","inp"); subj.value="Internal note: "+key+" – "+i.summary; f3.appendChild(subj); body.appendChild(f3);
     const f4=el("div","fld"); f4.appendChild(el("label",null,"Note")); const ta=el("textarea","inp"); ta.dir="auto"; ta.placeholder="Write your note to the developer…"; f4.appendChild(ta); body.appendChild(f4);
     const f5=el("label","tgl"); f5.style.padding="2px 12px 8px"; const cc=el("input","ck"); cc.type="checkbox"; cc.checked=true; f5.appendChild(cc); f5.append(" Include ticket details and link"); body.appendChild(f5);
-    const foot=el("div","foot"); const msg=el("span","msg"); const send=el("button","btn primary sp","Open in Outlook"); send.type="button"; send.title="Opens a ready-made email in your mail app. Check it and press Send there.";
-    send.addEventListener("click",()=>{
-      const to=[...chosen].map(d=>DEV_EMAIL[d]).concat(extra.value.split(/[,;\s]+/).map(x=>x.trim()).filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)));
+    const foot=el("div","foot"); const msg=el("span","msg"); const send=el("button","btn primary sp",MAIL?"Send email":"Open in Outlook"); send.type="button"; send.title=MAIL?"Sends from your mailbox right away (shows in your Sent Items).":"Opens a ready-made email in your mail app. Check it and press Send there.";
+    send.addEventListener("click",async()=>{
+      const to=[...new Set([...chosen].map(d=>DEV_EMAIL[d]).concat(extra.value.split(/[,;\s]+/).map(x=>x.trim()).filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x))))];
       const text=ta.value.trim();
       if(!to.length){ msg.textContent="Pick at least one developer."; msg.className="msg err"; return; }
       if(!text){ msg.textContent="Write the note first."; msg.className="msg err"; ta.focus(); return; }
-      const names=[...chosen].map(devFirstName);
-      let plain="Hi "+(names.length?names.join(", "):"team")+",\n\n"+text+"\n";
-      if(cc.checked) plain+="\n---\nTicket: "+key+" – "+i.summary+"\n"+SITE+"/browse/"+key+"\nStatus: "+i.status+" · Due: "+(i.due?fmtDate(i.due):"Not set")+" · Assignee: "+(i.assignee?PEOPLE[i.assignee].name:i.assigneeName)+(i.parent?" · Epic: "+i.parent.name:"")+"\n";
-      plain+="\nThanks,\n"+ME+"\n";
-      openEmail([...new Set(to)],subj.value.trim()||("Internal note: "+key),plain);
-      closePop(); toast("Email opened in Outlook. Check it and press Send there.",[...new Set(to)]);
+      const names=[...chosen].map(devFirstName), subject=subj.value.trim()||("Internal note: "+key);
+      if(!MAIL){
+        let plain="Hi "+(names.length?names.join(", "):"team")+",\n\n"+text+"\n";
+        if(cc.checked) plain+="\n---\nTicket: "+key+" – "+i.summary+"\n"+SITE+"/browse/"+key+"\nStatus: "+i.status+" · Due: "+(i.due?fmtDate(i.due):"Not set")+" · Assignee: "+(i.assignee?PEOPLE[i.assignee].name:i.assigneeName)+(i.parent?" · Epic: "+i.parent.name:"")+"\n";
+        plain+="\nThanks,\n"+ME+"\n";
+        openEmail(to,subject,plain);
+        closePop(); toast("Email opened in Outlook. Check it and press Send there.",to); return;
+      }
+      send.disabled=true; send.textContent="Sending…"; msg.textContent="";
+      let html="<p>Hi "+esc(names.length?names.join(", "):"team")+",</p>"+text.split(/\n{2,}/).map(par=>"<p>"+esc(par).replace(/\n/g,"<br>")+"</p>").join("");
+      if(cc.checked) html+="<hr><p><b>Ticket:</b> <a href=\""+esc(SITE)+"/browse/"+esc(key)+"\">"+esc(key)+"</a> – "+esc(i.summary)+"<br><b>Status:</b> "+esc(i.status)+" · <b>Due:</b> "+esc(i.due?fmtDate(i.due):"Not set")+" · <b>Assignee:</b> "+esc(i.assignee?PEOPLE[i.assignee].name:i.assigneeName)+(i.parent?" · <b>Epic:</b> "+esc(i.parent.name):"")+"</p>";
+      html+="<p>Thanks,<br>"+esc(ME)+"</p>";
+      try{ await api("/mail",{method:"POST",body:{to,subject,html}});
+        closePop(); toast("Internal note sent to "+to.length+" recipient"+(to.length===1?"":"s"),to);
+      }catch(err){ send.disabled=false; send.textContent="Send email"; msg.className="msg err";
+        msg.textContent=err.code==="network"?"The server didn't confirm. Check your Sent Items before sending again.":err.message; }
     });
     foot.appendChild(msg); foot.appendChild(send); p.appendChild(foot); placePop(anchor); ta.focus();
   }
@@ -633,21 +643,36 @@ import { api, getSession, signOut } from "./session.js";
     return {ok,fail:fails.length};
   }
   const devFirstName=d=>d==="bashar.k"?"Bashar":d.charAt(0).toUpperCase()+d.slice(1);
-  // Opens a ready-made email in the person's mail app (Outlook). Nothing is sent until they press Send there.
+  const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  // Without email sending set up on the proxy: opens a ready-made email in the person's mail app (Outlook).
   const mailtoHref=(to,subject,body)=>"mailto:"+to.join(",")+"?subject="+encodeURIComponent(subject.slice(0,250))+"&body="+encodeURIComponent(body);
   function openEmail(to,subject,body){ const a=document.createElement("a"); a.href=mailtoHref(to,subject,body); a.click(); }
-  // After developers are added, offer one ready-made email per developer (browsers allow only one to open at a time).
-  function notifyDevs(ops){
+  // After developers are added: emails each new developer (or, without email sending, offers a ready-made email per developer).
+  async function notifyDevs(ops){
     const byDev={}; ops.forEach(o=>o.added.forEach(d=>{ (byDev[d]=byDev[d]||[]).push(o.key); }));
-    const links=[], skipped=[];
+    const links=[], skipped=[], sent=[], failed=[];
     for(const d of Object.keys(byDev)){
       const to=DEV_EMAIL[d]; if(!to){ skipped.push("ai1_"+d+": no email on file"); continue; }
       const keys=byDev[d], items=keys.map(k=>issueByKey(k)).filter(Boolean);
       const subject=keys.length===1?("New Jira assignment: "+keys[0]+(items[0]?" – "+items[0].summary:"")):("New Jira assignments: "+keys.length+" tickets");
+      if(MAIL){
+        const rows=items.map(i=>"<tr><td><a href=\""+esc(SITE)+"/browse/"+esc(i.key)+"\">"+esc(i.key)+"</a></td><td>"+esc(i.summary)+"</td><td>"+esc(i.status)+"</td><td>"+esc(i.due?fmtDate(i.due):"Not set")+"</td><td>"+esc(i.parent?i.parent.name:"")+"</td><td>"+esc(i.reporter)+"</td></tr>").join("");
+        const html="<p>Hi "+esc(devFirstName(d))+",</p><p>You have been assigned as the developer (ai1_"+esc(d)+") on the following Jira "+(keys.length===1?"ticket":"tickets")+":</p>"
+          +"<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\"><thead><tr><th>Ticket</th><th>Title</th><th>Status</th><th>Due date</th><th>Epic</th><th>Reporter</th></tr></thead><tbody>"+rows+"</tbody></table>"
+          +"<p>Please review "+(keys.length===1?"it":"them")+" and set a due date in Jira based on the development time.</p><p>Thanks,<br>"+esc(ME)+"</p>";
+        try{ await api("/mail",{method:"POST",body:{to:[to],subject,html}}); sent.push("ai1_"+d+" ("+to+") · "+keys.join(", ")); }
+        catch(err){ failed.push("ai1_"+d+": "+(err.code==="network"?"the server didn't confirm, check your Sent Items before resending":err.message)); }
+        continue;
+      }
       const rows=items.map(i=>"• "+i.key+" – "+i.summary+"\n  "+SITE+"/browse/"+i.key+"\n  Status: "+i.status+" · Due: "+(i.due?fmtDate(i.due):"Not set")+(i.parent?" · Epic: "+i.parent.name:"")+" · Reporter: "+i.reporter).join("\n\n");
       const body="Hi "+devFirstName(d)+",\n\nYou have been assigned as the developer (ai1_"+d+") on the following Jira "+(keys.length===1?"ticket":"tickets")+":\n\n"+rows
         +"\n\nPlease review "+(keys.length===1?"it":"them")+" and set a due date in Jira based on the development time.\n\nThanks,\n"+ME+"\n";
       links.push({label:"Email ai1_"+d,href:mailtoHref([to],subject,body),title:to+" · "+keys.join(", ")});
+    }
+    if(MAIL){
+      if(failed.length||skipped.length) toast("Emails: "+sent.length+" sent"+(failed.length?", "+failed.length+" failed":""),sent.concat(failed,skipped),!!failed.length);
+      else if(sent.length) toast("Email sent to "+sent.length+" developer"+(sent.length===1?"":"s"),sent);
+      return;
     }
     if(links.length) toast("Let "+(links.length===1?"the developer":"the developers")+" know? Each button opens a ready-made email in Outlook.",skipped,false,links);
     else if(skipped.length) toast("No email sent",skipped,true);
@@ -682,7 +707,7 @@ import { api, getSession, signOut } from "./session.js";
   $("refresh").addEventListener("click",async()=>{ const b=$("refresh"); b.disabled=true; b.textContent="Refreshing…"; await reload(); b.disabled=false; b.textContent="Refresh"; });
 
   document.querySelectorAll(".seg [data-v]").forEach(b=>b.addEventListener("click",()=>{ state.view=b.dataset.v; try{localStorage.setItem("aion.view",state.view);}catch(e){} render(); }));
-  $("notify").checked=notifyOn; $("notify").addEventListener("change",e=>{ notifyOn=e.target.checked; try{localStorage.setItem("aion.notify",notifyOn?"1":"0");}catch(x){} toast(notifyOn?"Developers will be emailed when assigned.":"Assignment emails are off."); });
+  $("notify").checked=notifyOn; $("notify").addEventListener("change",e=>{ notifyOn=e.target.checked; try{localStorage.setItem("aion.notify",notifyOn?"1":"0");}catch(x){} toast(notifyOn?(MAIL?"Developers will be emailed when assigned.":"You'll be offered an email to developers when you assign them."):"Assignment emails are off."); });
   $("grp").addEventListener("change",e=>{ state.group=e.target.value; try{localStorage.setItem("aion.group",state.group);}catch(x){} render(); });
   $("ftoggle").addEventListener("click",()=>{ state.fopen=!state.fopen; try{localStorage.setItem("aion.fopen",state.fopen?"1":"0");}catch(e){} renderFilters(); });
   $("fclear").addEventListener("click",()=>{ state.f=F(); state.q=""; $("q").value=""; state.sel.clear(); render(); });

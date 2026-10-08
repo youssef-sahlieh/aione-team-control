@@ -14,6 +14,8 @@ ALLOWED_ORIGIN = "https://youssef-sahlieh.github.io"
 TEAM_EMAILS = "youssef@aione.biz,ellen@aione.biz"
 # The only Jira project the proxy reads or changes.
 JIRA_PROJECT = "AION"
+# Emails from the dashboard can only go to addresses at this domain.
+MAIL_DOMAIN = "aione.biz"
 
 # At most 10 sign-in attempts per minute from one address.
 [[ratelimits]]

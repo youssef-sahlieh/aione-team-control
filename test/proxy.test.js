@@ -14,7 +14,7 @@ const env = {
 let jiraCalls = [];
 let jiraReply = () => Response.json({});
 globalThis.fetch = async (url, init = {}) => {
-  jiraCalls.push({ url: String(url), method: init.method || "GET", headers: init.headers || {}, body: init.body ? JSON.parse(init.body) : undefined });
+  jiraCalls.push({ url: String(url), method: init.method || "GET", headers: init.headers || {}, body: init.body ? (() => { try { return JSON.parse(init.body); } catch { return init.body; } })() : undefined });
   return jiraReply(String(url), init);
 };
 
@@ -75,6 +75,35 @@ const tests = [
     assert.equal(r.status, 403); assert.deepEqual(await r.json(), { code: "jira", error: "You can't do that." });
   }],
   ["bad Jira token reported as a proxy problem, not a sign-in problem", async () => { jiraReply = () => new Response("", { status: 401 }); const r = await call("/jira/issue/AION-7/changelog", { token: await login() }); assert.equal(r.status, 502); assert.equal((await r.json()).code, "jira"); }],
+
+  ["email off without Microsoft settings", async () => {
+    const t = await login();
+    assert.equal((await (await call("/config", { token: t })).json()).mail, false);
+    const r = await call("/mail", { method: "POST", token: t, body: { to: ["ellen@aione.biz"], subject: "Hi", html: "<p>x</p>" } });
+    assert.equal(r.status, 501); assert.equal((await r.json()).code, "mail_off");
+  }],
+  ["email sent from the signed-in person's mailbox through Microsoft Graph", async () => {
+    const menv = { ...env, MAIL_DOMAIN: "aione.biz", MS_TENANT_ID: "tenant-1", MS_CLIENT_ID: "client-1", MS_CLIENT_SECRET: "shh" };
+    jiraCalls = []; jiraReply = (url) => url.includes("login.microsoftonline.com") ? Response.json({ access_token: "graph-token", expires_in: 3600 }) : new Response(null, { status: 202 });
+    const { token } = await makeToken(menv, "ellen@aione.biz");
+    const req = (body) => worker.fetch(new Request("https://p/mail", { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify(body) }), menv);
+    const r = await req({ to: ["Bashar.B@aione.biz"], subject: "Internal note", html: "<p>Hello</p>" });
+    assert.equal(r.status, 200);
+    const tok = jiraCalls.find((c) => c.url.includes("/oauth2/v2.0/token"));
+    assert.equal(tok.url, "https://login.microsoftonline.com/tenant-1/oauth2/v2.0/token");
+    const send = jiraCalls.find((c) => c.url.includes("graph.microsoft.com"));
+    assert.equal(send.url, "https://graph.microsoft.com/v1.0/users/ellen%40aione.biz/sendMail");
+    assert.equal(send.headers.Authorization, "Bearer graph-token");
+    assert.deepEqual(send.body.message.toRecipients, [{ emailAddress: { address: "Bashar.B@aione.biz" } }]);
+    assert.equal(send.body.message.body.contentType, "HTML"); assert.equal(send.body.saveToSentItems, true);
+    jiraCalls = [];
+    assert.equal((await req({ to: ["someone@gmail.com"], subject: "x", html: "<p>x</p>" })).status, 400, "outside addresses refused");
+    assert.equal((await req({ to: ["a@aione.biz.evil.com"], subject: "x", html: "<p>x</p>" })).status, 400, "look-alike domain refused");
+    assert.equal(jiraCalls.length, 0);
+    jiraReply = (url) => url.includes("graph.microsoft.com") ? Response.json({ error: { message: "denied" } }, { status: 403 }) : Response.json({ access_token: "graph-token", expires_in: 3600 });
+    const bad = await req({ to: ["ellen@aione.biz"], subject: "x", html: "<p>x</p>" });
+    assert.equal(bad.status, 502); assert.match((await bad.json()).error, /Mail\.Send/);
+  }],
 
   ["CORS allows the dashboard", async () => { const r = await call("/login", { method: "OPTIONS" }); assert.equal(r.status, 204); assert.equal(r.headers.get("Access-Control-Allow-Origin"), ORIGIN); }],
   ["CORS refuses other sites", async () => { const r = await call("/login", { method: "OPTIONS", origin: "https://evil.example" }); assert.equal(r.headers.get("Access-Control-Allow-Origin"), null); }],
