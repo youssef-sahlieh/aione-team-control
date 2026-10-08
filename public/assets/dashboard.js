@@ -68,12 +68,14 @@ import { api, getSession, signOut } from "./session.js";
   }
 
   const ALLOWED=new Set(["P","BR","STRONG","B","EM","I","U","S","DEL","UL","OL","LI","A","H1","H2","H3","H4","H5","H6","CODE","PRE","BLOCKQUOTE","TABLE","THEAD","TBODY","TR","TD","TH","HR"]);
-  const toText=h=>(new DOMParser().parseFromString(String(h||""),"text/html").body.textContent||"").replace(/\s+/g," ").trim();
+  // Jira's HTML carries inline styles; drop them before parsing (they're never shown, and the page's security policy reports each one).
+  const noStyles=h=>String(h||"").replace(/<style[\s\S]*?<\/style>/gi,"").replace(/\sstyle\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi,"");
+  const toText=h=>(new DOMParser().parseFromString(noStyles(h),"text/html").body.textContent||"").replace(/\s+/g," ").trim();
   function richNode(body){
     const box=el("div"); const s=String(body||"").trim();
     if(!s){ const e=el("span",null,"No text."); e.style.color="var(--muted)"; box.appendChild(e); return box; }
     if(!/^</.test(s)){ box.className="plain"; box.textContent=s; return box; }
-    const doc=new DOMParser().parseFromString(s,"text/html");
+    const doc=new DOMParser().parseFromString(noStyles(s),"text/html");
     (function walk(src,dst){ src.childNodes.forEach(n=>{
       if(n.nodeType===3){ dst.appendChild(document.createTextNode(n.nodeValue)); return; }
       if(n.nodeType!==1) return; const t=n.tagName;
