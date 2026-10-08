@@ -91,6 +91,8 @@
     <div class="blk admin-only jira-only"><h3>Assignee</h3><div class="inline"><span id="d-asgname" class="who"></span><button class="btn" id="d-asg" type="button">Change assignee</button></div></div>
     <div class="blk jira-only"><h3>Attachments <span id="d-acount"></span></h3><div id="d-att" class="atts"></div>
       <div class="inline"><a class="btn" id="d-attadd" target="_blank" rel="noopener">+ Add attachment in Jira ↗</a><span class="msg">This page can't upload files; the button opens the ticket in Jira, where you can drop them in.</span></div></div>
+    <div class="blk int-only"><h3>Attachments <span id="i-acount"></span></h3><div id="i-att" class="atts"></div>
+      <div class="inline"><label class="btn" for="i-file">+ Add files</label><input type="file" id="i-file" multiple hidden><span class="msg" id="i-attmsg">Up to 4 MB each.</span></div></div>
     <div class="blk"><h3>Description</h3><div class="desc rich" id="d-desc" dir="auto"></div></div>
     <div class="blk"><h3>Comments <span id="d-ccount"></span></h3><div class="blk" id="d-comments"></div>
       <textarea class="inp" id="d-reply" placeholder="Write a comment or answer…" dir="auto" aria-label="New comment"></textarea>

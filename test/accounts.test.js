@@ -183,6 +183,30 @@ const tests = [
     assert.equal(r.data.ticket.statusCat, "done"); assert.ok(r.data.ticket.closedAt);
     assert.equal((await call("/internal/INT-1", { method: "PUT", token: u.token, body: { status: "Done" } })).status, 400, "unknown status");
   }],
+  ["internal tickets: attachments upload, download byte-for-byte, and permissions", async () => {
+    const u = await login("bashar.b@aione.biz", "Pass-for-bashar", "10.0.1.1");
+    const raw = (path, { method = "GET", body, token, type } = {}) => worker.fetch(new Request("https://p" + path, { method, headers: { Origin: ORIGIN, Authorization: "Bearer " + token, ...(type ? { "Content-Type": type } : {}) }, body }), env);
+    const file = new Uint8Array(1_500_000).map((_, i) => (i * 7) % 256); // spans 3 chunks
+    let r = await raw("/internal/INT-1/attachments?name=" + encodeURIComponent("logs/2026 run.zip"), { method: "POST", body: file, token: u.token, type: "application/zip" });
+    assert.equal(r.status, 201);
+    const att = (await r.json()).attachment;
+    assert.equal(att.filename, "logs_2026 run.zip"); assert.equal(att.size, 1_500_000); assert.equal(att.mimeType, "application/zip"); assert.equal(att.author.email, "bashar.b@aione.biz");
+    r = await raw("/internal/INT-1/attachments/" + att.id, { token: u.token });
+    assert.equal(r.status, 200); assert.equal(r.headers.get("Content-Type"), "application/zip");
+    assert.match(r.headers.get("Content-Disposition"), /attachment; filename\*=UTF-8''logs_2026%20run\.zip/);
+    assert.deepEqual(new Uint8Array(await r.arrayBuffer()), file, "same bytes back");
+    const s = await login("sondos@aione.biz", "Pass-for-sondos", "10.0.1.2");
+    assert.equal((await raw("/internal/INT-1/attachments/" + att.id, { token: s.token })).status, 404, "other developers can't download");
+    assert.equal((await raw("/internal/INT-1/attachments?name=x", { method: "POST", body: new Uint8Array(4 * 1024 * 1024 + 1), token: u.token })).status, 413, "over 4 MB refused");
+    assert.equal((await raw("/internal/INT-1/attachments?name=x", { method: "POST", body: new Uint8Array(0), token: u.token })).status, 400, "empty refused");
+    const a = await login("youssef@aione.biz", "Team-password-1", "10.0.1.3");
+    r = await raw("/internal/INT-1/attachments?name=admin.txt", { method: "POST", body: new TextEncoder().encode("hi"), token: a.token, type: "text/plain" });
+    const adminAtt = (await r.json()).attachment;
+    assert.equal((await raw("/internal/INT-1/attachments/" + adminAtt.id, { method: "DELETE", token: u.token })).status, 403, "user can't remove someone else's file");
+    assert.equal((await raw("/internal/INT-1/attachments/" + att.id, { method: "DELETE", token: u.token })).status, 200, "user removes their own file");
+    assert.ok(![...env.STORE._data.keys()].some((k) => k.startsWith("ia:" + att.id)), "its bytes are gone");
+    assert.equal((await raw("/internal/INT-1/attachments/" + adminAtt.id, { method: "DELETE", token: a.token })).status, 200, "admin removes any file");
+  }],
   ["internal tickets: admin reassigns developers (reports who was added) and deletes", async () => {
     const a = await login("ellen@aione.biz", "Team-password-1", "10.0.0.4");
     const r = await call("/internal/INT-2", { method: "PUT", token: a.token, body: { devs: ["sondos", "ai1_bashar"] } });

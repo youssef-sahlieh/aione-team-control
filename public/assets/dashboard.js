@@ -1,13 +1,13 @@
 // AION Team Control dashboard. Jira data comes through the AION proxy (worker/), which checks the
 // sign-in and holds the Jira token. Team details (people, developers, emails) come from the proxy too,
 // so they aren't in this public code.
-import { api, getSession, signOut } from "./session.js";
+import { api, apiFile, getSession, signOut } from "./session.js";
 
   // Filled in from the proxy's /config after sign-in (see applyConfig).
   let SITE="", PROJECT="", PEOPLE={}, DEVS=[], DEV_EMAIL={}, DEV_COLOR={}, BYID={}, JQL="", ME="", MAIL=false;
   // Administrators see and change everything. Users see only the tickets labelled ai1_<MY_DEV> (the proxy
   // enforces this) and can move status, set due dates and comment.
-  let IS_ADMIN=true, MY_DEV="";
+  let IS_ADMIN=true, MY_DEV="", MY_EMAIL="";
   let notifyOn=true; try{ notifyOn=localStorage.getItem("aion.notify")!=="0"; }catch(e){}
   const devK=d=>DEV_COLOR[d]||("k"+(1+[...d].reduce((a,c)=>a+c.charCodeAt(0),0)%8));
   const STATUS_ORDER=["open","pending approval","dev approved","in development","reopened","pending qa","in qa","done review","resolved","closed"];
@@ -17,7 +17,7 @@ import { api, getSession, signOut } from "./session.js";
     SITE=cfg.site; PROJECT=cfg.project; MAIL=!!cfg.mail; PEOPLE=cfg.people||{}; DEVS=cfg.devs||[]; DEV_EMAIL=cfg.devEmails||{}; DEV_COLOR=cfg.devColors||{};
     BYID={}; for(const k in PEOPLE) BYID[PEOPLE[k].id]=k;
     const IDS=Object.values(PEOPLE).map(p=>'"'+p.id+'"').join(",");
-    IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||""; INTERNAL=!!cfg.accounts; $("new-int").hidden=!INTERNAL;
+    IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||""; MY_EMAIL=cfg.email||""; INTERNAL=!!cfg.accounts; $("new-int").hidden=!INTERNAL;
     document.body.classList.toggle("role-user",!IS_ADMIN);
     $("users-link").hidden=!(IS_ADMIN&&cfg.accounts);
     if(IS_ADMIN){
@@ -736,6 +736,7 @@ import { api, getSession, signOut } from "./session.js";
   }
   function showState(msg,isErr){ const s=$("pagestate"); s.hidden=!msg; s.className="state"+(isErr?" err":""); s.textContent=msg||""; }
   function errorText(err){ const c=err&&err.code;
+    if(c==="too_large"||c==="bad_request"||c==="forbidden"||c==="not_found") return err.message;
     if(c==="session") return "Your sign-in has expired. Sign in again.";
     if(c==="network") return "Can't reach the AION server. Check your connection and try again.";
     if(c==="rate_limited") return "Jira is busy. Wait a moment and try again.";
@@ -830,6 +831,7 @@ import { api, getSession, signOut } from "./session.js";
     dz.labels=ni.labels.slice(); dz.devs=new Set(ni.devs); renderDevChips(); $("d-due").value=t.due||"";
     HIST[key]={updated:t.updated,changes:(t.dueHistory||[]).map(h=>({when:h.when,by:h.by,from:h.from,to:h.to}))}; renderDrawerHist(key);
     const d=el("div","plain",t.description||""); if(!t.description){ d.textContent="No description."; d.style.color="var(--muted)"; } $("d-desc").replaceChildren(d);
+    renderIntAttachments(key);
     const cm=t.comments||[]; $("d-ccount").textContent="("+cm.length+")";
     const box=$("d-comments"); box.replaceChildren(); if(!cm.length) box.appendChild(el("div","msg","No comments yet."));
     cm.forEach(c=>{ const name=(c.author&&c.author.name)||"Someone";
@@ -837,6 +839,47 @@ import { api, getSession, signOut } from "./session.js";
       const rb=el("button","linkbtn sp","Reply"); rb.type="button"; rb.addEventListener("click",()=>{ const ta=$("d-reply"); if(!ta.value.trim()) ta.value=name.split(" ")[0]+", "; ta.focus(); });
       meta.appendChild(rb); cd.appendChild(meta); const b=el("div","plain rich",c.body); b.dir="auto"; cd.appendChild(b); box.appendChild(cd); });
   }
+  // Attachments on internal tickets: stored by the proxy; downloads go through it with your sign-in.
+  function renderIntAttachments(key){
+    const t=INT[key], atts=(t&&t.attachments)||[], box=$("i-att"); box.replaceChildren(); $("i-acount").textContent="("+atts.length+")";
+    if(!atts.length){ box.appendChild(el("span","msg","No attachments yet.")); return; }
+    atts.slice().sort((a,b)=>a.created<b.created?1:-1).forEach(a=>{
+      const ext=(String(a.filename).split(".").pop()||"").slice(0,4).toUpperCase(); const mt=a.mimeType||"";
+      const k=/image/.test(mt)?"k5":/pdf/.test(mt)?"k2":/zip|compressed|rar/.test(mt)?"k4":/sheet|excel|csv/.test(mt)?"k7":/word|document/.test(mt)?"k1":"k8";
+      const row=el("div","att "+k); row.appendChild(el("span","ic",ext||"FILE"));
+      const mid=el("div"); mid.style.minWidth="0"; const nm=el("div","nm",a.filename); nm.dir="auto"; mid.appendChild(nm);
+      const fw=fmtWhen(a.created); mid.appendChild(el("div","mt",fmtSize(a.size)+" · "+((a.author&&a.author.name)||"")+" · "+fw.d+" "+fw.t)); row.appendChild(mid);
+      const acts=el("div","inline");
+      const dl=el("button","btn","Download"); dl.type="button";
+      dl.addEventListener("click",async()=>{ dl.disabled=true; dl.textContent="Downloading…";
+        try{ const res=await apiFile("/internal/"+key+"/attachments/"+a.id); const url=URL.createObjectURL(await res.blob());
+          const link=document.createElement("a"); link.href=url; link.download=a.filename; document.body.appendChild(link); link.click(); link.remove(); setTimeout(()=>URL.revokeObjectURL(url),60000); }
+        catch(err){ toast("Download failed",[errorText(err)],true); }
+        dl.disabled=false; dl.textContent="Download"; });
+      acts.appendChild(dl);
+      if(IS_ADMIN||(a.author&&a.author.email===MY_EMAIL)){
+        const rm=el("button","btn danger","Remove"); rm.type="button";
+        rm.addEventListener("click",async()=>{ if(!confirm("Remove "+a.filename+"?")) return;
+          try{ const r=await apiFile("/internal/"+key+"/attachments/"+a.id,{method:"DELETE"}); INT[key]=(await r.json()).ticket; renderIntAttachments(key); toast("Attachment removed."); }
+          catch(err){ toast("Not removed",[errorText(err)],true); } });
+        acts.appendChild(rm);
+      }
+      row.appendChild(acts); box.appendChild(row);
+    });
+  }
+  $("i-file").addEventListener("change",async e=>{
+    const key=dz.key, files=[...e.target.files]; e.target.value=""; if(!key||!isInt(key)||!files.length) return;
+    const msg=$("i-attmsg"); let ok=0; const fails=[];
+    for(const [n,f] of files.entries()){
+      if(f.size>4*1024*1024){ fails.push(f.name+": bigger than 4 MB"); continue; }
+      msg.className="msg"; msg.textContent="Uploading "+(n+1)+" of "+files.length+": "+f.name+"…";
+      try{ const r=await apiFile("/internal/"+key+"/attachments?name="+encodeURIComponent(f.name),{method:"POST",body:f,type:f.type||"application/octet-stream"}); INT[key]=(await r.json()).ticket; ok++; }
+      catch(err){ fails.push(f.name+": "+errorText(err)); }
+    }
+    msg.textContent="Up to 4 MB each."; msg.className="msg";
+    if(dz.key===key) renderIntAttachments(key);
+    if(fails.length) toast((ok?ok+" added. ":"")+"Not added:",fails,true); else toast(ok===1?"Attachment added.":ok+" attachments added.");
+  });
   // Form for a new internal ticket, or (with key) for editing one's title, description and priority.
   function internalPopover(anchor,key){
     const t=key?INT[key]:null;

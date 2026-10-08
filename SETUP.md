@@ -60,10 +60,11 @@ Tickets that live only in AION Team Control, never in Jira. They're numbered **I
 
 - **Open one:** **+ Internal ticket** above the list. Administrators choose one or more developers; Users always open them for themselves.
 - **Work on it** in the ticket panel like any ticket: move it **Open → In Development → Closed**, set the due date (changes appear in the due date history), comment, and **Edit** the title, description and priority. A ticket stays open until someone closes it.
-- **Who sees what:** administrators see all internal tickets and can reassign developers or **Delete** one. A User only sees internal tickets for their own developer name.
+- **Attachments:** **+ Add files** in the ticket panel (up to 4 MB each, 20 per ticket). Files are stored with the ticket and only people who can see the ticket can download them. Whoever added a file, or an administrator, can remove it.
+- **Who sees what:** administrators see all internal tickets and can reassign developers or **Delete** one (Users can't delete). A User only sees internal tickets for their own developer name.
 - With "Email developer on assign" on, developers get an email when an administrator opens a ticket for them or adds them to one.
 
-They're stored in the same Upstash Redis database as the user accounts.
+They're stored in the same Upstash Redis database as the user accounts. The free plan holds 256 MB in total, which is plenty for tickets; attachments use most of it, so keep large files in Jira or a shared drive.
 
 ## Change the team shown on the dashboard
 
