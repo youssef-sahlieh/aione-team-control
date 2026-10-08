@@ -1,28 +1,32 @@
 # AION Team Control
 
-The team dashboard for Aione, hosted on GitHub Pages at https://youssef-sahlieh.github.io/aione-team-control/. People sign in with their work email and the team password.
+The Aione team dashboard for the AION Jira project: tickets, filters, boards, due date history, comments, developer assignments and internal notes.
 
-- **Setup and changing the password:** see [SETUP.md](SETUP.md)
-- **Allowed emails:** `src/team.json`
-- **Password:** the `TEAM_PASSWORD` secret under GitHub > Settings > Secrets and variables > Actions. It is never stored in the code.
-- **Deploys:** every push to `main` runs the tests, locks the app and publishes `public/` (see `.github/workflows/deploy.yml`)
-- **Tests:** `npm test` checks that only the right email and password unlock the app
+- **Dashboard:** https://youssef-sahlieh.github.io/aione-team-control/ (GitHub Pages, from `public/`)
+- **Jira proxy:** a Cloudflare Worker (from `worker/`) that checks the sign-in and talks to Jira
+- **Setup and changes:** see [SETUP.md](SETUP.md)
+- **Tests:** `npm test` (Node 20+) checks the proxy's sign-in, its limits on Jira, and that no team details are in the public code
 
-## How the sign-in protects the app
+## How it fits together
 
-GitHub Pages serves every file to anyone, so a password check alone would protect nothing. Instead, the app itself (`src/app.html`) is **encrypted** when the site is built. Only the encrypted file is published, and it can only be opened with an approved email and the password. The sign-in page and its code are public, but they contain nothing private.
+```
+Browser ──► GitHub Pages (dashboard files, public)
+   │
+   └──► Jira proxy on Cloudflare (checks email + password, holds the Jira token)
+            └──► Jira (AION project only)
+```
 
-Things to know:
-
-- Anyone who has the password and an approved email can get in, so share the password only with the team, and change it if it leaks.
-- The site can't limit how many passwords someone tries. A long password is what keeps it safe; each guess takes about half a second.
-- Never commit private data (tickets, customer details, keys) as plain files. Put app content in `src/app.html` so it gets encrypted.
+- People sign in with their work email and the team password. The **proxy** checks them and returns a 12-hour session.
+- Every Jira request goes through the proxy with that session. The proxy only reads and changes **AION** tickets, and only labels (developers), due dates, assignee, status and comments.
+- The Jira token, the password, the Jira site and the team details (people, developer emails) are **GitHub secrets**, passed to the proxy when it deploys. None of them are in this public repository.
+- Internal notes and new-assignment emails open a ready-made email in Outlook (a `mailto:` link). Nothing is sent until you press Send.
+- Changes in Jira are made as the Jira account whose API token the proxy uses.
 
 ## Files
 
-- `src/app.html`: the protected app. It's encrypted at build time and never published as-is.
-- `src/team.json`: the emails that can sign in.
-- `public/index.html`: the sign-in page.
-- `public/assets/app.js`: runs the sign-in and shows the app once it's unlocked.
-- `public/assets/lock.js`: the encryption (AES-256-GCM, with a password key from PBKDF2-SHA-256).
-- `scripts/build.js`: locks `src/app.html` into `public/assets/locked.json`.
+- `public/index.html`, `public/assets/signin.js`: the sign-in page.
+- `public/dashboard.html`, `public/assets/dashboard.js`, `public/assets/dashboard.css`: the dashboard.
+- `public/assets/session.js`: the session and the calls to the proxy.
+- `public/assets/config.js`: the proxy's address.
+- `worker/src/index.js`, `worker/wrangler.toml`: the proxy, its allowed emails and its Jira project.
+- `.github/workflows/deploy.yml`: publishes the dashboard. `.github/workflows/proxy.yml`: deploys the proxy.

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://*.workers.dev; form-action 'none'; base-uri 'self'">
+<meta name="referrer" content="same-origin">
+<meta name="robots" content="noindex">
+<title>AION Team Control</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Hebrew:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="assets/dashboard.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand">
+      <h1>AION Team Control</h1>
+      <div class="sub"><span id="team">…</span> · epics hidden · <span id="today"></span> · <span id="updated">Loading from Jira…</span> · <span id="auto">auto-refresh every 2 min</span></div>
+    </div>
+    <input class="search" id="q" type="search" placeholder="Search key, title or epic…" aria-label="Search tickets">
+    <button class="btn" id="refresh" type="button">Refresh</button>
+    <span class="me">Signed in as <b id="me">…</b> <button class="btn" id="signout" type="button">Sign out</button></span>
+  </div>
+
+  <div id="pagestate" class="state">Loading tickets from Jira…</div>
+
+  <div class="tiles" id="tiles" role="group" aria-label="Focus"></div>
+
+  <div class="fpanel">
+    <div class="fbar">
+      <span class="title">Filters</span>
+      <div class="active" id="active"></div>
+      <button class="btn" id="ftoggle" type="button" aria-expanded="true">Hide filters</button>
+      <button class="btn danger" id="fclear" type="button">Clear all</button>
+    </div>
+    <div class="fgrid" id="fgrid"></div>
+  </div>
+
+  <div class="toolbar">
+    <h2 id="vtitle">Tickets</h2><span class="count" id="vcount"></span>
+    <div class="sp">
+      <label class="tgl" title="After you assign a developer, offer a ready-made email to them"><input type="checkbox" class="ck" id="notify"> Email developer on assign</label>
+      <label class="tgl" id="grpwrap">Group by <select class="fsel auto" id="grp"><option value="">Nothing</option><option value="reporter">Reporter</option><option value="epic">Epic</option><option value="assignee">Assignee</option><option value="dev">Developer</option><option value="status">Status</option></select></label>
+      <div class="seg" role="group" aria-label="View">
+        <button type="button" data-v="list" aria-pressed="true">List</button>
+        <button type="button" data-v="dev" aria-pressed="false">By developer</button>
+        <button type="button" data-v="status" aria-pressed="false">By status</button>
+        <button type="button" data-v="assignee" aria-pressed="false">By assignee</button>
+        <button type="button" data-v="history" aria-pressed="false">Due date changes</button>
+      </div>
+    </div>
+  </div>
+  <div class="boardhint" id="hint" hidden></div>
+  <div id="view"></div>
+</div>
+
+<div class="bulk" id="bulk" hidden role="toolbar" aria-label="Bulk actions">
+  <span class="cnt" id="b-count">0 selected</span>
+  <button type="button" id="b-adddev">+ Developer</button>
+  <button type="button" id="b-rmdev">− Developer</button>
+  <button type="button" id="b-due">Due date</button>
+  <button type="button" id="b-status">Status</button>
+  <button type="button" id="b-asg">Assignee</button>
+  <button type="button" class="x" id="b-clear">Clear ✕</button>
+</div>
+<div class="pop" id="pop" hidden role="dialog"></div>
+<div class="toast" id="toast" hidden role="status"></div>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-label="Ticket details" role="dialog">
+  <div class="dhead">
+    <div class="dtop">
+      <a class="key" id="d-key" target="_blank" rel="noopener"></a>
+      <span class="stbtn" id="d-status"></span>
+      <span class="sp"><button class="btn note" id="d-note" type="button">✉ Internal notes</button><a class="btn primary" id="d-open" target="_blank" rel="noopener">Open in Jira ↗</a><button class="btn" id="d-close" type="button">Close</button></span>
+    </div>
+    <h2 class="dtitle" id="d-title" dir="auto"></h2>
+  </div>
+  <div class="dbody" id="d-body">
+    <div class="blk"><h3>Move status</h3><div class="trans" id="d-trans"></div></div>
+    <dl class="facts" id="d-facts"></dl>
+    <div class="blk"><h3>Developers</h3><div class="chips" id="d-devs"></div>
+      <div class="inline"><input class="inp" id="d-newdev" placeholder="Other developer name" aria-label="Add another developer"><button class="btn" id="d-adddev" type="button">Add</button><button class="btn primary" id="d-savedevs" type="button">Save developers</button><span class="msg" id="d-devmsg"></span></div></div>
+    <div class="blk"><h3>Due date</h3>
+      <div class="inline"><input class="inp" type="date" id="d-due" aria-label="Due date"><button class="btn primary" id="d-savedue" type="button">Save due date</button><button class="btn" id="d-cleardue" type="button">Clear</button><span class="msg" id="d-duemsg"></span></div></div>
+    <div class="blk"><h3>Due date history</h3><div id="d-hist"></div></div>
+    <div class="blk"><h3>Assignee</h3><div class="inline"><span id="d-asgname" class="who"></span><button class="btn" id="d-asg" type="button">Change assignee</button></div></div>
+    <div class="blk"><h3>Attachments <span id="d-acount"></span></h3><div id="d-att" class="atts"></div>
+      <div class="inline"><a class="btn" id="d-attadd" target="_blank" rel="noopener">+ Add attachment in Jira ↗</a><span class="msg">This page can't upload files; the button opens the ticket in Jira, where you can drop them in.</span></div></div>
+    <div class="blk"><h3>Description</h3><div class="desc rich" id="d-desc" dir="auto"></div></div>
+    <div class="blk"><h3>Comments <span id="d-ccount"></span></h3><div class="blk" id="d-comments"></div>
+      <textarea class="inp" id="d-reply" placeholder="Write a comment or answer…" dir="auto" aria-label="New comment"></textarea>
+      <div class="inline"><label class="tgl">Then assign to <select class="fsel auto" id="d-after"><option value="">Keep current assignee</option></select></label></div>
+      <div class="inline"><button class="btn primary" id="d-send" type="button">Add comment</button><a class="btn" id="d-cattach" target="_blank" rel="noopener">Attach a file in Jira ↗</a><span class="msg" id="d-cmsg"></span></div></div>
+  </div>
+</aside>
+
+<script src="assets/config.js"></script>
+<script type="module" src="assets/dashboard.js"></script>
+</body>
+</html>

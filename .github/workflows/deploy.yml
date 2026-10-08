@@ -1,4 +1,4 @@
-# Publishes the site to GitHub Pages on every push to main.
+# Publishes the dashboard (public/) to GitHub Pages on every push to main.
 name: Deploy to GitHub Pages
 
 on:
@@ -24,9 +24,6 @@ jobs:
         with:
           node-version: 24
       - run: npm test
-      - run: npm run build
-        env:
-          TEAM_PASSWORD: ${{ secrets.TEAM_PASSWORD }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

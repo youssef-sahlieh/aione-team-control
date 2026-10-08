@@ -1,0 +1,22 @@
+# AION Team Control proxy: checks the team sign-in and forwards dashboard requests to Jira.
+# Deployed by .github/workflows/proxy.yml. Secrets (Jira token, password, team details) are set
+# from GitHub secrets at deploy time and never stored here.
+name = "aione-team-proxy"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+workers_dev = true
+preview_urls = false
+
+[vars]
+# The dashboard's address. Browsers on any other site can't call the proxy.
+ALLOWED_ORIGIN = "https://youssef-sahlieh.github.io"
+# Who may sign in (comma separated). They all use the team password.
+TEAM_EMAILS = "youssef@aione.biz,ellen@aione.biz"
+# The only Jira project the proxy reads or changes.
+JIRA_PROJECT = "AION"
+
+# At most 10 sign-in attempts per minute from one address.
+[[ratelimits]]
+name = "LOGIN_LIMIT"
+namespace_id = "1001"
+simple = { limit = 10, period = 60 }
