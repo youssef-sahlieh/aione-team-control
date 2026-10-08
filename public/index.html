@@ -3,8 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://login.microsoftonline.com; frame-src https://login.microsoftonline.com; form-action 'self' https://login.microsoftonline.com; base-uri 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; form-action 'none'; base-uri 'self'">
 <meta name="referrer" content="same-origin">
+<meta name="robots" content="noindex">
 <title>AION Team Control</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
@@ -12,45 +13,21 @@
 </head>
 <body>
 
-<main class="auth" id="view-loading">
-  <p class="lead">Loading…</p>
-</main>
-
 <main class="auth" id="view-signin" hidden>
   <div class="card"><div class="band"></div><div class="cbody">
     <div class="mark"><span class="logo" aria-hidden="true">Ai1</span><div><b>AION Team Control</b><small>Aione System Ltd</small></div></div>
     <h1>Sign in</h1>
-    <p class="lead">Use your Aione Microsoft 365 work account.</p>
-    <p class="msg err" id="signin-msg" role="alert" hidden></p>
-    <button class="btn primary" id="signin-btn" type="button">Sign in with Microsoft</button>
-  </div><div class="foot">Only approved Aione accounts can open this app.</div></div>
+    <form id="signin-form" novalidate>
+      <div class="field"><label for="email">Work email</label><input class="input" id="email" type="email" autocomplete="username" required autofocus></div>
+      <div class="field"><label for="password">Password</label><input class="input" id="password" type="password" autocomplete="current-password" required></div>
+      <p class="msg err" id="signin-msg" role="alert" hidden></p>
+      <button class="btn primary" id="signin-btn" type="submit">Sign in</button>
+    </form>
+  </div><div class="foot">Only approved Aione team members can open this app.</div></div>
 </main>
 
-<main class="auth" id="view-denied" hidden>
-  <div class="card"><div class="band"></div><div class="cbody">
-    <div class="mark"><span class="logo" aria-hidden="true">Ai1</span><div><b>AION Team Control</b><small>Aione System Ltd</small></div></div>
-    <h1>You don't have access</h1>
-    <p class="lead"><span class="who" id="denied-who"></span> isn't on the list of people who can open AION Team Control. Sign out and use your approved work account, or ask Youssef for access.</p>
-    <button class="btn primary" id="denied-signout-btn" type="button">Sign out</button>
-  </div></div>
-</main>
+<div id="view-app" hidden></div>
 
-<div id="view-app" hidden>
-  <header class="top">
-    <span class="logo" aria-hidden="true">Ai1</span><b>AION Team Control</b>
-    <div class="sp"><span>Signed in as <span class="who" id="me">…</span></span><button class="btn" id="signout-btn" type="button">Sign out</button></div>
-  </header>
-  <main class="main">
-    <section class="panel">
-      <h2>You're signed in</h2>
-      <p>Only approved Aione accounts can reach this page. Microsoft checked who you are.</p>
-      <p class="next">Next step: the dashboard (tickets, filters, boards, due date history, internal notes) moves here, connected to Jira and Outlook.</p>
-    </section>
-  </main>
-</div>
-
-<script src="assets/config.js"></script>
-<script src="assets/vendor/msal-browser.min.js"></script>
 <script type="module" src="assets/app.js"></script>
 </body>
 </html>

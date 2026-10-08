@@ -1,62 +1,67 @@
-// AION Team Control - sign-in with Microsoft 365, then show the app.
-// Microsoft only issues sign-ins to users assigned to the app in Entra; this page also checks the
-// tenant and the allow-list in config.js before showing anything.
-import { allowedEmail, configProblem, redirectUri } from "./auth.js";
+// AION Team Control - email and password sign-in that unlocks the encrypted app content.
+import { fromB64, normalizeEmail, openContent, toB64, unlockKey } from "./lock.js";
 
-const cfg = window.AIONE_CONFIG;
+const SESSION = "aione-session";
 const $ = (id) => document.getElementById(id);
-const VIEWS = ["loading", "signin", "denied", "app"];
 
-function show(view) {
-  for (const v of VIEWS) $("view-" + v).hidden = v !== view;
+function readSession() {
+  try { return JSON.parse(sessionStorage.getItem(SESSION) || "null"); } catch { return null; }
+}
+function writeSession(value) {
+  try { value ? sessionStorage.setItem(SESSION, JSON.stringify(value)) : sessionStorage.removeItem(SESSION); } catch {}
 }
 
-function fail(msg) {
+function showApp(html, email) {
+  $("view-app").innerHTML = html;
+  $("me").textContent = email;
+  $("signout-btn").addEventListener("click", () => { writeSession(null); location.reload(); });
+  $("view-signin").hidden = true;
+  $("view-app").hidden = false;
+}
+
+function showError(msg) {
   $("signin-msg").textContent = msg;
   $("signin-msg").hidden = false;
-  $("signin-btn").disabled = true;
-  show("signin");
 }
 
 async function start() {
-  const problem = configProblem(cfg);
-  if (problem) return fail("This site isn't set up yet: " + problem);
+  const res = await fetch("assets/locked.json", { cache: "no-store" });
+  if (!res.ok) throw new Error("locked.json " + res.status);
+  const locked = await res.json();
 
-  const here = redirectUri(window.location);
-  const pca = await msal.PublicClientApplication.createPublicClientApplication({
-    auth: {
-      clientId: cfg.clientId,
-      authority: "https://login.microsoftonline.com/" + cfg.tenantId,
-      redirectUri: here,
-      postLogoutRedirectUri: here,
-      navigateToLoginRequestUrl: false
-    },
-    cache: { cacheLocation: "sessionStorage" }
-  });
-
-  const result = await pca.handleRedirectPromise();
-  const account = (result && result.account) || pca.getActiveAccount() || pca.getAllAccounts()[0];
-
-  const signOut = () => pca.logoutRedirect({ account });
-  $("signout-btn").addEventListener("click", signOut);
-  $("denied-signout-btn").addEventListener("click", signOut);
-  $("signin-btn").addEventListener("click", () =>
-    pca.loginRedirect({ scopes: ["openid", "profile", "email"], prompt: "select_account" }));
-
-  if (!account) return show("signin");
-
-  const email = allowedEmail(account, cfg);
-  if (!email) {
-    $("denied-who").textContent = account.username || "This account";
-    return show("denied");
+  // Stay signed in for this browser tab.
+  const saved = readSession();
+  if (saved) {
+    const html = await openContent(locked, fromB64(saved.key));
+    if (html) return showApp(html, saved.email);
+    writeSession(null);
   }
-  pca.setActiveAccount(account);
-  $("me").textContent = email;
-  show("app");
+
+  $("view-signin").hidden = false;
+  $("signin-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = normalizeEmail($("email").value);
+    const btn = $("signin-btn");
+    btn.disabled = true;
+    btn.textContent = "Checking…";
+    $("signin-msg").hidden = true;
+    const key = await unlockKey(locked, email, $("password").value);
+    const html = key && await openContent(locked, key);
+    if (html) {
+      writeSession({ email, key: toB64(key) });
+      $("password").value = "";
+      return showApp(html, email);
+    }
+    btn.disabled = false;
+    btn.textContent = "Sign in";
+    showError("That email and password don't match. Check them and try again.");
+    $("password").select();
+  });
 }
 
 start().catch((err) => {
   console.error(err);
-  fail("Sign-in didn't work: " + (err.errorMessage || err.message || "unknown error") + ". Try again, or ask Youssef.");
-  $("signin-btn").disabled = false;
+  $("view-signin").hidden = false;
+  $("signin-btn").disabled = true;
+  showError("The app couldn't load. Refresh the page, or ask Youssef.");
 });

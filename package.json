@@ -1,14 +1,11 @@
 {
   "name": "aione-team-control",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
-  "description": "AION Team Control on GitHub Pages, with Microsoft 365 sign-in.",
+  "description": "AION Team Control on GitHub Pages, with email and password sign-in.",
   "scripts": {
     "build": "node scripts/build.js",
-    "test": "node test/auth.test.js"
-  },
-  "dependencies": {
-    "@azure/msal-browser": "4.30.0"
+    "test": "node test/lock.test.js"
   }
 }

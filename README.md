@@ -1,25 +1,28 @@
 # AION Team Control
 
-The team dashboard for Aione, hosted on GitHub Pages at https://youssef-sahlieh.github.io/aione-team-control/. People sign in with their Aione Microsoft 365 account, and only approved accounts get in.
+The team dashboard for Aione, hosted on GitHub Pages at https://youssef-sahlieh.github.io/aione-team-control/. People sign in with their work email and the team password.
 
-- **Setup guide:** see [SETUP.md](SETUP.md)
-- **Allowed accounts:** `allowedEmails` in `public/assets/config.js`, plus the users assigned to the app in Microsoft Entra
-- **Deploys:** every push to `main` runs the tests and publishes `public/` (see `.github/workflows/deploy.yml`)
-- **Tests:** `npm install && npm test` checks the sign-in rules: wrong tenant, not-allowed emails and missing settings are refused
+- **Setup and changing the password:** see [SETUP.md](SETUP.md)
+- **Allowed emails:** `src/team.json`
+- **Password:** the `TEAM_PASSWORD` secret under GitHub > Settings > Secrets and variables > Actions. It is never stored in the code.
+- **Deploys:** every push to `main` runs the tests, locks the app and publishes `public/` (see `.github/workflows/deploy.yml`)
+- **Tests:** `npm test` checks that only the right email and password unlock the app
 
-## How sign-in protects the app
+## How the sign-in protects the app
 
-GitHub Pages serves files to anyone, so the page files themselves (HTML, CSS, JavaScript) are public. Sign-in controls who gets *into the app*:
+GitHub Pages serves every file to anyone, so a password check alone would protect nothing. Instead, the app itself (`src/app.html`) is **encrypted** when the site is built. Only the encrypted file is published, and it can only be opened with an approved email and the password. The sign-in page and its code are public, but they contain nothing private.
 
-- Microsoft only lets users assigned to the app in Entra sign in (SETUP.md, step 2). This is the real gate.
-- The page also checks the account's tenant and the allow-list before showing anything.
+Things to know:
 
-Keep private information out of the page files. Data such as Jira tickets and Outlook mail must be loaded after sign-in, from services that check the signed-in user's token. Never put it in this repository.
+- Anyone who has the password and an approved email can get in, so share the password only with the team, and change it if it leaks.
+- The site can't limit how many passwords someone tries. A long password is what keeps it safe; each guess takes about half a second.
+- Never commit private data (tickets, customer details, keys) as plain files. Put app content in `src/app.html` so it gets encrypted.
 
 ## Files
 
-- `public/index.html`: the page (sign-in, no-access and app views).
-- `public/assets/app.js`: runs the Microsoft sign-in and shows the right view.
-- `public/assets/auth.js`: the sign-in rules (tenant and allow-list checks).
-- `public/assets/config.js`: the Entra app IDs and allowed emails.
-- `scripts/build.js`: copies the Microsoft sign-in library into `public/assets/vendor/`.
+- `src/app.html`: the protected app. It's encrypted at build time and never published as-is.
+- `src/team.json`: the emails that can sign in.
+- `public/index.html`: the sign-in page.
+- `public/assets/app.js`: runs the sign-in and shows the app once it's unlocked.
+- `public/assets/lock.js`: the encryption (AES-256-GCM, with a password key from PBKDF2-SHA-256).
+- `scripts/build.js`: locks `src/app.html` into `public/assets/locked.json`.
