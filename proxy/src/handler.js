@@ -1,4 +1,4 @@
-// AION Team Control proxy (Cloudflare Worker).
+// AION Team Control proxy. Runs on Vercel (see api/proxy.js); the code itself only uses standard web APIs.
 // The dashboard on GitHub Pages can't call Jira itself: Jira blocks browser calls from other sites,
 // and the Jira token must stay secret. This Worker checks the team sign-in, then forwards a fixed
 // set of Jira actions for the one project in JIRA_PROJECT.
@@ -8,7 +8,8 @@
 //
 // Secrets: TEAM_PASSWORD, SESSION_SECRET, TEAM_CONFIG (JSON), JIRA_SITE, JIRA_EMAIL, JIRA_API_TOKEN,
 //          and optionally MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET (without them, email is off).
-// Vars: ALLOWED_ORIGIN, TEAM_EMAILS, JIRA_PROJECT, MAIL_DOMAIN. Binding (optional): LOGIN_LIMIT rate limiter.
+// Settings: ALLOWED_ORIGIN, TEAM_EMAILS, JIRA_PROJECT, MAIL_DOMAIN (see settings.js).
+// Optional: LOGIN_LIMIT, a rate limiter with limit({ key }) -> { success }; otherwise a simple in-memory one.
 
 const enc = new TextEncoder();
 const SESSION_MS = 12 * 3600 * 1000;
@@ -54,6 +55,19 @@ async function sameSecret(a, b) {
   const [ha, hb] = await Promise.all([a, b].map(async (s) => new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(String(s))))));
   return sameBytes(ha, hb);
 }
+
+// At most 10 sign-in attempts per minute from one address. Kept in memory, so it applies per running
+// instance of the proxy; it slows guessing down rather than stopping a determined attacker.
+const attempts = new Map();
+const memoryLimit = {
+  async limit({ key }) {
+    const now = Date.now();
+    const a = attempts.get(key);
+    if (!a || a.reset < now) { attempts.set(key, { count: 1, reset: now + 60000 }); if (attempts.size > 5000) attempts.clear(); return { success: true }; }
+    a.count++;
+    return { success: a.count <= 10 };
+  }
+};
 
 const teamEmails = (env) => String(env.TEAM_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
 
@@ -155,10 +169,9 @@ async function route(request, env, url) {
   const method = request.method;
 
   if (path === "/login" && method === "POST") {
-    if (env.LOGIN_LIMIT) {
-      const { success } = await env.LOGIN_LIMIT.limit({ key: request.headers.get("CF-Connecting-IP") || "unknown" });
-      if (!success) return fail("rate_limited", "Too many sign-in attempts. Wait a minute and try again.", 429);
-    }
+    const ip = request.headers.get("x-real-ip") || (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() || "unknown";
+    const { success } = await (env.LOGIN_LIMIT || memoryLimit).limit({ key: ip });
+    if (!success) return fail("rate_limited", "Too many sign-in attempts. Wait a minute and try again.", 429);
     const body = await readJson(request);
     const email = String((body && body.email) || "").trim().toLowerCase();
     const passwordOk = await sameSecret((body && body.password) || "", env.TEAM_PASSWORD || "");

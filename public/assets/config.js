@@ -1,2 +1,2 @@
-// Address of the AION proxy (the Cloudflare Worker in worker/). Not a secret.
-window.AIONE_API = "REPLACE_WITH_PROXY_URL";
+// Address of the AION proxy (proxy/, on Vercel). Not a secret.
+window.AIONE_API = "https://aione-team-proxy.vercel.app";

@@ -1,13 +1,15 @@
 // Run with: npm test  (Node 20+). Checks the proxy's sign-in, its limits on Jira, and what it sends to Jira.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import worker, { makeToken, readToken } from "../worker/src/index.js";
+import worker, { makeToken, readToken } from "../proxy/src/handler.js";
+import vercelEntry from "../proxy/api/proxy.js";
 
 const ORIGIN = "https://youssef-sahlieh.github.io";
 const env = {
   ALLOWED_ORIGIN: ORIGIN, TEAM_EMAILS: "youssef@aione.biz,ellen@aione.biz", JIRA_PROJECT: "AION",
   TEAM_PASSWORD: "right-password", SESSION_SECRET: "test-session-secret", TEAM_CONFIG: JSON.stringify({ people: { youssef: { id: "acc-1", name: "Youssef", ini: "Y" } } }),
-  JIRA_SITE: "https://example.atlassian.net", JIRA_EMAIL: "bot@aione.biz", JIRA_API_TOKEN: "jira-token"
+  JIRA_SITE: "https://example.atlassian.net", JIRA_EMAIL: "bot@aione.biz", JIRA_API_TOKEN: "jira-token",
+  LOGIN_LIMIT: { limit: async () => ({ success: true }) } // tests sign in many times; the limit itself is tested separately
 };
 
 // Fake Jira: records every call and answers with canned data.
@@ -103,6 +105,20 @@ const tests = [
     jiraReply = (url) => url.includes("graph.microsoft.com") ? Response.json({ error: { message: "denied" } }, { status: 403 }) : Response.json({ access_token: "graph-token", expires_in: 3600 });
     const bad = await req({ to: ["ellen@aione.biz"], subject: "x", html: "<p>x</p>" });
     assert.equal(bad.status, 502); assert.match((await bad.json()).error, /Mail\.Send/);
+  }],
+
+  ["Vercel entry restores the path and reads secrets from the environment", async () => {
+    Object.assign(process.env, { TEAM_PASSWORD: "vercel-pass", SESSION_SECRET: "s", TEAM_CONFIG: "{}", JIRA_SITE: "https://example.atlassian.net" });
+    const r = await vercelEntry(new Request("https://p.vercel.app/api/proxy?__path=login", { method: "POST", headers: { Origin: ORIGIN, "x-forwarded-for": "1.2.3.4" }, body: JSON.stringify({ email: "ellen@aione.biz", password: "vercel-pass" }) }));
+    assert.equal(r.status, 200); assert.equal(r.headers.get("Access-Control-Allow-Origin"), ORIGIN);
+    const bad = await vercelEntry(new Request("https://p.vercel.app/api/proxy?__path=login", { method: "POST", body: JSON.stringify({ email: "ellen@aione.biz", password: "right-password" }) }));
+    assert.equal(bad.status, 401, "uses Vercel's password, not another one");
+  }],
+  ["built-in sign-in limit: 11th try in a minute from one address is refused", async () => {
+    const { LOGIN_LIMIT, ...noLimit } = env;
+    const tryOnce = () => worker.fetch(new Request("https://p/login", { method: "POST", headers: { "x-real-ip": "9.9.9.9" }, body: "{}" }), noLimit);
+    for (let n = 0; n < 10; n++) assert.equal((await tryOnce()).status, 401);
+    assert.equal((await tryOnce()).status, 429);
   }],
 
   ["CORS allows the dashboard", async () => { const r = await call("/login", { method: "OPTIONS" }); assert.equal(r.status, 204); assert.equal(r.headers.get("Access-Control-Allow-Origin"), ORIGIN); }],
