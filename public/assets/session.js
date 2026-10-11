@@ -25,7 +25,7 @@ export function saveSession(s) {
 // Back to the sign-in page. A ticket in the address (#AION-123) is kept, so it opens after signing in.
 export function signOut(keepTicket) {
   try { store().removeItem(KEY); } catch {}
-  location.replace("index.html" + (keepTicket ? location.hash : ""));
+  location.replace("index.html" + (keepTicket ? location.search + location.hash : ""));
 }
 
 // Signing out in one tab signs out the others too.

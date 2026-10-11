@@ -11,31 +11,50 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Hebrew:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="assets/dashboard.css">
+<link rel="stylesheet" href="assets/styles/workspace.css">
+<link rel="stylesheet" href="assets/styles/readability.css">
+<link rel="stylesheet" href="assets/styles/overview.css">
+<link rel="stylesheet" href="assets/ai-assistant.css">
 </head>
 <body>
-<div class="wrap">
-  <div class="top">
-    <div class="brand">
-      <h1>AION Team Control</h1>
-      <div class="sub"><span id="team">…</span> · epics hidden · <span id="today"></span> · <span id="updated">Loading from Jira…</span> · <span id="auto">auto-refresh every 2 min</span></div>
-    </div>
+<a class="skip-link" href="#main-content">Skip to content</a>
+<div class="app-shell">
+  <aside class="app-sidebar" id="app-sidebar" aria-label="Main navigation">
+    <a class="app-brand" href="dashboard.html?page=overview"><span class="brand-mark">A</span><span>AION<span class="brand-caption">TEAM CONTROL</span></span></a>
+    <div class="workspace-label"><span class="workspace-dot"></span> Team workspace</div>
+    <p class="nav-label">WORKSPACE</p>
+    <nav id="main-nav" aria-label="Workspace"></nav>
+    <div class="sidebar-bottom"><a class="nav-link admin-only" id="users-link" href="users.html" hidden><span class="nav-icon">♙</span><span>Manage users</span></a><button class="nav-link" id="sidebar-collapse" type="button" aria-label="Collapse sidebar" aria-expanded="true"><span class="nav-icon">«</span><span>Collapse sidebar</span></button><div class="sidebar-note"><span class="workspace-dot"></span> Connected workspace</div></div>
+  </aside>
+  <button class="nav-scrim" id="nav-scrim" type="button" aria-label="Close navigation" hidden></button>
+  <div class="app-workspace">
+  <header class="app-topbar">
+    <button class="icon-btn" id="mobile-menu" type="button" aria-label="Open navigation" aria-controls="app-sidebar" aria-expanded="false">☰</button>
+    <div class="breadcrumbs">Workspace <span>/</span> <b id="breadcrumbs">All tickets</b></div>
+    <div class="search-wrap">
     <input class="search" id="q" type="search" placeholder="Search key, title or epic…" aria-label="Search tickets">
-    <button class="btn" id="refresh" type="button">Refresh</button>
-    <a class="btn admin-only" id="users-link" href="users.html" hidden>Users</a>
-    <span class="me">Signed in as <b id="me">…</b> <button class="btn" id="signout" type="button">Sign out</button></span>
-  </div>
+    </div>
+    <button class="btn ai-launcher" id="ai-launcher" type="button" aria-label="Open AION AI assistant" aria-controls="ai-panel" aria-expanded="false" disabled><span class="ai-launcher-mark" aria-hidden="true">✧</span><span class="ai-launcher-label">AION AI</span></button>
+    <details class="account-menu"><summary><span class="account-avatar" id="account-avatar">A</span><span class="account-name">My account</span></summary><div class="account-panel"><span class="me"><b id="me">…</b></span><span id="account-role">Team member</span><button class="btn" id="signout" type="button">Sign out</button></div></details>
+  </header>
+  <main class="wrap" id="main-content" tabindex="-1">
+  <div class="page-heading"><div><div class="eyebrow" id="page-eyebrow">YOUR WORKSPACE, IN FOCUS</div><h1 id="page-heading" tabindex="-1">All tickets</h1><p id="page-description">A clear view of your team's work, from first task to final delivery.</p></div><div class="page-actions"><span class="date-pill" id="today"></span><button class="btn" id="refresh" type="button">↻ Refresh</button><button class="btn primary" id="create-ticket" type="button">+ Internal ticket</button></div></div>
+  <div class="sync-line"><span id="team">…</span><span class="sync-meta"><span class="workspace-dot"></span><span id="updated">Loading from Jira…</span><span id="auto">auto-refresh every 2 min</span></span></div>
 
-  <div id="pagestate" class="state">Loading tickets from Jira…</div>
+  <div id="pagestate" class="state" role="status">Loading tickets from Jira…</div>
+  <div id="workspace-content" hidden></div>
+  <section id="tickets-area" aria-label="Ticket management">
 
   <div class="tiles" id="tiles" role="group" aria-label="Focus"></div>
 
   <div class="fpanel">
     <div class="fbar">
-      <span class="title">Filters</span>
+      <span class="title">Refine your view</span>
       <div class="active" id="active"></div>
-      <button class="btn" id="ftoggle" type="button" aria-expanded="true">Hide filters</button>
+      <button class="btn" id="ftoggle" type="button" aria-expanded="false">Advanced filters</button>
       <button class="btn danger" id="fclear" type="button">Clear all</button>
     </div>
+    <div id="quick-filters" class="quick-filters"></div>
     <div class="fgrid" id="fgrid"></div>
   </div>
 
@@ -50,12 +69,16 @@
         <button type="button" class="admin-only" data-v="dev" aria-pressed="false">By developer</button>
         <button type="button" data-v="status" aria-pressed="false">By status</button>
         <button type="button" class="admin-only" data-v="assignee" aria-pressed="false">By assignee</button>
-        <button type="button" data-v="history" aria-pressed="false">Due date changes</button>
+        <button type="button" class="admin-only" data-v="history" aria-pressed="false">Due date changes</button>
       </div>
     </div>
   </div>
   <div class="boardhint" id="hint" hidden></div>
   <div id="view"></div>
+  </section>
+  <footer class="workspace-footer"><span>AION Team Control</span><span>Built for a better working day.</span></footer>
+  </main>
+  </div>
 </div>
 
 <div class="bulk" id="bulk" hidden role="toolbar" aria-label="Bulk actions">
@@ -71,7 +94,7 @@
 <div class="toast" id="toast" hidden role="status"></div>
 
 <div class="scrim" id="scrim" hidden></div>
-<aside class="drawer" id="drawer" hidden aria-label="Ticket details" role="dialog">
+<aside class="drawer" id="drawer" hidden aria-label="Ticket details" role="dialog" aria-modal="true">
   <div class="dhead">
     <div class="dtop">
       <a class="key" id="d-key" target="_blank" rel="noopener"></a>
@@ -80,6 +103,7 @@
     </div>
     <h2 class="dtitle" id="d-title" dir="auto"></h2>
   </div>
+  <div id="drawer-tabs" class="drawer-tabs" role="tablist" aria-label="Ticket sections"></div>
   <div class="dbody" id="d-body">
     <div class="blk"><h3>Move status</h3><div class="trans" id="d-trans"></div></div>
     <dl class="facts" id="d-facts"></dl>
@@ -101,6 +125,12 @@
   </div>
 </aside>
 
+<button class="ai-scrim" id="ai-scrim" type="button" aria-label="Close AION AI assistant" hidden></button>
+<aside class="ai-panel" id="ai-panel" role="dialog" aria-modal="true" aria-labelledby="ai-title" hidden>
+  <header class="ai-header"><div><h2 id="ai-title">AION AI Assistant</h2><p id="ai-scope">Read-only ticket help</p></div><div class="ai-header-actions"><button class="btn" id="ai-new" type="button">New chat</button><button class="icon-btn" id="ai-close" type="button" aria-label="Close assistant">×</button></div></header>
+  <div class="ai-main" id="ai-main"><section class="ai-welcome" id="ai-welcome"><h3 id="ai-welcome-title">Help with your tickets.</h3><p id="ai-welcome-description">Understand your tickets, comments, deadlines and next steps.</p><div class="ai-prompts"><button type="button" data-ai-prompt="Help me prioritize my open Jira tasks.">What should I work on next?</button><button type="button" data-ai-prompt="Which authorized Jira tickets are overdue or due today?">Review deadlines</button><button type="button" data-ai-user data-ai-prompt="Help me understand a ticket's description and comments. Ask me for the ticket key.">Explain a ticket</button><button type="button" data-ai-admin hidden data-ai-prompt="Summarize project progress from Jira updates in the last 7 days.">Summarize this week</button><button type="button" data-ai-admin hidden data-ai-prompt="Analyze the team's developer workload and overdue Jira tickets.">Review team workload</button><button type="button" data-ai-admin hidden data-ai-prompt="Analyze current project progress, status counts and updates over the last 7 days.">Review project progress</button><button type="button" data-ai-admin hidden data-ai-prompt="Review overdue project tickets and upcoming deadlines. Explain the main delivery risks with ticket references.">Review delivery risks</button></div></section><div id="ai-messages" role="log" aria-label="AI conversation" aria-live="polite" aria-relevant="additions"></div></div>
+  <footer class="ai-composer"><div class="ai-status" id="ai-status" role="status"></div><form class="ai-form" id="ai-form"><textarea class="inp" id="ai-question" placeholder="Ask about your Jira tickets…" aria-label="Question for AION AI" maxlength="2000" rows="2"></textarea><button class="btn primary" id="ai-send" type="submit">Send</button></form><p class="ai-note">Read-only · Jira scope is independent of dashboard filters. Verify important details. Chat stays in this page session.</p></footer>
+</aside>
 <script src="assets/config.js"></script>
 <script type="module" src="assets/dashboard.js"></script>
 </body>
