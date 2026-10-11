@@ -2,6 +2,7 @@
 // sign-in and holds the Jira token. Team details (people, developers, emails) come from the proxy too,
 // so they aren't in this public code.
 import { api, apiFile, getSession, signOut } from "./session.js";
+import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normalizeInternalIssue } from "./models/issue.js";
 
   // Filled in from the proxy's /config after sign-in (see applyConfig).
   let SITE="", PROJECT="", PEOPLE={}, DEVS=[], DEV_EMAIL={}, DEV_COLOR={}, BYID={}, JQL="", ME="", MAIL=false;
@@ -52,14 +53,6 @@ import { api, apiFile, getSession, signOut } from "./session.js";
     changelog:key=>api("/jira/issue/"+key+"/changelog"),
     users:q=>api("/jira/users?q="+encodeURIComponent(q))
   };
-  // Jira's API returns descriptions and comments as structured documents; the proxy also asks for
-  // the HTML versions (renderedFields), which the existing display code expects.
-  function withRendered(raw){
-    const r=raw.renderedFields||{}, f=Object.assign({},raw.fields||{});
-    f.description=typeof r.description==="string"?r.description:(typeof f.description==="string"?f.description:"");
-    if(f.comment){ const rc=(r.comment&&r.comment.comments)||[]; f.comment=Object.assign({},f.comment,{comments:(f.comment.comments||[]).map((c,i)=>Object.assign({},c,{body:rc[i]&&typeof rc[i].body==="string"?rc[i].body:(typeof c.body==="string"?c.body:"")}))}); }
-    return Object.assign({},raw,{fields:f});
-  }
   // Internal tickets (INT-…): kept by the proxy, never in Jira. They're shown with every Jira ticket and
   // every action below goes to the right place for each kind.
   let INTERNAL=false, INT={}, INT_STATUSES=[{name:"Open",cat:"new"},{name:"In Development",cat:"indeterminate"},{name:"Closed",cat:"done"}], INT_PRIORITIES=["Highest","High","Medium","Low"];
@@ -79,14 +72,7 @@ import { api, apiFile, getSession, signOut } from "./session.js";
   const doTransition=(key,id)=>isInt(key)?internalApi.update(key,{status:id}):jira.transition(key,id);
   const doComment=(key,text)=>isInt(key)?internalApi.comment(key,text):jira.comment(key,text);
   // Same shape as a Jira ticket after norm(), so tiles, filters, boards and history all work unchanged.
-  function normInternal(t){
-    const cm=t.comments||[], last=cm.length?cm[cm.length-1]:null;
-    return { key:t.key, internal:true, summary:t.summary||"(no title)", status:t.status, cat:t.statusCat,
-      assignee:PEOPLE[t.assignee]?t.assignee:null, assigneeName:PEOPLE[t.assignee]?PEOPLE[t.assignee].name:"Unassigned", labels:(t.devs||[]).map(d=>"ai1_"+d), devs:(t.devs||[]).slice(), due:t.due||null,
-      created:(t.created||"").slice(0,10), updated:t.updated||"", priority:t.priority||"", type:"Internal",
-      reporter:(t.createdBy&&t.createdBy.name)||"Unknown", reporterId:null, assigneeId:PEOPLE[t.assignee]?PEOPLE[t.assignee].id:null, parent:null,
-      last:last?{author:(last.author&&last.author.name)||"Someone", fromTeam:true, when:last.created, text:last.body}:null };
-  }
+  const normInternal=t=>normalizeInternalIssue(t,PEOPLE);
   async function loadInternal(){
     if(!INTERNAL) return;
     try{
@@ -114,15 +100,6 @@ import { api, apiFile, getSession, signOut } from "./session.js";
   function ago(iso){ if(!iso) return ""; const m=(Date.now()-new Date(iso))/60000;
     if(m<60) return Math.max(1,Math.round(m))+"m ago"; if(m<1440) return Math.round(m/60)+"h ago"; if(m<10080) return Math.round(m/1440)+"d ago";
     return new Date(iso).toLocaleDateString("en-GB",{day:"numeric",month:"short"}); }
-
-  const isDevLabel=l=>/^ai1_/i.test(l), devOf=l=>l.slice(4).toLowerCase();
-  function labelsWith(labels,wanted){
-    const out=labels.filter(l=>!isDevLabel(l)), have=new Set();
-    labels.filter(isDevLabel).forEach(l=>{ const d=devOf(l); if(wanted.has(d)&&!have.has(d)){ out.push(l); have.add(d); } });
-    wanted.forEach(d=>{ if(!have.has(d)) out.push("ai1_"+d); });
-    return out;
-  }
-
   const ALLOWED=new Set(["P","BR","STRONG","B","EM","I","U","S","DEL","UL","OL","LI","A","H1","H2","H3","H4","H5","H6","CODE","PRE","BLOCKQUOTE","TABLE","THEAD","TBODY","TR","TD","TH","HR"]);
   // Jira's HTML carries inline styles; drop them before parsing (they're never shown, and the page's security policy reports each one).
   const noStyles=h=>String(h||"").replace(/<style[\s\S]*?<\/style>/gi,"").replace(/\sstyle\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi,"");
@@ -144,22 +121,7 @@ import { api, apiFile, getSession, signOut } from "./session.js";
     return box;
   }
 
-  function norm(raw){
-    const f=raw.fields||{}, labels=f.labels||[];
-    const aid=f.assignee&&f.assignee.accountId;
-    const cm=(f.comment&&f.comment.comments)||[], last=cm.length?cm[cm.length-1]:null;
-    return {
-      key:raw.key, summary:f.summary||"(no summary)",
-      status:(f.status&&f.status.name)||"", cat:(f.status&&f.status.statusCategory&&f.status.statusCategory.key)||"",
-      assignee:BYID[aid]||null, assigneeName:(f.assignee&&f.assignee.displayName)||"Unassigned",
-      labels, devs:[...new Set(labels.filter(isDevLabel).map(devOf))], due:f.duedate||null,
-      created:(f.created||"").slice(0,10), updated:f.updated||"",
-      priority:(f.priority&&f.priority.name)||"", type:(f.issuetype&&f.issuetype.name)||"",
-      reporter:(f.reporter&&f.reporter.displayName)||"Unknown", reporterId:(f.reporter&&f.reporter.accountId)||null, assigneeId:aid||null,
-      parent:f.parent?{key:f.parent.key,name:(f.parent.fields&&f.parent.fields.summary)||f.parent.key}:null,
-      last:last?{author:(last.author&&last.author.displayName)||"Someone", fromTeam:!!BYID[last.author&&last.author.accountId], when:last.created, text:toText(last.body)}:null
-    };
-  }
+  const norm=raw=>normalizeJiraIssue(raw,BYID,toText);
   const isNew=i=>NEW_STATUSES.includes(i.status.toLowerCase());
   const stK=i=>{ const s=(i.status||"").toLowerCase(); if(i.cat==="done"||s==="resolved"||s==="closed") return "k7"; if(s==="open") return "k1"; if(s==="pending approval") return "k4"; if(s==="dev approved") return "k5"; if(s==="in development") return "k3"; if(s.includes("qa")) return "k6"; if(s==="reopened") return "k2"; return "k8"; };
   const issueByKey=k=>(state.issues||[]).find(i=>i.key===k);

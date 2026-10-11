@@ -5,6 +5,11 @@
   "type": "module",
   "description": "AION Team Control: dashboard on GitHub Pages, Jira proxy on Vercel.",
   "scripts": {
-    "test": "node test/proxy.test.js && node test/accounts.test.js"
+    "test": "node test/proxy.test.js && node test/accounts.test.js && npm run test:frontend",
+    "test:frontend": "node --test test/frontend/*.test.js",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.0"
   }
 }
