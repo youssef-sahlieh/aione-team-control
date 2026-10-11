@@ -18,6 +18,41 @@ test("AI endpoints require authentication and report missing server configuratio
   const {chat}=await setup();assert.equal((await chat(undefined,undefined,undefined,false)).status,401);
   const res=await chat();assert.equal(res.status,503);assert.equal((await res.json()).code,"ai_not_configured");
 });
+test("ticket briefs verify authorization before sending only title and description to the model",async()=>{
+  let modelRequest;const {chat,requests}=await setup("user",async body=>{modelRequest=body;return message("Implement the work described in the ticket.");});
+  const result=await chat({key:"AION-1"},"/ai/brief");assert.equal(result.status,200);const brief=await result.json();assert.equal(brief.key,"AION-1");assert.equal(brief.readOnly,true);assert.match(brief.brief,/Implement/);
+  assert.deepEqual(modelRequest.tools,[]);assert.equal(modelRequest.tool_choice,"none");assert.equal(modelRequest.store,false);assert.equal(modelRequest.max_output_tokens,200);
+  assert.match(modelRequest.input[0].content,/Title AION-1/);assert.match(modelRequest.input[0].content,/Description/);assert.doesNotMatch(modelRequest.input[0].content,/Title AION-2|Ignore rules|synthetic-jira-token/);
+  assert.match(requests[0].body.jql,/labels = "ai1_builder"/);assert.match(requests[0].body.jql,/key = "AION-1"/);
+});
+test("unauthorized, foreign, internal and forged brief requests never reach the model",async()=>{
+  let models=0;const {chat}=await setup("user",async()=>{models++;return message("Unauthorized");});
+  assert.equal((await chat({key:"AION-2"},"/ai/brief")).status,403);
+  for(const body of [{key:"OTHER-1"},{key:"INT-1"},{key:"AION-1",description:"client text"},{key:"AION-1",role:"admin"},{key:"AION-1 OR key=AION-2"},null])assert.equal((await chat(body,"/ai/brief")).status,400);
+  assert.equal((await chat({key:"AION-1"},"/ai/brief","GET")).status,405);
+  assert.equal((await chat({key:"AION-1"},"/ai/brief","POST",false)).status,401);assert.equal(models,0);
+});
+test("manager briefs are bounded and do not execute model tool calls",async()=>{
+  const {env,chat,requests}=await setup("admin",async()=>message("word ".repeat(100)));
+  const result=await chat({key:"AION-2"},"/ai/brief");assert.equal(result.status,200);const brief=(await result.json()).brief;assert.ok(brief.length<=320);assert.ok(brief.split(" ").length<=40);assert.match(brief,/…$/);
+  env.AI_PROVIDER=async()=>callTool("add_comment",{key:"AION-1",text:"No"});assert.equal((await chat({key:"AION-1"},"/ai/brief")).status,502);
+  assert.ok(requests.every(r=>r.url.endsWith("/rest/api/3/search/jql")));
+});
+test("brief requests share the chat rate limit and unavailable services fail clearly",async()=>{
+  const {env,chat}=await setup("user",async()=>message("Brief"));
+  for(let n=0;n<10;n++)assert.equal((await chat({key:"AION-1"},"/ai/brief")).status,200);
+  assert.equal((await chat()).status,429);
+  delete env.AI_PROVIDER;assert.equal((await chat({key:"AION-1"},"/ai/brief")).status,503);
+});
+test("Claude briefs use one bounded request without tools, credentials or comments in model input",async()=>{
+  const {env,chat}=await setup("user");Object.assign(env,{AI_VENDOR:"anthropic",ANTHROPIC_API_KEY:"synthetic-claude-key",AI_MODEL:"test-claude"});
+  let calls=0;globalThis.fetch=async(url,init)=>{
+    if(String(url).includes("jira.test"))return Response.json({issues:[issue("AION-1")],isLast:true});
+    calls++;assert.equal(url,"https://api.anthropic.com/v1/messages");const body=JSON.parse(init.body);assert.equal(body.max_tokens,200);assert.equal(body.tools,undefined);assert.equal(body.tool_choice,undefined);assert.match(body.system,/untrusted data/);assert.doesNotMatch(JSON.stringify(body.messages),/synthetic-jira-token|Ignore rules/);
+    return Response.json({content:[{type:"text",text:"Improve the workflow described in the ticket."}]});
+  };
+  assert.equal((await chat({key:"AION-1"},"/ai/brief")).status,200);assert.equal(calls,1);
+});
 test("conversation service reuses authenticated Jira search and keeps foreign tickets out of model context",async()=>{
   let step=0,inputs=[];const provider=async body=>{inputs.push(JSON.stringify(body));return step++?message("Prioritize AION-1; AION-2 and OTHER-3 are unavailable."):callTool("search_tickets",{text:"",status:"open",updatedDays:0});};
   const {chat,requests}=await setup("user",provider);const res=await chat({message:"My tasks",history:[{role:"user",content:"Only deadlines please"}]});assert.equal(res.status,200);

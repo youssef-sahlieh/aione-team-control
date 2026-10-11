@@ -9,6 +9,8 @@ import { createWorkspace } from "./app/workspace.js";
 import { createIssueDrawer } from "./components/issue-drawer.js";
 import { defaultAssigneeKeys, assigneeOptions, assigneeFilterKey } from "./models/assignees.js";
 import { createAIAssistant } from "./ai-assistant.js";
+import { createAssigneeFilter } from "./components/assignee-filter.js";
+import { createTicketBriefs } from "./components/ticket-briefs.js";
 
   // Filled in from the proxy's /config after sign-in (see applyConfig).
   let SITE="", PROJECT="", PEOPLE={}, DEVS=[], DEV_EMAIL={}, DEV_COLOR={}, BYID={}, JQL="", ME="", MAIL=false;
@@ -32,12 +34,13 @@ import { createAIAssistant } from "./ai-assistant.js";
     } else {
       // The proxy scopes users by their ai1_ label; assignees are a view filter.
       JQL='project = '+PROJECT+' AND issuetype != Epic AND (statusCategory != Done OR updated >= -30d) ORDER BY updated DESC';
-      $("team").textContent="Your tickets · ai1_"+MY_DEV;
+      $("team").textContent="Your tickets";
       if(state.view==="dev"||state.view==="assignee"||state.view==="history") state.view="list";
       notifyOn=false;
     }
     state.f=defaultFilters();
     aiAssistant.configure(cfg);
+    ticketBriefs.configure(cfg);
   }
   // Both roles start with the named team; Others is an explicit opt-in.
   function defaultFilters(){ const f=F(); defaultAssigneeKeys(PEOPLE).forEach(k=>f.assignee.add(k)); return f; }
@@ -134,11 +137,11 @@ import { createAIAssistant } from "./ai-assistant.js";
   const F=createFilters;
   const state={issues:null,focus:"open",f:F(),q:"",view:"list",group:"",sel:new Set(),fopen:false,hperiod:7,updDays:3,dueDays:7,closedDays:30,mainIssues:[],closedIssues:[],internalIssues:[],pageIndex:0,pageSize:25};
   try{ const u=+localStorage.getItem("aion.upd"), d=+localStorage.getItem("aion.due"); if(u>=1&&u<=30) state.updDays=u; if(d>=1&&d<=90) state.dueDays=d; const cd=+localStorage.getItem("aion.closed"); if(cd>=1&&cd<=365) state.closedDays=cd; }catch(e){}
-  try{ const v=localStorage.getItem("aion.view"); if(v) state.view=v; if(localStorage.getItem("aion.fopen")==="0") state.fopen=false; const gg=localStorage.getItem("aion.group"); if(gg!==null) state.group=gg; }catch(e){}
+  try{ const v=localStorage.getItem("aion.view"); if(v) state.view=v; state.fopen=localStorage.getItem("aion.fopen")==="1"; const gg=localStorage.getItem("aion.group"); if(gg!==null) state.group=gg; }catch(e){}
 
   const FOCUS=[
     {id:"open",k:"k1",l:"All open",h:"Everything not done",f:i=>i.cat!=="done"},
-    {id:"nodev",k:"k2",l:"No developer",h:"Needs an ai1_ label",f:i=>i.cat!=="done"&&!i.devs.length},
+    {id:"nodev",k:"k2",l:"No developer",h:"Waiting for a developer",f:i=>i.cat!=="done"&&!i.devs.length},
     {id:"reply",k:"k6",l:"Needs a reply",h:"Last comment from outside",f:i=>i.cat!=="done"&&needsReply(i)},
     {id:"overdue",k:"k2",l:"Overdue",h:"Due date passed",f:(i,t)=>i.cat!=="done"&&i.due&&i.due<t},
     {id:"today",k:"k3",l:"Due today",h:"Finish by end of day",f:(i,t)=>i.cat!=="done"&&i.due===t},
@@ -155,25 +158,33 @@ import { createAIAssistant } from "./ai-assistant.js";
     return matchesFilters(i,t,{filters:state.f,query:state.q,needsReply,assigneeKey:i=>assigneeFilterKey(i,PEOPLE)},skip);
   }
   const focusDef=()=>FOCUS.find(x=>x.id===state.focus)||FOCUS[0];
-  function visible(skip){ const t=todayStr(), fd=focusDef(); return workspace.personalItems((state.issues||[]).filter(i=>fd.f(i,t)&&passFilters(i,t,skip))); }
+  function visible(skip){ const t=todayStr(), fd=focusDef(); return (state.issues||[]).filter(i=>fd.f(i,t)&&passFilters(i,t,skip)); }
   function filterCount(){ const f=state.f; return f.reporter.size+f.assignee.size+f.dev.size+f.status.size+f.type.size+f.priority.size+(f.epic?1:0)+(f.due!=="any"?1:0)+(f.activity!=="any"?1:0)+(state.q?1:0); }
 
   function renderQuickFilters(){
-    const box=$("quick-filters"); box.replaceChildren();
+    const box=$("quick-filters"), more=$("ftoggle"); box.replaceChildren();
     const pick=(label,options,value,onChange)=>{ const field=el("label","quick-field"), select=el("select"); field.appendChild(el("span",null,label)); select.setAttribute("aria-label",label); options.forEach(([v,l])=>select.appendChild(new Option(l,v))); if(value==="__multiple"){const o=new Option("Multiple selected",value);o.disabled=true;select.appendChild(o);} select.value=value;select.addEventListener("change",()=>{onChange(select.value);state.sel.clear();state.pageIndex=0;render();});field.appendChild(select);box.appendChild(field);return select;};
     const val=set=>set.size>1?"__multiple":[...set][0]||"";
-    const team=defaultAssigneeKeys(PEOPLE), teamSelected=state.f.assignee.size===team.length&&team.every(k=>state.f.assignee.has(k));
-    pick("Assignee",[["__team","Team (default)"],...assigneeOptions(PEOPLE),["other","Others"]],teamSelected?"__team":val(state.f.assignee),v=>state.f.assignee=new Set(v==="__team"?team:[v]));
+    box.appendChild(assigneeFilter.renderButton());
+    if(IS_ADMIN)pick("Developer",[["","All developers"],["__none","No developer"],...[...new Set([...allDevs(),...state.f.dev])].filter(d=>d!=="__none").sort().map(d=>[d,d])],val(state.f.dev),v=>state.f.dev=new Set(v?[v]:[]));
+    if(IS_ADMIN)pick("Reporter",[["","All reporters"],...[...new Set([...(state.issues||[]).map(i=>i.reporter),...state.f.reporter])].filter(Boolean).sort((a,b)=>a.localeCompare(b)).map(x=>[x,x])],val(state.f.reporter),v=>state.f.reporter=new Set(v?[v]:[]));
     pick("Status",[["","All statuses"],...[...new Set([...(state.issues||[]).map(i=>i.status),...state.f.status])].sort((a,b)=>stIdx(a)-stIdx(b)).map(x=>[x,x])],val(state.f.status),v=>state.f.status=new Set(v?[v]:[]));
-    if(IS_ADMIN) pick("Developer",[["","All developers"],["__none","No developer"],...[...new Set([...allDevs(),...state.f.dev])].filter(x=>x!=="__none").map(x=>[x,x])],val(state.f.dev),v=>state.f.dev=new Set(v?[v]:[]));
+    if(IS_ADMIN)pick("Priority",[["","All priorities"],...[...new Set([...(state.issues||[]).map(i=>i.priority||"None"),...state.f.priority])].sort((a,b)=>a.localeCompare(b)).map(x=>[x,x])],val(state.f.priority),v=>state.f.priority=new Set(v?[v]:[]));
     pick("Due date",DUE_OPTS,state.f.due,v=>state.f.due=v);
+    const moreField=el("div","quick-field more-filter-field");moreField.append(el("span",null,"Additional filters"),more);box.appendChild(moreField);
+    moreField.hidden=!IS_ADMIN;more.hidden=!IS_ADMIN;
+    if(!IS_ADMIN)return;
     let views=[]; try{views=readViews(localStorage,MY_EMAIL);}catch(_){}
-    pick("Saved view",[["","Saved views"],...views.map((v,n)=>[String(n),v.name])],"",v=>{ if(v==="")return; const restored=restoreView(views[+v],IS_ADMIN,PEOPLE);if(!restored)return;Object.assign(state,restored);$("q").value=state.q;workspace.navigate(state.view==="history"?"history":["dev","status","assignee"].includes(state.view)?"boards":"tickets",{mode:state.view}); });
+    const savedField=pick("Saved view",[["","Saved views"],...views.map((v,n)=>[String(n),v.name])],"",v=>{ if(v==="")return; const restored=restoreView(views[+v],IS_ADMIN,PEOPLE);if(!restored)return;Object.assign(state,restored);$("q").value=state.q;workspace.navigate(state.view==="history"?"history":["dev","status","assignee"].includes(state.view)?"boards":"tickets",{mode:state.view}); }).closest("label");
     const save=el("button","btn","Save view");save.type="button";save.addEventListener("click",()=>{ const name=prompt("Name this personal view:");if(!name||!name.trim())return;const view=serializeView(state,name);const updated=views.filter(v=>v.name!==view.name).concat(view).slice(-20);try{localStorage.setItem(savedViewKey(MY_EMAIL),JSON.stringify(updated));toast("View saved in this browser.");renderQuickFilters();}catch(_){toast("Couldn't save this view. Browser storage is unavailable.",[],true);} });box.appendChild(save);
+    if(IS_ADMIN){$("fgrid").querySelector(".saved-view-tools")?.remove();const tools=el("div","saved-view-tools");tools.append(savedField,save);$("fgrid").appendChild(tools);}
   }
 
   function renderTiles(){
     const t=todayStr(), box=$("tiles"); box.replaceChildren();
+    const primaryFocus=["open","overdue","today","closed"];
+    let extra;
+    if(IS_ADMIN&&workspace.route().page!=="tickets"){extra=el("details","focus-more");extra.id="manager-more-focus";extra.open=!!state.moreFocusOpen||!primaryFocus.includes(state.focus);extra.appendChild(el("summary","btn","More focus options"));extra.addEventListener("toggle",()=>{state.moreFocusOpen=extra.open;});}
     const base=(state.issues||[]).filter(i=>passFilters(i,t));
     FOCUS.forEach(fd=>{
       if((fd.id==="nodev"||fd.id==="duechg")&&!IS_ADMIN) return;
@@ -187,11 +198,12 @@ import { createAIAssistant } from "./ai-assistant.js";
         st.appendChild(mk("−",-1,"Fewer days")); st.appendChild(el("span","stepv",v+"d")); st.appendChild(mk("+",1,"More days")); b.appendChild(st);
       } else { b.appendChild(el("span","l",fd.l)); b.appendChild(el("span","h",fd.h)); }
       b.addEventListener("click",()=>{ state.focus=fd.id; state.sel.clear(); render(); });
-      box.appendChild(b);
+      if(extra&&!primaryFocus.includes(fd.id))extra.appendChild(b);else box.appendChild(b);
     });
+    if(extra)box.appendChild(extra);
   }
 
-  function section(title,k,anyFn){ const s=el("div","fsec "+k); const h=el("h4",null,title); if(anyFn){ const a=el("button","any","Any"); a.type="button"; a.addEventListener("click",()=>{ anyFn(); state.sel.clear(); render(); }); h.appendChild(a); } s.appendChild(h); return s; }
+  function section(title,k,anyFn){ const s=el("div","fsec "+k); const h=el("h4",null,title); if(anyFn){ const a=el("button","any","Any"); a.type="button"; a.setAttribute("aria-label","Reset "+title+" filter"); a.addEventListener("click",()=>{ anyFn(); state.sel.clear(); render(); }); h.appendChild(a); } s.appendChild(h); return s; }
   function chip(label,k,pressed,count,onClick,swatch,avatar){
     const c=el("button","fc "+k); c.type="button"; c.setAttribute("aria-pressed",String(pressed));
     if(avatar) c.appendChild(el("span","av "+k,avatar)); else if(swatch) c.appendChild(el("span","sw"));
@@ -203,9 +215,12 @@ import { createAIAssistant } from "./ai-assistant.js";
   function countBy(skip,fn){ const m={}; visible(skip).forEach(i=>{ [].concat(fn(i)).forEach(v=>{ m[v]=(m[v]||0)+1; }); }); return m; }
 
   function renderFilters(){
-    const g=$("fgrid"); g.replaceChildren(); g.hidden=!state.fopen;
-    $("ftoggle").textContent=state.fopen?"Hide advanced":"Advanced filters"; $("ftoggle").setAttribute("aria-expanded",String(state.fopen));
+    const g=$("fgrid"); g.replaceChildren(); g.hidden=!IS_ADMIN||!state.fopen;
+    $("ftoggle").textContent=state.fopen?"Hide more filters":"More filters"; $("ftoggle").setAttribute("aria-expanded",String(state.fopen));
+    if(IS_ADMIN&&state.fopen){const help=el("p","filter-help","Select multiple options within a group to include either. Selections across groups are combined.");g.appendChild(help);}
     const f=state.f;
+    const eps={};
+    if(IS_ADMIN){
     let s=section("Assignee","k4",()=>f.assignee=new Set(defaultAssigneeKeys(PEOPLE))); let cs=el("div","chips");
     s.querySelector(".any").textContent="Default team";
     const ca=countBy("assignee",i=>assigneeFilterKey(i,PEOPLE));
@@ -250,15 +265,18 @@ import { createAIAssistant } from "./ai-assistant.js";
     s=section("Epic (parent)","k8",null);
     const sel=el("select","fsel"); sel.setAttribute("aria-label","Epic");
     sel.appendChild(new Option("All epics","")); sel.appendChild(new Option("No epic","none"));
-    const eps={}; (state.issues||[]).forEach(i=>{ if(i.parent) eps[i.parent.key]=i.parent.name; });
+    (state.issues||[]).forEach(i=>{ if(i.parent) eps[i.parent.key]=i.parent.name; });
     Object.entries(eps).sort((a,b)=>a[1].localeCompare(b[1])).forEach(([k,n])=>sel.appendChild(new Option(n+" ("+k+")",k)));
     sel.value=f.epic; sel.addEventListener("change",()=>{ f.epic=sel.value; state.sel.clear(); render(); });
     s.appendChild(sel); g.appendChild(s);
+    }
 
     const act=$("active"); act.replaceChildren();
     const addA=(label,k,rm)=>{ const c=el("span","achip "+k,label); const x=el("button",null,"✕"); x.type="button"; x.setAttribute("aria-label","Remove "+label); x.addEventListener("click",()=>{ rm(); state.sel.clear(); render(); }); c.appendChild(x); act.appendChild(c); };
     f.reporter.forEach(v=>addA("Reporter: "+v,"k6",()=>f.reporter.delete(v)));
-    f.assignee.forEach(v=>addA(assigneeOptions(PEOPLE).find(([key])=>key===v)?.[1]||(v==="other"?"Other assignees":v),"kp-"+v,()=>f.assignee.delete(v)));
+    const defaults=defaultAssigneeKeys(PEOPLE);
+    if(!IS_ADMIN&&f.assignee.size===defaults.length&&defaults.every(key=>f.assignee.has(key)))act.appendChild(el("span","filter-empty","Default team"));
+    else f.assignee.forEach(v=>addA(assigneeOptions(PEOPLE).find(([key])=>key===v)?.[1]||(v==="other"?"Other assignees":v),"kp-"+v,()=>f.assignee.delete(v)));
     f.dev.forEach(v=>addA(v==="__none"?"No developer":"ai1_"+v,v==="__none"?"k2":devK(v),()=>f.dev.delete(v)));
     f.status.forEach(v=>addA(v,stK({status:v,cat:""}),()=>f.status.delete(v)));
     f.type.forEach(v=>addA(v,"k7",()=>f.type.delete(v)));
@@ -268,6 +286,7 @@ import { createAIAssistant } from "./ai-assistant.js";
     if(f.activity!=="any") addA(ACT_OPTS.find(x=>x[0]===f.activity)[1],"k6",()=>f.activity="any");
     if(state.q) addA("“"+state.q+"”","k1",()=>{ state.q=""; $("q").value=""; });
     if(!act.childNodes.length) act.appendChild(el("span","filter-empty","All tickets in this focus"));
+    const matches=visible().length;$("filter-summary").textContent=matches+" ticket"+(matches===1?"":"s")+" match · "+filterCount()+" selected";
     $("fclear").disabled=!filterCount();
     renderQuickFilters();
   }
@@ -277,7 +296,7 @@ import { createAIAssistant } from "./ai-assistant.js";
     if(!state.f.assignee.size) state.f.assignee=new Set(defaultAssigneeKeys(PEOPLE));
     // The proxy scopes developers by their authenticated ai1_ label. Do not
     // apply an invisible, editable developer filter on top of that scope.
-    if(!IS_ADMIN) state.f.dev.clear();
+    if(!IS_ADMIN){state.f.dev.clear();state.f.reporter.clear();state.f.priority.clear();state.f.type.clear();state.f.epic="";state.f.activity="any";}
     const t=todayStr(); $("today").textContent=fmtDate(t)+" "+t.slice(0,4);
     renderTiles(); renderFilters();
     if(workspace.renderPage()){ updateBulk(); return; }
@@ -305,11 +324,12 @@ import { createAIAssistant } from "./ai-assistant.js";
   }
 
   function listView(items,t){
-    const w=el("div","listwrap");
+    const w=el("div","listwrap"+(ticketBriefs.enabled()?" with-ai-briefs":""));
     const h=el("div","gr head"); const all=el("input","ck"); all.type="checkbox"; all.setAttribute("aria-label","Select all");
     all.checked=items.every(i=>state.sel.has(i.key)); all.addEventListener("change",()=>{ items.forEach(i=>all.checked?state.sel.add(i.key):state.sel.delete(i.key)); render(); });
     const hc=el("span","c-ck"); hc.appendChild(all); h.appendChild(hc);
     [["c-key","Ticket ID"],["c-ttl","Title / Priority"],["c-who","Assignee"],["c-rep","Reporter"],["c-dev","Developers"],["c-st","Status"],["c-due","Due date"],["c-cre","Created"],["c-upd","Updated"],["c-note",""],["c-actions",""]].forEach(([c,x])=>h.appendChild(el("span",c,x)));
+    if(ticketBriefs.enabled()){const label=el("span","c-brief","AI brief");label.title="Generate a short AI explanation of each Jira ticket.";h.insertBefore(label,h.querySelector(".c-who"));}
     w.appendChild(h);
     const allSorted=sortItems(items), pages=Math.max(1,Math.ceil(allSorted.length/state.pageSize));
     state.pageIndex=Math.min(state.pageIndex,pages-1);
@@ -377,6 +397,7 @@ import { createAIAssistant } from "./ai-assistant.js";
     const tags=tagsFor(i,t,state.group!=="epic"); if(tags.childNodes.length) tt.appendChild(tags);
     if((state.focus==="reply"||state.focus==="recent"||state.f.activity==="reply")&&i.last){ const sn=el("span","snip"); sn.dir="auto"; sn.appendChild(el("b",null,i.last.author+" · "+ago(i.last.when)+": ")); sn.append(i.last.text); tt.appendChild(sn); }
     tt.addEventListener("click",()=>openDrawer(i.key)); r.appendChild(tt);
+    if(ticketBriefs.enabled())r.appendChild(ticketBriefs.renderCell(i));
     const canAsg=IS_ADMIN; const who=el(canAsg?"button":"span","who c-who"+(canAsg?" asg":"")); who.appendChild(avatar(i)); who.appendChild(el("span",null,i.assignee?PEOPLE[i.assignee].name:i.assigneeName));
     if(canAsg){ who.type="button"; who.title="Change assignee"; who.addEventListener("click",e=>{ e.stopPropagation(); assigneePopover(who,[i.key]); }); } r.appendChild(who);
     const rp=el("span","who c-rep"); rp.appendChild(el("span","av k6",initials(i.reporter))); const rn=el("span",null,i.reporter); rn.title=i.reporter; rp.appendChild(rn); r.appendChild(rp);
@@ -960,6 +981,8 @@ import { createAIAssistant } from "./ai-assistant.js";
   const drawerUI=createIssueDrawer({canViewHistory:()=>IS_ADMIN,isDirty:()=>{const issue=issueByKey(dz.key);if(!issue)return !!$("d-reply").value.trim();return !!$("d-reply").value.trim()||!!$("d-newdev").value.trim()||$("d-due").value!==(issue.due||"")||dz.devs.size!==issue.devs.length||issue.devs.some(d=>!dz.devs.has(d));}});
   const workspace=createWorkspace({state,context:()=>({admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount()}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>!dz.key||closeDrawer()});
   const aiAssistant=createAIAssistant({openIssue:openDrawer,beforeOpen:()=>{if(dz.key&&!closeDrawer())return false;closePop();return true;}});
+  const ticketBriefs=createTicketBriefs({api});
+  const assigneeFilter=createAssigneeFilter({getSelection:()=>state.f.assignee,getOptions:()=>assigneeOptions(PEOPLE),getDefaults:()=>defaultAssigneeKeys(PEOPLE),getCounts:()=>countBy("assignee",i=>assigneeFilterKey(i,PEOPLE)),onApply:selected=>{state.f.assignee=selected;state.sel.clear();state.pageIndex=0;render();}});
   $("create-ticket").addEventListener("click",e=>internalPopover(e.currentTarget));
   document.querySelector(".account-panel").appendChild($("notify").closest("label"));
   window.addEventListener("hashchange",()=>{try{const key=decodeURIComponent(location.hash.slice(1));if(issueByKey(key))openDrawer(key);}catch(_){} });

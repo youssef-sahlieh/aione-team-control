@@ -1,6 +1,5 @@
 /* A quieter overview; other workspace pages retain their own layouts. */
-body[data-workspace-page="overview"] .eyebrow,
-body[data-workspace-page="overview"] .workspace-footer span:last-child { display: none; }
+body[data-workspace-page="overview"] .eyebrow { display: none; }
 body[data-workspace-page="overview"] .wrap { gap: 24px; }
 body[data-workspace-page="overview"] .page-heading h1 { font-size: 30px; }
 body[data-workspace-page="overview"] .page-heading p { margin-top: 6px; }

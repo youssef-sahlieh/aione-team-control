@@ -1,0 +1,32 @@
+/* Keep the requested work and its state prominent; supporting metadata stays readable. */
+.gr .ttl .s, .card .t, .compact-ticket b { color: var(--fg); font-weight: 600; }
+.gr .ttl:hover .s { color: var(--accent); }
+.gr .stbtn { font-weight: 600; color: color-mix(in srgb,var(--k) 85%,var(--fg)); border: 1px solid color-mix(in srgb,currentColor 30%,transparent); }
+.gr .duebtn:not(.late):not(.today) { color: var(--muted); }
+.gr .who, .gr .upd, .gr .key, .gr .tags .epic, .gr .snip { color: var(--muted); }
+.gr .upd { font-size: 12px; }
+.ticket-brief { min-width: 0; font-size: 13px; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; }
+.ticket-brief-text { display: block; }
+.brief-generate { min-height: 44px; border: 1px solid var(--line-strong); padding: 8px 10px; border-radius: 8px; background: var(--surface); color: var(--accent); font-size: 13px; cursor: pointer; }
+.brief-generate:hover { background: var(--accent-soft); }
+.brief-generate:disabled { color: var(--muted); cursor: wait; }
+.brief-error { display: block; margin-top: 6px; font-size: 12px; }
+.brief-unavailable { color: var(--muted); }
+body[data-workspace-role] .with-ai-briefs .gr { grid-template-columns: 24px 82px minmax(120px,1fr) minmax(160px,1.2fr) 110px 115px 110px 90px 44px; gap: 10px; }
+@media(max-width:1399px) {
+  body[data-workspace-role] .with-ai-briefs .gr { grid-template-columns: 24px minmax(0,1fr) minmax(0,1fr) 44px; grid-template-areas: 'ck key key actions' 'ck ttl ttl actions' 'ck brief brief actions' 'ck who who actions' 'ck dev st actions' 'ck due due actions'; gap: 10px; }
+  .with-ai-briefs .gr.head { display: none; }
+  .with-ai-briefs .gr .c-ck { grid-area: ck; }
+  .with-ai-briefs .gr .c-key { grid-area: key; }
+  .with-ai-briefs .gr .c-ttl { grid-area: ttl; }
+  .with-ai-briefs .gr .c-brief { grid-area: brief; }
+  .with-ai-briefs .gr .c-who { grid-area: who; }
+  .with-ai-briefs .gr .c-dev { grid-area: dev; }
+  .with-ai-briefs .gr .c-st { grid-area: st; }
+  .with-ai-briefs .gr .c-due { grid-area: due; justify-self: start; }
+  .with-ai-briefs .gr .c-actions { grid-area: actions; }
+  .ticket-brief:not(:has(.brief-unavailable))::before { content: 'AI brief'; display: block; font-size: 11px; font-weight: 600; margin-bottom: 4px; }
+}
+@media(max-width:820px) {
+  body[data-workspace-role] .with-ai-briefs .gr { grid-template-columns: 24px minmax(0,1fr) auto; grid-template-areas: 'ck key actions' 'ck ttl ttl' 'ck brief brief' 'ck who who' 'ck dev st' 'ck due due'; }
+}

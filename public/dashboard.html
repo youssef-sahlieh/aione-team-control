@@ -14,7 +14,10 @@
 <link rel="stylesheet" href="assets/styles/workspace.css">
 <link rel="stylesheet" href="assets/styles/readability.css">
 <link rel="stylesheet" href="assets/styles/overview.css">
+<link rel="stylesheet" href="assets/styles/filters.css">
+<link rel="stylesheet" href="assets/styles/manager.css">
 <link rel="stylesheet" href="assets/ai-assistant.css">
+<link rel="stylesheet" href="assets/styles/ticket-briefs.css">
 </head>
 <body>
 <a class="skip-link" href="#main-content">Skip to content</a>
@@ -34,7 +37,7 @@
     <div class="search-wrap">
     <input class="search" id="q" type="search" placeholder="Search key, title or epic…" aria-label="Search tickets">
     </div>
-    <button class="btn ai-launcher" id="ai-launcher" type="button" aria-label="Open AION AI assistant" aria-controls="ai-panel" aria-expanded="false" disabled><span class="ai-launcher-mark" aria-hidden="true">✧</span><span class="ai-launcher-label">AION AI</span></button>
+    <button class="btn ai-launcher" id="ai-launcher" type="button" aria-label="Open AION AI assistant" aria-controls="ai-panel" aria-expanded="false" hidden disabled><span class="ai-launcher-mark" aria-hidden="true">✧</span><span class="ai-launcher-label">AION AI</span></button>
     <details class="account-menu"><summary><span class="account-avatar" id="account-avatar">A</span><span class="account-name">My account</span></summary><div class="account-panel"><span class="me"><b id="me">…</b></span><span id="account-role">Team member</span><button class="btn" id="signout" type="button">Sign out</button></div></details>
   </header>
   <main class="wrap" id="main-content" tabindex="-1">
@@ -51,8 +54,9 @@
     <div class="fbar">
       <span class="title">Refine your view</span>
       <div class="active" id="active"></div>
-      <button class="btn" id="ftoggle" type="button" aria-expanded="false">Advanced filters</button>
-      <button class="btn danger" id="fclear" type="button">Clear all</button>
+      <span id="filter-summary" class="filter-summary" aria-live="polite"></span>
+      <button class="btn" id="ftoggle" type="button" aria-expanded="false" aria-controls="fgrid">More filters</button>
+      <button class="btn" id="fclear" type="button">Reset filters</button>
     </div>
     <div id="quick-filters" class="quick-filters"></div>
     <div class="fgrid" id="fgrid"></div>
@@ -76,7 +80,7 @@
   <div class="boardhint" id="hint" hidden></div>
   <div id="view"></div>
   </section>
-  <footer class="workspace-footer"><span>AION Team Control</span><span>Built for a better working day.</span></footer>
+  <footer class="workspace-footer"><span>AION Team Control</span></footer>
   </main>
   </div>
 </div>
@@ -129,7 +133,7 @@
 <aside class="ai-panel" id="ai-panel" role="dialog" aria-modal="true" aria-labelledby="ai-title" hidden>
   <header class="ai-header"><div><h2 id="ai-title">AION AI Assistant</h2><p id="ai-scope">Read-only ticket help</p></div><div class="ai-header-actions"><button class="btn" id="ai-new" type="button">New chat</button><button class="icon-btn" id="ai-close" type="button" aria-label="Close assistant">×</button></div></header>
   <div class="ai-main" id="ai-main"><section class="ai-welcome" id="ai-welcome"><h3 id="ai-welcome-title">Help with your tickets.</h3><p id="ai-welcome-description">Understand your tickets, comments, deadlines and next steps.</p><div class="ai-prompts"><button type="button" data-ai-prompt="Help me prioritize my open Jira tasks.">What should I work on next?</button><button type="button" data-ai-prompt="Which authorized Jira tickets are overdue or due today?">Review deadlines</button><button type="button" data-ai-user data-ai-prompt="Help me understand a ticket's description and comments. Ask me for the ticket key.">Explain a ticket</button><button type="button" data-ai-admin hidden data-ai-prompt="Summarize project progress from Jira updates in the last 7 days.">Summarize this week</button><button type="button" data-ai-admin hidden data-ai-prompt="Analyze the team's developer workload and overdue Jira tickets.">Review team workload</button><button type="button" data-ai-admin hidden data-ai-prompt="Analyze current project progress, status counts and updates over the last 7 days.">Review project progress</button><button type="button" data-ai-admin hidden data-ai-prompt="Review overdue project tickets and upcoming deadlines. Explain the main delivery risks with ticket references.">Review delivery risks</button></div></section><div id="ai-messages" role="log" aria-label="AI conversation" aria-live="polite" aria-relevant="additions"></div></div>
-  <footer class="ai-composer"><div class="ai-status" id="ai-status" role="status"></div><form class="ai-form" id="ai-form"><textarea class="inp" id="ai-question" placeholder="Ask about your Jira tickets…" aria-label="Question for AION AI" maxlength="2000" rows="2"></textarea><button class="btn primary" id="ai-send" type="submit">Send</button></form><p class="ai-note">Read-only · Jira scope is independent of dashboard filters. Verify important details. Chat stays in this page session.</p></footer>
+  <footer class="ai-composer"><div class="ai-status" id="ai-status" role="status"></div><form class="ai-form" id="ai-form"><textarea class="inp" id="ai-question" placeholder="Ask about your Jira tickets…" aria-label="Question for AION AI" maxlength="2000" rows="2"></textarea><button class="btn primary" id="ai-send" type="submit">Send</button></form><p class="ai-note">Read-only · Chat lasts for this session.</p></footer>
 </aside>
 <script src="assets/config.js"></script>
 <script type="module" src="assets/dashboard.js"></script>

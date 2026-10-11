@@ -17,6 +17,8 @@ The proxy's secrets are **Vercel environment variables**: vercel.com → aione-t
 | `KV_REST_API_URL`, `KV_REST_API_TOKEN` | Added by Vercel when you connect the Upstash Redis database (user accounts) |
 | `GMAIL_USER`, `GMAIL_APP_PASSWORD` | Sends the dashboard's emails automatically through a Gmail account |
 | `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET` | Not used now: the Microsoft 365 alternative to Gmail, if an admin ever sets it up |
+| `JIRA_NOTIFICATION_SECRET` | Secret for the new-ticket Jira Automation webhook (at least 32 characters) |
+| `NO_DEVELOPER_NOTIFY_TO` | Optional recipient override; defaults to `youssef@aione.biz,ellen@aione.biz` |
 
 **After changing a variable, redeploy:** vercel.com → aione-team-proxy → **Deployments** → the latest one → **⋯ → Redeploy**. Variables only take effect on a new deployment.
 
@@ -109,6 +111,8 @@ Every change made from the dashboard shows in Jira as made by this account.
 Gmail allows about 500 emails a day from one account. To stop sending, delete the two `GMAIL_` variables and redeploy. If you change the Gmail account's password, Google cancels its app passwords: create a new one and update `GMAIL_APP_PASSWORD`.
 
 ## If something doesn't work
+
+For automatic emails when a new Jira ticket has no developer, see [ticket notification activation](docs/ticket-notifications.md). This needs a deployed proxy and a Jira Automation rule; it works without the dashboard open.
 
 - **"Can't reach the AION server":** check that https://aione-team-proxy.vercel.app/config answers with `{"code":"session",...}`. If not, open the latest deployment in Vercel for errors.
 - **"Jira didn't accept the proxy's API token":** the token expired or was revoked. Replace it (above).

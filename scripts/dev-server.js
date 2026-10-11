@@ -3,7 +3,7 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { resolve, sep, extname } from "node:path";
-import { aiChat, aiConfigured } from "../proxy/src/ai.js";
+import { aiChat, aiBrief, aiConfigured } from "../proxy/src/ai.js";
 
 const root = resolve("public");
 const port = Number(process.env.PORT || 3000);
@@ -30,7 +30,7 @@ createServer(async (req, res) => {
         if(!cfg.ok){res.writeHead(cfg.status,{"Content-Type":"application/json","Cache-Control":"no-store"}).end(await cfg.text());return;}
         const me=await cfg.json();
         const request=new Request("http://localhost"+url.pathname.slice(4),{method:req.method,headers,body:["GET","HEAD"].includes(req.method)?undefined:Buffer.concat(chunks)});
-        const response=url.pathname!=="/api/ai/chat"?Response.json({code:"ai_read_only",error:"Ticket actions are disabled in AION AI v1."},{status:403}):await aiChat(request,process.env,{me,project:me.project,readSearch:async body=>{
+        const response=!["/api/ai/chat","/api/ai/brief"].includes(url.pathname)?Response.json({code:"ai_read_only",error:"Ticket actions are disabled in AION AI v1."},{status:403}):await (url.pathname==="/api/ai/brief"?aiBrief:aiChat)(request,process.env,{me,project:me.project,readSearch:async body=>{
           const r=await fetch(upstream+"/jira/search",{method:"POST",headers:{...headers,"Content-Type":"application/json"},body:JSON.stringify(body),redirect:"error",signal:AbortSignal.timeout(20000)});
           if(!r.ok)throw new Error("Authorized Jira read failed");return r.json();
         }});

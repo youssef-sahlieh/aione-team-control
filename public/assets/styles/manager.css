@@ -1,0 +1,57 @@
+/* Manager workspace: primary navigation and concise, actionable ticket rows. */
+.nav-more > summary { cursor: pointer; list-style: none; justify-content: space-between; }
+.nav-more > summary::-webkit-details-marker { display: none; }
+.nav-more > summary::after { content: '⌄'; font-size: 16px; }
+.nav-more[open] > summary::after { content: '⌃'; }
+.nav-more-links { padding-left: 12px; border-left: 1px solid #ffffff26; margin-left: 14px; }
+body.sidebar-collapsed .nav-more-links { margin-left: 0; padding-left: 0; border: 0; }
+body.sidebar-collapsed .nav-more > summary::after { display: none; }
+body[data-workspace-role=manager] .sidebar-note,
+body[data-workspace-role=manager] .eyebrow { display: none; }
+body[data-workspace-role=manager] .page-heading p { max-width: 650px; }
+.saved-view-tools { grid-column: 1 / -1; display: flex; align-items: end; gap: 12px; padding-top: 14px; border-top: 1px solid var(--line); }
+.saved-view-tools .quick-field { flex: 1; max-width: 400px; }
+body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .tiles { display: flex; flex-wrap: wrap; gap: 8px; overflow: visible; }
+body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .tile { display: flex; flex-direction: row; align-items: center; flex-wrap: wrap; min-height: 44px; padding: 8px 12px; gap: 8px; border-radius: 8px; box-shadow: none; }
+body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .tile::before,
+body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .tile .h { display: none; }
+body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .tile .n { font-size: 15px; order: 1; font-variant-numeric: tabular-nums; color: var(--muted); }
+body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .tile .l { font-size: 13px; }
+body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .tile[aria-pressed=true] { border-color: var(--accent); background: var(--accent-soft); }
+body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .tile[aria-pressed=true] .n { color: var(--accent); }
+body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .tile .step { margin: 0; }
+.focus-more { flex-basis: 100%; display: flex; flex-wrap: wrap; }
+.focus-more > summary { width: fit-content; cursor: pointer; color: var(--muted); margin-bottom: 6px; }
+.focus-more .tile { display: inline-flex !important; margin: 6px 8px 0 0; }
+.focus-more:not([open]) .tile { display: none !important; }
+body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .gr .tags .epic { display: none; }
+body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .gr { gap: 12px; padding: 16px; }
+body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .row-menu { border: 1px solid var(--line); border-radius: 8px; }
+body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .gr.head { letter-spacing: 0; font-size: 12px; text-transform: none; background: var(--sunk); }
+body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .toolbar { padding: 4px 0; gap: 10px; }
+@media(min-width:821px) {
+  body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .gr { grid-template-columns: 24px 88px minmax(140px,1fr) 110px 115px 115px 96px 44px; }
+  body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .gr .c-who { display: flex; }
+}
+@media(min-width:821px) and (max-width:1399px) {
+  body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .gr { grid-template-columns: 24px minmax(0,1fr) minmax(0,1fr) 44px; grid-template-areas: 'ck key key actions' 'ck ttl ttl actions' 'ck who dev actions' 'ck st due actions'; gap: 10px; }
+  body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .gr.head { display: none; }
+  body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .gr .c-ck { grid-area: ck; }
+  body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .gr .c-key { grid-area: key; }
+  body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .gr .c-ttl { grid-area: ttl; }
+  body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .gr .c-who { grid-area: who; }
+  body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .gr .c-dev { grid-area: dev; }
+  body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .gr .c-st { grid-area: st; }
+  body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .gr .c-due { grid-area: due; }
+  body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .gr .c-actions { grid-area: actions; }
+}
+@media(max-width:820px) {
+  body[data-workspace-role=manager] .quick-filters { grid-template-columns: 1fr 1fr; }
+  body[data-workspace-role=manager] .assignee-filter-field,
+  body[data-workspace-role=manager] .more-filter-field { grid-column: 1 / -1; }
+  body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .gr { grid-template-areas: 'ck key actions' 'ck ttl ttl' 'ck who who' 'ck dev st' 'ck due due'; }
+  body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .gr .c-who { display: flex; grid-area: who; }
+  body[data-workspace-role=manager]:not([data-workspace-page=tickets]) .tile { padding: 8px 10px; }
+  .saved-view-tools { flex-wrap: wrap; }
+  .saved-view-tools .quick-field { flex-basis: 100%; max-width: none; }
+}
