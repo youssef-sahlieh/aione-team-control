@@ -17,7 +17,8 @@
 //   emails in TEAM_EMAILS sign in with TEAM_PASSWORD as admins. The first sign-in with TEAM_PASSWORD
 //   after the database is added creates admin accounts for everyone in TEAM_EMAILS.
 import { internalRoutes } from "./internal.js";
-import { aiChat, aiConfigured } from "./ai.js";
+import { aiChat, aiBrief, aiConfigured } from "./ai.js";
+import { newTicketNotification } from "./notifications.js";
 import { ROLES, checkPassword, createLinkToken, deleteUser, getUser, hashPassword, listUsers, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, useLinkToken, validDev, validEmail } from "./users.js";
 
 const enc = new TextEncoder();
@@ -308,6 +309,17 @@ async function route(request, env, url) {
   const path = url.pathname;
   const method = request.method;
 
+  // Jira Automation uses its own secret, never a team password or a user's browser session.
+  if (path === "/notifications/jira-created") {
+    if (method !== "POST") return fail("method", "Use POST for Jira events.", 405);
+    if (!env.JIRA_NOTIFICATION_SECRET || env.JIRA_NOTIFICATION_SECRET.length < 32) return fail("notification_off", "Ticket notifications aren't configured.", 503);
+    if (!(await sameSecret(request.headers.get("X-AION-Webhook-Secret") || "", env.JIRA_NOTIFICATION_SECRET))) return fail("forbidden", "Invalid webhook secret.", 401);
+    return newTicketNotification(request, env, {
+      readIssue: key => jira(env, "/rest/api/3/issue/" + key + "?fields=summary,labels,status,assignee,priority,duedate,project"),
+      sendMail: (from, body) => sendMail(env, from, body)
+    });
+  }
+
   if (path === "/login" && method === "POST") {
     const ip = clientIp(request);
     const body = (await readJson(request)) || {};
@@ -364,8 +376,8 @@ async function route(request, env, url) {
   const isAdmin = me.role === "admin";
   const devLabel = "ai1_" + me.dev;
   if(path.startsWith("/ai/")){
-    if(path!=="/ai/chat")return fail("ai_read_only","Ticket actions are disabled in AION AI v1.",403);
-    return aiChat(request,env,{me,project:env.JIRA_PROJECT,readSearch:async body=>{
+    if(!["/ai/chat","/ai/brief"].includes(path))return fail("ai_read_only","Ticket actions are disabled in AION AI v1.",403);
+    return (path==="/ai/brief"?aiBrief:aiChat)(request,env,{me,project:env.JIRA_PROJECT,readSearch:async body=>{
       const result=await route(new Request(new URL("/jira/search",url),{method:"POST",headers:{Authorization:request.headers.get("Authorization"),"Content-Type":"application/json"},body:JSON.stringify(body)}),env,new URL("/jira/search",url));
       if(!result.ok)throw new Error("Authorized Jira read failed");return result.json();
     }});

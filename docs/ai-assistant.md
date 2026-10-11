@@ -37,7 +37,8 @@ Run or restart
 against the deployed proxy's `/config` and reads Jira through its authenticated
 `/jira/search`. Local chat uses live authorized Jira data and the configured model
 API, so normal provider usage charges apply. Without the selected provider's key and model the panel
-shows an unavailable/setup state and does not send questions to the model.
+hides the AI launcher and does not send questions to the model. Configuration
+instructions remain in this guide rather than in the dashboard.
 
 ## Activate on Vercel
 
@@ -96,12 +97,18 @@ available, instance-memory fallback otherwise), up to eight tool calls/five mode
 rounds, and a 45-second conversation deadline. Each response has a token cap.
 Provider error details and credentials are not returned to the browser.
 
+## Ticket brief column
+
+When AI is configured, the ticket list includes **AI brief**. Press **Generate brief** on a Jira row to produce one or two short sentences (up to 40 words / 320 characters) explaining its title and description. On small screens the brief sits beneath the title. Briefs are generated on demand, retained in page-session memory, and invalidated when the ticket's updated timestamp changes. Reload and sign-out clear them; they are never stored in browser storage. Internal INT tickets do not support AI briefs in v1.
+
+The authenticated `/ai/brief` endpoint accepts only a project ticket key, reuses the existing authorized ticket reader, and checks availability before model access. The model receives only that authorized title and bounded description, with no tools, comments, credentials or chat history. Briefs and chat share the ten-request-per-minute limit and provider configuration. No status, label, date, assignee or comment writes occur. Failures offer a per-row retry; unavailable AI hides the column. Sparse descriptions may produce limited explanations. Read the ticket for authoritative details.
+
 ## Reserved actions
 
 The server has a disabled write capability list for status changes, developer
 assignment/removal, comments and ticket creation. These capabilities are never
 advertised to the model. Model write calls, unknown capabilities, client action
-envelopes, non-chat AI routes and mutation methods are rejected server-side.
+envelopes, AI routes other than chat/brief, and mutation methods are rejected server-side.
 The AI service has no Jira mutation callback at all. No v2 activation flag exists.
 
 V2 should add a separate action service with validated proposals, explicit user
@@ -111,10 +118,10 @@ enable v2 by merely adding tool names to the read registry.
 
 ## Verification
 
-`npm test` includes 17 AI backend tests for authentication, authorized reads,
+`npm test` includes 22 AI backend tests for authentication, authorized reads,
 cross-project/developer isolation, partial comments, administrator workload,
 rejected writes, malformed requests, pagination, limits, and the model adapter.
-`npm run test:e2e` includes five AI browser tests for chat history, ticket links,
-safe rendering, role suggestions, unavailable/failure states, keyboard focus,
+`npm run test:e2e` includes eleven AI browser tests for chat history, ticket links, ticket briefs,
+safe rendering, role suggestions, hidden unavailable controls, failure states, keyboard focus,
 and layouts at 320/1440 px. Tests use synthetic Jira/model data and never contact
 production Jira, Claude or OpenAI. Live model quality and credentials have not been tested.

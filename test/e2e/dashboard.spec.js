@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { jiraIssue, internalTicket, people } from "../fixtures/issues.js";
 
-async function mockDashboard(page, { role = "admin", failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false } = {}) {
+async function mockDashboard(page, { role = "admin", failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false } = {}) {
   await page.clock.setFixedTime(new Date("2026-10-11T09:00:00Z"));
   const calls = [], unexpected = [], errors = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -25,6 +25,7 @@ async function mockDashboard(page, { role = "admin", failure = false, expired = 
     const json = value => route.fulfill({ json: value });
     if (path === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people:assigneeTeam?{...people,...Object.fromEntries(["karim","youssef","rami","razan"].map(key=>[key,{id:`test-${key}`,name:key[0].toUpperCase()+key.slice(1),ini:key[0].toUpperCase()}]))}:people, devs: ["builder", "reviewer"], role, dev: "builder", email: "test@example.invalid", accounts: true, mail: false, ai:{enabled:!aiDisabled,readOnly:true} });
     if(path==="/ai/chat")return aiFailure?route.fulfill({status:503,json:{code:"ai_unavailable",error:"AI service unavailable. Try again."}}):json({answer:"Review AION-101 first. AION-9999 is unverified. <img src=x onerror=alert(1)>",references:[{key:"AION-101",title:"Synthetic Jira task"}],readOnly:true});
+    if(path==="/ai/brief")return briefFailure?route.fulfill({status:503,json:{code:"ai_unavailable",error:"Brief service unavailable. Try again."}}):json({key:body.key,brief:"Fix the reported issue so the workflow works correctly. <img src=x onerror=alert(1)>",updated:jiraIssue.fields.updated,readOnly:true});
     if (path === "/login") return json({token:"synthetic-token",email:"test@example.invalid",expiresAt:Date.now()+3600000,role});
     if (path === "/internal" && method === "GET") return json({ tickets: [internalTicket] });
     if (path === "/jira/search") {
@@ -41,6 +42,34 @@ async function mockDashboard(page, { role = "admin", failure = false, expired = 
   return { calls, unexpected, errors };
 }
 
+async function selectAssignees(page,names){
+  await page.locator("#assignee-filter-trigger").click();const picker=page.locator("#assignee-filter-dialog");
+  for(const check of await picker.getByRole("checkbox").all())await check.setChecked(names.includes(await check.getAttribute("aria-label")));
+  await picker.getByRole("button",{name:"Apply",exact:true}).click();await expect(picker).not.toBeVisible();
+}
+for(const width of [320,1440])test(`assignee picker searches, stages selection and restores focus at ${width}px`,async({page})=>{
+  await page.setViewportSize({width,height:900});const mock=await mockDashboard(page,{assigneeTeam:true});await page.goto("/dashboard.html");await expect(page.locator("#view .item")).toHaveCount(3);
+  const trigger=page.locator("#assignee-filter-trigger"),picker=page.locator("#assignee-filter-dialog");await trigger.click();await expect(picker.getByRole("searchbox",{name:"Search assignees"})).toBeFocused();await expect(picker.getByRole("checkbox",{name:"Karim",exact:true})).toBeChecked();
+  await picker.getByRole("searchbox").fill("raza");await expect(picker.getByRole("checkbox")).toHaveCount(1);await picker.getByRole("checkbox",{name:"Razan",exact:true}).check();await expect(page.locator("#view .item")).toHaveCount(3);
+  await picker.getByRole("button",{name:"Cancel",exact:true}).click();await expect(trigger).toBeFocused();await expect(page.locator("#view .item")).toHaveCount(3);
+  await trigger.click();await picker.getByRole("searchbox").fill("nobody matches this");await expect(picker).toContainText("No people match your search");await page.keyboard.press("Escape");await expect(picker).not.toBeVisible();await expect(trigger).toBeFocused();
+  await trigger.click();for(const check of await picker.getByRole("checkbox").all())await check.uncheck();await picker.getByRole("button",{name:"Apply",exact:true}).click();await expect(picker).toBeVisible();await expect(picker.getByRole("status")).toHaveText("Select at least one assignee.");
+  await picker.getByRole("button",{name:"Reset to default",exact:true}).click();await picker.getByRole("checkbox",{name:"Razan",exact:true}).check();await picker.screenshot({path:`test-results/assignee-picker-${width}.png`});
+  await picker.getByRole("button",{name:"Apply",exact:true}).click();await expect(page.locator("#view .item")).toHaveCount(4);await expect(page.locator("#assignee-filter-trigger")).toBeFocused();await expect(page.locator("#active")).toContainText("Razan");
+  await page.getByRole("button",{name:"Remove Razan",exact:true}).click();await expect(page.locator("#view .item")).toHaveCount(3);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+for(const role of ["admin","user"])for(const width of [320,1440])test(`${role} AI brief column generates on demand and survives local filters at ${width}px`,async({page})=>{
+  await page.setViewportSize({width,height:1000});const mock=await mockDashboard(page,{role});await page.goto("/dashboard.html");await expect(page.locator("#view .item")).toHaveCount(2);
+  expect(mock.calls.some(c=>c.path==="/ai/brief")).toBe(false);
+  await page.getByRole("button",{name:"Generate brief for AION-101",exact:true}).click();await expect(page.locator(".ticket-brief-text")).toContainText("Fix the reported issue");await expect(page.locator(".ticket-brief img")).toHaveCount(0);
+  await page.getByRole("combobox",{name:"Status",exact:true}).selectOption("Open");await expect(page.locator("#view .item")).toHaveCount(1);await page.getByRole("combobox",{name:"Status",exact:true}).selectOption("");await expect(page.locator(".ticket-brief-text")).toBeVisible();
+  expect(mock.calls.filter(c=>c.path==="/ai/brief")).toHaveLength(1);await expect(page.getByRole("button",{name:"Generate brief for INT-101",exact:true})).toHaveCount(0);
+  expect(await page.locator("#view .ttl .s").first().evaluate(el=>getComputedStyle(el).fontWeight)).toBe("600");
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.locator("#view").screenshot({path:`test-results/ticket-briefs-${role}-${width}.png`});expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test("AI brief failures offer a retry without losing the ticket list",async({page})=>{
+  const mock=await mockDashboard(page,{briefFailure:true});await page.goto("/dashboard.html");await page.getByRole("button",{name:"Generate brief for AION-101",exact:true}).click();await expect(page.locator(".brief-error")).toContainText("Brief service unavailable");await expect(page.getByRole("button",{name:"Retry brief for AION-101",exact:true})).toBeEnabled();await expect(page.locator("#view .item")).toHaveCount(2);expect(mock.errors).toEqual([]);
+});
 for(const width of [320,1440])test(`AI panel retains session chat and links verified tickets at ${width}px`,async({page})=>{
   await page.setViewportSize({width,height:900});const mock=await mockDashboard(page);await page.goto("/dashboard.html?page=overview");
   await page.locator("#ai-launcher").click();await expect(page.locator("#ai-question")).toBeFocused();
@@ -65,27 +94,76 @@ test("manager AI exposes project and team options",async({page})=>{
   for(const button of await page.locator("[data-ai-admin]").all())await expect(button).toBeVisible();await expect(page.locator("[data-ai-user]")).toBeHidden();
   await page.getByRole("button",{name:"Review project progress",exact:true}).click();await expect(page.locator("#ai-messages .ai-message-assistant")).toHaveCount(1);expect(mock.calls.find(c=>c.path==="/ai/chat").body.message).toContain("project progress");expect(mock.errors).toEqual([]);
 });
-test("unconfigured AI displays setup state without making chat requests",async({page})=>{
-  const mock=await mockDashboard(page,{aiDisabled:true});await page.goto("/dashboard.html");await page.locator("#ai-launcher").click();await expect(page.locator("#ai-status")).toContainText("server configuration");await expect(page.locator("#ai-send")).toBeDisabled();await expect(page.locator("#ai-question")).toBeDisabled();
-  await page.locator("#ai-close").focus();await page.keyboard.press("Tab");await expect(page.locator("#ai-new")).toBeFocused();expect(mock.calls.some(c=>c.path==="/ai/chat")).toBe(false);expect(mock.errors).toEqual([]);
+for(const role of ["admin","user"])test(`${role} sees no AI setup controls when chat is unavailable`,async({page})=>{
+  const mock=await mockDashboard(page,{role,aiDisabled:true});await page.goto("/dashboard.html");await expect(page.locator("#view .item")).toHaveCount(2);await expect(page.locator("#ai-launcher")).toBeHidden();await expect(page.locator("#ai-panel")).toBeHidden();await expect(page.locator("#ai-send")).toBeDisabled();
+  await expect(page.locator("#main-content")).not.toContainText("server configuration");expect(mock.calls.some(c=>c.path==="/ai/chat")).toBe(false);expect(mock.errors).toEqual([]);
+  await expect(page.locator(".c-brief")).toHaveCount(0);expect(mock.calls.some(c=>c.path==="/ai/brief")).toBe(false);
 });
 
-for(const role of ["admin","user"])test(`${role} defaults to four assignees and includes Others only on selection`,async({page})=>{
+for(const role of ["admin","user"])test(`${role} defaults to three assignees and includes Razan and Others only on selection`,async({page})=>{
   const mock=await mockDashboard(page,{role,assigneeTeam:true});await page.goto("/dashboard.html");
-  await expect(page.locator("#view .item")).toHaveCount(4);
-  await expect(page.locator("#view")).toContainText("Task for razan");
+  await expect(page.locator("#view .item")).toHaveCount(3);
+  await expect(page.locator("#view")).not.toContainText("Task for razan");
   await expect(page.locator("#view")).not.toContainText("Task for someone");
-  const selector=page.getByRole("combobox",{name:"Assignee",exact:true});await expect(selector).toHaveValue("__team");
+  await expect(page.locator("#assignee-filter-trigger")).toHaveAttribute("title","Karim, Youssef, Rami (default)");
+  if(role==="user"){
+    await expect(page.locator("#ftoggle")).toBeHidden();await expect(page.locator("#active")).toHaveText("Default team");
+    await selectAssignees(page,["Karim","Youssef","Rami","Razan"]);await expect(page.locator("#view .item")).toHaveCount(4);await page.locator("#fclear").click();
+    await selectAssignees(page,["Others"]);await expect(page.locator("#view .item")).toHaveCount(2);await expect(page.locator("#view")).toContainText("Task for someone");
+    await page.locator("#fclear").click();await expect(page.locator("#view .item")).toHaveCount(3);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);return;
+  }
   await page.locator("#ftoggle").click();
+  const razan=page.locator("#fgrid .fsec.k4").getByRole("button",{name:/Razan/});await expect(razan).toHaveAttribute("aria-pressed","false");await razan.click();await expect(page.locator("#view .item")).toHaveCount(4);await expect(page.locator("#view")).toContainText("Task for razan");await page.locator("#fclear").click();
   const others=page.locator("#fgrid .fsec.k4").getByRole("button",{name:/Others/});
-  await expect(others).toHaveAttribute("aria-pressed","false");await others.click();await expect(page.locator("#view .item")).toHaveCount(6);
-  await others.click();await expect(page.locator("#view .item")).toHaveCount(4);
-  await selector.selectOption("other");await expect(page.locator("#view .item")).toHaveCount(2);await expect(page.locator("#view")).toContainText("Task for someone");
+  await expect(others).toHaveAttribute("aria-pressed","false");await others.click();await expect(page.locator("#view .item")).toHaveCount(5);await expect(page.locator("#view")).not.toContainText("Task for razan");
+  await others.click();await expect(page.locator("#view .item")).toHaveCount(3);
+  await selectAssignees(page,["Others"]);await expect(page.locator("#view .item")).toHaveCount(2);await expect(page.locator("#view")).toContainText("Task for someone");
   page.once("dialog",d=>d.accept("Others only"));await page.getByRole("button",{name:"Save view",exact:true}).click();
-  await page.locator("#fclear").click();await expect(page.locator("#view .item")).toHaveCount(4);
+  await page.locator("#fclear").click();await expect(page.locator("#view .item")).toHaveCount(3);
   await page.getByRole("combobox",{name:"Saved view",exact:true}).selectOption({label:"Others only"});await expect(page.locator("#view .item")).toHaveCount(2);
   expect(mock.calls.filter(c=>c.path==="/jira/search").every(c=>!c.body.jql.includes("assignee in"))).toBe(true);
   expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+for(const width of [320,1440])test(`filter labels and selections remain clear at ${width}px`,async({page})=>{
+  await page.setViewportSize({width,height:900});const mock=await mockDashboard(page,{role:"user",assigneeTeam:true});await page.goto("/dashboard.html");
+  await expect(page.locator("#filter-summary")).toHaveText("3 tickets match · 3 selected");await expect(page.locator(".quick-field > span").filter({hasText:"Assignee"})).toBeVisible();
+  await expect(page.locator("#ftoggle")).toBeHidden();await expect(page.locator("#fgrid")).toBeHidden();
+  for(const label of ["Reporter","Priority","Developer","Saved view"])await expect(page.getByRole("combobox",{name:label,exact:true})).toHaveCount(0);
+  await expect(page.locator("#quick-filters select:visible")).toHaveCount(2);
+  await selectAssignees(page,["Razan"]);await expect(page.locator("#view .item")).toHaveCount(1);await expect(page.locator("#filter-summary")).toHaveText("1 ticket match · 1 selected");
+  await page.getByRole("button",{name:"Reset filters",exact:true}).click();await expect(page.locator("#view .item")).toHaveCount(3);await expect(page.locator("#filter-summary")).toHaveText("3 tickets match · 3 selected");
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.locator(".fpanel").screenshot({path:`test-results/filters-${width}.png`});expect(mock.errors).toEqual([]);
+});
+for(const role of ["admin"])for(const width of [320,1440])test(`${role} reporter, status and priority stay visible and filter together at ${width}px`,async({page})=>{
+  await page.setViewportSize({width,height:1000});const mock=await mockDashboard(page,{role});await page.goto("/dashboard.html");await expect(page.locator("#view .item")).toHaveCount(2);
+  await expect(page.locator("#fgrid")).toBeHidden();
+  for(const name of ["Reporter","Status","Priority"]){await expect(page.getByRole("combobox",{name,exact:true})).toBeVisible();await expect(page.locator("#quick-filters .quick-field > span").filter({hasText:new RegExp(`^${name}$`)})).toBeVisible();}
+  await page.locator(".fpanel").screenshot({path:`test-results/primary-filters-${role}-${width}.png`});
+  await page.getByRole("combobox",{name:"Reporter",exact:true}).selectOption("Test Reporter");await expect(page.locator("#view .item")).toHaveCount(1);
+  await page.getByRole("combobox",{name:"Status",exact:true}).selectOption("Pending QA");await page.getByRole("combobox",{name:"Priority",exact:true}).selectOption("High");await expect(page.locator("#view")).toContainText("AION-101");
+  await page.getByRole("combobox",{name:"Reporter",exact:true}).selectOption("Test Builder");await expect(page.locator("#view .item")).toHaveCount(0);
+  await expect(page.getByRole("combobox",{name:"Priority",exact:true}).locator("option")).toContainText(["All priorities","High","Medium"]);
+  await page.getByRole("button",{name:"Remove Reporter: Test Builder",exact:true}).click();await expect(page.getByRole("combobox",{name:"Reporter",exact:true})).toHaveValue("");await expect(page.locator("#view .item")).toHaveCount(1);
+  await page.getByRole("button",{name:"Reset filters",exact:true}).click();await expect(page.locator("#view .item")).toHaveCount(2);
+  await page.getByRole("combobox",{name:"Priority",exact:true}).selectOption("Medium");await expect(page.locator("#view .item")).toHaveCount(1);await expect(page.locator("#view")).toContainText("INT-101");
+  await page.getByRole("combobox",{name:"Reporter",exact:true}).selectOption("Test Builder");await page.getByRole("combobox",{name:"Priority",exact:true}).selectOption("");await expect(page.locator("#view .item")).toHaveCount(1);await page.locator("#ftoggle").click();
+  await page.locator("#fgrid .fsec").filter({has:page.locator("h4",{hasText:"Reporter"})}).getByRole("button",{name:/Test Reporter/}).click();await expect(page.getByRole("combobox",{name:"Reporter",exact:true})).toHaveValue("__multiple");
+  await expect(page.locator("#view .item")).toHaveCount(2);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+for(const width of [320,1024,1440])test(`manager workspace keeps secondary tools accessible at ${width}px`,async({page})=>{
+  await page.setViewportSize({width,height:1000});const mock=await mockDashboard(page);await page.goto("/dashboard.html");
+  if(width<=820)await page.locator("#mobile-menu").click();
+  await expect(page.locator('#main-nav > a:not([hidden])')).toHaveCount(4);await expect(page.locator('[data-page="history"]')).toBeHidden();
+  await page.locator("#manager-more-nav summary").click();await expect(page.locator('[data-page="history"]')).toBeVisible();await page.locator('[data-page="history"]').click();await expect(page.locator("#page-heading")).toHaveText("Due date history");
+  if(width<=820)await page.locator("#mobile-menu").click();await page.locator('[data-page="tickets"]').click();
+  await expect(page.locator("#quick-filters select")).toHaveCount(5);await expect(page.getByRole("combobox",{name:"Saved view",exact:true})).toBeHidden();await expect(page.locator("#bulk")).toBeHidden();
+  await expect(page.locator("#tiles > .tile")).toHaveCount(10);await expect(page.locator("#manager-more-focus")).toHaveCount(0);
+  const row=page.locator("#view .gr.item").first();if(width>=1400)await expect(row.locator(".c-who")).toBeVisible();else await expect(row.locator(".c-who")).toBeHidden();await expect(row.locator(".c-dev")).toBeVisible();await expect(row.locator(".c-rep")).toBeHidden();
+  await row.locator("input.ck").check();await expect(page.locator("#bulk")).toBeVisible();await page.locator("#b-clear").click();await expect(page.locator("#bulk")).toBeHidden();
+  await page.getByRole("button",{name:"Actions for AION-101",exact:true}).click();await expect(page.locator("#pop")).toContainText("Internal notes");await page.locator("#pop").getByRole("button",{name:"Open details",exact:true}).click();await expect(page.locator("#d-facts")).toContainText("Reporter");await page.locator("#d-close").click();
+  await page.locator("#ftoggle").click();await expect(page.locator("#fgrid h4").filter({hasText:"Developer (ai1_)"})).toBeVisible();await expect(page.getByRole("combobox",{name:"Saved view",exact:true})).toBeVisible();await page.locator("#ftoggle").click();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:`test-results/manager-clean-${width}.png`,fullPage:true});expect(mock.unexpected).toEqual([]);expect(mock.errors).toEqual([]);
 });
 
 test("workspace pages navigate locally and browser Back restores page",async({page})=>{
@@ -114,7 +192,7 @@ test("drawer tabs retain draft and closing respects discard confirmation and foc
 
 test("personal saved view restores filters after a refresh",async({page})=>{
   await mockDashboard(page);await page.goto("/dashboard.html");await expect(page.locator("#view .item")).toHaveCount(2);await page.getByRole("combobox",{name:"Status",exact:true}).selectOption("Pending QA");await expect(page.locator("#view .item")).toHaveCount(1);
-  page.once("dialog",d=>d.accept("QA work"));await page.getByRole("button",{name:"Save view",exact:true}).click();await page.locator("#fclear").click();
+  await page.locator("#ftoggle").click();page.once("dialog",d=>d.accept("QA work"));await page.getByRole("button",{name:"Save view",exact:true}).click();await page.locator("#fclear").click();
   await page.reload();await page.getByRole("combobox",{name:"Saved view",exact:true}).selectOption({label:"QA work"});await expect(page.locator("#view .item")).toHaveCount(1);await expect(page.locator("#active")).toContainText("Pending QA");
 });
 
@@ -138,9 +216,12 @@ test("admin renders both sources, filters locally, groups and changes board with
   await expect(page.locator("#view .item")).toHaveCount(2);
   await expect(page.locator("#users-link")).toBeVisible();
   await expect(page.locator('[data-page="tickets"]')).toBeVisible();
-  await expect(page.locator('[data-page="mytasks"]')).toBeVisible();
+  await expect(page.locator('[data-page="mytasks"]')).toHaveCount(0);await page.locator("#manager-more-nav summary").click();await expect(page.locator('[data-page="boards"]')).toBeVisible();
   await expect(page.locator("#tiles .tile").filter({hasText:"No developer"})).toBeVisible();
-  await expect(page.getByRole("combobox",{name:"Developer",exact:true}).locator('option[value="__none"]')).toHaveCount(1);
+  await expect(page.getByRole("combobox",{name:"Developer",exact:true})).toBeVisible();
+  await page.getByRole("combobox",{name:"Developer",exact:true}).selectOption("reviewer");await expect(page.locator("#view .item")).toHaveCount(1);await expect(page.locator("#active")).toContainText("ai1_reviewer");
+  await page.getByRole("combobox",{name:"Developer",exact:true}).selectOption("__none");await expect(page.locator("#view .item")).toHaveCount(0);
+  await page.getByRole("combobox",{name:"Developer",exact:true}).selectOption("");await expect(page.locator("#view .item")).toHaveCount(2);
   await page.locator("#ftoggle").click();
   await expect(page.locator("#fgrid").getByRole("button",{name:/No developer/})).toBeVisible();
   await page.locator("#q").fill("internal");
@@ -162,19 +243,19 @@ test("developer restores team defaults and downgrades saved admin board", async 
   await page.goto("/dashboard.html");
   await expect(page.locator("#view .item")).toHaveCount(2);
   await expect(page.locator("#users-link")).toBeHidden();
-  await expect(page.locator('[data-page="tickets"]')).toBeHidden();
-  await expect(page.locator('[data-page="mytasks"]')).toBeVisible();
-  await expect(page.locator("#page-heading")).toHaveText("My tasks");
+  await expect(page.locator('[data-page="tickets"]')).toBeVisible();
+  await expect(page.locator('[data-page="mytasks"]')).toHaveCount(0);
+  await expect(page.locator("#page-heading")).toHaveText("All tickets");
   await expect(page.locator("#tiles .tile").filter({hasText:"No developer"})).toHaveCount(0);
   await expect(page.getByRole("combobox",{name:"Developer",exact:true})).toHaveCount(0);
-  await page.locator("#ftoggle").click();
+  await expect(page.locator("#ftoggle")).toBeHidden();
   await expect(page.locator("#fgrid").getByRole("button",{name:/No developer/})).toHaveCount(0);
   await expect(page.locator("#fgrid h4").filter({hasText:"Developer (ai1_)"})).toHaveCount(0);
   await expect(page.locator('[data-v="dev"]')).toBeHidden();
   await expect(page.locator('[data-v="assignee"]')).toBeHidden();
   await expect(page.locator('[data-v="list"]')).toHaveAttribute("aria-pressed", "true");
   await page.locator("#fclear").click();
-  await expect(page.locator("#active")).toContainText("Test Lead");
+  await expect(page.locator("#active")).toContainText("Default team");
   expect(mock.unexpected).toEqual([]);
   expect(mock.errors).toEqual([]);
 });
@@ -217,9 +298,9 @@ test("sign-in preserves both page route and ticket deep link",async({page})=>{
 });
 
 test("developer workload links fall back to tickets and row menus retain role restrictions",async({page})=>{
-  const mock=await mockDashboard(page,{role:"user"});await page.goto("/dashboard.html?page=workload#INT-101");await expect(page.locator("#page-heading")).toHaveText("My tasks");await expect(page.locator('[data-page="workload"]')).toBeHidden();await expect(page.locator(".workload-table")).toHaveCount(0);await expect(page.locator("#d-key")).toContainText("INT-101");await page.locator("#d-close").click();
-  await page.goto("/dashboard.html?page=tickets#AION-101");await expect(page).toHaveURL(/page=mytasks#AION-101/);await expect(page.locator("#d-key")).toContainText("AION-101");await page.locator("#d-close").click();
-  await page.locator('[data-page="mytasks"]').click();await page.getByRole("button",{name:"Actions for AION-101",exact:true}).click();await expect(page.locator("#pop")).toContainText("Set due date");await expect(page.locator("#pop")).not.toContainText("Assign developers");await expect(page.locator("#pop")).not.toContainText("Change assignee");expect(mock.unexpected).toEqual([]);expect(mock.errors).toEqual([]);
+  const mock=await mockDashboard(page,{role:"user"});await page.goto("/dashboard.html?page=workload#INT-101");await expect(page.locator("#page-heading")).toHaveText("All tickets");await expect(page.locator('[data-page="workload"]')).toBeHidden();await expect(page.locator(".workload-table")).toHaveCount(0);await expect(page.locator("#d-key")).toContainText("INT-101");await page.locator("#d-close").click();
+  await page.goto("/dashboard.html?page=mytasks#AION-101");await expect(page).toHaveURL(/page=tickets#AION-101/);await expect(page.locator("#d-key")).toContainText("AION-101");await page.locator("#d-close").click();
+  await page.locator('[data-page="tickets"]').click();await page.getByRole("button",{name:"Actions for AION-101",exact:true}).click();await expect(page.locator("#pop")).toContainText("Set due date");await expect(page.locator("#pop")).not.toContainText("Assign developers");await expect(page.locator("#pop")).not.toContainText("Change assignee");expect(mock.unexpected).toEqual([]);expect(mock.errors).toEqual([]);
 });
 
 for(const role of ["admin","user"])test(`${role} due-date history visibility follows manager role`,async({page})=>{
@@ -233,7 +314,7 @@ for(const role of ["admin","user"])test(`${role} due-date history visibility fol
     await page.getByRole("tab",{name:"Activity",exact:true}).click();
     await expect(page.locator("#d-hist")).toBeVisible();
   }else{
-    await expect(page.locator("#page-heading")).toHaveText("My tasks");
+    await expect(page.locator("#page-heading")).toHaveText("All tickets");
     await expect(page.getByRole("tab",{name:"Activity",exact:true})).toHaveCount(0);
     await expect(page.locator("#d-hist")).toBeHidden();
     await expect(page.locator("#d-due")).toBeVisible();
@@ -244,7 +325,7 @@ for(const role of ["admin","user"])test(`${role} due-date history visibility fol
   }
   await page.locator("#d-close").click();
   const nav=page.locator('[data-page="history"]'), switcher=page.locator('[data-v="history"]'), tile=page.locator("#tiles .tile").filter({hasText:"Due date moved"});
-  if(role==="admin"){await expect(nav).toBeVisible();await expect(switcher).toBeVisible();await expect(tile).toBeVisible();}
+  if(role==="admin"){await expect(nav).toBeVisible();await expect(switcher).toBeVisible();await page.locator("#manager-more-focus summary").click();await expect(tile).toBeVisible();}
   else{
     await expect(nav).toBeHidden();await expect(switcher).toBeHidden();await expect(tile).toHaveCount(0);
     await page.goto("/dashboard.html");

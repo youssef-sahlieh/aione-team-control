@@ -1,5 +1,5 @@
 import { createFilters } from "./filters.js";
-import { defaultAssigneeKeys } from "./assignees.js";
+import { defaultAssigneeKeys, assigneeOptions } from "./assignees.js";
 const fields = ["reporter", "assignee", "dev", "status", "type", "priority"];
 const modes = ["list", "dev", "status", "assignee", "history"];
 const focuses = ["open", "nodev", "reply", "overdue", "today", "approval", "nodue", "recent", "duechg", "closed"];
@@ -24,7 +24,8 @@ export function restoreView(v, admin, people) {
   const f = createFilters(); fields.forEach(key => { f[key] = new Set(v.filters[key]); });
   Object.assign(f, { epic: v.filters.epic, due: v.filters.due, activity: v.filters.activity });
   const team=defaultAssigneeKeys(people);
-  f.assignee=new Set([...f.assignee].filter(key=>key==="other"||team.includes(key)));
+  const available=assigneeOptions(people).map(([key])=>key);
+  f.assignee=new Set([...f.assignee].filter(key=>key==="other"||available.includes(key)));
   if(!f.assignee.size) team.forEach(key=>f.assignee.add(key));
   if (!admin) f.dev.clear();
   return { f, q: v.query, focus: !admin && ["nodev", "duechg"].includes(v.focus) ? "open" : v.focus, view: !admin && ["dev", "assignee", "history"].includes(v.mode) ? "list" : v.mode, group: v.group };

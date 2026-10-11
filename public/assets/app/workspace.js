@@ -1,12 +1,11 @@
 import { readRoute, routeUrl } from "./router.js";
 import { calculateWorkload } from "../models/workload.js";
-import { defaultAssigneeKeys } from "../models/assignees.js";
+import { assigneeOptions } from "../models/assignees.js";
 const $ = id => document.getElementById(id);
 const node = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const button = (text, cls, action) => { const b = node("button", cls, text); b.type = "button"; b.addEventListener("click", action); return b; };
 const icons = {
   overview: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z",
-  mytasks: "M9 6h11 M9 12h11 M9 18h11 M3 6l1 1 2-2 M3 12l1 1 2-2 M3 18l1 1 2-2",
   tickets: "M4 4h16v16H4z M8 9h8 M8 14h5",
   boards: "M3 4h5v16H3z M10 4h5v11h-5z M17 4h5v14h-5z",
   workload: "M4 20V10 M10 20V4 M16 20v-7 M22 20H2",
@@ -15,7 +14,6 @@ const icons = {
 };
 const pages = [
   ["overview", "Overview", "Your work, at a glance."],
-  ["mytasks", "My tasks", "Your assignments and the work that needs your attention."],
   ["tickets", "All tickets", "A clear view of your team's work, from first task to final delivery."],
   ["boards", "Boards", "Keep work moving with a shared view of every stage."],
   ["workload", "Workload", "Understand assignments, deadlines, and where support is needed."],
@@ -57,7 +55,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     if (!menuOpen) return;
     if (e.key === "Escape") { e.preventDefault(); setMenu(false); }
     if (e.key === "Tab") {
-      const focusable = [...$("app-sidebar").querySelectorAll("a,button")].filter(n => n.getClientRects().length);
+      const focusable = [...$("app-sidebar").querySelectorAll("a,button,summary")].filter(n => n.getClientRects().length);
       const first = focusable[0], last = focusable.at(-1);
       if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
@@ -92,16 +90,22 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     a.addEventListener("click", e => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate(id); });
     nav.appendChild(a);
   }
+  const moreNav=node("details","nav-more");moreNav.id="manager-more-nav";
+  const moreSummary=node("summary","nav-link");moreSummary.title="More workspace pages";moreSummary.append(node("span","nav-icon","⋯"),node("span","","More"));moreNav.appendChild(moreSummary);
+  const moreLinks=node("div","nav-more-links");moreNav.appendChild(moreLinks);
+  nav.appendChild(moreNav);
   function configure() {
     route = readRoute(new URL(location.href), context().admin);
+    document.body.dataset.workspaceRole=context().admin?"manager":"user";
+    moreNav.hidden=!context().admin;
+    if(context().admin){
+      for(const id of ["overview","tickets","workload","calendar"])nav.insertBefore(nav.querySelector(`[data-page="${id}"]`),moreNav);
+      for(const id of ["boards","history"])moreLinks.appendChild(nav.querySelector(`[data-page="${id}"]`));
+    }
     nav.querySelector('[data-page="history"]').hidden = !context().admin;
     nav.querySelector('[data-page="workload"]').hidden = !context().admin;
-    nav.querySelector('[data-page="tickets"]').hidden = !context().admin;
-    if(!context().admin){
-      nav.querySelector('[data-page="mytasks"]').appendChild($("nav-ticket-count"));
-      const current = new URL(location.href);
-      if(current.searchParams.get("page") === "tickets")history.replaceState(null,"",routeUrl("mytasks",null,current));
-    }
+    const current = new URL(location.href);
+    if(current.searchParams.get("page") === "mytasks")history.replaceState(null,"",routeUrl("tickets",null,current));
     // Preserve the old saved ticket modes when there is no explicit page route.
     if (new URL(location.href).searchParams.has("page")) synchronize();
     ready = true;
@@ -167,7 +171,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
       const name=metric.name;
       const row = node("tr"), member = node("td");
       member.appendChild(button(workloadMode === "dev" ? name==="__none"?"No developer":name : ctx.people[name]?.name || "Other assignees", "", () => {
-        if(ctx.admin) state.f[workloadMode === "dev" ? "dev" : "assignee"] = new Set([workloadMode === "assignee"&&!defaultAssigneeKeys(ctx.people).includes(name)?"other":name]); navigate("tickets", { focus: "open" });
+        if(ctx.admin) state.f[workloadMode === "dev" ? "dev" : "assignee"] = new Set([workloadMode === "assignee"&&!assigneeOptions(ctx.people).some(([key])=>key===name)?"other":name]); navigate("tickets", { focus: "open" });
       })); row.appendChild(member);
       for (const [value, cls, label] of [[metric.open, "","Open"], [metric.inProgress,"","In progress"], [metric.overdue, "late-count","Overdue"], [metric.noDueDate, "","No date"], [metric.completed, "","Done"]]){const td=node("td",cls,String(value));td.dataset.label=label;row.appendChild(td);}
       const distribution = node("td", "workload-distribution"), bar = node("div", "workload-bar");
@@ -210,8 +214,9 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     if (!ready) return false;
     const page = pages.find(p => p[0] === route.page);
     document.body.dataset.workspacePage = route.page;
-    $("page-heading").textContent = page[1]; $("page-description").textContent = page[2]; $("breadcrumbs").textContent = page[1];
-    for (const link of nav.children) { if (link.dataset.page === route.page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); }
+    $("page-heading").textContent = page[1]; $("page-description").textContent = route.page==="tickets"&&!context().admin?"The tickets you’re authorized to work on.":page[2]; $("breadcrumbs").textContent = page[1];
+    for (const link of nav.querySelectorAll("a[data-page]")) { if (link.dataset.page === route.page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); }
+    if(context().admin&&["boards","history"].includes(route.page))moreNav.open=true;
     $("nav-ticket-count").textContent = String(state.issues?.length || 0);
     const custom = ["overview", "workload", "calendar"].includes(route.page);
     $("tickets-area").hidden = custom; $("workspace-content").hidden = !custom;
@@ -225,11 +230,5 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     if (route.page === "calendar") calendar(data, target);
     return true;
   }
-  function personalItems(items) {
-    if (route.page !== "mytasks" || !context().admin) return items;
-    const ctx = context();
-    const me = Object.keys(ctx.people).find(k => ctx.people[k].email?.toLowerCase() === ctx.email.toLowerCase() || k.toLowerCase() === ctx.email.split("@")[0].toLowerCase());
-    return items.filter(i => (ctx.dev && i.devs.includes(ctx.dev)) || (me && i.assignee === me));
-  }
-  return { configure, renderPage, navigate, personalItems, route: () => route };
+  return { configure, renderPage, navigate, route: () => route };
 }

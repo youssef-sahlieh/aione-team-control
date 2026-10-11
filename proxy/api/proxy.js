@@ -8,7 +8,7 @@ import handler from "../src/handler.js";
 import settings from "../settings.js";
 import { redisStore } from "../src/users.js";
 
-const SECRETS = ["TEAM_PASSWORD", "SESSION_SECRET", "TEAM_CONFIG", "JIRA_SITE", "JIRA_EMAIL", "JIRA_API_TOKEN", "MS_TENANT_ID", "MS_CLIENT_ID", "MS_CLIENT_SECRET", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AI_VENDOR", "AI_MODEL"];
+const SECRETS = ["TEAM_PASSWORD", "SESSION_SECRET", "TEAM_CONFIG", "JIRA_SITE", "JIRA_EMAIL", "JIRA_API_TOKEN", "MS_TENANT_ID", "MS_CLIENT_ID", "MS_CLIENT_SECRET", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AI_VENDOR", "AI_MODEL", "JIRA_NOTIFICATION_SECRET"];
 
 let gmail = null;
 function gmailMailer() {
@@ -32,6 +32,7 @@ async function handle(request) {
   url.searchParams.delete("__path");
   const env = { ...settings, MAILER: gmailMailer(), STORE: store() };
   for (const name of SECRETS) env[name] = process.env[name] || "";
+  env.NO_DEVELOPER_NOTIFY_TO = process.env.NO_DEVELOPER_NOTIFY_TO ?? settings.NO_DEVELOPER_NOTIFY_TO;
   const hasBody = !["GET", "HEAD"].includes(request.method);
   return handler.fetch(new Request(url, { method: request.method, headers: request.headers, body: hasBody ? await request.arrayBuffer() : undefined }), env);
 }

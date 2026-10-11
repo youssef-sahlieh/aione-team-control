@@ -4,11 +4,11 @@ import { defaultAssigneeKeys, assigneeOptions, assigneeFilterKey } from "../../p
 import { createFilters, matchesFilters } from "../../public/assets/models/filters.js";
 import { restoreView, serializeView } from "../../public/assets/models/saved-views.js";
 const people={karim:{name:"Karim Team"},ys:{name:"Youssef Team"},rami:{name:"Rami"},rz:{name:"Razan"},ellen:{name:"Ellen"}};
-test("default assignees resolve configured keys for the four named people",()=>{
-  assert.deepEqual(defaultAssigneeKeys(people),["karim","ys","rami","rz"]);
+test("default assignees exclude Razan while keeping her available explicitly",()=>{
+  assert.deepEqual(defaultAssigneeKeys(people),["karim","ys","rami"]);
   assert.deepEqual(assigneeOptions(people).map(([key])=>key),["karim","ys","rami","rz"]);
   const {rz,...withoutRazan}=people;
-  assert.equal(defaultAssigneeKeys(withoutRazan).at(-1),"razan");
+  assert.equal(defaultAssigneeKeys(withoutRazan).includes("razan"),false);
   assert.equal(assigneeFilterKey({assignee:null,assigneeName:"Razan Team"},withoutRazan),"razan");
 });
 test("Others includes configured outsiders, unknown Jira accounts and unassigned tickets only when selected",()=>{
@@ -17,7 +17,7 @@ test("Others includes configured outsiders, unknown Jira accounts and unassigned
   for(const issue of [{assignee:"ellen"},{assignee:null,assigneeName:"Someone else"},{assignee:null,assigneeName:"Unassigned"}]){
     assert.equal(match(issue),false);f.assignee.add("other");assert.equal(match(issue),true);f.assignee.delete("other");
   }
-  assert.equal(match({assignee:"rz"}),true);
+  assert.equal(match({assignee:"rz"}),false);f.assignee.add("other");assert.equal(match({assignee:"rz"}),false);f.assignee.add("rz");assert.equal(match({assignee:"rz"}),true);
 });
 test("saved views preserve explicitly selected Others for both roles and restore the default team for empty selections",()=>{
   const f=createFilters(),state={f,focus:"open",view:"list",group:"",q:""};
@@ -25,6 +25,8 @@ test("saved views preserve explicitly selected Others for both roles and restore
     assert.deepEqual([...restoreView(serializeView(state,"Default"),admin,people).f.assignee],defaultAssigneeKeys(people));
     f.assignee=new Set(["other"]);
     assert.deepEqual([...restoreView(serializeView(state,"Others"),admin,people).f.assignee],["other"]);
+    f.assignee=new Set(["rz"]);
+    assert.deepEqual([...restoreView(serializeView(state,"Razan"),admin,people).f.assignee],["rz"]);
     f.assignee.clear();
   }
 });

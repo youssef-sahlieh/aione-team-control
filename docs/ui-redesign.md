@@ -28,10 +28,9 @@ ticket focus; list entries open details. Dates use short readable labels, overdu
 work is explicit, and Completed states the active history window. Filters and
 all role restrictions continue to apply. The layout stacks on smaller screens.
 
-My Tasks uses the authenticated developer label or a configured person matched by
-email/account prefix; if neither matches, an administrator's personal list is
-empty. This does not expand proxy-authorized visibility. Summary and calendar
-pages honor the current filter criteria and disclose when filters apply.
+All tickets is the single ticket page for both roles. User ticket access remains
+restricted by the authenticated developer scope enforced by the proxy. Summary
+and calendar pages honor the current filter criteria and disclose when filters apply.
 
 Ticket rows now use clearer spacing, separate priority/status/date indicators,
 role-aware quick actions and page sizes of 25/50/100. Sorting/filtering precedes
@@ -61,11 +60,41 @@ Developer quick/advanced filter controls and editable developer filter chips are
 manager-only. Users rely on the proxy's authenticated AI1_ label scope; old saved
 developer filters are ignored so they cannot silently narrow the user's list.
 
-Both roles default to Karim, Youssef, Rami and Razan in the assignee filter.
+Both roles default to Karim, Youssef and Rami in the assignee filter. Razan
+remains a separate option and is included only when explicitly selected.
+
+The manager sidebar keeps Overview, All tickets, Workload and Calendar as primary
+pages, with Boards and Due date history under More. My tasks has been removed;
+old My tasks links open All tickets while preserving the ticket hash. Users
+continue to see only authorized tickets. Direct links still
+work and open the relevant navigation group. The manager's quick filters show
+Assignee, Developer, Reporter, Status, Priority and Due date; multi-select developer chips and saved-view controls are
+available in More filters. Users have a minimal Assignee, Status and Due date bar,
+with search in the top bar. Reporter, Priority, Developer, advanced filters and saved-view controls
+are manager-only. Users' default assignees are summarized as Default team instead of separate chips;
+custom selections remain removable and Razan/Others stay available through the assignee picker.
+Hidden advanced criteria are cleared for users so they cannot silently narrow the list.
+Ticket focus counts use compact buttons, and rows
+keep assignee, developer, status and due date visible on smaller screens. Reporter,
+created/updated dates and internal notes remain available in details or row menus.
+Bulk actions appear only after selection. AI stays in its existing top-bar panel.
+
+All tickets retains its original dashboard layout: all ten focus cards are
+available directly, and list rows use their original desktop/mobile arrangement.
+The manager's compact card and row styling applies only to other ticket pages.
+The new Jira-style filters and three-person default selection remain in place.
+
+The Jira-style filter toolbar has a searchable assignee picker with native
+checkboxes, default/optional groups, counts and staged Apply/Cancel controls.
+Cancel or Escape discards draft selections and restores keyboard focus. At least
+one assignee must be selected; Reset to default restores Karim, Youssef and Rami.
+The picker uses a native modal dialog for focus handling, becomes a bottom sheet
+on mobile, and supports zero-result searches. Active chips remain removable, and
+the toolbar reports the matching ticket count for the current focus and filters.
 The quick selector offers the default team, each person, and Others; advanced
 chips allow combining selections. Other configured people, unknown Jira accounts
 and unassigned tickets are grouped under Others and appear only when selected.
-Clear all and Default team restore the named selection. Existing nonempty saved
+Reset filters and Default team restore the named selection. Existing nonempty saved
 assignee selections remain, including explicitly selected Others. Names resolve
 to configured account keys, with a display-name fallback for named people absent
 from config; this does not add invented Jira IDs or change internal assignment
