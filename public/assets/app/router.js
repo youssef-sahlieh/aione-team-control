@@ -1,7 +1,8 @@
 export const PAGES = new Set(["overview", "mytasks", "tickets", "boards", "workload", "calendar", "history"]);
 export function readRoute(url, admin) {
   const requested = url.searchParams.get("page");
-  const page = PAGES.has(requested) ? requested : "tickets";
+  const allowed = PAGES.has(requested) && (admin || !["history", "workload"].includes(requested));
+  const page = !admin && (!allowed || requested === "tickets") ? "mytasks" : allowed ? requested : "tickets";
   const requestedMode = url.searchParams.get("mode");
   const modes = admin ? ["status", "dev", "assignee"] : ["status"];
   return { page, mode: modes.includes(requestedMode) ? requestedMode : "status" };

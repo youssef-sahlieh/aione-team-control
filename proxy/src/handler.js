@@ -17,6 +17,7 @@
 //   emails in TEAM_EMAILS sign in with TEAM_PASSWORD as admins. The first sign-in with TEAM_PASSWORD
 //   after the database is added creates admin accounts for everyone in TEAM_EMAILS.
 import { internalRoutes } from "./internal.js";
+import { aiChat, aiConfigured } from "./ai.js";
 import { ROLES, checkPassword, createLinkToken, deleteUser, getUser, hashPassword, listUsers, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, useLinkToken, validDev, validEmail } from "./users.js";
 
 const enc = new TextEncoder();
@@ -362,6 +363,13 @@ async function route(request, env, url) {
   const email = me.email;
   const isAdmin = me.role === "admin";
   const devLabel = "ai1_" + me.dev;
+  if(path.startsWith("/ai/")){
+    if(path!=="/ai/chat")return fail("ai_read_only","Ticket actions are disabled in AION AI v1.",403);
+    return aiChat(request,env,{me,project:env.JIRA_PROJECT,readSearch:async body=>{
+      const result=await route(new Request(new URL("/jira/search",url),{method:"POST",headers:{Authorization:request.headers.get("Authorization"),"Content-Type":"application/json"},body:JSON.stringify(body)}),env,new URL("/jira/search",url));
+      if(!result.ok)throw new Error("Authorized Jira read failed");return result.json();
+    }});
+  }
 
   if (path === "/users" || path.startsWith("/users/")) return accountRoutes(request, env, url, me);
   if (path === "/internal" || path.startsWith("/internal/")) return internalRoutes(request, env, url, me);
@@ -374,7 +382,7 @@ async function route(request, env, url) {
   if (path === "/config" && method === "GET") {
     let team = {};
     try { team = JSON.parse(env.TEAM_CONFIG || "{}"); } catch {}
-    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, mail: isAdmin && mailEnabled(env) });
+    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true} });
   }
 
   if (!isAdmin && (path === "/mail" || path === "/jira/users")) return fail("forbidden", "Only administrators can do that.", 403);

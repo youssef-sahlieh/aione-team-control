@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { jiraIssue, internalTicket, people } from "../fixtures/issues.js";
 
-async function mockDashboard(page, { role = "admin", failure = false, expired = false, many = false, mutationFailure = false } = {}) {
+async function mockDashboard(page, { role = "admin", failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false } = {}) {
   await page.clock.setFixedTime(new Date("2026-10-11T09:00:00Z"));
   const calls = [], unexpected = [], errors = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -23,12 +23,13 @@ async function mockDashboard(page, { role = "admin", failure = false, expired = 
     const path = url.pathname, method = req.method(), body = req.postDataJSON();
     calls.push({ path, method, body });
     const json = value => route.fulfill({ json: value });
-    if (path === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people, devs: ["builder", "reviewer"], role, dev: "builder", email: "test@example.invalid", accounts: true, mail: false });
+    if (path === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people:assigneeTeam?{...people,...Object.fromEntries(["karim","youssef","rami","razan"].map(key=>[key,{id:`test-${key}`,name:key[0].toUpperCase()+key.slice(1),ini:key[0].toUpperCase()}]))}:people, devs: ["builder", "reviewer"], role, dev: "builder", email: "test@example.invalid", accounts: true, mail: false, ai:{enabled:!aiDisabled,readOnly:true} });
+    if(path==="/ai/chat")return aiFailure?route.fulfill({status:503,json:{code:"ai_unavailable",error:"AI service unavailable. Try again."}}):json({answer:"Review AION-101 first. AION-9999 is unverified. <img src=x onerror=alert(1)>",references:[{key:"AION-101",title:"Synthetic Jira task"}],readOnly:true});
     if (path === "/login") return json({token:"synthetic-token",email:"test@example.invalid",expiresAt:Date.now()+3600000,role});
     if (path === "/internal" && method === "GET") return json({ tickets: [internalTicket] });
     if (path === "/jira/search") {
       if (failure) return route.fulfill({ status: 503, json: { code: "jira", error: "Synthetic outage" } });
-      const issues=many?Array.from({length:30},(_,n)=>({...jiraIssue,key:`AION-${101+n}`,fields:{...jiraIssue.fields,summary:`Synthetic Jira task ${n+1}`}})):[jiraIssue];
+      const issues=assigneeTeam?["karim","youssef","rami","razan","someone"].map((key,n)=>({...jiraIssue,key:`AION-${201+n}`,fields:{...jiraIssue.fields,summary:`Task for ${key}`,assignee:{accountId:`test-${key}`,displayName:key[0].toUpperCase()+key.slice(1)}}})):many?Array.from({length:30},(_,n)=>({...jiraIssue,key:`AION-${101+n}`,fields:{...jiraIssue.fields,summary:`Synthetic Jira task ${n+1}`}})):[jiraIssue];
       return json({ issues: body.jql.includes("statusCategory = Done") ? [] : issues, isLast: true });
     }
     if (path.endsWith("/changelog")) return json({ changelog: { histories: [] } });
@@ -39,6 +40,53 @@ async function mockDashboard(page, { role = "admin", failure = false, expired = 
   });
   return { calls, unexpected, errors };
 }
+
+for(const width of [320,1440])test(`AI panel retains session chat and links verified tickets at ${width}px`,async({page})=>{
+  await page.setViewportSize({width,height:900});const mock=await mockDashboard(page);await page.goto("/dashboard.html?page=overview");
+  await page.locator("#ai-launcher").click();await expect(page.locator("#ai-question")).toBeFocused();
+  await page.getByRole("button",{name:"Review deadlines",exact:true}).click();await expect(page.locator("#ai-messages .ai-message-assistant")).toHaveCount(1);
+  await expect(page.locator("#ai-messages img")).toHaveCount(0);await expect(page.locator("#ai-messages a")).toHaveCount(1);
+  await page.keyboard.press("Escape");await expect(page.locator("#ai-panel")).toBeHidden();await expect(page.locator("#ai-launcher")).toBeFocused();
+  await page.locator("#ai-launcher").click();await expect(page.locator("#ai-messages .ai-message-assistant")).toHaveCount(1);
+  await page.locator("#ai-question").fill("Explain the comments");await page.locator("#ai-send").click();await expect(page.locator("#ai-messages .ai-message-assistant")).toHaveCount(2);
+  const calls=mock.calls.filter(c=>c.path==="/ai/chat");expect(calls).toHaveLength(2);expect(calls[1].body.history).toHaveLength(2);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:`test-results/ai-chat-${width}.png`,fullPage:true});
+  await page.locator("#ai-messages a").first().click();await expect(page.locator("#ai-panel")).toBeHidden();await expect(page.locator("#d-key")).toContainText("AION-101");await page.locator("#d-close").click();
+  await page.locator("#ai-launcher").click();await page.locator("#ai-new").click();await expect(page.locator("#ai-messages .ai-message")).toHaveCount(0);await expect(page.locator("#ai-welcome")).toBeVisible();
+  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test("developer AI suggestions omit team workload and failure preserves the question",async({page})=>{
+  const mock=await mockDashboard(page,{role:"user",aiFailure:true});await page.goto("/dashboard.html");await page.locator("#ai-launcher").click();for(const button of await page.locator("[data-ai-admin]").all())await expect(button).toBeHidden();
+  await expect(page.locator("#ai-scope")).toHaveText("Read-only help with your tickets");await expect(page.getByRole("button",{name:"Explain a ticket",exact:true})).toBeVisible();await expect(page.locator(".ai-prompts button:visible")).toHaveCount(3);
+  await page.locator("#ai-question").fill("What should I work on?");await page.locator("#ai-send").click();await expect(page.locator("#ai-status")).toContainText("AI service unavailable");await expect(page.locator("#ai-question")).toHaveValue("What should I work on?");await expect(page.locator("#ai-send")).toBeEnabled();expect(mock.errors).toEqual([]);
+});
+test("manager AI exposes project and team options",async({page})=>{
+  const mock=await mockDashboard(page);await page.goto("/dashboard.html");await page.locator("#ai-launcher").click();await expect(page.locator("#ai-scope")).toHaveText("Read-only tickets and team insights");
+  for(const button of await page.locator("[data-ai-admin]").all())await expect(button).toBeVisible();await expect(page.locator("[data-ai-user]")).toBeHidden();
+  await page.getByRole("button",{name:"Review project progress",exact:true}).click();await expect(page.locator("#ai-messages .ai-message-assistant")).toHaveCount(1);expect(mock.calls.find(c=>c.path==="/ai/chat").body.message).toContain("project progress");expect(mock.errors).toEqual([]);
+});
+test("unconfigured AI displays setup state without making chat requests",async({page})=>{
+  const mock=await mockDashboard(page,{aiDisabled:true});await page.goto("/dashboard.html");await page.locator("#ai-launcher").click();await expect(page.locator("#ai-status")).toContainText("server configuration");await expect(page.locator("#ai-send")).toBeDisabled();await expect(page.locator("#ai-question")).toBeDisabled();
+  await page.locator("#ai-close").focus();await page.keyboard.press("Tab");await expect(page.locator("#ai-new")).toBeFocused();expect(mock.calls.some(c=>c.path==="/ai/chat")).toBe(false);expect(mock.errors).toEqual([]);
+});
+
+for(const role of ["admin","user"])test(`${role} defaults to four assignees and includes Others only on selection`,async({page})=>{
+  const mock=await mockDashboard(page,{role,assigneeTeam:true});await page.goto("/dashboard.html");
+  await expect(page.locator("#view .item")).toHaveCount(4);
+  await expect(page.locator("#view")).toContainText("Task for razan");
+  await expect(page.locator("#view")).not.toContainText("Task for someone");
+  const selector=page.getByRole("combobox",{name:"Assignee",exact:true});await expect(selector).toHaveValue("__team");
+  await page.locator("#ftoggle").click();
+  const others=page.locator("#fgrid .fsec.k4").getByRole("button",{name:/Others/});
+  await expect(others).toHaveAttribute("aria-pressed","false");await others.click();await expect(page.locator("#view .item")).toHaveCount(6);
+  await others.click();await expect(page.locator("#view .item")).toHaveCount(4);
+  await selector.selectOption("other");await expect(page.locator("#view .item")).toHaveCount(2);await expect(page.locator("#view")).toContainText("Task for someone");
+  page.once("dialog",d=>d.accept("Others only"));await page.getByRole("button",{name:"Save view",exact:true}).click();
+  await page.locator("#fclear").click();await expect(page.locator("#view .item")).toHaveCount(4);
+  await page.getByRole("combobox",{name:"Saved view",exact:true}).selectOption({label:"Others only"});await expect(page.locator("#view .item")).toHaveCount(2);
+  expect(mock.calls.filter(c=>c.path==="/jira/search").every(c=>!c.body.jql.includes("assignee in"))).toBe(true);
+  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
 
 test("workspace pages navigate locally and browser Back restores page",async({page})=>{
   const mock=await mockDashboard(page);await page.goto("/dashboard.html?page=overview");await expect(page.locator(".summary-card")).toHaveCount(4);
@@ -89,6 +137,12 @@ test("admin renders both sources, filters locally, groups and changes board with
   await page.goto("/dashboard.html");
   await expect(page.locator("#view .item")).toHaveCount(2);
   await expect(page.locator("#users-link")).toBeVisible();
+  await expect(page.locator('[data-page="tickets"]')).toBeVisible();
+  await expect(page.locator('[data-page="mytasks"]')).toBeVisible();
+  await expect(page.locator("#tiles .tile").filter({hasText:"No developer"})).toBeVisible();
+  await expect(page.getByRole("combobox",{name:"Developer",exact:true}).locator('option[value="__none"]')).toHaveCount(1);
+  await page.locator("#ftoggle").click();
+  await expect(page.locator("#fgrid").getByRole("button",{name:/No developer/})).toBeVisible();
   await page.locator("#q").fill("internal");
   await expect(page.locator("#view .item")).toHaveCount(1);
   await expect(page.locator("#view")).toContainText("INT-101");
@@ -108,6 +162,14 @@ test("developer restores team defaults and downgrades saved admin board", async 
   await page.goto("/dashboard.html");
   await expect(page.locator("#view .item")).toHaveCount(2);
   await expect(page.locator("#users-link")).toBeHidden();
+  await expect(page.locator('[data-page="tickets"]')).toBeHidden();
+  await expect(page.locator('[data-page="mytasks"]')).toBeVisible();
+  await expect(page.locator("#page-heading")).toHaveText("My tasks");
+  await expect(page.locator("#tiles .tile").filter({hasText:"No developer"})).toHaveCount(0);
+  await expect(page.getByRole("combobox",{name:"Developer",exact:true})).toHaveCount(0);
+  await page.locator("#ftoggle").click();
+  await expect(page.locator("#fgrid").getByRole("button",{name:/No developer/})).toHaveCount(0);
+  await expect(page.locator("#fgrid h4").filter({hasText:"Developer (ai1_)"})).toHaveCount(0);
   await expect(page.locator('[data-v="dev"]')).toBeHidden();
   await expect(page.locator('[data-v="assignee"]')).toBeHidden();
   await expect(page.locator('[data-v="list"]')).toHaveAttribute("aria-pressed", "true");
@@ -154,9 +216,41 @@ test("sign-in preserves both page route and ticket deep link",async({page})=>{
   const mock=await mockDashboard(page,{expired:true});await page.goto("/dashboard.html?page=overview#AION-101");await expect(page).toHaveURL(/index\.html\?page=overview#AION-101$/);await page.locator("#email").fill("test@example.invalid");await page.locator("#password").fill("synthetic-password");await page.locator("#signin-btn").click();await expect(page).toHaveURL(/dashboard\.html\?page=overview#AION-101$/);await expect(page.locator("#drawer")).toBeVisible();await expect(page.locator("#d-key")).toContainText("AION-101");expect(mock.errors).toEqual([]);
 });
 
-test("developer workload and row menus retain role restrictions",async({page})=>{
-  const mock=await mockDashboard(page,{role:"user"});await page.goto("/dashboard.html?page=workload");await expect(page.locator(".workload-table")).toContainText("builder");await expect(page.locator(".workload-table")).not.toContainText("reviewer");await expect(page.getByRole("button",{name:"Jira assignees",exact:true})).toHaveCount(0);
-  await page.locator('[data-page="tickets"]').click();await page.getByRole("button",{name:"Actions for AION-101",exact:true}).click();await expect(page.locator("#pop")).toContainText("Set due date");await expect(page.locator("#pop")).not.toContainText("Assign developers");await expect(page.locator("#pop")).not.toContainText("Change assignee");expect(mock.unexpected).toEqual([]);expect(mock.errors).toEqual([]);
+test("developer workload links fall back to tickets and row menus retain role restrictions",async({page})=>{
+  const mock=await mockDashboard(page,{role:"user"});await page.goto("/dashboard.html?page=workload#INT-101");await expect(page.locator("#page-heading")).toHaveText("My tasks");await expect(page.locator('[data-page="workload"]')).toBeHidden();await expect(page.locator(".workload-table")).toHaveCount(0);await expect(page.locator("#d-key")).toContainText("INT-101");await page.locator("#d-close").click();
+  await page.goto("/dashboard.html?page=tickets#AION-101");await expect(page).toHaveURL(/page=mytasks#AION-101/);await expect(page.locator("#d-key")).toContainText("AION-101");await page.locator("#d-close").click();
+  await page.locator('[data-page="mytasks"]').click();await page.getByRole("button",{name:"Actions for AION-101",exact:true}).click();await expect(page.locator("#pop")).toContainText("Set due date");await expect(page.locator("#pop")).not.toContainText("Assign developers");await expect(page.locator("#pop")).not.toContainText("Change assignee");expect(mock.unexpected).toEqual([]);expect(mock.errors).toEqual([]);
+});
+
+for(const role of ["admin","user"])test(`${role} due-date history visibility follows manager role`,async({page})=>{
+  const mock=await mockDashboard(page,{role});
+  await page.addInitScript(()=>localStorage.setItem("aion.view","history"));
+  await page.goto("/dashboard.html?page=history#AION-101");
+  await expect(page.locator("#drawer")).toBeVisible();
+  if(role==="admin"){
+    await expect(page.locator("#page-heading")).toHaveText("Due date history");
+    await expect(page.getByRole("tab",{name:"Activity",exact:true})).toBeVisible();
+    await page.getByRole("tab",{name:"Activity",exact:true}).click();
+    await expect(page.locator("#d-hist")).toBeVisible();
+  }else{
+    await expect(page.locator("#page-heading")).toHaveText("My tasks");
+    await expect(page.getByRole("tab",{name:"Activity",exact:true})).toHaveCount(0);
+    await expect(page.locator("#d-hist")).toBeHidden();
+    await expect(page.locator("#d-due")).toBeVisible();
+    await page.getByRole("tab",{name:"Overview",exact:true}).focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(page.getByRole("tab",{name:"Comments",exact:true})).toBeFocused();
+    expect(mock.calls.some(c=>c.path.endsWith("/changelog"))).toBe(false);
+  }
+  await page.locator("#d-close").click();
+  const nav=page.locator('[data-page="history"]'), switcher=page.locator('[data-v="history"]'), tile=page.locator("#tiles .tile").filter({hasText:"Due date moved"});
+  if(role==="admin"){await expect(nav).toBeVisible();await expect(switcher).toBeVisible();await expect(tile).toBeVisible();}
+  else{
+    await expect(nav).toBeHidden();await expect(switcher).toBeHidden();await expect(tile).toHaveCount(0);
+    await page.goto("/dashboard.html");
+    await expect(page.locator('#view .listwrap')).toBeVisible();
+  }
+  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
 
 test("load failure displays error without a false successful update", async ({ page }) => {

@@ -8,7 +8,7 @@ import handler from "../src/handler.js";
 import settings from "../settings.js";
 import { redisStore } from "../src/users.js";
 
-const SECRETS = ["TEAM_PASSWORD", "SESSION_SECRET", "TEAM_CONFIG", "JIRA_SITE", "JIRA_EMAIL", "JIRA_API_TOKEN", "MS_TENANT_ID", "MS_CLIENT_ID", "MS_CLIENT_SECRET"];
+const SECRETS = ["TEAM_PASSWORD", "SESSION_SECRET", "TEAM_CONFIG", "JIRA_SITE", "JIRA_EMAIL", "JIRA_API_TOKEN", "MS_TENANT_ID", "MS_CLIENT_ID", "MS_CLIENT_SECRET", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AI_VENDOR", "AI_MODEL"];
 
 let gmail = null;
 function gmailMailer() {

@@ -1,5 +1,6 @@
 import { readRoute, routeUrl } from "./router.js";
 import { calculateWorkload } from "../models/workload.js";
+import { defaultAssigneeKeys } from "../models/assignees.js";
 const $ = id => document.getElementById(id);
 const node = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const button = (text, cls, action) => { const b = node("button", cls, text); b.type = "button"; b.addEventListener("click", action); return b; };
@@ -13,7 +14,7 @@ const icons = {
   history: "M3 5v6h6 M3 11a9 9 0 1 1 2 7 M12 7v5l3 2"
 };
 const pages = [
-  ["overview", "Overview", "Your team's work, at a glance."],
+  ["overview", "Overview", "Your work, at a glance."],
   ["mytasks", "My tasks", "Your assignments and the work that needs your attention."],
   ["tickets", "All tickets", "A clear view of your team's work, from first task to final delivery."],
   ["boards", "Boards", "Keep work moving with a shared view of every stage."],
@@ -71,7 +72,9 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
   }
   function navigate(page, { mode, focus } = {}) {
     if (!canLeave()) return;
-    const url = routeUrl(page, mode, location.href);
+    const requestedUrl = routeUrl(page, mode, location.href);
+    const resolved = readRoute(requestedUrl, context().admin);
+    const url = routeUrl(resolved.page, resolved.mode, requestedUrl);
     history.pushState(null, "", url);
     route = readRoute(url, context().admin);
     if (focus) state.focus = focus;
@@ -91,6 +94,14 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
   }
   function configure() {
     route = readRoute(new URL(location.href), context().admin);
+    nav.querySelector('[data-page="history"]').hidden = !context().admin;
+    nav.querySelector('[data-page="workload"]').hidden = !context().admin;
+    nav.querySelector('[data-page="tickets"]').hidden = !context().admin;
+    if(!context().admin){
+      nav.querySelector('[data-page="mytasks"]').appendChild($("nav-ticket-count"));
+      const current = new URL(location.href);
+      if(current.searchParams.get("page") === "tickets")history.replaceState(null,"",routeUrl("mytasks",null,current));
+    }
     // Preserve the old saved ticket modes when there is no explicit page route.
     if (new URL(location.href).searchParams.has("page")) synchronize();
     ready = true;
@@ -113,26 +124,29 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     const open = items.filter(i => i.cat !== "done");
     const late = open.filter(i => i.due && i.due < today());
     const due = open.filter(i => i.due === today());
-    const cards = node("div", "summary-cards");
-    for (const [label, value, foot, focus] of [["Open tickets", open.length, "Ready to move forward", "open"], ["Overdue", late.length, "A little attention goes a long way", "overdue"], ["Due today", due.length, "Today's priorities", "today"], ["Completed", items.filter(i => i.cat === "done").length, "Within the loaded history window", "closed"]]) {
+    const cards = node("div", "summary-cards overview-metrics");
+    for (const [label, value, focus] of [["Open tickets", open.length, "open"], ["Overdue", late.length, "overdue"], ["Due today", due.length, "today"], ["Completed", items.filter(i => i.cat === "done").length, "closed"]]) {
       const card = button("", "summary-card", () => navigate("tickets", { focus }));
-      card.append(node("span", "metric-label", label), node("strong", "", String(value)), node("span", "metric-foot", foot)); cards.appendChild(card);
+      card.dataset.focus = focus;
+      card.append(node("span", "metric-label", label), node("strong", "", String(value)));
+      if(focus === "closed") card.appendChild(node("span", "metric-foot", `Last ${state.closedDays} days`));
+      cards.appendChild(card);
     }
     target.appendChild(cards);
-    const banner = node("div", "overview-banner"), copy = node("div");
-    copy.append(node("h2", "", late.length ? `${late.length} ticket${late.length === 1 ? " needs" : "s need"} a little attention` : "A little clarity for your working day"), node("p", "", late.length ? "Review overdue work and help the team get back on track." : "Review upcoming work, set dates, and keep your team moving."));
-    banner.append(node("span", "banner-icon", "↗"), copy, button("Review tickets →", "btn", () => navigate("tickets", { focus: late.length ? "overdue" : "open" }))); target.appendChild(banner);
-    const grid = node("div", "workspace-grid"), priorities = panel("Needs attention", "Open tickets, ordered by deadline");
-    priorities.querySelector(".panel-heading").appendChild(button("View all →", "linkbtn", () => navigate("tickets")));
+    const grid = node("div", "workspace-grid overview-grid"), priorities = panel("Needs attention", "Next open tickets, ordered by due date.");
+    priorities.querySelector(".panel-heading").appendChild(button("View all →", "linkbtn", () => navigate("tickets", {focus:"open"})));
     const selected = open.slice().sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999")).slice(0, 6);
     if (!selected.length) priorities.appendChild(node("div", "empty-copy", "No open tickets in this view."));
-    selected.forEach(i => priorities.appendChild(compactIssue(i)));
-    const status = panel("Work by status", "The actual workflow stages of your loaded tickets");
+    selected.forEach(i => {
+      const ticket=compactIssue(i);ticket.classList.add("overview-ticket");
+      ticket.querySelector("small").textContent=`${i.key} · ${i.status}`;
+      const date=ticket.querySelector(".ticket-date");
+      if(i.due){const text=new Date(i.due+"T00:00:00Z").toLocaleDateString("en-GB",{day:"numeric",month:"short",...(i.due.slice(0,4)!==today().slice(0,4)?{year:"numeric"}:{}),timeZone:"UTC"});date.textContent=(i.due<today()?"Overdue · ":i.due===today()?"Today · ":"")+text;}
+      priorities.appendChild(ticket);
+    });
+    const status = panel("Open by status");status.classList.add("overview-status");
     const counts = new Map(); open.forEach(i => counts.set(i.status, (counts.get(i.status) || 0) + 1));
-    const track = node("div", "status-track");
-    for (const [name, count] of counts) { const part = node("span"); part.style.setProperty("--weight", count); part.title = `${name}: ${count}`; track.appendChild(part); }
-    status.appendChild(track);
-    for (const [name, count] of counts) { const row = node("div", "status-line"); row.append(node("span", "status-dot"), node("span", "", name), node("strong", "", String(count))); status.appendChild(row); }
+    for (const [name, count] of counts) { const row = node("div", "status-line"); row.append(node("span", "", name), node("strong", "", String(count))); status.appendChild(row); }
     if (!counts.size) status.appendChild(node("div", "empty-copy", "No open work to display."));
     grid.append(priorities, status); target.appendChild(grid);
   }
@@ -153,7 +167,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
       const name=metric.name;
       const row = node("tr"), member = node("td");
       member.appendChild(button(workloadMode === "dev" ? name==="__none"?"No developer":name : ctx.people[name]?.name || "Other assignees", "", () => {
-        state.f[workloadMode === "dev" ? "dev" : "assignee"] = new Set([name]); navigate("tickets", { focus: "open" });
+        if(ctx.admin) state.f[workloadMode === "dev" ? "dev" : "assignee"] = new Set([workloadMode === "assignee"&&!defaultAssigneeKeys(ctx.people).includes(name)?"other":name]); navigate("tickets", { focus: "open" });
       })); row.appendChild(member);
       for (const [value, cls, label] of [[metric.open, "","Open"], [metric.inProgress,"","In progress"], [metric.overdue, "late-count","Overdue"], [metric.noDueDate, "","No date"], [metric.completed, "","Done"]]){const td=node("td",cls,String(value));td.dataset.label=label;row.appendChild(td);}
       const distribution = node("td", "workload-distribution"), bar = node("div", "workload-bar");
@@ -195,6 +209,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
   function renderPage(items) {
     if (!ready) return false;
     const page = pages.find(p => p[0] === route.page);
+    document.body.dataset.workspacePage = route.page;
     $("page-heading").textContent = page[1]; $("page-description").textContent = page[2]; $("breadcrumbs").textContent = page[1];
     for (const link of nav.children) { if (link.dataset.page === route.page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); }
     $("nav-ticket-count").textContent = String(state.issues?.length || 0);
@@ -206,7 +221,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     // Respect all active filters but include closed tickets for summary metrics.
     const data = allowedItems();
     if (route.page === "overview") overview(data, target);
-    if (route.page === "workload") workload(context().admin ? data : data.filter(i => i.devs.includes(context().dev)), target);
+    if (route.page === "workload" && context().admin) workload(data, target);
     if (route.page === "calendar") calendar(data, target);
     return true;
   }

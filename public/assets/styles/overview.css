@@ -1,0 +1,72 @@
+/* A quieter overview; other workspace pages retain their own layouts. */
+body[data-workspace-page="overview"] .eyebrow,
+body[data-workspace-page="overview"] .workspace-footer span:last-child { display: none; }
+body[data-workspace-page="overview"] .wrap { gap: 24px; }
+body[data-workspace-page="overview"] .page-heading h1 { font-size: 30px; }
+body[data-workspace-page="overview"] .page-heading p { margin-top: 6px; }
+body[data-workspace-page="overview"] .sync-line { font-size: 12px; }
+body[data-workspace-page="overview"] .summary-filter-info { margin-bottom: 14px; }
+.overview-metrics {
+  gap: 0;
+  margin-bottom: 28px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.overview-metrics .summary-card {
+  border: 0;
+  border-radius: 0;
+  border-right: 1px solid var(--line);
+  padding: 24px;
+  gap: 8px;
+  position: relative;
+  background: transparent;
+}
+.overview-metrics .summary-card:last-child { border-right: 0; }
+.overview-metrics .summary-card:hover { background: var(--sunk); }
+.overview-metrics .summary-card:focus-visible { outline-offset: -4px; }
+.overview-metrics .summary-card strong {
+  font-size: 36px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.overview-metrics .summary-card[data-focus="overdue"] strong { color: var(--crit); }
+.overview-metrics .metric-label { font-size: 14px; }
+.overview-metrics .metric-foot { font-size: 12px; }
+.overview-grid { grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr); gap: 24px; align-items: start; }
+.overview-grid .panel { padding: 24px; border-radius: 12px; }
+.overview-grid .panel-heading { align-items: start; margin-bottom: 16px; }
+.overview-grid h2 { font-size: 17px; }
+.overview-grid .panel-subtitle { font-size: 13px; margin-top: 6px; }
+.overview-grid .linkbtn { min-height: 44px; white-space: nowrap; display: flex; align-items: center; font-size: 13px; }
+.overview-ticket { padding: 18px 0; gap: 18px; }
+.overview-ticket .ticket-dot { display: none; }
+.overview-ticket b { font-size: 15px; font-weight: 500; }
+.overview-ticket small { font-size: 13px; margin-top: 6px; }
+.overview-ticket .ticket-date { font-size: 13px; }
+.overview-ticket .ticket-date.late { color: var(--crit); }
+.overview-ticket:hover b { color: var(--accent); }
+.overview-status .status-line { border-top: 1px solid var(--line); padding: 16px 0; }
+.overview-status .status-line strong { font-weight: 600; font-variant-numeric: tabular-nums; }
+@media (max-width: 1100px) {
+  .overview-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .overview-metrics .summary-card:nth-child(2) { border-right: 0; }
+  .overview-metrics .summary-card:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+  .overview-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 480px) {
+  body[data-workspace-page="overview"] .wrap { gap: 20px; }
+  body[data-workspace-page="overview"] .page-heading h1 { font-size: 28px; }
+  .overview-metrics { margin-bottom: 20px; }
+  .overview-metrics .summary-card { padding: 18px 16px; }
+  .overview-metrics .summary-card strong { font-size: 30px; }
+  .overview-grid { gap: 20px; }
+  .overview-grid .panel { padding: 18px; }
+  .overview-grid .panel-heading { flex-wrap: wrap; gap: 4px; }
+  .overview-ticket { gap: 8px; }
+  .overview-ticket .ticket-info { flex-basis: 100%; }
+  .overview-ticket .ticket-date { margin-left: 0; }
+}

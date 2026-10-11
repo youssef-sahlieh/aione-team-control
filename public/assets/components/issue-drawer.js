@@ -1,5 +1,5 @@
 const $ = id => document.getElementById(id);
-export function createIssueDrawer({ isDirty }) {
+export function createIssueDrawer({ isDirty, canViewHistory }) {
   const drawer = $("drawer"), body = $("d-body"), tabs = $("drawer-tabs");
   let opener = null, active = "overview";
   const panels = {};
@@ -16,13 +16,15 @@ export function createIssueDrawer({ isDirty }) {
   const note = document.createElement("p"); note.className = "msg"; note.textContent = "Recorded due date changes. This timeline is not a complete ticket audit."; panels.activity.prepend(note);
   Object.values(panels).forEach(panel => body.appendChild(panel));
   function select(id) {
+    if(id === "activity" && !canViewHistory()) id = "overview";
+    $("tab-activity").hidden = !canViewHistory();
     active = id;
     for (const tab of tabs.children) { const selected = tab.id === "tab-" + id; tab.setAttribute("aria-selected", String(selected)); tab.tabIndex = selected ? 0 : -1; }
     for (const [key, panel] of Object.entries(panels)) panel.hidden = key !== id;
     body.scrollTop = 0;
   }
   tabs.addEventListener("keydown", e => {
-    const list = [...tabs.children], index = list.indexOf(document.activeElement);
+    const list = [...tabs.children].filter(tab => !tab.hidden), index = list.indexOf(document.activeElement);
     if (index < 0) return;
     let next = index;
     if (e.key === "ArrowRight") next = (index + 1) % list.length;

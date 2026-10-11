@@ -7,6 +7,8 @@ import { createFilters, matchesFilters } from "./models/filters.js";
 import { readViews, restoreView, savedViewKey, serializeView } from "./models/saved-views.js";
 import { createWorkspace } from "./app/workspace.js";
 import { createIssueDrawer } from "./components/issue-drawer.js";
+import { defaultAssigneeKeys, assigneeOptions, assigneeFilterKey } from "./models/assignees.js";
+import { createAIAssistant } from "./ai-assistant.js";
 
   // Filled in from the proxy's /config after sign-in (see applyConfig).
   let SITE="", PROJECT="", PEOPLE={}, DEVS=[], DEV_EMAIL={}, DEV_COLOR={}, BYID={}, JQL="", ME="", MAIL=false;
@@ -21,27 +23,24 @@ import { createIssueDrawer } from "./components/issue-drawer.js";
   function applyConfig(cfg){
     SITE=cfg.site; PROJECT=cfg.project; MAIL=!!cfg.mail; PEOPLE=cfg.people||{}; DEVS=cfg.devs||[]; DEV_EMAIL=cfg.devEmails||{}; DEV_COLOR=cfg.devColors||{};
     BYID={}; for(const k in PEOPLE) BYID[PEOPLE[k].id]=k;
-    const IDS=Object.values(PEOPLE).map(p=>'"'+p.id+'"').join(",");
     IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||""; MY_EMAIL=cfg.email||""; INTERNAL=!!cfg.accounts; $("new-int").hidden=!INTERNAL;
     document.body.classList.toggle("role-user",!IS_ADMIN);
     $("users-link").hidden=!(IS_ADMIN&&cfg.accounts);
     if(IS_ADMIN){
-      JQL='project = '+PROJECT+' AND assignee in ('+IDS+') AND issuetype != Epic AND (statusCategory != Done OR updated >= -30d) ORDER BY updated DESC';
+      JQL='project = '+PROJECT+' AND issuetype != Epic AND (statusCategory != Done OR updated >= -30d) ORDER BY updated DESC';
       $("team").textContent=Object.values(PEOPLE).map(p=>p.name).join(" · ");
     } else {
-      // Users: only tickets assigned to Karim, Youssef and Rami (the proxy adds their ai1_ label on top),
-      // with the Assignee filter set to all three by default.
-      JQL='project = '+PROJECT+' AND assignee in ('+IDS+') AND issuetype != Epic AND (statusCategory != Done OR updated >= -30d) ORDER BY updated DESC';
-      CLOSED_EXTRA=' AND assignee in ('+IDS+')';
-      $("team").textContent="Your tickets · ai1_"+MY_DEV+" · assigned to "+Object.values(PEOPLE).map(p=>p.name).join(", ");
-      if(state.view==="dev"||state.view==="assignee") state.view="list";
+      // The proxy scopes users by their ai1_ label; assignees are a view filter.
+      JQL='project = '+PROJECT+' AND issuetype != Epic AND (statusCategory != Done OR updated >= -30d) ORDER BY updated DESC';
+      $("team").textContent="Your tickets · ai1_"+MY_DEV;
+      if(state.view==="dev"||state.view==="assignee"||state.view==="history") state.view="list";
       notifyOn=false;
-      state.f=defaultFilters();
     }
+    state.f=defaultFilters();
+    aiAssistant.configure(cfg);
   }
-  let CLOSED_EXTRA="";
-  // The filters a person starts with (and gets back with "Clear all"): Users always see the team's tickets.
-  function defaultFilters(){ const f=F(); if(!IS_ADMIN) Object.keys(PEOPLE).forEach(k=>f.assignee.add(k)); return f; }
+  // Both roles start with the named team; Others is an explicit opt-in.
+  function defaultFilters(){ const f=F(); defaultAssigneeKeys(PEOPLE).forEach(k=>f.assignee.add(k)); return f; }
   const teamNames=()=>{ const n=Object.values(PEOPLE).map(p=>p.name); return n.length>1?n.slice(0,-1).join(", ")+" or "+n[n.length-1]:n.join(""); };
   let lastLoad=0;
   const NEW_STATUSES=["open","pending approval"];
@@ -153,7 +152,7 @@ import { createIssueDrawer } from "./components/issue-drawer.js";
   const ACT_OPTS=[["any","Any"],["reply","Needs reply"],["new3","Opened ≤ 3 days"],["upd1","Updated today"]];
 
   function passFilters(i,t,skip){
-    return matchesFilters(i,t,{filters:state.f,query:state.q,needsReply},skip);
+    return matchesFilters(i,t,{filters:state.f,query:state.q,needsReply,assigneeKey:i=>assigneeFilterKey(i,PEOPLE)},skip);
   }
   const focusDef=()=>FOCUS.find(x=>x.id===state.focus)||FOCUS[0];
   function visible(skip){ const t=todayStr(), fd=focusDef(); return workspace.personalItems((state.issues||[]).filter(i=>fd.f(i,t)&&passFilters(i,t,skip))); }
@@ -163,8 +162,10 @@ import { createIssueDrawer } from "./components/issue-drawer.js";
     const box=$("quick-filters"); box.replaceChildren();
     const pick=(label,options,value,onChange)=>{ const field=el("label","quick-field"), select=el("select"); field.appendChild(el("span",null,label)); select.setAttribute("aria-label",label); options.forEach(([v,l])=>select.appendChild(new Option(l,v))); if(value==="__multiple"){const o=new Option("Multiple selected",value);o.disabled=true;select.appendChild(o);} select.value=value;select.addEventListener("change",()=>{onChange(select.value);state.sel.clear();state.pageIndex=0;render();});field.appendChild(select);box.appendChild(field);return select;};
     const val=set=>set.size>1?"__multiple":[...set][0]||"";
+    const team=defaultAssigneeKeys(PEOPLE), teamSelected=state.f.assignee.size===team.length&&team.every(k=>state.f.assignee.has(k));
+    pick("Assignee",[["__team","Team (default)"],...assigneeOptions(PEOPLE),["other","Others"]],teamSelected?"__team":val(state.f.assignee),v=>state.f.assignee=new Set(v==="__team"?team:[v]));
     pick("Status",[["","All statuses"],...[...new Set([...(state.issues||[]).map(i=>i.status),...state.f.status])].sort((a,b)=>stIdx(a)-stIdx(b)).map(x=>[x,x])],val(state.f.status),v=>state.f.status=new Set(v?[v]:[]));
-    pick("Developer",[["","All developers"],["__none","No developer"],...[...new Set([...allDevs(),...state.f.dev])].filter(x=>x!=="__none").map(x=>[x,x])],val(state.f.dev),v=>state.f.dev=new Set(v?[v]:[]));
+    if(IS_ADMIN) pick("Developer",[["","All developers"],["__none","No developer"],...[...new Set([...allDevs(),...state.f.dev])].filter(x=>x!=="__none").map(x=>[x,x])],val(state.f.dev),v=>state.f.dev=new Set(v?[v]:[]));
     pick("Due date",DUE_OPTS,state.f.due,v=>state.f.due=v);
     let views=[]; try{views=readViews(localStorage,MY_EMAIL);}catch(_){}
     pick("Saved view",[["","Saved views"],...views.map((v,n)=>[String(n),v.name])],"",v=>{ if(v==="")return; const restored=restoreView(views[+v],IS_ADMIN,PEOPLE);if(!restored)return;Object.assign(state,restored);$("q").value=state.q;workspace.navigate(state.view==="history"?"history":["dev","status","assignee"].includes(state.view)?"boards":"tickets",{mode:state.view}); });
@@ -175,6 +176,7 @@ import { createIssueDrawer } from "./components/issue-drawer.js";
     const t=todayStr(), box=$("tiles"); box.replaceChildren();
     const base=(state.issues||[]).filter(i=>passFilters(i,t));
     FOCUS.forEach(fd=>{
+      if((fd.id==="nodev"||fd.id==="duechg")&&!IS_ADMIN) return;
       const n=base.filter(i=>fd.f(i,t)).length;
       const b=el("button","tile "+fd.k); b.type="button"; b.setAttribute("aria-pressed",String(state.focus===fd.id));
       b.appendChild(el("span","n",String(n)));
@@ -204,10 +206,11 @@ import { createIssueDrawer } from "./components/issue-drawer.js";
     const g=$("fgrid"); g.replaceChildren(); g.hidden=!state.fopen;
     $("ftoggle").textContent=state.fopen?"Hide advanced":"Advanced filters"; $("ftoggle").setAttribute("aria-expanded",String(state.fopen));
     const f=state.f;
-    let s=section("Assignee","k4",()=>f.assignee.clear()); let cs=el("div","chips");
-    const ca=countBy("assignee",i=>i.assignee||"other");
-    Object.keys(PEOPLE).forEach(k=>cs.appendChild(chip(PEOPLE[k].name,"kp-"+k,f.assignee.has(k),ca[k]||0,()=>toggleSet(f.assignee,k),false,PEOPLE[k].ini)));
-    if(ca.other||f.assignee.has("other")) cs.appendChild(chip("Others","k8",f.assignee.has("other"),ca.other||0,()=>toggleSet(f.assignee,"other"),false,"+"));
+    let s=section("Assignee","k4",()=>f.assignee=new Set(defaultAssigneeKeys(PEOPLE))); let cs=el("div","chips");
+    s.querySelector(".any").textContent="Default team";
+    const ca=countBy("assignee",i=>assigneeFilterKey(i,PEOPLE));
+    assigneeOptions(PEOPLE).forEach(([key,name])=>cs.appendChild(chip(name,"kp-"+key,f.assignee.has(key),ca[key]||0,()=>toggleSet(f.assignee,key),false,PEOPLE[key]?.ini||initials(name))));
+    cs.appendChild(chip("Others","k8",f.assignee.has("other"),ca.other||0,()=>toggleSet(f.assignee,"other"),false,"+"));
     s.appendChild(cs); g.appendChild(s);
 
     s=section("Reporter","k6",()=>f.reporter.clear()); cs=el("div","chips");
@@ -215,11 +218,13 @@ import { createIssueDrawer } from "./components/issue-drawer.js";
     [...reps].sort((a,b)=>(cr[b]||0)-(cr[a]||0)||a.localeCompare(b)).forEach(r=>cs.appendChild(chip(r,"k6",f.reporter.has(r),cr[r]||0,()=>toggleSet(f.reporter,r),false,initials(r))));
     s.appendChild(cs); g.appendChild(s);
 
-    s=section("Developer (ai1_)","k1",()=>f.dev.clear()); cs=el("div","chips");
-    const cd=countBy("dev",i=>i.devs.length?i.devs:["__none"]);
-    cs.appendChild(chip("No developer","k2",f.dev.has("__none"),cd["__none"]||0,()=>toggleSet(f.dev,"__none"),true));
-    allDevs().forEach(d=>cs.appendChild(chip(d,devK(d),f.dev.has(d),cd[d]||0,()=>toggleSet(f.dev,d),true)));
-    s.appendChild(cs); g.appendChild(s);
+    if(IS_ADMIN){
+      s=section("Developer (ai1_)","k1",()=>f.dev.clear()); cs=el("div","chips");
+      const cd=countBy("dev",i=>i.devs.length?i.devs:["__none"]);
+      cs.appendChild(chip("No developer","k2",f.dev.has("__none"),cd["__none"]||0,()=>toggleSet(f.dev,"__none"),true));
+      allDevs().forEach(d=>cs.appendChild(chip(d,devK(d),f.dev.has(d),cd[d]||0,()=>toggleSet(f.dev,d),true)));
+      s.appendChild(cs); g.appendChild(s);
+    }
 
     s=section("Status","k5",()=>f.status.clear()); cs=el("div","chips");
     const cst=countBy("status",i=>i.status); const sts=new Set(Object.keys(cst)); f.status.forEach(x=>sts.add(x));
@@ -253,7 +258,7 @@ import { createIssueDrawer } from "./components/issue-drawer.js";
     const act=$("active"); act.replaceChildren();
     const addA=(label,k,rm)=>{ const c=el("span","achip "+k,label); const x=el("button",null,"✕"); x.type="button"; x.setAttribute("aria-label","Remove "+label); x.addEventListener("click",()=>{ rm(); state.sel.clear(); render(); }); c.appendChild(x); act.appendChild(c); };
     f.reporter.forEach(v=>addA("Reporter: "+v,"k6",()=>f.reporter.delete(v)));
-    f.assignee.forEach(v=>addA(PEOPLE[v]?PEOPLE[v].name:(v==="other"?"Other assignees":v),"kp-"+v,()=>f.assignee.delete(v)));
+    f.assignee.forEach(v=>addA(assigneeOptions(PEOPLE).find(([key])=>key===v)?.[1]||(v==="other"?"Other assignees":v),"kp-"+v,()=>f.assignee.delete(v)));
     f.dev.forEach(v=>addA(v==="__none"?"No developer":"ai1_"+v,v==="__none"?"k2":devK(v),()=>f.dev.delete(v)));
     f.status.forEach(v=>addA(v,stK({status:v,cat:""}),()=>f.status.delete(v)));
     f.type.forEach(v=>addA(v,"k7",()=>f.type.delete(v)));
@@ -269,6 +274,10 @@ import { createIssueDrawer } from "./components/issue-drawer.js";
 
   function render(){
     if(!state.issues) return;
+    if(!state.f.assignee.size) state.f.assignee=new Set(defaultAssigneeKeys(PEOPLE));
+    // The proxy scopes developers by their authenticated ai1_ label. Do not
+    // apply an invisible, editable developer filter on top of that scope.
+    if(!IS_ADMIN) state.f.dev.clear();
     const t=todayStr(); $("today").textContent=fmtDate(t)+" "+t.slice(0,4);
     renderTiles(); renderFilters();
     if(workspace.renderPage()){ updateBulk(); return; }
@@ -428,7 +437,7 @@ import { createIssueDrawer } from "./components/issue-drawer.js";
     out.sort((a,b)=>a.when<b.when?1:-1); return out;
   }
   async function loadHistory(force){
-    if(histBusy||!state.issues) return;
+    if(!IS_ADMIN||histBusy||!state.issues) return;
     const todo=state.issues.filter(i=>i.cat!=="done"&&!i.internal).filter(i=>force||!HIST[i.key]||HIST[i.key].updated!==i.updated);
     if(!todo.length) return;
     histBusy=true; histDone=0; histTotal=todo.length; if(state.view==="history") render();
@@ -439,6 +448,7 @@ import { createIssueDrawer } from "./components/issue-drawer.js";
   }
   function renderDrawerHist(key){
     const box=$("d-hist"); box.replaceChildren(); const ch=dueChanges(key);
+    if(!IS_ADMIN) return;
     if(!HIST[key]){ box.appendChild(el("span","msg","Loading…")); return; }
     if(!ch.length){ box.appendChild(el("span","msg","The due date has never been set or changed.")); return; }
     const tl=el("div","tl");
@@ -739,7 +749,7 @@ import { createIssueDrawer } from "./components/issue-drawer.js";
   async function loadClosed(){
     if(closedBusy) return; const days=state.closedDays; closedBusy=true;
     try{
-      const list=await searchAll('project = '+PROJECT+' AND issuetype != Epic AND statusCategory = Done AND updated >= -'+days+'d'+CLOSED_EXTRA+' ORDER BY updated DESC',FIELDS);
+      const list=await searchAll('project = '+PROJECT+' AND issuetype != Epic AND statusCategory = Done AND updated >= -'+days+'d ORDER BY updated DESC',FIELDS);
       state.closedIssues=list.map(norm); mergeIssues(); if($("pop").hidden&&!drag) render();
     }catch(err){ if(state.focus==="closed") toast("Couldn't load closed tickets",[errorText(err)],true); }
     finally{ closedBusy=false; if(state.closedDays!==days) loadClosed(); }
@@ -793,7 +803,7 @@ import { createIssueDrawer } from "./components/issue-drawer.js";
   async function loadDetail(key){
     loadTransitions(key);
     if(isInt(key)){ renderInternal(key); return; }
-    fetchHistory(key).then(ch=>{ const i=issueByKey(key); HIST[key]={updated:i?i.updated:"",changes:ch}; if(dz.key===key) renderDrawerHist(key); }).catch(()=>{ if(dz.key===key&&!HIST[key]) $("d-hist").replaceChildren(el("span","msg err","Couldn't load the history.")); });
+    if(IS_ADMIN) fetchHistory(key).then(ch=>{ const i=issueByKey(key); HIST[key]={updated:i?i.updated:"",changes:ch}; if(dz.key===key) renderDrawerHist(key); }).catch(()=>{ if(dz.key===key&&!HIST[key]) $("d-hist").replaceChildren(el("span","msg err","Couldn't load the history.")); });
     try{ const list=await searchAll("key = "+key,["summary","description","status","assignee","reporter","labels","duedate","created","updated","priority","issuetype","comment","parent","attachment"]);
       if(dz.key!==key) return; const raw=list[0]; if(!raw){ $("d-desc").replaceChildren(el("span",null,"Ticket not found.")); return; }
       const f=raw.fields||{}, ni=norm(raw);
@@ -947,8 +957,9 @@ import { createIssueDrawer } from "./components/issue-drawer.js";
   setInterval(()=>{ const a=$("auto"); if(!a||!lastLoad) return; const left=Math.max(0,120-Math.round((Date.now()-lastLoad)/1000)); a.textContent="next refresh in "+(left>=60?Math.floor(left/60)+"m "+(left%60)+"s":left+"s");
     if(Date.now()-lastLoad>120000&&document.visibilityState==="visible"&&!batchBusy&&$("pop").hidden&&!drag){ lastLoad=Date.now(); reload(); } },1000);
   $("signout").addEventListener("click",()=>signOut());
-  const drawerUI=createIssueDrawer({isDirty:()=>{const issue=issueByKey(dz.key);if(!issue)return !!$("d-reply").value.trim();return !!$("d-reply").value.trim()||!!$("d-newdev").value.trim()||$("d-due").value!==(issue.due||"")||dz.devs.size!==issue.devs.length||issue.devs.some(d=>!dz.devs.has(d));}});
+  const drawerUI=createIssueDrawer({canViewHistory:()=>IS_ADMIN,isDirty:()=>{const issue=issueByKey(dz.key);if(!issue)return !!$("d-reply").value.trim();return !!$("d-reply").value.trim()||!!$("d-newdev").value.trim()||$("d-due").value!==(issue.due||"")||dz.devs.size!==issue.devs.length||issue.devs.some(d=>!dz.devs.has(d));}});
   const workspace=createWorkspace({state,context:()=>({admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount()}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>!dz.key||closeDrawer()});
+  const aiAssistant=createAIAssistant({openIssue:openDrawer,beforeOpen:()=>{if(dz.key&&!closeDrawer())return false;closePop();return true;}});
   $("create-ticket").addEventListener("click",e=>internalPopover(e.currentTarget));
   document.querySelector(".account-panel").appendChild($("notify").closest("label"));
   window.addEventListener("hashchange",()=>{try{const key=decodeURIComponent(location.hash.slice(1));if(issueByKey(key))openDrawer(key);}catch(_){} });

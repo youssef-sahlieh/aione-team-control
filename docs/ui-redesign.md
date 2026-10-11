@@ -5,14 +5,28 @@ collapsible desktop navigation, mobile navigation with dismissal/focus handling,
 page headings and a consistent responsive visual system. The Users management
 and sign-in/reset screens retain their existing layouts.
 
+The workspace readability pass uses Segoe UI with Hebrew-capable fallbacks,
+15 px body/ticket text, 12–14 px supporting labels, stronger secondary-text
+contrast, and consistent 44 px primary controls. Search and drawer inputs use
+16 px text on mobile, filters and view switches wrap, and keyboard focus is
+clearly outlined. Styles are scoped through the dashboard's readability sheet.
+
 Pages use an allowlisted `?page=` route. Overview shows open/overdue/today/completed
 metrics, deadline-sorted attention items and actual workflow distribution. Boards
 and History reuse the existing renderers and actions. Workload keeps developer
-labels and Jira assignees separate; developers get their own workload. Calendar
+labels and Jira assignees separate and is visible only to managers (admin role).
+Developer Workload links fall back to All tickets, preserving ticket deep links. Calendar
 has month/week navigation, a mobile agenda, and unscheduled tickets; opening a
 ticket gives access to the existing due-date editor. Page changes do not request
 new Jira data. Browser Back/Forward and page queries with issue hashes work,
 including after sign-in.
+
+Overview uses a minimal layout: one divided metrics panel, a six-ticket attention
+list and a plain status-count summary. Decorative banners, status dots and
+marketing copy are removed from this page. Metrics still open the corresponding
+ticket focus; list entries open details. Dates use short readable labels, overdue
+work is explicit, and Completed states the active history window. Filters and
+all role restrictions continue to apply. The layout stacks on smaller screens.
 
 My Tasks uses the authenticated developer label or a configured person matched by
 email/account prefix; if neither matches, an administrator's personal list is
@@ -36,6 +50,29 @@ they contain no issue payloads or credentials. Developer defaults and unavailabl
 board downgrades are retained. Saving an existing name replaces that definition;
 at most 20 views are retained per user. Cross-device sharing is not implemented.
 
+The No developer focus tile and filter options are reserved for managers (admin
+role). Restoring a saved view as a developer removes that filter and resets the
+No developer focus to All open.
+Due date history navigation, the Due date changes view, Due date moved tile,
+and the drawer Activity tab are also manager-only. Developer history routes and
+saved modes fall back to the ticket list, and Jira changelog requests are skipped.
+Developers retain the current due date and its editor.
+Developer quick/advanced filter controls and editable developer filter chips are
+manager-only. Users rely on the proxy's authenticated AI1_ label scope; old saved
+developer filters are ignored so they cannot silently narrow the user's list.
+
+Both roles default to Karim, Youssef, Rami and Razan in the assignee filter.
+The quick selector offers the default team, each person, and Others; advanced
+chips allow combining selections. Other configured people, unknown Jira accounts
+and unassigned tickets are grouped under Others and appear only when selected.
+Clear all and Default team restore the named selection. Existing nonempty saved
+assignee selections remain, including explicitly selected Others. Names resolve
+to configured account keys, with a display-name fallback for named people absent
+from config; this does not add invented Jira IDs or change internal assignment
+permissions. Workspaces with an entirely different configured team retain it.
+Jira searches no longer hardcode team assignees, so Others can include authorized
+tickets; the proxy still enforces every developer's authenticated AI1_ label.
+
 Ticket details retain their DOM controls and API handlers, now organized into
 Overview, Activity, Comments and Files tabs. Tabs preserve draft inputs; closing
 with pending date/developer/comment edits prompts before discarding them. The
@@ -52,8 +89,8 @@ from the authenticated API. Development preview runs at `http://localhost:3000`
 using `npm run dev` (Node 24+); authenticated requests go through the existing
 deployed proxy. This preview uses live data and saves.
 
-Validation: existing 36 proxy and 22 account tests, 19 frontend model/router/filter/
-saved-view/workload tests, and 22 mocked Chromium browser tests. Browser coverage
+Validation: existing 36 proxy and 22 account tests, 24 frontend model/router/filter/
+saved-view/workload/assignee tests, and 26 mocked Chromium browser tests. Browser coverage
 includes roles, source-specific drawers, sign-in with page/hash, saved views across
 reload, draft discard/focus restoration, failure feedback, pagination selection,
 page navigation and layout checks at 320/375/390/768/1024/1440 px. Screenshots of

@@ -1,0 +1,121 @@
+/* Comfortable reading sizes and consistent targets for the workspace. */
+:root {
+  --sans: "Segoe UI", "IBM Plex Sans", "IBM Plex Sans Hebrew", Arial, sans-serif;
+  --muted: #5f6d83;
+}
+body { font-size: 15px; line-height: 1.55; }
+.skip-link { top: 0; transform: translateY(calc(-100% - 12px)); }
+.skip-link:focus { top: 10px; transform: none; }
+button, input, select, textarea { font-family: var(--sans); }
+button, a, input, select, textarea, summary { touch-action: manipulation; }
+:where(button, a, input, select, textarea, summary):focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+.nav-link { font-size: 15px; min-height: 48px; }
+.brand-caption { font-size: 11px; letter-spacing: 1.2px; }
+.workspace-label, .sidebar-note, .nav-label { font-size: 12px; }
+.nav-label, .sidebar-note { color: #a7b5cd; }
+.breadcrumbs, .account-menu summary, .account-panel { font-size: 14px; }
+.search-wrap .search { height: 44px; font-size: 15px; }
+.search-wrap::before { top: 7px; }
+.eyebrow { font-size: 11px; letter-spacing: 1.2px; }
+.page-heading h1 { font-size: 32px; letter-spacing: -.6px; }
+.page-heading p { font-size: 15px; line-height: 1.6; }
+.date-pill, .sync-line, .summary-filter-info { font-size: 13px; }
+.sync-line { flex-wrap: wrap; row-gap: 6px; }
+.btn, .fbar .btn, .dtop .btn, .calendar-controls .btn {
+  font-size: 14px;
+  min-height: 44px;
+  padding: 10px 14px;
+  line-height: 1.4;
+  box-sizing: border-box;
+}
+.icon-btn { min-width: 44px; min-height: 44px; }
+.tile { min-height: 112px; }
+.tile .l { font-size: 14px; }
+.tile .h, .tile .step, .filter-empty { font-size: 12px; }
+.tile .stepb { min-width: 32px; min-height: 32px; }
+.fbar .title, .quick-field, .fsec h4 { font-size: 13px; }
+.quick-field select, .fsel, .pagination select {
+  font-size: 14px;
+  min-height: 44px;
+  padding: 9px 10px;
+}
+.fc { font-size: 13px; min-height: 40px; padding: 7px 10px; }
+.achip { font-size: 12px; }
+.achip button { min-width: 32px; min-height: 32px; }
+.toolbar { flex-wrap: wrap; gap: 12px; }
+.toolbar h2 { font-size: 18px; }
+.toolbar .count, .toolbar .tgl, .toolbar .seg { font-size: 13px; }
+.seg { flex-wrap: wrap; }
+.seg button { font-size: 13px; min-height: 44px; padding: 9px 12px; }
+.gr { padding-block: 18px; }
+.gr.head { font-size: 11px; letter-spacing: .5px; }
+.ttl .s, .card .t { font-size: 15px; line-height: 1.5; }
+.key, button.key.int, .who, .dev, .duebtn { font-size: 13px; }
+.dev { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.tags .epic, .tags .flag { font-size: 12px; }
+.stbtn { font-size: 12px; padding: 7px 9px; }
+.stbtn.menu, .duebtn, .devcell { min-height: 44px; }
+.pagination { font-size: 13px; flex-wrap: wrap; }
+.summary-card .metric-label { font-size: 14px; }
+.summary-card .metric-foot { font-size: 12px; }
+.summary-card strong { font-size: 34px; }
+.panel h2, .overview-banner h2 { font-size: 18px; }
+.panel p, .overview-banner p { font-size: 14px; line-height: 1.65; }
+.overview-banner p { color: var(--muted); }
+.compact-ticket b { font-size: 15px; line-height: 1.5; }
+.compact-ticket small, .compact-ticket .ticket-date { font-size: 12px; }
+.status-line, .status-line strong { font-size: 14px; }
+.workload-table { font-size: 14px; }
+.workload-table th { font-size: 12px; }
+.calendar-label, .day-number { font-size: 13px; }
+.calendar-ticket { font-size: 12px; padding: 8px 6px; min-height: 44px; }
+.calendar-controls strong { font-size: 16px; }
+.empty-copy { font-size: 14px; }
+.dtitle { font-size: 23px; line-height: 1.45; }
+.drawer-tab { font-size: 14px; min-height: 48px; }
+.facts { font-size: 15px; }
+.facts dt, .blk h3 { font-size: 12px; letter-spacing: .5px; }
+.rich { font-size: 15px; line-height: 1.7; }
+.rich h1, .rich h2, .rich h3, .rich h4 { font-size: 16px; }
+.inp { font-size: 16px; min-height: 44px; box-sizing: border-box; }
+.msg, .cmeta, .att .mt, .pop .note { font-size: 13px; }
+.att .nm { font-size: 15px; }
+.pop h4, .pop .fld label { font-size: 12px; }
+.opt { min-height: 44px; font-size: 14px; padding: 10px; }
+.workspace-footer { font-size: 12px; gap: 12px; flex-wrap: wrap; }
+
+@media (max-width: 820px) {
+  .page-heading h1 { font-size: 28px; }
+  .page-heading p { font-size: 14px; max-width: 100%; }
+  .search-wrap .search { font-size: 16px; }
+  .sync-meta { flex-wrap: wrap; }
+  .quick-filters .btn { min-height: 44px; }
+  .toolbar .sp { flex-wrap: wrap; }
+  .summary-card strong { font-size: 30px; }
+  .dtop .btn { padding: 9px 10px; font-size: 13px; }
+  .dtitle { font-size: 21px; }
+  .drawer-tabs { gap: 0; }
+  .drawer-tab { font-size: 13px; }
+  .workload-table th, .workload-table td { font-size: 13px; }
+  .calendar-controls .btn { padding: 9px 10px; }
+}
+@media (max-width: 480px) {
+  .summary-cards { gap: 10px; }
+  .summary-card { padding: 14px; }
+  .summary-card .metric-label { font-size: 13px; }
+  .compact-ticket { gap: 10px; flex-wrap: wrap; }
+  .compact-ticket .ticket-date { margin-left: 18px; }
+  .panel .workload-table td { font-size: 16px; }
+  .panel .workload-table td:first-child { font-size: 15px; }
+  .panel .workload-table td[data-label]::before { font-size: 11px; }
+  .calendar-panel .day-detail { font-size: 14px; }
+  .calendar-panel .calendar-ticket { font-size: 14px; padding: 10px; }
+  .calendar-panel .calendar-ticket small, .calendar-panel .calendar-empty { font-size: 12px; }
+  .pagination .page-buttons { width: 100%; justify-content: space-between; }
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme=light]) { --muted: #a8b5ca; }
+}

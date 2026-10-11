@@ -10,6 +10,8 @@ The Aione team dashboard for the AION Jira project: tickets, filters, boards, du
 UI modernization starts with the [baseline and permission matrix](docs/ui-modernization-baseline.md).
 The [workspace redesign](docs/ui-redesign.md) adds sidebar navigation, Overview,
 Workload, Calendar, paginated tickets, personal saved views and tabbed details.
+The [AION AI v1 setup guide](docs/ai-assistant.md) describes the read-only chat
+assistant, server model settings, permission boundaries and reserved v2 actions.
 Install dependencies with `npm ci` and `npm ci --prefix proxy`. `npm test` also
 runs frontend model tests; `npx playwright install chromium` followed by
 `npm run test:e2e` runs mocked browser regression tests without production writes.
