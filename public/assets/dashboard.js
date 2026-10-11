@@ -3,6 +3,10 @@
 // so they aren't in this public code.
 import { api, apiFile, getSession, signOut } from "./session.js";
 import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normalizeInternalIssue } from "./models/issue.js";
+import { createFilters, matchesFilters } from "./models/filters.js";
+import { readViews, restoreView, savedViewKey, serializeView } from "./models/saved-views.js";
+import { createWorkspace } from "./app/workspace.js";
+import { createIssueDrawer } from "./components/issue-drawer.js";
 
   // Filled in from the proxy's /config after sign-in (see applyConfig).
   let SITE="", PROJECT="", PEOPLE={}, DEVS=[], DEV_EMAIL={}, DEV_COLOR={}, BYID={}, JQL="", ME="", MAIL=false;
@@ -83,8 +87,8 @@ import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normal
     }catch(err){ toast("Couldn't load internal tickets",[errorText(err)],true); }
   }
   async function searchAll(jql,fields){
-    let r=await jira.search(jql,fields); let list=(r.issues||[]).slice(), g=0;
-    while(r.isLast===false&&r.nextPageToken&&g<10){ g++; r=await jira.search(jql,fields,r.nextPageToken); list=list.concat(r.issues||[]); }
+    let r=await jira.search(jql,fields); let list=(r.issues||[]).slice(); const tokens=new Set();
+    while(r.isLast===false&&r.nextPageToken){ if(tokens.has(r.nextPageToken))throw new Error("Jira repeated a pagination token.");tokens.add(r.nextPageToken);r=await jira.search(jql,fields,r.nextPageToken);list=list.concat(r.issues||[]); }
     return list.map(withRendered);
   }
   const fmtWhen=iso=>{ try{ const d=new Date(iso); return {d:d.toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric",timeZone:"Asia/Jerusalem"}),t:d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Jerusalem"})}; }catch(e){ return {d:iso.slice(0,10),t:iso.slice(11,16)}; } };
@@ -128,8 +132,8 @@ import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normal
   const allDevs=()=>{ const s=new Set(DEVS); (state.issues||[]).forEach(i=>i.devs.forEach(d=>s.add(d))); return [...s].sort(); };
   const needsReply=i=>i.last&&!i.last.fromTeam&&Date.parse(i.updated)>=Date.now()-(typeof state!=="undefined"?state.updDays:3)*dayMs;
 
-  const F=()=>({reporter:new Set(),assignee:new Set(),dev:new Set(),status:new Set(),type:new Set(),priority:new Set(),epic:"",due:"any",activity:"any"});
-  const state={issues:null,focus:"open",f:F(),q:"",view:"list",group:"",sel:new Set(),fopen:true,hperiod:7,updDays:3,dueDays:7,closedDays:30,mainIssues:[],closedIssues:[],internalIssues:[]};
+  const F=createFilters;
+  const state={issues:null,focus:"open",f:F(),q:"",view:"list",group:"",sel:new Set(),fopen:false,hperiod:7,updDays:3,dueDays:7,closedDays:30,mainIssues:[],closedIssues:[],internalIssues:[],pageIndex:0,pageSize:25};
   try{ const u=+localStorage.getItem("aion.upd"), d=+localStorage.getItem("aion.due"); if(u>=1&&u<=30) state.updDays=u; if(d>=1&&d<=90) state.dueDays=d; const cd=+localStorage.getItem("aion.closed"); if(cd>=1&&cd<=365) state.closedDays=cd; }catch(e){}
   try{ const v=localStorage.getItem("aion.view"); if(v) state.view=v; if(localStorage.getItem("aion.fopen")==="0") state.fopen=false; const gg=localStorage.getItem("aion.group"); if(gg!==null) state.group=gg; }catch(e){}
 
@@ -149,26 +153,23 @@ import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normal
   const ACT_OPTS=[["any","Any"],["reply","Needs reply"],["new3","Opened ≤ 3 days"],["upd1","Updated today"]];
 
   function passFilters(i,t,skip){
-    const f=state.f;
-    if(skip!=="reporter"&&f.reporter.size&&!f.reporter.has(i.reporter)) return false;
-    if(skip!=="assignee"&&f.assignee.size&&!f.assignee.has(i.assignee||"other")) return false;
-    if(skip!=="dev"&&f.dev.size){ if(![...f.dev].some(d=>d==="__none"?!i.devs.length:i.devs.includes(d))) return false; }
-    if(skip!=="status"&&f.status.size&&!f.status.has(i.status)) return false;
-    if(skip!=="type"&&f.type.size&&!f.type.has(i.type)) return false;
-    if(skip!=="priority"&&f.priority.size&&!f.priority.has(i.priority||"None")) return false;
-    if(f.epic&&!(f.epic==="none"?!i.parent:i.parent&&i.parent.key===f.epic)) return false;
-    if(f.due!=="any"){ const d=i.due;
-      if(f.due==="none"&&d) return false; if(f.due==="overdue"&&!(d&&d<t)) return false; if(f.due==="today"&&d!==t) return false;
-      if(f.due==="week"&&!(d&&d>t&&dnum(d)<=dnum(t)+7)) return false; if(f.due==="later"&&!(d&&dnum(d)>dnum(t)+7)) return false; }
-    if(f.activity==="reply"&&!needsReply(i)) return false;
-    if(f.activity==="new3"&&!(dnum(t)-dnum(i.created)<=3)) return false;
-    if(f.activity==="upd1"&&!(i.updated&&Date.parse(i.updated)>=Date.now()-dayMs)) return false;
-    const q=state.q.toLowerCase(); if(q&&!(i.key.toLowerCase().includes(q)||i.reporter.toLowerCase().includes(q)||i.summary.toLowerCase().includes(q)||(i.parent&&i.parent.name.toLowerCase().includes(q)))) return false;
-    return true;
+    return matchesFilters(i,t,{filters:state.f,query:state.q,needsReply},skip);
   }
   const focusDef=()=>FOCUS.find(x=>x.id===state.focus)||FOCUS[0];
-  function visible(skip){ const t=todayStr(), fd=focusDef(); return (state.issues||[]).filter(i=>fd.f(i,t)&&passFilters(i,t,skip)); }
+  function visible(skip){ const t=todayStr(), fd=focusDef(); return workspace.personalItems((state.issues||[]).filter(i=>fd.f(i,t)&&passFilters(i,t,skip))); }
   function filterCount(){ const f=state.f; return f.reporter.size+f.assignee.size+f.dev.size+f.status.size+f.type.size+f.priority.size+(f.epic?1:0)+(f.due!=="any"?1:0)+(f.activity!=="any"?1:0)+(state.q?1:0); }
+
+  function renderQuickFilters(){
+    const box=$("quick-filters"); box.replaceChildren();
+    const pick=(label,options,value,onChange)=>{ const field=el("label","quick-field"), select=el("select"); field.appendChild(el("span",null,label)); select.setAttribute("aria-label",label); options.forEach(([v,l])=>select.appendChild(new Option(l,v))); if(value==="__multiple"){const o=new Option("Multiple selected",value);o.disabled=true;select.appendChild(o);} select.value=value;select.addEventListener("change",()=>{onChange(select.value);state.sel.clear();state.pageIndex=0;render();});field.appendChild(select);box.appendChild(field);return select;};
+    const val=set=>set.size>1?"__multiple":[...set][0]||"";
+    pick("Status",[["","All statuses"],...[...new Set([...(state.issues||[]).map(i=>i.status),...state.f.status])].sort((a,b)=>stIdx(a)-stIdx(b)).map(x=>[x,x])],val(state.f.status),v=>state.f.status=new Set(v?[v]:[]));
+    pick("Developer",[["","All developers"],["__none","No developer"],...[...new Set([...allDevs(),...state.f.dev])].filter(x=>x!=="__none").map(x=>[x,x])],val(state.f.dev),v=>state.f.dev=new Set(v?[v]:[]));
+    pick("Due date",DUE_OPTS,state.f.due,v=>state.f.due=v);
+    let views=[]; try{views=readViews(localStorage,MY_EMAIL);}catch(_){}
+    pick("Saved view",[["","Saved views"],...views.map((v,n)=>[String(n),v.name])],"",v=>{ if(v==="")return; const restored=restoreView(views[+v],IS_ADMIN,PEOPLE);if(!restored)return;Object.assign(state,restored);$("q").value=state.q;workspace.navigate(state.view==="history"?"history":["dev","status","assignee"].includes(state.view)?"boards":"tickets",{mode:state.view}); });
+    const save=el("button","btn","Save view");save.type="button";save.addEventListener("click",()=>{ const name=prompt("Name this personal view:");if(!name||!name.trim())return;const view=serializeView(state,name);const updated=views.filter(v=>v.name!==view.name).concat(view).slice(-20);try{localStorage.setItem(savedViewKey(MY_EMAIL),JSON.stringify(updated));toast("View saved in this browser.");renderQuickFilters();}catch(_){toast("Couldn't save this view. Browser storage is unavailable.",[],true);} });box.appendChild(save);
+  }
 
   function renderTiles(){
     const t=todayStr(), box=$("tiles"); box.replaceChildren();
@@ -201,7 +202,7 @@ import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normal
 
   function renderFilters(){
     const g=$("fgrid"); g.replaceChildren(); g.hidden=!state.fopen;
-    $("ftoggle").textContent=state.fopen?"Hide filters":"Show filters"; $("ftoggle").setAttribute("aria-expanded",String(state.fopen));
+    $("ftoggle").textContent=state.fopen?"Hide advanced":"Advanced filters"; $("ftoggle").setAttribute("aria-expanded",String(state.fopen));
     const f=state.f;
     let s=section("Assignee","k4",()=>f.assignee.clear()); let cs=el("div","chips");
     const ca=countBy("assignee",i=>i.assignee||"other");
@@ -261,14 +262,16 @@ import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normal
     if(f.due!=="any") addA("Due: "+DUE_OPTS.find(x=>x[0]===f.due)[1],"k3",()=>f.due="any");
     if(f.activity!=="any") addA(ACT_OPTS.find(x=>x[0]===f.activity)[1],"k6",()=>f.activity="any");
     if(state.q) addA("“"+state.q+"”","k1",()=>{ state.q=""; $("q").value=""; });
-    if(!act.childNodes.length){ const n=el("span",null,"None yet. Click any chip below to filter."); n.style.color="var(--muted)"; n.style.fontSize="13px"; act.appendChild(n); }
+    if(!act.childNodes.length) act.appendChild(el("span","filter-empty","All tickets in this focus"));
     $("fclear").disabled=!filterCount();
+    renderQuickFilters();
   }
 
   function render(){
     if(!state.issues) return;
     const t=todayStr(); $("today").textContent=fmtDate(t)+" "+t.slice(0,4);
     renderTiles(); renderFilters();
+    if(workspace.renderPage()){ updateBulk(); return; }
     document.querySelectorAll(".seg [data-v]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.v===state.view)));
     $("grpwrap").hidden=state.view!=="list"; $("grp").value=state.group||"";
     const items=visible(); const fd=focusDef();
@@ -297,9 +300,11 @@ import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normal
     const h=el("div","gr head"); const all=el("input","ck"); all.type="checkbox"; all.setAttribute("aria-label","Select all");
     all.checked=items.every(i=>state.sel.has(i.key)); all.addEventListener("change",()=>{ items.forEach(i=>all.checked?state.sel.add(i.key):state.sel.delete(i.key)); render(); });
     const hc=el("span","c-ck"); hc.appendChild(all); h.appendChild(hc);
-    [["c-key","Key"],["c-ttl","Ticket"],["c-who","Assignee"],["c-rep","Reporter"],["c-dev","Developers"],["c-st","Status"],["c-due","Due"],["c-cre","Created"],["c-upd","Updated"],["c-note",""]].forEach(([c,x])=>h.appendChild(el("span",c,x)));
+    [["c-key","Ticket ID"],["c-ttl","Title / Priority"],["c-who","Assignee"],["c-rep","Reporter"],["c-dev","Developers"],["c-st","Status"],["c-due","Due date"],["c-cre","Created"],["c-upd","Updated"],["c-note",""],["c-actions",""]].forEach(([c,x])=>h.appendChild(el("span",c,x)));
     w.appendChild(h);
-    const sorted=sortItems(items);
+    const allSorted=sortItems(items), pages=Math.max(1,Math.ceil(allSorted.length/state.pageSize));
+    state.pageIndex=Math.min(state.pageIndex,pages-1);
+    const sorted=allSorted.slice(state.pageIndex*state.pageSize,(state.pageIndex+1)*state.pageSize);
     if(state.group){
       const groups={}; const put=(k,name,link,i,ord)=>{ (groups[k]=groups[k]||{name,key:link,items:[],ord}).items.push(i); };
       sorted.forEach(i=>{ const g=state.group;
@@ -318,6 +323,10 @@ import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normal
         w.appendChild(gh); gp.items.forEach(i=>w.appendChild(gridRow(i,t)));
       });
     } else sorted.forEach(i=>w.appendChild(gridRow(i,t)));
+    const pager=el("div","pagination"); pager.appendChild(el("span",null,`${items.length?state.pageIndex*state.pageSize+1:0}–${Math.min((state.pageIndex+1)*state.pageSize,items.length)} of ${items.length} tickets`));
+    const size=el("select"); size.setAttribute("aria-label","Tickets per page"); [25,50,100].forEach(n=>size.appendChild(new Option(n+" per page",String(n)))); size.value=String(state.pageSize); size.addEventListener("change",()=>{state.pageSize=+size.value;state.pageIndex=0;render();}); pager.appendChild(size);
+    const buttons=el("div","page-buttons"); const prev=el("button","btn","←"), next=el("button","btn","→"); prev.type=next.type="button"; prev.setAttribute("aria-label","Previous page"); next.setAttribute("aria-label","Next page"); prev.disabled=!state.pageIndex; next.disabled=state.pageIndex===pages-1;
+    prev.addEventListener("click",()=>{state.pageIndex--;render();}); next.addEventListener("click",()=>{state.pageIndex++;render();}); buttons.append(prev,el("span",null,`${state.pageIndex+1} / ${pages}`),next);pager.appendChild(buttons);w.appendChild(pager);
     return w;
   }
 
@@ -369,7 +378,19 @@ import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normal
     r.appendChild(el("span","upd c-upd",ago(i.updated)));
     if(IS_ADMIN){ const nb=el("button","notebtn c-note","✉ Internal notes"); nb.type="button"; nb.title="Email the developer directly (not posted in Jira)"; nb.addEventListener("click",e=>{ e.stopPropagation(); notePopover(nb,i.key); }); r.appendChild(nb); }
     else r.appendChild(el("span","c-note"));
+    const actions=el("span","c-actions"), menu=el("button","icon-btn row-menu","⋯");menu.type="button";menu.setAttribute("aria-label","Actions for "+i.key);menu.setAttribute("aria-haspopup","dialog");menu.addEventListener("click",()=>rowActions(menu,i));actions.appendChild(menu);r.appendChild(actions);
     return r;
+  }
+
+  function rowActions(anchor,i){
+    const p=$("pop");p.replaceChildren();p.appendChild(el("h4",null,i.key+" · Quick actions"));const body=el("div","body");p.appendChild(body);
+    const action=(label,fn)=>{const b=el("button","opt",label);b.type="button";b.addEventListener("click",()=>{closePop();fn();});body.appendChild(b);};
+    action("Open details",()=>openDrawer(i.key));
+    action("Copy ticket link",async()=>{try{await navigator.clipboard.writeText(dashUrl(i.key));toast("Ticket link copied.");}catch(_){toast("Couldn't copy the link.",[],true);}});
+    action("Change status",()=>statusPopover(anchor,[i.key]));action("Set due date",()=>duePopover(anchor,[i.key]));
+    if(IS_ADMIN){action("Assign developers",()=>devPopover(anchor,[i.key],"set"));action("Change assignee",()=>assigneePopover(anchor,[i.key]));action("Internal notes",()=>notePopover(anchor,i.key));}
+    if(!i.internal){const a=el("a","opt","Open in Jira ↗");a.href=ticketUrl(i.key);a.target="_blank";a.rel="noopener";body.appendChild(a);}
+    placePop(anchor);body.querySelector("button")?.focus({preventScroll:true});
   }
 
   function shiftOf(c){ if(!c.from) return {txt:"first set",k:"k1"}; if(!c.to) return {txt:"cleared",k:"k8"}; const n=Math.round(dnum(c.to)-dnum(c.from)); if(n>0) return {txt:"+"+n+"d later",k:n>=7?"k2":"k3"}; if(n<0) return {txt:n+"d earlier",k:"k7"}; return {txt:"same",k:"k8"}; }
@@ -510,7 +531,7 @@ import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normal
   }
   document.addEventListener("mousedown",e=>{ const p=$("pop"); if(!p.hidden&&!p.contains(e.target)&&popAnchor&&!popAnchor.contains(e.target)) closePop(); });
   document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ if(!$("pop").hidden) closePop(); else if(!$("drawer").hidden) closeDrawer(); } });
-  window.addEventListener("scroll",()=>{ if(!$("pop").hidden) closePop(); },{passive:true});
+  window.addEventListener("scroll",()=>{ if($("pop").hidden)return;if(!popAnchor?.isConnected){closePop();return;}const bounds=popAnchor.getBoundingClientRect();if(bounds.bottom<0||bounds.top>innerHeight)closePop();else placePop(popAnchor); },{passive:true});
 
   function devPopover(anchor,keys,mode){
     const p=$("pop"); p.replaceChildren(); const one=keys.length===1&&mode==="set";
@@ -667,7 +688,7 @@ import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normal
     if(fails.length) toast(okText+" on "+ok+" of "+ops.length+". These need a look:",fails,true); else toast(okText+(ops.length>1?" on "+ok+" tickets":"")+".");
     const toNotify=done.filter(o=>o.added&&o.added.length);
     if(toNotify.length&&notifyOn) setTimeout(()=>notifyDevs(toNotify),fails.length?4000:1500);
-    await reload(); if(dz.key) loadDetail(dz.key);
+    await reload(); if(dz.key&&!fails.some(f=>f.startsWith(dz.key+":"))) loadDetail(dz.key);
     return {ok,fail:fails.length};
   }
   const devFirstName=d=>d==="bashar.k"?"Bashar":d.charAt(0).toUpperCase()+d.slice(1);
@@ -743,7 +764,7 @@ import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normal
   let qt=null; $("q").addEventListener("input",e=>{ clearTimeout(qt); qt=setTimeout(()=>{ state.q=e.target.value.trim(); render(); },150); });
 
   const dz={key:null,labels:[],devs:new Set()};
-  function closeDrawer(){ $("drawer").hidden=true; $("scrim").hidden=true; dz.key=null; }
+  function closeDrawer(force){ if(dz.key&&force!==true&&!drawerUI.allowClose())return false;$("drawer").hidden=true;$("scrim").hidden=true;dz.key=null;drawerUI.close();return true; }
   $("d-close").addEventListener("click",closeDrawer); $("scrim").addEventListener("click",closeDrawer);
   function setMsg(id,text,ok){ const m=$(id); m.textContent=text||""; m.className="msg"+(text?(ok?" ok":" err"):""); }
   function renderDevChips(){ const box=$("d-devs"); box.replaceChildren(); const names=new Set(allDevs()); dz.devs.forEach(d=>names.add(d));
@@ -751,6 +772,8 @@ import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normal
       c.addEventListener("click",()=>{ dz.devs.has(d)?dz.devs.delete(d):dz.devs.add(d); c.setAttribute("aria-pressed",String(dz.devs.has(d))); setMsg("d-devmsg",""); }); box.appendChild(c); }); }
   const fact=(dt,dd)=>{ const w=el("div"); w.appendChild(el("dt",null,dt)); w.appendChild(el("dd",null,dd||"—")); return w; };
   function openDrawer(key){
+    if(dz.key&&dz.key!==key&&!closeDrawer())return;
+    if(!dz.key){drawerUI.open();$("d-reply").value="";$("d-newdev").value="";}
     closePop(); dz.key=key; const i=issueByKey(key);
     $("drawer").hidden=false; $("scrim").hidden=false; $("drawer").classList.toggle("is-int",isInt(key));
     $("d-key").textContent=key+(isInt(key)?"":" ↗"); $("d-key").href=$("d-open").href=ticketUrl(key); if(isInt(key)) $("d-key").removeAttribute("href");
@@ -896,7 +919,7 @@ import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normal
   $("d-edit").addEventListener("click",e=>{ if(dz.key&&isInt(dz.key)) internalPopover(e.currentTarget,dz.key); });
   $("d-del").addEventListener("click",async()=>{ const key=dz.key; if(!key||!isInt(key)) return;
     if(!confirm("Delete "+key+"? This can't be undone. To finish a ticket, close it instead.")) return;
-    try{ await internalApi.remove(key); closeDrawer(); toast(key+" deleted."); await reload(); }catch(err){ toast("Not deleted",[errorText(err)],true); } });
+    try{ await internalApi.remove(key); closeDrawer(true); toast(key+" deleted."); await reload(); }catch(err){ toast("Not deleted",[errorText(err)],true); } });
   function fmtSize(b){ if(b==null) return ""; if(b<1024) return b+" B"; if(b<1048576) return Math.round(b/1024)+" KB"; return (b/1048576).toFixed(1)+" MB"; }
   function renderAttachments(atts){
     const box=$("d-att"); box.replaceChildren(); $("d-acount").textContent="("+atts.length+")";
@@ -924,13 +947,19 @@ import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normal
   setInterval(()=>{ const a=$("auto"); if(!a||!lastLoad) return; const left=Math.max(0,120-Math.round((Date.now()-lastLoad)/1000)); a.textContent="next refresh in "+(left>=60?Math.floor(left/60)+"m "+(left%60)+"s":left+"s");
     if(Date.now()-lastLoad>120000&&document.visibilityState==="visible"&&!batchBusy&&$("pop").hidden&&!drag){ lastLoad=Date.now(); reload(); } },1000);
   $("signout").addEventListener("click",()=>signOut());
+  const drawerUI=createIssueDrawer({isDirty:()=>{const issue=issueByKey(dz.key);if(!issue)return !!$("d-reply").value.trim();return !!$("d-reply").value.trim()||!!$("d-newdev").value.trim()||$("d-due").value!==(issue.due||"")||dz.devs.size!==issue.devs.length||issue.devs.some(d=>!dz.devs.has(d));}});
+  const workspace=createWorkspace({state,context:()=>({admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount()}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>!dz.key||closeDrawer()});
+  $("create-ticket").addEventListener("click",e=>internalPopover(e.currentTarget));
+  document.querySelector(".account-panel").appendChild($("notify").closest("label"));
+  window.addEventListener("hashchange",()=>{try{const key=decodeURIComponent(location.hash.slice(1));if(issueByKey(key))openDrawer(key);}catch(_){} });
   async function start(){
     const s=getSession(); if(!s){ signOut(true); return; }
     $("me").textContent=s.email; ME=s.email.split("@")[0].replace(/^./,c=>c.toUpperCase());
     $("today").textContent=fmtDate(todayStr())+" "+todayStr().slice(0,4);
     try{ applyConfig(await api("/config")); }
     catch(err){ showState(errorText(err),true); $("updated").textContent="not connected"; return; }
+    workspace.configure();
     await reload();
-    const h=decodeURIComponent(location.hash.slice(1)); if(/^[A-Z][A-Z0-9_]*-\d+$/.test(h)&&issueByKey(h)) openDrawer(h);
+    try{const h=decodeURIComponent(location.hash.slice(1));if(/^[A-Z][A-Z0-9_]*-\d+$/.test(h)&&issueByKey(h))openDrawer(h);}catch(_){}
   }
   start();
