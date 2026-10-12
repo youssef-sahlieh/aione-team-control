@@ -18,7 +18,7 @@
 //   after the database is added creates admin accounts for everyone in TEAM_EMAILS.
 import { internalRoutes } from "./internal.js";
 import { aiChat, aiBrief, aiConfigured } from "./ai.js";
-import { newTicketNotification } from "./notifications.js";
+import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
 import { ROLES, checkPassword, createLinkToken, deleteUser, getUser, hashPassword, listUsers, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, useLinkToken, validDev, validEmail } from "./users.js";
 
 const enc = new TextEncoder();
@@ -378,7 +378,7 @@ async function route(request, env, url) {
   if(path.startsWith("/ai/")){
     if(!["/ai/chat","/ai/brief"].includes(path))return fail("ai_read_only","Ticket actions are disabled in AION AI v1.",403);
     return (path==="/ai/brief"?aiBrief:aiChat)(request,env,{me,project:env.JIRA_PROJECT,readSearch:async body=>{
-      const result=await route(new Request(new URL("/jira/search",url),{method:"POST",headers:{Authorization:request.headers.get("Authorization"),"Content-Type":"application/json"},body:JSON.stringify(body)}),env,new URL("/jira/search",url));
+      const result=await route(new Request(new URL("/jira/search",url),{method:"POST",headers:{Authorization:request.headers.get("Authorization"),"Content-Type":"application/json","X-AION-Read-Only":"1"},body:JSON.stringify(body)}),env,new URL("/jira/search",url));
       if(!result.ok)throw new Error("Authorized Jira read failed");return result.json();
     }});
   }
@@ -415,6 +415,12 @@ async function route(request, env, url) {
       body: { jql, fields, maxResults: Math.min(Number(b.maxResults) || 100, 100), expand: "renderedFields", ...(typeof b.nextPageToken === "string" ? { nextPageToken: b.nextPageToken } : {}) }
     });
     if (!r.ok) return r.res;
+    if(isAdmin&&mailEnabled(env)&&env.STORE&&request.headers.get("X-AION-Read-Only")!=="1"){
+      try{await notifyTicketsFromSearch(env,r.data.issues||[],{
+        readIssue:key=>jira(env,"/rest/api/3/issue/"+key+"?fields=summary,labels,status,assignee,priority,duedate,project"),
+        sendMail:(from,body)=>sendMail(env,from,body)
+      });}catch{console.warn("Ticket notification check failed; Jira results remain available.");}
+    }
     // Only this project's tickets (and for users, only their own) ever leave the proxy, whatever the search asked for.
     return json({ ...r.data, issues: (r.data.issues || []).filter((i) => isOurKey(i.key) && (isAdmin || hasDevLabel(i.fields && i.fields.labels))) });
   }

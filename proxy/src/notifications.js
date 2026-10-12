@@ -6,6 +6,43 @@ const json = (body, status = 200) => Response.json(body, { status, headers: { "C
 const fail = (code, error, status) => json({ code, error }, status);
 const escape = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
+// Manager Jira reads already run when the dashboard loads and refreshes. Reuse that trigger and
+// the existing mail proxy, without requiring a Jira Automation rule or another service secret.
+export async function notifyTicketsFromSearch(env, issues, dependencies, now = Date.now()) {
+  const store=env.STORE;
+  if(!store?.setIfAbsent||!store?.deleteIfValue)return {skipped:"no_storage"};
+  const prefix="notify:search:"+env.JIRA_PROJECT;
+  // Start at activation, never backfill the current No developer backlog.
+  if(await store.setIfAbsent(prefix+":started",String(now),315360000))return {initialized:true,sent:0};
+  const started=Number(await store.get(prefix+":started"));
+  if(!Number.isFinite(started)||started<=0)throw new Error("Invalid notification start date");
+  const owner=crypto.randomUUID(),lock=prefix+":lock";
+  if(!await store.setIfAbsent(lock,owner,120))return {skipped:"busy"};
+  let sent=0,attempted=0;const checkStarted=Date.now();
+  try {
+    for(const issue of issues){
+      const created=Date.parse(issue.fields?.created);
+      if(!Number.isFinite(created)||created<started||created>now||typeof issue.key!=="string"||!issue.key.startsWith(env.JIRA_PROJECT+"-")||!/^\d+$/.test(issue.key.slice(env.JIRA_PROJECT.length+1))||!/^\d+$/.test(String(issue.id||"")))continue;
+      const seen=prefix+":seen:"+issue.id;
+      if(await store.get(seen)||await store.get("notify:no-developer:"+env.JIRA_PROJECT+":"+issue.id))continue;
+      if(!Array.isArray(issue.fields?.labels)||!issue.fields?.status?.statusCategory?.key)continue;
+      // A ticket first observed with a developer/Done is not a new unassigned ticket later.
+      if(issue.fields.labels.some(label=>/^ai1_/i.test(label))||issue.fields.status.statusCategory.key==="done"){
+        await store.set(seen,"excluded");continue;
+      }
+      // Bound the extra work on each Jira read; pending tickets are retried on later refreshes.
+      if(attempted>=3||Date.now()-checkStarted>20000)break;
+      attempted++;
+      const response=await newTicketNotification(new Request("https://notification.internal/event",{method:"POST",body:JSON.stringify({webhookEvent:"jira:issue_created",issue:{key:issue.key}})}),env,dependencies);
+      if(!response.ok){console.warn("Ticket notification delivery failed",response.status);continue;}
+      const result=await response.json();
+      if(result.sent){sent++;await store.set(seen,"sent");}
+      else if(["has_developer","ticket_closed","already_sent"].includes(result.skipped))await store.set(seen,result.skipped);
+    }
+    return {sent};
+  }finally{await store.deleteIfValue(lock,owner);}
+}
+
 export async function newTicketNotification(request, env, { readIssue, sendMail }) {
   const store = env.STORE;
   const to = [...new Set(String(env.NO_DEVELOPER_NOTIFY_TO || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean))];

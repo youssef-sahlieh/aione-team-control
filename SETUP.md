@@ -112,7 +112,7 @@ Gmail allows about 500 emails a day from one account. To stop sending, delete th
 
 ## If something doesn't work
 
-For automatic emails when a new Jira ticket has no developer, see [ticket notification activation](docs/ticket-notifications.md). This needs a deployed proxy and a Jira Automation rule; it works without the dashboard open.
+For automatic emails when a new Jira ticket has no developer, see [ticket notification activation](docs/ticket-notifications.md). Deploy the proxy and open a manager dashboard once to activate automatic checks using the existing mailer and database. An optional Jira Automation rule enables alerts while all dashboards are closed.
 
 - **"Can't reach the AION server":** check that https://aione-team-proxy.vercel.app/config answers with `{"code":"session",...}`. If not, open the latest deployment in Vercel for errors.
 - **"Jira didn't accept the proxy's API token":** the token expired or was revoked. Replace it (above).

@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import handler, { makeToken } from "../proxy/src/handler.js";
-import { memoryStore, redisStore } from "../proxy/src/users.js";
+import { memoryStore, redisStore, saveUser } from "../proxy/src/users.js";
+import { notifyTicketsFromSearch } from "../proxy/src/notifications.js";
 import { POST as vercelPost } from "../proxy/api/proxy.js";
 
 function fixture() {
@@ -203,4 +204,73 @@ test("Redis uses atomic SET NX and owner-checked Lua release", async t => {
   assert.equal(calls[2][0], "EVAL");
   assert.match(calls[2][1], /GET.*ARGV\[1\].*DEL/);
   assert.deepEqual(calls[2].slice(2), ["1", "lock", "owner"]);
+});
+
+test("automatic checks establish a baseline and email new tickets without a webhook secret",async t=>{
+  const f=fixture();t.after(f.restore);delete f.env.JIRA_NOTIFICATION_SECRET;
+  const now=Date.now(),old={...f.issue,fields:{...f.issue.fields,created:new Date(now-60000).toISOString()}};
+  const dependencies={readIssue:async()=>({ok:true,data:f.issue}),sendMail:async(from,mail)=>{f.mails.push(mail);return Response.json({ok:true});}};
+  assert.deepEqual(await notifyTicketsFromSearch(f.env,[old],dependencies,now),{initialized:true,sent:0});assert.equal(f.mails.length,0);
+  f.issue.fields.created=new Date(now+1000).toISOString();
+  assert.deepEqual(await notifyTicketsFromSearch(f.env,[old,f.issue],dependencies,now+2000),{sent:1});assert.deepEqual(f.mails[0].to,["youssef@aione.biz","ellen@aione.biz"]);
+  assert.deepEqual(await notifyTicketsFromSearch(f.env,[f.issue],dependencies,now+3000),{sent:0});assert.equal(f.mails.length,1);
+});
+
+test("observed assigned tickets, foreign tickets and old backlog cannot become new-ticket alerts",async t=>{
+  const f=fixture();t.after(f.restore);const now=Date.now();let sends=0;
+  const dependencies={readIssue:async()=>({ok:true,data:f.issue}),sendMail:async()=>{sends++;return Response.json({ok:true});}};
+  await notifyTicketsFromSearch(f.env,[],dependencies,now);
+  f.issue.fields.created=new Date(now+1000).toISOString();f.issue.fields.labels=["ai1_ellen"];
+  await notifyTicketsFromSearch(f.env,[f.issue],dependencies,now+2000);
+  f.issue.fields.labels=[];
+  await notifyTicketsFromSearch(f.env,[f.issue,{...f.issue,key:"OTHER-1",id:"99"},{...f.issue,id:"98",fields:{...f.issue.fields,created:new Date(now-1000).toISOString()}}],dependencies,now+3000);
+  assert.equal(sends,0);
+});
+
+test("automatic email failure preserves ticket eligibility for the next refresh",async t=>{
+  const f=fixture();t.after(f.restore);const now=Date.now();let failed=true,sends=0;
+  const dependencies={readIssue:async()=>({ok:true,data:f.issue}),sendMail:async()=>{if(failed)return Response.json({error:"mail"},{status:502});sends++;return Response.json({ok:true});}};
+  await notifyTicketsFromSearch(f.env,[],dependencies,now);f.issue.fields.created=new Date(now+1000).toISOString();
+  assert.deepEqual(await notifyTicketsFromSearch(f.env,[f.issue],dependencies,now+2000),{sent:0});failed=false;
+  assert.deepEqual(await notifyTicketsFromSearch(f.env,[f.issue],dependencies,now+3000),{sent:1});assert.equal(sends,1);
+});
+
+test("automatic checks bound each batch and later refreshes drain pending tickets",async t=>{
+  const f=fixture();t.after(f.restore);const now=Date.now();let sends=0;
+  const issues=Array.from({length:5},(_,index)=>({...f.issue,id:String(20000+index),key:"AION-"+(50+index),fields:{...f.issue.fields,created:new Date(now+1000).toISOString()}}));
+  const dependencies={readIssue:async key=>({ok:true,data:issues.find(issue=>issue.key===key)}),sendMail:async()=>{sends++;return Response.json({ok:true});}};
+  await notifyTicketsFromSearch(f.env,[],dependencies,now);
+  assert.deepEqual(await notifyTicketsFromSearch(f.env,issues,dependencies,now+2000),{sent:3});
+  assert.deepEqual(await notifyTicketsFromSearch(f.env,issues,dependencies,now+3000),{sent:2});assert.equal(sends,5);
+});
+
+test("authenticated manager Jira refreshes use the existing mailer; user reads do not activate alerts",async t=>{
+  const f=fixture();t.after(f.restore);delete f.env.JIRA_NOTIFICATION_SECRET;
+  await saveUser(f.env.STORE,{email:"ellen@aione.biz",name:"Ellen",role:"admin",v:1});
+  await saveUser(f.env.STORE,{email:"developer@aione.biz",name:"Developer",role:"user",dev:"ellen",v:1});
+  f.issue.fields.labels=["ai1_ellen"];f.issue.fields.created=new Date().toISOString();
+  globalThis.fetch=async url=>String(url).includes("/search/jql")?Response.json({issues:[f.issue],isLast:true}):Response.json(f.issue);
+  const search=async email=>{const {token}=await makeToken(f.env,email,Date.now(),1);return handler.fetch(new Request("https://proxy.test/jira/search",{method:"POST",headers:{Authorization:"Bearer "+token},body:JSON.stringify({jql:"project = AION",fields:["created","labels","status"]})}),f.env);};
+  assert.equal((await search("developer@aione.biz")).status,200);assert.equal(await f.env.STORE.get("notify:search:AION:started"),null);
+  assert.equal((await search("ellen@aione.biz")).status,200);await f.env.STORE.set("notify:search:AION:started",String(Date.now()-10000));
+  f.issue.fields.labels=[];
+  assert.equal((await search("ellen@aione.biz")).status,200);assert.equal(f.mails.length,1);
+  assert.equal((await search("ellen@aione.biz")).status,200);assert.equal(f.mails.length,1);
+});
+
+test("notification storage failures cannot break a manager's Jira ticket read",async t=>{
+  const f=fixture();t.after(f.restore);await saveUser(f.env.STORE,{email:"ellen@aione.biz",role:"admin",v:1});
+  f.env.STORE.setIfAbsent=async()=>{throw new Error("Storage unavailable");};
+  const {token}=await makeToken(f.env,"ellen@aione.biz",Date.now(),1);
+  globalThis.fetch=async()=>Response.json({issues:[f.issue],isLast:true});
+  const response=await handler.fetch(new Request("https://proxy.test/jira/search",{method:"POST",headers:{Authorization:"Bearer "+token},body:JSON.stringify({jql:"project = AION",fields:[]})}),f.env);
+  assert.equal(response.status,200);assert.equal((await response.json()).issues[0].key,"AION-42");assert.equal(f.mails.length,0);
+});
+
+test("read-only AI lookups do not activate or send automatic email alerts",async t=>{
+  const f=fixture();t.after(f.restore);await saveUser(f.env.STORE,{email:"ellen@aione.biz",role:"admin",v:1});
+  const {token}=await makeToken(f.env,"ellen@aione.biz",Date.now(),1);f.issue.fields.created=new Date().toISOString();
+  globalThis.fetch=async()=>Response.json({issues:[f.issue],isLast:true});
+  const response=await handler.fetch(new Request("https://proxy.test/jira/search",{method:"POST",headers:{Authorization:"Bearer "+token,"X-AION-Read-Only":"1"},body:JSON.stringify({jql:"project = AION",fields:["created"]})}),f.env);
+  assert.equal(response.status,200);assert.equal(await f.env.STORE.get("notify:search:AION:started"),null);assert.equal(f.mails.length,0);
 });

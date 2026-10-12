@@ -31,7 +31,7 @@ createServer(async (req, res) => {
         const me=await cfg.json();
         const request=new Request("http://localhost"+url.pathname.slice(4),{method:req.method,headers,body:["GET","HEAD"].includes(req.method)?undefined:Buffer.concat(chunks)});
         const response=!["/api/ai/chat","/api/ai/brief"].includes(url.pathname)?Response.json({code:"ai_read_only",error:"Ticket actions are disabled in AION AI v1."},{status:403}):await (url.pathname==="/api/ai/brief"?aiBrief:aiChat)(request,process.env,{me,project:me.project,readSearch:async body=>{
-          const r=await fetch(upstream+"/jira/search",{method:"POST",headers:{...headers,"Content-Type":"application/json"},body:JSON.stringify(body),redirect:"error",signal:AbortSignal.timeout(20000)});
+          const r=await fetch(upstream+"/jira/search",{method:"POST",headers:{...headers,"Content-Type":"application/json","X-AION-Read-Only":"1"},body:JSON.stringify(body),redirect:"error",signal:AbortSignal.timeout(20000)});
           if(!r.ok)throw new Error("Authorized Jira read failed");return r.json();
         }});
         res.writeHead(response.status,{"Content-Type":"application/json","Cache-Control":"no-store"}).end(await response.text());return;
