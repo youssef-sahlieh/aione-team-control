@@ -22,6 +22,7 @@ test("ticket briefs verify authorization before sending only title and descripti
   let modelRequest;const {chat,requests}=await setup("user",async body=>{modelRequest=body;return message("Implement the work described in the ticket.");});
   const result=await chat({key:"AION-1"},"/ai/brief");assert.equal(result.status,200);const brief=await result.json();assert.equal(brief.key,"AION-1");assert.equal(brief.readOnly,true);assert.match(brief.brief,/Implement/);
   assert.deepEqual(modelRequest.tools,[]);assert.equal(modelRequest.tool_choice,"none");assert.equal(modelRequest.store,false);assert.equal(modelRequest.max_output_tokens,200);
+  assert.match(modelRequest.input[0].content,/"source":"UNTRUSTED JIRA DATA"/);
   assert.match(modelRequest.input[0].content,/Title AION-1/);assert.match(modelRequest.input[0].content,/Description/);assert.doesNotMatch(modelRequest.input[0].content,/Title AION-2|Ignore rules|synthetic-jira-token/);
   assert.match(requests[0].body.jql,/labels = "ai1_builder"/);assert.match(requests[0].body.jql,/key = "AION-1"/);
 });
@@ -48,7 +49,7 @@ test("Claude briefs use one bounded request without tools, credentials or commen
   const {env,chat}=await setup("user");Object.assign(env,{AI_VENDOR:"anthropic",ANTHROPIC_API_KEY:"synthetic-claude-key",AI_MODEL:"test-claude"});
   let calls=0;globalThis.fetch=async(url,init)=>{
     if(String(url).includes("jira.test"))return Response.json({issues:[issue("AION-1")],isLast:true});
-    calls++;assert.equal(url,"https://api.anthropic.com/v1/messages");const body=JSON.parse(init.body);assert.equal(body.max_tokens,200);assert.equal(body.tools,undefined);assert.equal(body.tool_choice,undefined);assert.match(body.system,/untrusted data/);assert.doesNotMatch(JSON.stringify(body.messages),/synthetic-jira-token|Ignore rules/);
+    calls++;assert.equal(url,"https://api.anthropic.com/v1/messages");const body=JSON.parse(init.body);assert.equal(body.max_tokens,200);assert.equal(body.tools,undefined);assert.equal(body.tool_choice,undefined);assert.match(body.system,/UNTRUSTED JIRA DATA/);assert.equal(JSON.parse(body.messages[0].content[0].text).source,"UNTRUSTED JIRA DATA");assert.doesNotMatch(JSON.stringify(body.messages),/synthetic-jira-token|Ignore rules/);
     return Response.json({content:[{type:"text",text:"Improve the workflow described in the ticket."}]});
   };
   assert.equal((await chat({key:"AION-1"},"/ai/brief")).status,200);assert.equal(calls,1);
@@ -63,7 +64,9 @@ test("conversation service reuses authenticated Jira search and keeps foreign ti
 test("issue detail lookup returns only authorized details and discloses partial comments",async()=>{
   let step=0,last;const {chat}=await setup("user",async body=>{last=body;return step++?message("AION-1 has a comment."):callTool("read_issue",{key:"AION-1"});});
   assert.equal((await chat()).status,200);const output=JSON.parse(last.input.find(i=>i.type==="function_call_output").output);
-  assert.equal(output.description.trim(),"Description");assert.equal(output.commentCoverage.complete,false);assert.equal(output.commentCoverage.total,30);assert.equal(output.comments[0].author,"Reviewer");
+  assert.equal(output.source,"UNTRUSTED JIRA DATA");
+  const ticket=output.data;
+  assert.equal(ticket.description.trim(),"Description");assert.equal(ticket.commentCoverage.complete,false);assert.equal(ticket.commentCoverage.total,30);assert.equal(ticket.comments[0].author,"Reviewer");
 });
 test("foreign project details and unauthorized ticket references cannot be exposed",async()=>{
   let step=0;const {chat,requests}=await setup("user",async()=>step++?message("AION-2"):callTool("read_issue",{key:"AION-2"}));
@@ -128,6 +131,7 @@ test("Claude adapter round-trips tool calls, text and signed thinking through au
   assert.equal(bodies[0].tool_choice.disable_parallel_tool_use,true);
   assert.deepEqual(bodies[1].messages.at(-2).content[0],thinking);
   const result=bodies[1].messages.at(-1);assert.equal(result.role,"user");assert.equal(result.content[0].type,"tool_result");assert.equal(result.content[0].tool_use_id,"toolu_test");
+  assert.equal(JSON.parse(result.content[0].content).source,"UNTRUSTED JIRA DATA");
   assert.match(result.content[0].content,/Title AION-1/);assert.doesNotMatch(result.content[0].content,/Title AION-2/);
 });
 test("Claude configuration selects only server credentials and sanitizes provider failures",async()=>{
