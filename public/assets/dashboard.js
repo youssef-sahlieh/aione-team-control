@@ -1,7 +1,7 @@
 // AION Team Control dashboard. Jira data comes through the AION proxy (worker/), which checks the
 // sign-in and holds the Jira token. Team details (people, developers, emails) come from the proxy too,
 // so they aren't in this public code.
-import { api, apiFile, getSession, signOut } from "./session.js";
+import { api, apiFile, loadSession, signOut } from "./session.js";
 import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normalizeInternalIssue } from "./models/issue.js";
 import { createFilters, matchesFilters } from "./models/filters.js";
 import { readViews, restoreView, savedViewKey, serializeView } from "./models/saved-views.js";
@@ -995,7 +995,7 @@ import { createTicketHistory } from "./components/ticket-history.js";
   document.querySelector(".account-panel").appendChild($("notify").closest("label"));
   window.addEventListener("hashchange",()=>{try{const key=decodeURIComponent(location.hash.slice(1));if(issueByKey(key))openDrawer(key);}catch(_){} });
   async function start(){
-    const s=getSession(); if(!s){ signOut(true); return; }
+    const s=await loadSession(); if(!s){ signOut(true); return; }
     $("me").textContent=s.email; ME=s.email.split("@")[0].replace(/^./,c=>c.toUpperCase());
     $("today").textContent=fmtDate(todayStr())+" "+todayStr().slice(0,4);
     try{ applyConfig(await api("/config")); }

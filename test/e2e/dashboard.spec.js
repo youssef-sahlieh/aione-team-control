@@ -5,6 +5,7 @@ async function mockDashboard(page, { role = "admin", failure = false, expired = 
   await page.clock.setFixedTime(new Date("2026-10-11T09:00:00Z"));
   const calls = [], unexpected = [], errors = [];
   let historyFailures=historyFailure?1:0;
+  let signedIn=!expired;
   page.on("pageerror", error => errors.push(error.message));
   await page.addInitScript(({ role, expired }) => {
     if(sessionStorage.getItem("aion-test-initialized"))return;
@@ -19,15 +20,17 @@ async function mockDashboard(page, { role = "admin", failure = false, expired = 
   // An unmatched request can never fall through to production Jira or mail.
   await page.route("**/*", async route => {
     const req = route.request(), url = new URL(req.url());
-    if (url.origin === "http://127.0.0.1:4173") return route.continue();
-    if (url.hostname !== "aione-team-proxy.vercel.app") return route.abort();
-    const path = url.pathname, method = req.method(), body = req.postDataJSON();
+    if (url.origin === "http://127.0.0.1:4173"&&!url.pathname.startsWith("/api/")) return route.continue();
+    if (url.origin !== "http://127.0.0.1:4173"||!url.pathname.startsWith("/api/")) return route.abort();
+    const path = url.pathname.slice(4), method = req.method(), body = req.postDataJSON();
+    if(path==="/session")return signedIn?route.fulfill({json:{email:"test@example.invalid",name:"Test",role,csrf:"synthetic-csrf",expiresAt:Date.now()+3600000}}):route.fulfill({status:401,json:{code:"session"}});
     calls.push({ path, method, body });
     const json = value => route.fulfill({ json: value });
     if (path === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people:assigneeTeam?{...people,...Object.fromEntries(["karim","youssef","rami","razan"].map(key=>[key,{id:`test-${key}`,name:key[0].toUpperCase()+key.slice(1),ini:key[0].toUpperCase()}]))}:people, devs: ["builder", "reviewer"], role, dev: "builder", email: "test@example.invalid", accounts: true, mail: false, ai:{enabled:!aiDisabled,readOnly:true} });
     if(path==="/ai/chat")return aiFailure?route.fulfill({status:503,json:{code:"ai_unavailable",error:"AI service unavailable. Try again."}}):json({answer:"Review AION-101 first. AION-9999 is unverified. <img src=x onerror=alert(1)>",references:[{key:"AION-101",title:"Synthetic Jira task"}],readOnly:true});
     if(path==="/ai/brief")return briefFailure?route.fulfill({status:503,json:{code:"ai_unavailable",error:"Brief service unavailable. Try again."}}):json({key:body.key,brief:"Fix the reported issue so the workflow works correctly. <img src=x onerror=alert(1)>",updated:jiraIssue.fields.updated,readOnly:true});
-    if (path === "/login") return json({token:"synthetic-token",email:"test@example.invalid",expiresAt:Date.now()+3600000,role});
+    if (path === "/login") {signedIn=true;return json({csrf:"synthetic-csrf",email:"test@example.invalid",expiresAt:Date.now()+3600000,role});}
+    if(path==="/logout"){signedIn=false;return json({ok:true});}
     if (path === "/internal" && method === "GET") return json({ tickets: [internalTicket] });
     if (path === "/jira/search") {
       if (failure) return route.fulfill({ status: 503, json: { code: "jira", error: "Synthetic outage" } });
@@ -53,6 +56,17 @@ async function selectAssignees(page,names){
   for(const check of await picker.getByRole("checkbox").all())await check.setChecked(names.includes(await check.getAttribute("aria-label")));
   await picker.getByRole("button",{name:"Apply",exact:true}).click();await expect(picker).not.toBeVisible();
 }
+test("real cookie sessions stay HttpOnly, reject cross-origin mutations and revoke on logout",async({page,context})=>{
+  await page.route("**/*",route=>new URL(route.request().url()).origin==="http://127.0.0.1:4173"?route.continue():route.abort());
+  await page.goto("/index.html");await page.locator("#email").fill("security@example.invalid");await page.locator("#password").fill("synthetic-browser-password");await page.locator("#signin-btn").click();await expect(page.locator("#page-heading")).toHaveText("All tickets");
+  const cookie=(await context.cookies()).find(c=>c.name==="aion-session");expect(cookie.httpOnly).toBe(true);expect(cookie.sameSite).toBe("Strict");
+  expect(await page.evaluate(()=>document.cookie.includes("aion-session"))).toBe(false);expect(await page.evaluate(()=>localStorage.getItem("aione-session"))).toBeNull();
+  const session=await context.request.get("/api/session");const info=await session.json();expect(info.token).toBeUndefined();expect(info.csrf).toBeTruthy();
+  const rejected=await context.request.post("/api/logout",{headers:{Origin:"https://attacker.invalid","X-AION-CSRF":info.csrf}});expect(rejected.status()).toBe(403);
+  const headers=(await context.request.get("/dashboard.html")).headers();expect(headers["x-frame-options"]).toBe("DENY");expect(headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+  await page.locator(".account-menu summary").click();await page.locator("#signout").click();await expect(page).toHaveURL(/index\.html$/);
+  const replay=await context.request.get("/api/session",{headers:{Cookie:"aion-session="+cookie.value}});expect(replay.status()).toBe(401);
+});
 for(const width of [320,1440])test(`assignee picker searches, stages selection and restores focus at ${width}px`,async({page})=>{
   await page.setViewportSize({width,height:900});const mock=await mockDashboard(page,{assigneeTeam:true});await page.goto("/dashboard.html");await expect(page.locator("#view .item")).toHaveCount(3);
   const trigger=page.locator("#assignee-filter-trigger"),picker=page.locator("#assignee-filter-dialog");await trigger.click();await expect(picker.getByRole("searchbox",{name:"Search assignees"})).toBeFocused();await expect(picker.getByRole("checkbox",{name:"Karim",exact:true})).toBeChecked();

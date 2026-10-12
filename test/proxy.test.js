@@ -116,12 +116,12 @@ const tests = [
     assert.equal(bad.status, 502); assert.match((await bad.json()).error, /Mail\.Send/);
   }],
 
-  ["Vercel entry restores the path and reads secrets from the environment", async () => {
+  ["Vercel entry enables cookie sessions and requires same-origin login with a database", async () => {
     Object.assign(process.env, { TEAM_PASSWORD: "vercel-pass", SESSION_SECRET: "s", TEAM_CONFIG: "{}", JIRA_SITE: "https://example.atlassian.net" });
-    const r = await vercelPost(new Request("https://p.vercel.app/api/proxy?__path=login", { method: "POST", headers: { Origin: ORIGIN, "x-forwarded-for": "1.2.3.4" }, body: JSON.stringify({ email: "ellen@aione.biz", password: "vercel-pass" }) }));
-    assert.equal(r.status, 200); assert.equal(r.headers.get("Access-Control-Allow-Origin"), ORIGIN);
+    const r = await vercelPost(new Request("https://p.vercel.app/api/proxy?__path=login", { method: "POST", headers: { Origin: "https://p.vercel.app", "x-forwarded-for": "1.2.3.4" }, body: JSON.stringify({ email: "ellen@aione.biz", password: "vercel-pass" }) }));
+    assert.equal(r.status, 503);assert.equal((await r.json()).code,"no_store");
     const bad = await vercelPost(new Request("https://p.vercel.app/api/proxy?__path=login", { method: "POST", body: JSON.stringify({ email: "ellen@aione.biz", password: "right-password" }) }));
-    assert.equal(bad.status, 401, "uses Vercel's password, not another one");
+    assert.equal(bad.status, 403, "login requires an explicit same-origin request");
   }],
   ["email through the host's mailer (Gmail): sender name, reply-to and recipients", async () => {
     const sent = [];
@@ -142,8 +142,10 @@ const tests = [
     assert.equal(r.status, 502); assert.match((await r.json()).error, /GMAIL_APP_PASSWORD/);
   }],
   ["Vercel entry turns Gmail on only when both Gmail settings are set", async () => {
-    const t = await (await vercelPost(new Request("https://p.vercel.app/api/proxy?__path=login", { method: "POST", headers: { "x-forwarded-for": "5.6.7.8" }, body: JSON.stringify({ email: "youssef@aione.biz", password: "vercel-pass" }) }))).json();
-    const mailFlag = async () => (await (await vercelGet(new Request("https://p.vercel.app/api/proxy?__path=config", { headers: { Authorization: "Bearer " + t.token } }))).json()).mail;
+    process.env.KV_REST_API_URL="https://redis.test";process.env.KV_REST_API_TOKEN="synthetic-token";
+    const {token}=await makeToken({SESSION_SECRET:"s"},"youssef@aione.biz",Date.now(),1,"synthetic-sid");
+    jiraReply=(url,init)=>{const [command,key]=JSON.parse(init.body);assert.equal(command,"GET");return Response.json({result:key.startsWith("sess:")?JSON.stringify({csrf:"synthetic-csrf"}):JSON.stringify({email:"youssef@aione.biz",name:"Youssef",role:"admin",v:1})});};
+    const mailFlag = async () => (await (await vercelGet(new Request("https://p.vercel.app/api/proxy?__path=config", { headers: { Cookie: "__Host-aion-session=" + token } }))).json()).mail;
     delete process.env.GMAIL_USER; delete process.env.GMAIL_APP_PASSWORD;
     assert.equal(await mailFlag(), false);
     process.env.GMAIL_USER = "aione.bot@gmail.com";
@@ -151,6 +153,7 @@ const tests = [
     process.env.GMAIL_APP_PASSWORD = "abcd efgh ijkl mnop";
     assert.equal(await mailFlag(), true);
     delete process.env.GMAIL_USER; delete process.env.GMAIL_APP_PASSWORD;
+    delete process.env.KV_REST_API_URL;delete process.env.KV_REST_API_TOKEN;
   }],
   ["built-in sign-in limit: 11th try in a minute from one address is refused", async () => {
     const { LOGIN_LIMIT, ...noLimit } = env;

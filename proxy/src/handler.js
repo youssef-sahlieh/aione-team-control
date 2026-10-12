@@ -17,6 +17,7 @@
 //   emails in TEAM_EMAILS sign in with TEAM_PASSWORD as admins. The first sign-in with TEAM_PASSWORD
 //   after the database is added creates admin accounts for everyone in TEAM_EMAILS.
 import { internalRoutes } from "./internal.js";
+import { cookieSessionRequest } from "./sessions.js";
 import { aiChat, aiBrief, aiConfigured } from "./ai.js";
 import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
 import { ROLES, checkPassword, createLinkToken, deleteUser, getUser, hashPassword, listUsers, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, useLinkToken, validDev, validEmail } from "./users.js";
@@ -83,8 +84,8 @@ const memoryLimit = {
 const teamEmails = (env) => String(env.TEAM_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
 
 // Sessions carry the account's version (v), so a password reset or removal ends them right away.
-export async function makeToken(env, email, now = Date.now(), v = 0) {
-  const body = b64url(enc.encode(JSON.stringify({ email, v, exp: now + SESSION_MS })));
+export async function makeToken(env, email, now = Date.now(), v = 0, sid = undefined) {
+  const body = b64url(enc.encode(JSON.stringify({ email, v, exp: now + SESSION_MS, ...(sid?{sid}:{}) })));
   return { token: body + "." + b64url(await hmac(env.SESSION_SECRET, body)), expiresAt: now + SESSION_MS };
 }
 
@@ -102,6 +103,8 @@ export async function readToken(env, header, now = Date.now()) {
   }
   const { email, exp, v } = claims;
   if (typeof exp !== "number" || exp < now || typeof email !== "string") return null;
+  if(claims.sid&&(!env.STORE||!await env.STORE.get("sess:"+claims.sid)))return null;
+  if(env.COOKIE_SESSIONS&&!claims.sid)return null;
   if (env.STORE) {
     const u = await getUser(env.STORE, email);
     if (!u || u.v !== v) return null;
@@ -170,8 +173,8 @@ async function sendMail(env, from, b) {
       await env.MAILER({ fromName: firstName(from) + " via AION Team Control", replyTo: from, to, subject, html });
       return json({ ok: true, to });
     } catch (err) {
-      console.log("mail error:", err && err.message);
-      return fail("mail", /auth|login|credential|535|534/i.test(String(err && err.message)) ? "The email account didn't accept its app password. Check GMAIL_USER and GMAIL_APP_PASSWORD." : "The email didn't send: " + ((err && err.message) || "unknown error"), 502);
+      console.warn("mail_failed");
+      return fail("mail", /auth|login|credential|535|534/i.test(String(err && err.message)) ? "The email account didn't accept its app password. Check GMAIL_USER and GMAIL_APP_PASSWORD." : "The email could not be sent. Please try again or contact an administrator.", 502);
     }
   }
   const token = await getGraphToken(env);
@@ -183,8 +186,7 @@ async function sendMail(env, from, b) {
   });
   if (res.ok) return json({ ok: true, to });
   const data = await res.json().catch(() => ({}));
-  const detail = data && data.error && data.error.message;
-  return fail("mail", res.status === 403 ? "Microsoft refused to send from " + from + ". Check the app's Mail.Send permission and admin consent." : detail || "Outlook answered " + res.status + ".", 502);
+  return fail("mail", res.status === 403 ? "Microsoft refused to send from " + from + ". Check the app's Mail.Send permission and admin consent." : "The email provider could not send the message. Please try again.", 502);
 }
 
 // Emails from the app itself (password links). Returns true when sent.
@@ -194,7 +196,7 @@ async function sendSystemMail(env, to, subject, html) {
     await env.MAILER({ fromName: "AION Team Control", replyTo: undefined, to: [to], subject, html });
     return true;
   } catch (err) {
-    console.log("system mail error:", err && err.message);
+    console.warn("system_mail_failed");
     return false;
   }
 }
@@ -329,6 +331,11 @@ async function route(request, env, url) {
       let u = await getUser(env.STORE, email);
       if (!u && (await bootstrapAdmins(env, email, password))) u = await getUser(env.STORE, email);
       if (!u || !(await checkPassword(password, u.pw))) return fail("login", "That email and password don't match.", 401);
+      if(u.pw.iterations<600000){
+        const upgraded={...u,pw:await hashPassword(password)};
+        if(await env.STORE.compareAndSet("u:"+u.email,JSON.stringify(u),JSON.stringify(upgraded)))u=upgraded;
+        else{u=await getUser(env.STORE,email);if(!u||!await checkPassword(password,u.pw))return fail("login","That email and password don't match.",401);}
+      }
       return json({ email: u.email, name: u.name, role: u.role, ...(await makeToken(env, u.email, Date.now(), u.v)) });
     }
     const { success } = await (env.LOGIN_LIMIT || memoryLimit).limit({ key: ip });
@@ -481,12 +488,13 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     let res;
     try {
-      res = await route(request, env, new URL(request.url));
+      res = env.COOKIE_SESSIONS?await cookieSessionRequest(request,env,req=>route(req,env,new URL(req.url)),{readToken,makeToken}):await route(request, env, new URL(request.url));
     } catch (err) {
-      console.log("proxy error:", err && err.message);
+      console.warn("proxy_failed");
       res = fail("server", "The proxy hit an error.", 500);
     }
     for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
+    res.headers.set("X-Content-Type-Options","nosniff");res.headers.set("X-Frame-Options","DENY");
     return res;
   }
 };
