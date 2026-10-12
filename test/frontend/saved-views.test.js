@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 import { createFilters } from "../../public/assets/models/filters.js";
 import { serializeView, restoreView, readViews, savedViewKey, validateView } from "../../public/assets/models/saved-views.js";
 const state={f:createFilters(),view:"dev",focus:"overdue",group:"status",q:"test"};
+test("ticket source survives saved views while older views default to all sources",()=>{
+  const f=createFilters();f.source="internal";const view=serializeView({...state,f},"Internal only");assert.equal(restoreView(view,true,{lead:{}}).f.source,"internal");
+  delete view.filters.source;assert.equal(restoreView(view,true,{lead:{}}).f.source,"all");view.filters.source="invalid";assert.equal(validateView(view),false);
+});
 test("due-date history saved views downgrade for developers and remain intact for managers",()=>{
   const view=serializeView({...state,focus:"duechg",view:"history"},"Date changes");
   const user=restoreView(view,false,{lead:{}});

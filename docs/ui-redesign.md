@@ -70,7 +70,7 @@ continue to see only authorized tickets. Direct links still
 work and open the relevant navigation group. The manager's quick filters show
 Assignee, Developer, Reporter, Status, Priority and Due date; multi-select developer chips and saved-view controls are
 available in More filters. Users have a minimal Assignee, Status and Due date bar,
-with search in the top bar. Reporter, Priority, Developer, advanced filters and saved-view controls
+with a Ticket source selector (All tickets / Internal tickets only / Jira tickets only) and search in the top bar. Reporter, Priority, Developer, advanced filters and saved-view controls
 are manager-only. Users' default assignees are summarized as Default team instead of separate chips;
 custom selections remain removable and Razan/Others stay available through the assignee picker.
 Hidden advanced criteria are cleared for users so they cannot silently narrow the list.

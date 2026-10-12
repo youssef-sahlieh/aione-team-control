@@ -58,7 +58,9 @@ Until then, Youssef and Ellen sign in with the team password and the Users page 
 
 ## Internal tickets
 
-Tickets that live only in AION Team Control, never in Jira. They're numbered **INT-1, INT-2, …**, carry a teal **Internal** tag, and show up in every tile, filter, board and view next to the Jira tickets (filter on them with **Work type → Internal**).
+Tickets that live only in AION Team Control, never in Jira. They're numbered **INT-1, INT-2, …**, carry a teal **Internal** tag, and show up in every tile, filter, board and view next to the Jira tickets.
+
+To show only internal tickets, choose **Ticket source → Internal tickets only** in the main filter bar. This is available to managers and users, combines with the other visible filters, and preserves each user's authorized ticket scope. Choose **All tickets** or **Reset filters** to include Jira tickets again. Managers can also save an internal-only view.
 
 - **Open one:** **+ Internal ticket** above the list. Administrators choose one or more developers; Users always open them for themselves.
 - **Assignee:** every internal ticket is assigned to Karim, Youssef or Rami, like the Jira tickets. Youssef is pre-selected; switch to Karim or Rami before creating it if needed. Administrators can change it later (click the assignee in the list, or **Change assignee** in the ticket panel).
