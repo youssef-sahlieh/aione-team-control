@@ -101,6 +101,9 @@ const tests = [
     assert.equal((await call("/users", { method: "POST", token: u.token, body: { email: "me2@aione.biz", name: "x", role: "admin" } })).status, 403);
     assert.equal((await call("/mail", { method: "POST", token: u.token, body: { to: ["ellen@aione.biz"], subject: "x", html: "x" } })).status, 403);
     assert.equal((await call("/jira/users?q=ab", { token: u.token })).status, 403);
+    jiraCalls.length=0;
+    assert.equal((await call("/jira/issue/AION-1/history",{token:u.token})).status,403,"full ticket history remains manager-only, even for the user's own ticket");
+    assert.equal(jiraCalls.length,0,"history denial happens before a Jira call");
   }],
   ["admin still sees every ticket", async () => {
     const a = await login("ellen@aione.biz", "Team-password-1", "6.6.6.6");

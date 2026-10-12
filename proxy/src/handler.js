@@ -431,9 +431,21 @@ async function route(request, env, url) {
     return pass(await jira(env, "/rest/api/3/user/search?maxResults=8&query=" + encodeURIComponent(q)));
   }
 
-  const m = /^\/jira\/issue\/([A-Z][A-Z0-9_]*-\d+)(\/changelog|\/transitions|\/comment)?$/.exec(path);
+  const m = /^\/jira\/issue\/([A-Z][A-Z0-9_]*-\d+)(\/changelog|\/history|\/transitions|\/comment)?$/.exec(path);
   if (m && isOurKey(m[1])) {
     const key = m[1], sub = m[2] || "";
+    if(sub==="/history"){
+      if(!isAdmin)return fail("forbidden","Only managers can view full ticket history.",403);
+      if(method!=="GET")return fail("method","Ticket history is read-only.",405);
+      const start=url.searchParams.get("startAt")||"0";
+      if(!/^\d{1,9}$/.test(start))return fail("bad_request","Invalid history page.",400);
+      const result=await jira(env,"/rest/api/3/issue/"+key+"/changelog?startAt="+Number(start)+"&maxResults=100");
+      if(!result.ok)return result.res;
+      // Never forward Jira's nextPage URL; callers paginate through this fixed authorized route.
+      const data=result.data;
+      if(!Array.isArray(data.values))return fail("jira","Jira returned invalid ticket history.",502);
+      return json({values:data.values,startAt:data.startAt??Number(start),total:data.total,isLast:data.isLast});
+    }
     if (!isAdmin) {
       const t = await jira(env, "/rest/api/3/issue/" + key + "?fields=labels");
       if (!t.ok) return t.res;

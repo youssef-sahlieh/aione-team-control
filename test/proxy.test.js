@@ -70,6 +70,15 @@ const tests = [
   ["status move", async () => { jiraCalls = []; jiraReply = () => new Response(null, { status: 204 }); await call("/jira/issue/AION-7/transitions", { method: "POST", token: await login(), body: { id: 31 } }); assert.deepEqual(jiraCalls[0].body, { transition: { id: "31" } }); }],
   ["comment uses plain text", async () => { jiraCalls = []; jiraReply = () => Response.json({ id: "1" }, { status: 201 }); await call("/jira/issue/AION-7/comment", { method: "POST", token: await login(), body: { text: " hello " } }); assert.equal(jiraCalls[0].url, "https://example.atlassian.net/rest/api/2/issue/AION-7/comment"); assert.deepEqual(jiraCalls[0].body, { body: "hello" }); }],
   ["changelog", async () => { jiraCalls = []; jiraReply = () => Response.json({ changelog: { histories: [] } }); await call("/jira/issue/AION-7/changelog", { token: await login() }); assert.equal(jiraCalls[0].url, "https://example.atlassian.net/rest/api/3/issue/AION-7?fields=duedate&expand=changelog"); }],
+  ["full history uses bounded changelog pages and does not forward Jira pagination URLs", async () => {
+    jiraCalls=[];jiraReply=()=>Response.json({values:[{id:"1",items:[{field:"status",fromString:"Open",toString:"In QA"}]}],startAt:100,total:101,isLast:true,nextPage:"https://private.example"});
+    const result=await call("/jira/issue/AION-7/history?startAt=100&maxResults=9999",{token:await login()});assert.equal(result.status,200);assert.equal(jiraCalls[0].url,"https://example.atlassian.net/rest/api/3/issue/AION-7/changelog?startAt=100&maxResults=100");const data=await result.json();assert.equal(data.values[0].items[0].field,"status");assert.equal(data.nextPage,undefined);
+  }],
+  ["history rejects invalid pagination, writes, missing sessions and foreign projects", async()=>{
+    const token=await login();jiraCalls=[];
+    for(const start of ["-1","1.5","abc","1000000000"])assert.equal((await call("/jira/issue/AION-7/history?startAt="+start,{token})).status,400);
+    assert.equal((await call("/jira/issue/AION-7/history",{token,method:"POST",body:{}})).status,405);assert.equal((await call("/jira/issue/AION-7/history")).status,401);assert.equal((await call("/jira/issue/OTHER-1/history",{token})).status,404);assert.equal(jiraCalls.length,0);
+  }],
   ["user search", async () => { jiraCalls = []; jiraReply = () => Response.json([]); await call("/jira/users?q=ka%20ri", { token: await login() }); assert.equal(jiraCalls[0].url, "https://example.atlassian.net/rest/api/3/user/search?maxResults=8&query=ka%20ri"); }],
   ["Jira errors come back readable, without signing the user out", async () => {
     jiraReply = () => Response.json({ errorMessages: ["You can't do that."] }, { status: 403 });

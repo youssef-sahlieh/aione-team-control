@@ -1,9 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { jiraIssue, internalTicket, people } from "../fixtures/issues.js";
 
-async function mockDashboard(page, { role = "admin", failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false } = {}) {
+async function mockDashboard(page, { role = "admin", failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false } = {}) {
   await page.clock.setFixedTime(new Date("2026-10-11T09:00:00Z"));
   const calls = [], unexpected = [], errors = [];
+  let historyFailures=historyFailure?1:0;
   page.on("pageerror", error => errors.push(error.message));
   await page.addInitScript(({ role, expired }) => {
     if(sessionStorage.getItem("aion-test-initialized"))return;
@@ -34,6 +35,11 @@ async function mockDashboard(page, { role = "admin", failure = false, expired = 
       return json({ issues: body.jql.includes("statusCategory = Done") ? [] : issues, isLast: true });
     }
     if (path.endsWith("/changelog")) return json({ changelog: { histories: [] } });
+    if(path.endsWith("/history")){
+      const start=Number(url.searchParams.get("startAt")||0);
+      if(start===1&&historyFailures-->0)return route.fulfill({status:503,json:{code:"jira",error:"History unavailable"}});
+      return json({startAt:start,total:2,isLast:start===1,values:[start===0?{id:"h1",created:"2026-10-09T10:00:00Z",author:{displayName:"Test Manager"},items:[{field:"status",fromString:"Open",toString:"In Development"}]}:{id:"h2",created:"2026-10-10T10:00:00Z",author:{displayName:"Test Lead"},items:[{field:"assignee",fromString:"Unassigned",toString:"Test Lead"},{field:"description",fromString:null,toString:"<img src=x onerror=alert(1)>"}]}]});
+    }
     if (path.endsWith("/transitions") && method === "GET") return json({ transitions: [{ id: "7", name: "Start", to: { name: "In Development", statusCategory: { key: "indeterminate" } } }, { id: "8", name: "Unavailable", isAvailable: false, to: { name: "Closed" } }] });
     if(mutationFailure&&method==="PUT")return route.fulfill({status:503,json:{code:"jira",error:"Synthetic save failure"}});
     unexpected.push({ path, method });
@@ -183,6 +189,18 @@ test("pagination preserves selections across pages",async({page})=>{
   await page.getByRole("button",{name:"Previous page",exact:true}).click();await expect(page.getByRole("checkbox",{name:label,exact:true})).toBeChecked();expect(mock.errors).toEqual([]);
 });
 
+for(const width of [320,1440])test(`manager History beside Comments loads every Jira page safely at ${width}px`,async({page})=>{
+  await page.setViewportSize({width,height:900});const mock=await mockDashboard(page);await page.goto("/dashboard.html#AION-101");
+  await expect(page.getByRole("tab",{name:"History",exact:true})).toBeVisible();expect(mock.calls.some(c=>c.path.endsWith("/history"))).toBe(false);
+  await page.getByRole("tab",{name:"History",exact:true}).click();await expect(page.locator("#d-full-history")).toContainText("2 change events · Complete Jira field history");await expect(page.locator(".ticket-history-entry")).toHaveCount(2);
+  await expect(page.locator(".ticket-history-entry").first()).toContainText("Test Lead");await expect(page.locator("#d-full-history")).toContainText("In Development");await expect(page.locator("#d-full-history img")).toHaveCount(0);
+  await page.getByRole("tab",{name:"Comments",exact:true}).click();await page.locator("#d-reply").fill("Keep this draft");await page.getByRole("tab",{name:"History",exact:true}).click();await page.getByRole("tab",{name:"Comments",exact:true}).click();await expect(page.locator("#d-reply")).toHaveValue("Keep this draft");await page.locator("#d-reply").fill("");
+  expect(mock.calls.filter(c=>c.path.endsWith("/history"))).toHaveLength(2);expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.getByRole("tab",{name:"History",exact:true}).click();await page.screenshot({path:`test-results/full-history-${width}.png`,fullPage:true});expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test("partial history failure is disclosed and retry loads all pages",async({page})=>{
+  const mock=await mockDashboard(page,{historyFailure:true});await page.goto("/dashboard.html#AION-101");await page.getByRole("tab",{name:"History",exact:true}).click();await expect(page.locator("#d-full-history")).toContainText("History incomplete");await expect(page.locator(".ticket-history-entry")).toHaveCount(1);
+  await page.getByRole("button",{name:"Retry history",exact:true}).click();await expect(page.locator("#d-full-history")).toContainText("Complete Jira field history");await expect(page.locator(".ticket-history-entry")).toHaveCount(2);expect(mock.errors).toEqual([]);
+});
 test("drawer tabs retain draft and closing respects discard confirmation and focus",async({page})=>{
   const mock=await mockDashboard(page);await page.goto("/dashboard.html");const opener=page.locator("#view .ttl").filter({hasText:"Synthetic Jira task"});await opener.click();
   await page.getByRole("tab",{name:"Comments",exact:true}).click();await page.locator("#d-reply").fill("Keep my draft");await page.getByRole("tab",{name:"Overview",exact:true}).click();await page.getByRole("tab",{name:"Comments",exact:true}).click();await expect(page.locator("#d-reply")).toHaveValue("Keep my draft");
@@ -316,6 +334,7 @@ for(const role of ["admin","user"])test(`${role} due-date history visibility fol
   }else{
     await expect(page.locator("#page-heading")).toHaveText("All tickets");
     await expect(page.getByRole("tab",{name:"Activity",exact:true})).toHaveCount(0);
+    await expect(page.getByRole("tab",{name:"History",exact:true})).toHaveCount(0);expect(mock.calls.some(c=>c.path.endsWith("/history"))).toBe(false);
     await expect(page.locator("#d-hist")).toBeHidden();
     await expect(page.locator("#d-due")).toBeVisible();
     await page.getByRole("tab",{name:"Overview",exact:true}).focus();

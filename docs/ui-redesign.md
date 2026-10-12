@@ -84,6 +84,20 @@ available directly, and list rows use their original desktop/mobile arrangement.
 The manager's compact card and row styling applies only to other ticket pages.
 The new Jira-style filters and three-person default selection remain in place.
 
+Jira ticket details include a manager-only **History** tab immediately beside Comments.
+It loads all pages of Jira's field changelog on demand, newest first, with author,
+timestamp, field name and full before/after text. Status, assignee, labels, priority,
+due dates and custom field changes are included when Jira records them; Comments
+remain in their own tab. Internal tickets retain their existing due-date Activity
+timeline and have no Jira History tab. The proxy's `/jira/issue/<key>/history` route
+is authenticated, manager-only, restricted to this project, read-only, and fixes
+each Jira page to 100 entries. It uses Jira's [paginated changelog endpoint](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-issueidorkey-changelog-get).
+The frontend follows pages to completion, detects stalled pagination, discloses
+partial failures with retry, caches five ticket histories by updated timestamp
+for the page session, and ignores stale results when the selected ticket changes.
+Tab switching preserves comment drafts. Existing manager-only due-date history
+controls remain unchanged.
+
 The Jira-style filter toolbar has a searchable assignee picker with native
 checkboxes, default/optional groups, counts and staged Apply/Cancel controls.
 Cancel or Escape discards draft selections and restores keyboard focus. At least
