@@ -156,18 +156,20 @@ import { createTicketHistory } from "./components/ticket-history.js";
   const ACT_OPTS=[["any","Any"],["reply","Needs reply"],["new3","Opened ≤ 3 days"],["upd1","Updated today"]];
 
   function passFilters(i,t,skip){
-    return matchesFilters(i,t,{filters:state.f,query:state.q,needsReply,assigneeKey:i=>assigneeFilterKey(i,PEOPLE)},skip);
+    const filters=IS_ADMIN&&workspace.route().page==="internal"?{...state.f,source:"internal"}:state.f;
+    return matchesFilters(i,t,{filters,query:state.q,needsReply,assigneeKey:i=>assigneeFilterKey(i,PEOPLE)},skip);
   }
   const focusDef=()=>FOCUS.find(x=>x.id===state.focus)||FOCUS[0];
   function visible(skip){ const t=todayStr(), fd=focusDef(); return (state.issues||[]).filter(i=>fd.f(i,t)&&passFilters(i,t,skip)); }
-  function filterCount(){ const f=state.f; return f.reporter.size+f.assignee.size+f.dev.size+f.status.size+f.type.size+f.priority.size+(f.epic?1:0)+(f.due!=="any"?1:0)+(f.activity!=="any"?1:0)+(f.source!=="all"?1:0)+(state.q?1:0); }
+  function filterCount(){ const f=state.f; return f.reporter.size+f.assignee.size+f.dev.size+f.status.size+f.type.size+f.priority.size+(f.epic?1:0)+(f.due!=="any"?1:0)+(f.activity!=="any"?1:0)+(f.source!=="all"&&workspace.route().page!=="internal"?1:0)+(state.q?1:0); }
+  const showTicketBriefs=()=>ticketBriefs.enabled()&&workspace.route().page!=="internal";
 
   function renderQuickFilters(){
     const box=$("quick-filters"), more=$("ftoggle"); box.replaceChildren();
     const pick=(label,options,value,onChange)=>{ const field=el("label","quick-field"), select=el("select"); field.appendChild(el("span",null,label)); select.setAttribute("aria-label",label); options.forEach(([v,l])=>select.appendChild(new Option(l,v))); if(value==="__multiple"){const o=new Option("Multiple selected",value);o.disabled=true;select.appendChild(o);} select.value=value;select.addEventListener("change",()=>{onChange(select.value);state.sel.clear();state.pageIndex=0;render();});field.appendChild(select);box.appendChild(field);return select;};
     const val=set=>set.size>1?"__multiple":[...set][0]||"";
     box.appendChild(assigneeFilter.renderButton());
-    pick("Ticket source",[["all","All tickets"],["internal","Internal tickets only"],["jira","Jira tickets only"]],state.f.source,v=>state.f.source=v);
+    if(workspace.route().page!=="internal")pick("Ticket source",[["all","All tickets"],["internal","Internal tickets only"],["jira","Jira tickets only"]],state.f.source,v=>state.f.source=v);
     if(IS_ADMIN)pick("Developer",[["","All developers"],["__none","No developer"],...[...new Set([...allDevs(),...state.f.dev])].filter(d=>d!=="__none").sort().map(d=>[d,d])],val(state.f.dev),v=>state.f.dev=new Set(v?[v]:[]));
     if(IS_ADMIN)pick("Reporter",[["","All reporters"],...[...new Set([...(state.issues||[]).map(i=>i.reporter),...state.f.reporter])].filter(Boolean).sort((a,b)=>a.localeCompare(b)).map(x=>[x,x])],val(state.f.reporter),v=>state.f.reporter=new Set(v?[v]:[]));
     pick("Status",[["","All statuses"],...[...new Set([...(state.issues||[]).map(i=>i.status),...state.f.status])].sort((a,b)=>stIdx(a)-stIdx(b)).map(x=>[x,x])],val(state.f.status),v=>state.f.status=new Set(v?[v]:[]));
@@ -178,7 +180,7 @@ import { createTicketHistory } from "./components/ticket-history.js";
     if(!IS_ADMIN)return;
     let views=[]; try{views=readViews(localStorage,MY_EMAIL);}catch(_){}
     const savedField=pick("Saved view",[["","Saved views"],...views.map((v,n)=>[String(n),v.name])],"",v=>{ if(v==="")return; const restored=restoreView(views[+v],IS_ADMIN,PEOPLE);if(!restored)return;Object.assign(state,restored);$("q").value=state.q;workspace.navigate(state.view==="history"?"history":["dev","status","assignee"].includes(state.view)?"boards":"tickets",{mode:state.view}); }).closest("label");
-    const save=el("button","btn","Save view");save.type="button";save.addEventListener("click",()=>{ const name=prompt("Name this personal view:");if(!name||!name.trim())return;const view=serializeView(state,name);const updated=views.filter(v=>v.name!==view.name).concat(view).slice(-20);try{localStorage.setItem(savedViewKey(MY_EMAIL),JSON.stringify(updated));toast("View saved in this browser.");renderQuickFilters();}catch(_){toast("Couldn't save this view. Browser storage is unavailable.",[],true);} });box.appendChild(save);
+    const save=el("button","btn","Save view");save.type="button";save.addEventListener("click",()=>{ const name=prompt("Name this personal view:");if(!name||!name.trim())return;const view=serializeView(workspace.route().page==="internal"?{...state,f:{...state.f,source:"internal"}}:state,name);const updated=views.filter(v=>v.name!==view.name).concat(view).slice(-20);try{localStorage.setItem(savedViewKey(MY_EMAIL),JSON.stringify(updated));toast("View saved in this browser.");renderQuickFilters();}catch(_){toast("Couldn't save this view. Browser storage is unavailable.",[],true);} });box.appendChild(save);
     if(IS_ADMIN){$("fgrid").querySelector(".saved-view-tools")?.remove();const tools=el("div","saved-view-tools");tools.append(savedField,save);$("fgrid").appendChild(tools);}
   }
 
@@ -286,7 +288,7 @@ import { createTicketHistory } from "./components/ticket-history.js";
     if(f.epic) addA(f.epic==="none"?"No epic":(eps[f.epic]||f.epic),"k8",()=>f.epic="");
     if(f.due!=="any") addA("Due: "+DUE_OPTS.find(x=>x[0]===f.due)[1],"k3",()=>f.due="any");
     if(f.activity!=="any") addA(ACT_OPTS.find(x=>x[0]===f.activity)[1],"k6",()=>f.activity="any");
-    if(f.source!=="all")addA(f.source==="internal"?"Internal tickets only":"Jira tickets only","k7",()=>f.source="all");
+    if(f.source!=="all"&&workspace.route().page!=="internal")addA(f.source==="internal"?"Internal tickets only":"Jira tickets only","k7",()=>f.source="all");
     if(state.q) addA("“"+state.q+"”","k1",()=>{ state.q=""; $("q").value=""; });
     if(!act.childNodes.length) act.appendChild(el("span","filter-empty","All tickets in this focus"));
     const matches=visible().length;$("filter-summary").textContent=matches+" ticket"+(matches===1?"":"s")+" match · "+filterCount()+" selected";
@@ -327,12 +329,12 @@ import { createTicketHistory } from "./components/ticket-history.js";
   }
 
   function listView(items,t){
-    const w=el("div","listwrap"+(ticketBriefs.enabled()?" with-ai-briefs":""));
+    const w=el("div","listwrap"+(showTicketBriefs()?" with-ai-briefs":""));
     const h=el("div","gr head"); const all=el("input","ck"); all.type="checkbox"; all.setAttribute("aria-label","Select all");
     all.checked=items.every(i=>state.sel.has(i.key)); all.addEventListener("change",()=>{ items.forEach(i=>all.checked?state.sel.add(i.key):state.sel.delete(i.key)); render(); });
     const hc=el("span","c-ck"); hc.appendChild(all); h.appendChild(hc);
     [["c-key","Ticket ID"],["c-ttl","Title / Priority"],["c-who","Assignee"],["c-rep","Reporter"],["c-dev","Developers"],["c-st","Status"],["c-due","Due date"],["c-cre","Created"],["c-upd","Updated"],["c-note",""],["c-actions",""]].forEach(([c,x])=>h.appendChild(el("span",c,x)));
-    if(ticketBriefs.enabled()){const label=el("span","c-brief","AI brief");label.title="Generate a short AI explanation of each Jira ticket.";h.insertBefore(label,h.querySelector(".c-who"));}
+    if(showTicketBriefs()){const label=el("span","c-brief","AI brief");label.title="Generate a short AI explanation of each Jira ticket.";h.insertBefore(label,h.querySelector(".c-who"));}
     w.appendChild(h);
     const allSorted=sortItems(items), pages=Math.max(1,Math.ceil(allSorted.length/state.pageSize));
     state.pageIndex=Math.min(state.pageIndex,pages-1);
@@ -400,7 +402,7 @@ import { createTicketHistory } from "./components/ticket-history.js";
     const tags=tagsFor(i,t,state.group!=="epic"); if(tags.childNodes.length) tt.appendChild(tags);
     if((state.focus==="reply"||state.focus==="recent"||state.f.activity==="reply")&&i.last){ const sn=el("span","snip"); sn.dir="auto"; sn.appendChild(el("b",null,i.last.author+" · "+ago(i.last.when)+": ")); sn.append(i.last.text); tt.appendChild(sn); }
     tt.addEventListener("click",()=>openDrawer(i.key)); r.appendChild(tt);
-    if(ticketBriefs.enabled())r.appendChild(ticketBriefs.renderCell(i));
+    if(showTicketBriefs())r.appendChild(ticketBriefs.renderCell(i));
     const canAsg=IS_ADMIN; const who=el(canAsg?"button":"span","who c-who"+(canAsg?" asg":"")); who.appendChild(avatar(i)); who.appendChild(el("span",null,i.assignee?PEOPLE[i.assignee].name:i.assigneeName));
     if(canAsg){ who.type="button"; who.title="Change assignee"; who.addEventListener("click",e=>{ e.stopPropagation(); assigneePopover(who,[i.key]); }); } r.appendChild(who);
     const rp=el("span","who c-rep"); rp.appendChild(el("span","av k6",initials(i.reporter))); const rn=el("span",null,i.reporter); rn.title=i.reporter; rp.appendChild(rn); r.appendChild(rp);

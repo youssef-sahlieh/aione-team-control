@@ -62,6 +62,8 @@ Tickets that live only in AION Team Control, never in Jira. They're numbered **I
 
 To show only internal tickets, choose **Ticket source → Internal tickets only** in the main filter bar. This is available to managers and users, combines with the other visible filters, and preserves each user's authorized ticket scope. Choose **All tickets** or **Reset filters** to include Jira tickets again. Managers can also save an internal-only view.
 
+Managers also have a separate **Internal tickets** sidebar page, showing only `INT-` IDs with its own page scope. Users keep the source filter on All tickets. Jira tickets have `AION-` IDs; internal dashboard tickets have `INT-` IDs.
+
 - **Open one:** **+ Internal ticket** above the list. Administrators choose one or more developers; Users always open them for themselves.
 - **Assignee:** every internal ticket is assigned to Karim, Youssef or Rami, like the Jira tickets. Youssef is pre-selected; switch to Karim or Rami before creating it if needed. Administrators can change it later (click the assignee in the list, or **Change assignee** in the ticket panel).
 - **Work on it** in the ticket panel like any ticket: move it **Open → In Development → Closed**, set the due date (changes appear in the due date history), comment, and **Edit** the title, description and priority. A ticket stays open until someone closes it.

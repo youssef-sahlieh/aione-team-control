@@ -76,6 +76,18 @@ for(const role of ["admin","user"])for(const width of [320,1440])test(`${role} A
 test("AI brief failures offer a retry without losing the ticket list",async({page})=>{
   const mock=await mockDashboard(page,{briefFailure:true});await page.goto("/dashboard.html");await page.getByRole("button",{name:"Generate brief for AION-101",exact:true}).click();await expect(page.locator(".brief-error")).toContainText("Brief service unavailable");await expect(page.getByRole("button",{name:"Retry brief for AION-101",exact:true})).toBeEnabled();await expect(page.locator("#view .item")).toHaveCount(2);expect(mock.errors).toEqual([]);
 });
+for(const width of [320,1440])test(`manager has a separate INT ticket page at ${width}px`,async({page})=>{
+  await page.setViewportSize({width,height:1000});const mock=await mockDashboard(page);await page.goto("/dashboard.html");await expect(page.locator("#view .item")).toHaveCount(2);
+  await page.getByRole("combobox",{name:"Ticket source",exact:true}).selectOption("jira");await expect(page.locator("#view .item")).toHaveCount(1);
+  if(width<=820)await page.locator("#mobile-menu").click();await page.locator('[data-page="internal"]').click();
+  await expect(page.locator("#page-heading")).toHaveText("Internal tickets");await expect(page.locator("#nav-internal-count")).toHaveText("1");await expect(page.locator("#view .item")).toHaveCount(1);await expect(page.locator("#view")).toContainText("INT-101");await expect(page.locator("#view")).not.toContainText("AION-101");
+  await expect(page.getByRole("combobox",{name:"Ticket source",exact:true})).toHaveCount(0);await expect(page.locator("#view .c-brief")).toHaveCount(0);
+  await page.getByRole("combobox",{name:"Status",exact:true}).selectOption("Pending QA");await expect(page.locator("#view .item")).toHaveCount(0);await page.locator("#fclear").click();await expect(page.locator("#view .item")).toHaveCount(1);
+  await page.locator("#ftoggle").click();page.once("dialog",d=>d.accept("Internal page"));await page.getByRole("button",{name:"Save view",exact:true}).click();
+  if(width<=820)await page.locator("#mobile-menu").click();await page.locator('[data-page="tickets"]').click();await expect(page.locator("#view .item")).toHaveCount(2);await page.getByRole("combobox",{name:"Saved view",exact:true}).selectOption({label:"Internal page"});await expect(page.locator("#view .item")).toHaveCount(1);await expect(page.locator("#view")).toContainText("INT-101");
+  if(width<=820)await page.locator("#mobile-menu").click();await page.locator('[data-page="internal"]').click();await page.locator("#view .ttl").first().click();await expect(page.locator("#d-key")).toContainText("INT-101");await expect(page.locator("#d-open")).toBeHidden();await page.locator("#d-close").click();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:`test-results/internal-page-${width}.png`,fullPage:true});expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
 for(const role of ["admin","user"])test(`${role} can show internal tickets only and reset source filtering`,async({page})=>{
   const mock=await mockDashboard(page,{role});await page.goto("/dashboard.html");await expect(page.locator("#view .item")).toHaveCount(2);
   const source=page.getByRole("combobox",{name:"Ticket source",exact:true});await source.selectOption("internal");await expect(page.locator("#view .item")).toHaveCount(1);await expect(page.locator("#view")).toContainText("INT-101");await expect(page.locator("#view")).not.toContainText("AION-101");
@@ -85,6 +97,7 @@ for(const role of ["admin","user"])test(`${role} can show internal tickets only 
   }
   await page.getByRole("button",{name:"Remove Internal tickets only",exact:true}).click();await expect(source).toHaveValue("all");await expect(page.locator("#view .item")).toHaveCount(2);
   await source.selectOption("jira");await expect(page.locator("#view .item")).toHaveCount(1);await expect(page.locator("#view")).toContainText("AION-101");await page.locator("#fclear").click();await expect(source).toHaveValue("all");await expect(page.locator("#view .item")).toHaveCount(2);
+  if(role==="user"){await expect(page.locator('[data-page="internal"]')).toBeHidden();await page.goto("/dashboard.html?page=internal#INT-101");await expect(page.locator("#page-heading")).toHaveText("All tickets");await expect(page.locator("#d-key")).toContainText("INT-101");await page.locator("#d-close").click();await source.selectOption("internal");await expect(page.locator("#view .item")).toHaveCount(1);}
   expect(mock.calls.filter(c=>["PUT","DELETE"].includes(c.method))).toHaveLength(0);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
 for(const width of [320,1440])test(`AI panel retains session chat and links verified tickets at ${width}px`,async({page})=>{
@@ -171,7 +184,7 @@ for(const role of ["admin"])for(const width of [320,1440])test(`${role} reporter
 for(const width of [320,1024,1440])test(`manager workspace keeps secondary tools accessible at ${width}px`,async({page})=>{
   await page.setViewportSize({width,height:1000});const mock=await mockDashboard(page);await page.goto("/dashboard.html");
   if(width<=820)await page.locator("#mobile-menu").click();
-  await expect(page.locator('#main-nav > a:not([hidden])')).toHaveCount(4);await expect(page.locator('[data-page="history"]')).toBeHidden();
+  await expect(page.locator('#main-nav > a:not([hidden])')).toHaveCount(5);await expect(page.locator('[data-page="history"]')).toBeHidden();
   await page.locator("#manager-more-nav summary").click();await expect(page.locator('[data-page="history"]')).toBeVisible();await page.locator('[data-page="history"]').click();await expect(page.locator("#page-heading")).toHaveText("Due date history");
   if(width<=820)await page.locator("#mobile-menu").click();await page.locator('[data-page="tickets"]').click();
   await expect(page.locator("#quick-filters select")).toHaveCount(6);await expect(page.getByRole("combobox",{name:"Saved view",exact:true})).toBeHidden();await expect(page.locator("#bulk")).toBeHidden();

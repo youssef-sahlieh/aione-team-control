@@ -63,7 +63,7 @@ developer filters are ignored so they cannot silently narrow the user's list.
 Both roles default to Karim, Youssef and Rami in the assignee filter. Razan
 remains a separate option and is included only when explicitly selected.
 
-The manager sidebar keeps Overview, All tickets, Workload and Calendar as primary
+The manager sidebar keeps Overview, All tickets, Internal tickets, Workload and Calendar as primary
 pages, with Boards and Due date history under More. My tasks has been removed;
 old My tasks links open All tickets while preserving the ticket hash. Users
 continue to see only authorized tickets. Direct links still
@@ -83,6 +83,15 @@ All tickets retains its original dashboard layout: all ten focus cards are
 available directly, and list rows use their original desktop/mobile arrangement.
 The manager's compact card and row styling applies only to other ticket pages.
 The new Jira-style filters and three-person default selection remain in place.
+
+Managers have a dedicated **Internal tickets** page (`?page=internal`) containing
+only `INT-` ticket IDs. It reuses ticket controls and visible filters, ignores a
+conflicting Ticket source selection from other pages, and omits the Jira-only AI
+brief column. All tickets remains the combined view. Users retain the minimal
+Ticket source selector to choose Internal tickets only or Jira tickets only;
+they do not get the separate manager navigation page. Source classification uses
+the `INT-<number>` ID prefix rather than the Jira issue type. Server account scope
+still governs which internal tickets each user receives.
 
 Jira ticket details include a manager-only **History** tab immediately beside Comments.
 It loads all pages of Jira's field changelog on demand, newest first, with author,
