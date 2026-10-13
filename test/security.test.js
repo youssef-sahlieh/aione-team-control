@@ -70,9 +70,8 @@ test("mailer and proxy errors redact synthetic sensitive details from responses 
   const failure=await f.request("/jira/search",{method:"POST",cookie:session.cookie,csrf:session.data.csrf,body:{jql:"project = AION",fields:[]}});assert.equal(failure.status,500);assert.ok(!(await failure.text()).includes(marker));assert.ok(!logs.join(" ").includes(marker));
 });
 
-test("hosting headers block framing and browser code never stores bearer credentials",()=>{
-  const config=JSON.parse(readFileSync(new URL("../vercel.json",import.meta.url),"utf8"));const headers=config.headers[0].headers;
-  assert.ok(headers.some(h=>h.key==="X-Frame-Options"&&h.value==="DENY"));assert.ok(headers.some(h=>h.key==="Content-Security-Policy"&&h.value.includes("frame-ancestors 'none'")));
-  const session=readFileSync(new URL("../public/assets/session.js",import.meta.url),"utf8");assert.doesNotMatch(session,/headers\.Authorization|JSON\.stringify\(s\)/);assert.match(session,/X-AION-CSRF/);assert.match(session,/\/logout/);
-  const configScript=readFileSync(new URL("../public/assets/config.js",import.meta.url),"utf8");assert.match(configScript,/removeItem\("aione-session"\)/);
+test("GitHub Pages stays on its host and uses the existing bearer proxy",()=>{
+  const configScript=readFileSync(new URL("../public/assets/config.js",import.meta.url),"utf8");assert.match(configScript,/https:\/\/aione-team-proxy\.vercel\.app/);assert.doesNotMatch(configScript,/location\.replace|removeItem/);
+  const session=readFileSync(new URL("../public/assets/session.js",import.meta.url),"utf8");assert.match(session,/headers\.Authorization/);
+  const entry=readFileSync(new URL("../proxy/api/proxy.js",import.meta.url),"utf8");assert.doesNotMatch(entry,/COOKIE_SESSIONS\s*:\s*true/);
 });

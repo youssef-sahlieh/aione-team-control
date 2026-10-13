@@ -1,43 +1,36 @@
 // Sign-in session and calls to the AION proxy, shared by the sign-in page and the dashboard.
 // The sign-in is remembered in this browser (all tabs, also after closing it) until the proxy's
-// 24-hour HttpOnly cookie runs out or is revoked on sign-out. Only identity and CSRF metadata live in memory.
+// 24-hour token runs out or the person signs out, so links in emails open straight into the dashboard.
 
-const KEY = "aion-logout";
-let session = null;
+const KEY = "aione-session";
 
 // https in production; http://localhost when testing on this computer.
-export const proxyReady = () => {try{const url=new URL(window.AIONE_API);return url.origin===location.origin&&(url.protocol==="https:"||["localhost","127.0.0.1"].includes(url.hostname));}catch{return false;}};
+export const proxyReady = () => /^(https:\/\/|http:\/\/localhost[:/])/.test(String(window.AIONE_API || ""));
 
 const store = () => { try { return window.localStorage; } catch { return null; } };
 
 export function getSession() {
-  return session && session.expiresAt > Date.now() ? session : null;
-}
-
-export async function loadSession(){
-  try{const response=await fetch(window.AIONE_API+"/session",{credentials:"same-origin",cache:"no-store"});if(!response.ok){session=null;return null;}saveSession(await response.json());return getSession();}catch{session=null;return null;}
+  try {
+    const s = JSON.parse(store().getItem(KEY) || "null");
+    if (s && s.token && s.expiresAt > Date.now()) return s;
+    if (s) store().removeItem(KEY);
+  } catch {}
+  return null;
 }
 
 export function saveSession(s) {
-  if(!s||typeof s.csrf!=="string"||!s.email)throw new Error("The server needs the secure-session update before you can sign in.");
-  session={email:s.email,name:s.name,role:s.role,expiresAt:s.expiresAt,csrf:s.csrf};
-  try{store()?.removeItem("aione-session");}catch{}
+  try { store().setItem(KEY, JSON.stringify(s)); } catch {}
 }
 
 // Back to the sign-in page. A ticket in the address (#AION-123) is kept, so it opens after signing in.
-export async function signOut(keepTicket) {
-  if(!keepTicket&&getSession()){
-    try{const response=await fetch(window.AIONE_API+"/logout",{method:"POST",credentials:"same-origin",headers:{"X-AION-CSRF":session.csrf}});if(!response.ok&&response.status!==401)throw new Error();}
-    catch{alert("Could not securely sign out. Please retry when the connection is available.");return;}
-  }
-  session=null;
-  try { store()?.removeItem("aione-session");store()?.setItem(KEY,String(Date.now())); } catch {}
+export function signOut(keepTicket) {
+  try { store().removeItem(KEY); } catch {}
   location.replace("index.html" + (keepTicket ? location.search + location.hash : ""));
 }
 
 // Signing out in one tab signs out the others too.
 window.addEventListener("storage", (e) => {
-  if (e.key === KEY && !/index\.html$|\/$|reset\.html$/.test(location.pathname)) {session=null;location.replace("index.html");}
+  if (e.key === KEY && !e.newValue && !/index\.html$|\/$|reset\.html$/.test(location.pathname)) location.replace("index.html");
 });
 
 export class ApiError extends Error {
@@ -52,11 +45,11 @@ export class ApiError extends Error {
 export async function apiFile(path, { method = "GET", body, type } = {}) {
   const s = getSession();
   const headers = {};
-  if (s && !["GET","HEAD"].includes(method)) headers["X-AION-CSRF"] = s.csrf;
+  if (s) headers.Authorization = "Bearer " + s.token;
   if (type) headers["Content-Type"] = type;
   let res;
   try {
-    res = await fetch(window.AIONE_API + path, { method, headers, body, credentials:"same-origin" });
+    res = await fetch(window.AIONE_API + path, { method, headers, body });
   } catch {
     throw new ApiError("network", "network error", 0);
   }
@@ -74,11 +67,11 @@ export async function apiFile(path, { method = "GET", body, type } = {}) {
 export async function api(path, { method = "GET", body } = {}) {
   const s = getSession();
   const headers = {};
-  if (s && !["GET","HEAD"].includes(method)) headers["X-AION-CSRF"] = s.csrf;
+  if (s) headers.Authorization = "Bearer " + s.token;
   if (body !== undefined) headers["Content-Type"] = "application/json";
   let res;
   try {
-    res = await fetch(window.AIONE_API + path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined, credentials:"same-origin" });
+    res = await fetch(window.AIONE_API + path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
   } catch {
     throw new ApiError("network", "network error", 0);
   }

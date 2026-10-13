@@ -1,7 +1,5 @@
 # AION AI v1
 
-The secure deployment uses same-origin `/api/ai/chat` and `/api/ai/brief` with HttpOnly session cookies and CSRF checks. Complete the [security hosting migration](security-deployment.md) before using the new frontend. Local preview forwards its HttpOnly cookie to the updated proxy; browser bearer-token storage is no longer used.
-
 The top-bar AION AI button opens a read-only chat panel. Questions can cover
 authorized Jira tickets, descriptions, recent comments, prioritization, deadlines,
 project updates and administrator workload. Verified ticket keys open dashboard

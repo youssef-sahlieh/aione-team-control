@@ -1,6 +1,6 @@
 // AION Team Control sign-in: the proxy checks the email and password and returns a session token.
 // Also the "Forgot password?" form, which asks the proxy to email a reset link.
-import { api, loadSession, proxyReady, saveSession } from "./session.js";
+import { api, getSession, proxyReady, saveSession } from "./session.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -16,7 +16,7 @@ function showView(name) {
   (name === "forgot" ? $("forgot-email") : $("email")).focus();
 }
 
-if (await loadSession()) {
+if (getSession()) {
   location.replace("dashboard.html" + location.search + location.hash);
 } else {
   showView("signin");
