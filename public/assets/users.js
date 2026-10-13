@@ -1,6 +1,6 @@
 // Users page (administrators only): add people, choose Administrator or User, pick the developer a
 // User sees, send password links, and remove accounts. Everything is checked again by the proxy.
-import { api, getSession, signOut } from "./session.js";
+import { api, loadSession, signOut } from "./session.js";
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -156,7 +156,7 @@ async function load() {
 $("signout").addEventListener("click", () => signOut());
 
 async function start() {
-  const s = getSession();
+  const s = await loadSession();
   if (!s) return signOut();
   $("me").textContent = s.email;
   try {

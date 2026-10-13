@@ -1,7 +1,10 @@
-export const createFilters = () => ({ reporter: new Set(), assignee: new Set(), dev: new Set(), status: new Set(), type: new Set(), priority: new Set(), epic: "", due: "any", activity: "any" });
+export const createFilters = () => ({ reporter: new Set(), assignee: new Set(), dev: new Set(), status: new Set(), type: new Set(), priority: new Set(), epic: "", due: "any", activity: "any", source: "all" });
+export const isInternalTicket = issue => /^INT-\d+$/i.test(issue.key || "");
 const dayMs = 86400000, dayNumber = s => Date.parse(s + "T00:00:00Z") / dayMs;
 // Extracted from the dashboard's original engine. skip applies only to faceted Sets.
 export function matchesFilters(i, today, { filters: f, query, needsReply, now = Date.now(), assigneeKey = issue => issue.assignee || "other" }, skip) {
+  if(f.source==="internal"&&!isInternalTicket(i))return false;
+  if(f.source==="jira"&&isInternalTicket(i))return false;
   if (skip !== "reporter" && f.reporter.size && !f.reporter.has(i.reporter)) return false;
   if (skip !== "assignee" && f.assignee.size && !f.assignee.has(assigneeKey(i))) return false;
   if (skip !== "dev" && f.dev.size && ![...f.dev].some(d => d === "__none" ? !i.devs.length : i.devs.includes(d))) return false;

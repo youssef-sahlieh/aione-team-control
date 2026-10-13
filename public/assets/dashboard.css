@@ -306,3 +306,7 @@ button.key.int:hover{text-decoration:underline}
 .drawer:not(.is-int) .int-only{display:none!important}
 .pop .fld .inp,.pop .fld .fsel{width:100%;box-sizing:border-box}
 .pop .fld textarea.inp{min-height:90px}
+.mention-picker{border:1px solid var(--line,#dfe3e8);border-radius:8px;background:var(--panel,#fff);max-height:220px;overflow:auto;margin-top:6px;box-shadow:0 6px 20px #0001}
+.mention-option{display:block;width:100%;border:0;background:transparent;text-align:start;padding:10px 12px;font:inherit;color:inherit;cursor:pointer;overflow-wrap:anywhere}
+.mention-option[aria-selected="true"],.mention-option:hover{background:#eaf1ff;color:#172b4d}
+.mention-message,.mention-hint{padding:8px 12px;font-size:12px;color:#526174}.mention-hint{padding:0;margin:6px 0 10px}

@@ -12,6 +12,13 @@
 .brief-generate:disabled { color: var(--muted); cursor: wait; }
 .brief-error { display: block; margin-top: 6px; font-size: 12px; }
 .brief-unavailable { color: var(--muted); }
+.ticket-history-entry { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.ticket-history-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.ticket-history-meta time, .history-value-label { color: var(--muted); font-size: 12px; }
+.ticket-history-change { margin-top: 12px; }
+.ticket-history-values { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 6px; }
+.history-value { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; margin-top: 4px; }
+@media(max-width:480px) { .ticket-history-values { grid-template-columns: 1fr; } .drawer-tabs { flex-wrap: wrap; } }
 body[data-workspace-role] .with-ai-briefs .gr { grid-template-columns: 24px 82px minmax(120px,1fr) minmax(160px,1.2fr) 110px 115px 110px 90px 44px; gap: 10px; }
 @media(max-width:1399px) {
   body[data-workspace-role] .with-ai-briefs .gr { grid-template-columns: 24px minmax(0,1fr) minmax(0,1fr) 44px; grid-template-areas: 'ck key key actions' 'ck ttl ttl actions' 'ck brief brief actions' 'ck who who actions' 'ck dev st actions' 'ck due due actions'; gap: 10px; }

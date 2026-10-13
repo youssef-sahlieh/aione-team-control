@@ -7,7 +7,7 @@
 // Keys: "u:<email>" user record (JSON), "users" set of emails, "rt:<sha256 of link token>" one-time link.
 
 const enc = new TextEncoder();
-export const ITERATIONS = 210000;
+export const ITERATIONS = 600000;
 export const ROLES = ["admin", "user"];
 
 const b64 = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes)));
@@ -82,9 +82,8 @@ export async function createLinkToken(store, email, purpose, ttlSeconds) {
 export async function useLinkToken(store, token) {
   if (typeof token !== "string" || !/^[\w-]{20,100}$/.test(token)) return null;
   const key = "rt:" + (await sha256hex(token));
-  const raw = await store.get(key);
+  const raw = await store.getdel(key);
   if (!raw) return null;
-  await store.del(key);
   try { return JSON.parse(raw); } catch { return null; }
 }
 
@@ -102,6 +101,8 @@ export function memoryStore() {
     async get(k) { return alive(k) ? data.get(k) : null; },
     async set(k, v, ttl) { data.set(k, String(v)); if (ttl) expires.set(k, Date.now() + ttl * 1000); else expires.delete(k); },
     async del(k) { data.delete(k); expires.delete(k); },
+    async getdel(k) { if(!alive(k))return null;const value=data.get(k);data.delete(k);expires.delete(k);return value; },
+    async compareAndSet(k,expected,value) { if(!alive(k)||data.get(k)!==expected)return false;data.set(k,String(value));return true; },
     async setIfAbsent(k, v, ttl) { if (alive(k)) return false; data.set(k, String(v)); expires.set(k, Date.now() + ttl * 1000); return true; },
     async deleteIfValue(k, v) { if (!alive(k) || data.get(k) !== String(v)) return false; data.delete(k); expires.delete(k); return true; },
     async incr(k, ttl) { const n = (alive(k) ? Number(data.get(k)) : 0) + 1; data.set(k, String(n)); if (n === 1 && ttl) expires.set(k, Date.now() + ttl * 1000); return n; },
@@ -124,6 +125,8 @@ export function redisStore(url, token) {
     get: (k) => cmd("GET", k),
     set: (k, v, ttl) => (ttl ? cmd("SET", k, String(v), "EX", String(ttl)) : cmd("SET", k, String(v))),
     del: (k) => cmd("DEL", k),
+    getdel: (k) => cmd("GETDEL", k),
+    compareAndSet: async(k,expected,value)=>!!(await cmd("EVAL","if redis.call('GET', KEYS[1]) == ARGV[1] then redis.call('SET', KEYS[1], ARGV[2]); return 1 else return 0 end","1",k,expected,String(value))),
     setIfAbsent: async (k, v, ttl) => (await cmd("SET", k, String(v), "NX", "EX", String(ttl))) === "OK",
     deleteIfValue: async (k, v) => !!(await cmd("EVAL", "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end", "1", k, String(v))),
     async incr(k, ttl) { const n = await cmd("INCR", k); if (n === 1 && ttl) await cmd("EXPIRE", k, String(ttl)); return n; },

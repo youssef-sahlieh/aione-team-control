@@ -1,9 +1,11 @@
 import { test, expect } from "@playwright/test";
 import { jiraIssue, internalTicket, people } from "../fixtures/issues.js";
 
-async function mockDashboard(page, { role = "admin", failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false } = {}) {
+async function mockDashboard(page, { role = "admin", failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1 } = {}) {
   await page.clock.setFixedTime(new Date("2026-10-11T09:00:00Z"));
   const calls = [], unexpected = [], errors = [];
+  let historyFailures=historyFailure?1:0;
+  let signedIn=!expired;
   page.on("pageerror", error => errors.push(error.message));
   await page.addInitScript(({ role, expired }) => {
     if(sessionStorage.getItem("aion-test-initialized"))return;
@@ -18,22 +20,32 @@ async function mockDashboard(page, { role = "admin", failure = false, expired = 
   // An unmatched request can never fall through to production Jira or mail.
   await page.route("**/*", async route => {
     const req = route.request(), url = new URL(req.url());
-    if (url.origin === "http://127.0.0.1:4173") return route.continue();
-    if (url.hostname !== "aione-team-proxy.vercel.app") return route.abort();
-    const path = url.pathname, method = req.method(), body = req.postDataJSON();
+    if (url.origin === "http://127.0.0.1:4173"&&!url.pathname.startsWith("/api/")) return route.continue();
+    if (url.origin !== "http://127.0.0.1:4173"||!url.pathname.startsWith("/api/")) return route.abort();
+    const path = url.pathname.slice(4), method = req.method(), body = req.postDataJSON();
+    if(path==="/session")return signedIn?route.fulfill({json:{email:"test@example.invalid",name:"Test",role,csrf:"synthetic-csrf",expiresAt:Date.now()+3600000}}):route.fulfill({status:401,json:{code:"session"}});
     calls.push({ path, method, body });
     const json = value => route.fulfill({ json: value });
     if (path === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people:assigneeTeam?{...people,...Object.fromEntries(["karim","youssef","rami","razan"].map(key=>[key,{id:`test-${key}`,name:key[0].toUpperCase()+key.slice(1),ini:key[0].toUpperCase()}]))}:people, devs: ["builder", "reviewer"], role, dev: "builder", email: "test@example.invalid", accounts: true, mail: false, ai:{enabled:!aiDisabled,readOnly:true} });
     if(path==="/ai/chat")return aiFailure?route.fulfill({status:503,json:{code:"ai_unavailable",error:"AI service unavailable. Try again."}}):json({answer:"Review AION-101 first. AION-9999 is unverified. <img src=x onerror=alert(1)>",references:[{key:"AION-101",title:"Synthetic Jira task"}],readOnly:true});
     if(path==="/ai/brief")return briefFailure?route.fulfill({status:503,json:{code:"ai_unavailable",error:"Brief service unavailable. Try again."}}):json({key:body.key,brief:"Fix the reported issue so the workflow works correctly. <img src=x onerror=alert(1)>",updated:jiraIssue.fields.updated,readOnly:true});
-    if (path === "/login") return json({token:"synthetic-token",email:"test@example.invalid",expiresAt:Date.now()+3600000,role});
+    if (path === "/login") {signedIn=true;return json({csrf:"synthetic-csrf",email:"test@example.invalid",expiresAt:Date.now()+3600000,role});}
+    if(path==="/logout"){signedIn=false;return json({ok:true});}
     if (path === "/internal" && method === "GET") return json({ tickets: [internalTicket] });
     if (path === "/jira/search") {
       if (failure) return route.fulfill({ status: 503, json: { code: "jira", error: "Synthetic outage" } });
       const issues=assigneeTeam?["karim","youssef","rami","razan","someone"].map((key,n)=>({...jiraIssue,key:`AION-${201+n}`,fields:{...jiraIssue.fields,summary:`Task for ${key}`,assignee:{accountId:`test-${key}`,displayName:key[0].toUpperCase()+key.slice(1)}}})):many?Array.from({length:30},(_,n)=>({...jiraIssue,key:`AION-${101+n}`,fields:{...jiraIssue.fields,summary:`Synthetic Jira task ${n+1}`}})):[jiraIssue];
       return json({ issues: body.jql.includes("statusCategory = Done") ? [] : issues, isLast: true });
     }
-    if (path.endsWith("/changelog")) return json({ changelog: { histories: [] } });
+    if(path==="/jira/users")return json([{accountId:"synthetic-karim",displayName:"Karim Example",active:true},{accountId:"synthetic-youssef",displayName:"Youssef Example",active:true},{accountId:"synthetic-app",displayName:"App",accountType:"app"}]);
+    if(path.endsWith("/comment")&&method==="POST")return json({id:"synthetic-comment"});
+    if (path.endsWith("/changelog")) return json({ changelog: legacyHistory?{total:legacyTotal,histories:[{id:'legacy-1',created:'2026-10-09T10:00:00Z',author:{displayName:'Jira Manager'},items:[{field:'status',fromString:'Open',toString:'In Development'}]}]}:{ histories: [] } });
+    if(path.endsWith("/history")){
+      if(legacyHistory)return route.fulfill({status:404,json:{code:'not_found',error:'Not found.'}});
+      const start=Number(url.searchParams.get("startAt")||0);
+      if(start===1&&historyFailures-->0)return route.fulfill({status:503,json:{code:"jira",error:"History unavailable"}});
+      return json({startAt:start,total:2,isLast:start===1,values:[start===0?{id:"h1",created:"2026-10-09T10:00:00Z",author:{displayName:"Test Manager"},items:[{field:"status",fromString:"Open",toString:"In Development"}]}:{id:"h2",created:"2026-10-10T10:00:00Z",author:{displayName:"Test Lead"},items:[{field:"assignee",fromString:"Unassigned",toString:"Test Lead"},{field:"description",fromString:null,toString:"<img src=x onerror=alert(1)>"}]}]});
+    }
     if (path.endsWith("/transitions") && method === "GET") return json({ transitions: [{ id: "7", name: "Start", to: { name: "In Development", statusCategory: { key: "indeterminate" } } }, { id: "8", name: "Unavailable", isAvailable: false, to: { name: "Closed" } }] });
     if(mutationFailure&&method==="PUT")return route.fulfill({status:503,json:{code:"jira",error:"Synthetic save failure"}});
     unexpected.push({ path, method });
@@ -42,11 +54,42 @@ async function mockDashboard(page, { role = "admin", failure = false, expired = 
   return { calls, unexpected, errors };
 }
 
+for(const role of ['admin','user'])test(`${role} Jira mentions pick people and send account IDs`,async({page})=>{
+  const mock=await mockDashboard(page,{role});await page.goto('/dashboard.html#AION-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();
+  const input=page.locator('#d-reply');await input.fill('Please check @ka');await expect(page.getByRole('option',{name:'Karim Example',exact:true})).toBeVisible();await input.press('Enter');await expect(input).toHaveValue('Please check @Karim Example ');
+  await input.press('Home');await input.press('Home');await input.press('Control+Home');await input.press('ArrowRight');await input.press('Control+Home');await input.press('Q');
+  await input.press('Control+End');await input.press('End');await input.press('Space');await input.press('@');await input.press('y');await input.press('o');await expect(page.getByRole('option',{name:'Youssef Example',exact:true})).toBeVisible();await input.press('ArrowDown');await input.press('Enter');
+  await page.locator('#d-send').click();await expect(page.locator('#d-cmsg')).toHaveText('Sent.');
+  const sent=mock.calls.find(c=>c.path==='/jira/issue/AION-101/comment');expect(sent.body.text).toBe('QPlease check [~accountid:synthetic-karim]  [~accountid:synthetic-youssef]');expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('editing a selected mention makes it plain text and internal tickets have no picker',async({page})=>{
+  const mock=await mockDashboard(page);await page.goto('/dashboard.html#AION-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();const input=page.locator('#d-reply');await input.fill('@ka');await expect(page.getByRole('option',{name:'Karim Example',exact:true})).toBeVisible();await input.press('Enter');await input.fill('@Karim Edited');await input.press('Escape');await page.locator('#d-send').click();await expect(page.locator('#d-cmsg')).toHaveText('Sent.');expect(mock.calls.find(c=>c.path.endsWith('/comment')).body.text).toBe('@Karim Edited');
+  await page.locator('#d-close').click();await page.goto('/dashboard.html#INT-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();await input.fill('@ka');await expect(page.locator('.mention-hint')).toBeHidden();await expect(page.locator('#comment-mention-picker')).toBeHidden();expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+
+test('legacy Jira history route displays real field changes when all events are returned',async({page})=>{
+  const mock=await mockDashboard(page,{legacyHistory:true});await page.goto('/dashboard.html#AION-101');await page.getByRole('tab',{name:'History',exact:true}).click();await expect(page.locator('#d-full-history')).toContainText('1 change events · Complete Jira field history');await expect(page.locator('#d-full-history')).toContainText('Jira Manager');await expect(page.locator('#d-full-history')).toContainText('In Development');await expect(page.locator('.ticket-history-entry')).toHaveCount(1);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('legacy Jira history cannot claim completeness when its expanded events are capped',async({page})=>{
+  const mock=await mockDashboard(page,{legacyHistory:true,legacyTotal:150});await page.goto('/dashboard.html#AION-101');await page.getByRole('tab',{name:'History',exact:true}).click();await expect(page.locator('#d-full-history')).toContainText('1 of 150 change events · Older history may be missing');await expect(page.locator('#d-full-history')).not.toContainText('Complete Jira field history');await expect(page.getByRole('link',{name:'Open ticket in Jira',exact:true})).toHaveAttribute('href',/jira\.example\.invalid\/browse\/AION-101/);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+
 async function selectAssignees(page,names){
   await page.locator("#assignee-filter-trigger").click();const picker=page.locator("#assignee-filter-dialog");
   for(const check of await picker.getByRole("checkbox").all())await check.setChecked(names.includes(await check.getAttribute("aria-label")));
   await picker.getByRole("button",{name:"Apply",exact:true}).click();await expect(picker).not.toBeVisible();
 }
+test("real cookie sessions stay HttpOnly, reject cross-origin mutations and revoke on logout",async({page,context})=>{
+  await page.route("**/*",route=>new URL(route.request().url()).origin==="http://127.0.0.1:4173"?route.continue():route.abort());
+  await page.goto("/index.html");await page.locator("#email").fill("security@example.invalid");await page.locator("#password").fill("synthetic-browser-password");await page.locator("#signin-btn").click();await expect(page.locator("#page-heading")).toHaveText("All tickets");
+  const cookie=(await context.cookies()).find(c=>c.name==="aion-session");expect(cookie.httpOnly).toBe(true);expect(cookie.sameSite).toBe("Strict");
+  expect(await page.evaluate(()=>document.cookie.includes("aion-session"))).toBe(false);expect(await page.evaluate(()=>localStorage.getItem("aione-session"))).toBeNull();
+  const session=await context.request.get("/api/session");const info=await session.json();expect(info.token).toBeUndefined();expect(info.csrf).toBeTruthy();
+  const rejected=await context.request.post("/api/logout",{headers:{Origin:"https://attacker.invalid","X-AION-CSRF":info.csrf}});expect(rejected.status()).toBe(403);
+  const headers=(await context.request.get("/dashboard.html")).headers();expect(headers["x-frame-options"]).toBe("DENY");expect(headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+  await page.locator(".account-menu summary").click();await page.locator("#signout").click();await expect(page).toHaveURL(/index\.html$/);
+  const replay=await context.request.get("/api/session",{headers:{Cookie:"aion-session="+cookie.value}});expect(replay.status()).toBe(401);
+});
 for(const width of [320,1440])test(`assignee picker searches, stages selection and restores focus at ${width}px`,async({page})=>{
   await page.setViewportSize({width,height:900});const mock=await mockDashboard(page,{assigneeTeam:true});await page.goto("/dashboard.html");await expect(page.locator("#view .item")).toHaveCount(3);
   const trigger=page.locator("#assignee-filter-trigger"),picker=page.locator("#assignee-filter-dialog");await trigger.click();await expect(picker.getByRole("searchbox",{name:"Search assignees"})).toBeFocused();await expect(picker.getByRole("checkbox",{name:"Karim",exact:true})).toBeChecked();
@@ -69,6 +112,30 @@ for(const role of ["admin","user"])for(const width of [320,1440])test(`${role} A
 });
 test("AI brief failures offer a retry without losing the ticket list",async({page})=>{
   const mock=await mockDashboard(page,{briefFailure:true});await page.goto("/dashboard.html");await page.getByRole("button",{name:"Generate brief for AION-101",exact:true}).click();await expect(page.locator(".brief-error")).toContainText("Brief service unavailable");await expect(page.getByRole("button",{name:"Retry brief for AION-101",exact:true})).toBeEnabled();await expect(page.locator("#view .item")).toHaveCount(2);expect(mock.errors).toEqual([]);
+});
+for(const width of [320,1440])test(`manager has a separate INT ticket page at ${width}px`,async({page})=>{
+  await page.setViewportSize({width,height:1000});const mock=await mockDashboard(page);await page.goto("/dashboard.html");await expect(page.locator("#view .item")).toHaveCount(2);
+  await page.getByRole("combobox",{name:"Ticket source",exact:true}).selectOption("jira");await expect(page.locator("#view .item")).toHaveCount(1);
+  if(width<=820)await page.locator("#mobile-menu").click();await page.locator('[data-page="internal"]').click();
+  await expect(page.locator("#page-heading")).toHaveText("Internal tickets");await expect(page.locator("#nav-internal-count")).toHaveText("1");await expect(page.locator("#view .item")).toHaveCount(1);await expect(page.locator("#view")).toContainText("INT-101");await expect(page.locator("#view")).not.toContainText("AION-101");
+  await expect(page.getByRole("combobox",{name:"Ticket source",exact:true})).toHaveCount(0);await expect(page.locator("#view .c-brief")).toHaveCount(0);
+  await page.getByRole("combobox",{name:"Status",exact:true}).selectOption("Pending QA");await expect(page.locator("#view .item")).toHaveCount(0);await page.locator("#fclear").click();await expect(page.locator("#view .item")).toHaveCount(1);
+  await page.locator("#ftoggle").click();page.once("dialog",d=>d.accept("Internal page"));await page.getByRole("button",{name:"Save view",exact:true}).click();
+  if(width<=820)await page.locator("#mobile-menu").click();await page.locator('[data-page="tickets"]').click();await expect(page.locator("#view .item")).toHaveCount(2);await page.getByRole("combobox",{name:"Saved view",exact:true}).selectOption({label:"Internal page"});await expect(page.locator("#view .item")).toHaveCount(1);await expect(page.locator("#view")).toContainText("INT-101");
+  if(width<=820)await page.locator("#mobile-menu").click();await page.locator('[data-page="internal"]').click();await page.locator("#view .ttl").first().click();await expect(page.locator("#d-key")).toContainText("INT-101");await expect(page.locator("#d-open")).toBeHidden();await page.locator("#d-close").click();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:`test-results/internal-page-${width}.png`,fullPage:true});expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+for(const role of ["admin","user"])test(`${role} can show internal tickets only and reset source filtering`,async({page})=>{
+  const mock=await mockDashboard(page,{role});await page.goto("/dashboard.html");await expect(page.locator("#view .item")).toHaveCount(2);
+  const source=page.getByRole("combobox",{name:"Ticket source",exact:true});await source.selectOption("internal");await expect(page.locator("#view .item")).toHaveCount(1);await expect(page.locator("#view")).toContainText("INT-101");await expect(page.locator("#view")).not.toContainText("AION-101");
+  await page.getByRole("combobox",{name:"Status",exact:true}).selectOption("Pending QA");await expect(page.locator("#view .item")).toHaveCount(0);await page.getByRole("combobox",{name:"Status",exact:true}).selectOption("");
+  if(role==="admin"){
+    await page.locator("#ftoggle").click();page.once("dialog",d=>d.accept("Internal only"));await page.getByRole("button",{name:"Save view",exact:true}).click();await page.locator("#fclear").click();await page.reload();await page.getByRole("combobox",{name:"Saved view",exact:true}).selectOption({label:"Internal only"});await expect(source).toHaveValue("internal");await expect(page.locator("#view .item")).toHaveCount(1);
+  }
+  await page.getByRole("button",{name:"Remove Internal tickets only",exact:true}).click();await expect(source).toHaveValue("all");await expect(page.locator("#view .item")).toHaveCount(2);
+  await source.selectOption("jira");await expect(page.locator("#view .item")).toHaveCount(1);await expect(page.locator("#view")).toContainText("AION-101");await page.locator("#fclear").click();await expect(source).toHaveValue("all");await expect(page.locator("#view .item")).toHaveCount(2);
+  if(role==="user"){await expect(page.locator('[data-page="internal"]')).toBeHidden();await page.goto("/dashboard.html?page=internal#INT-101");await expect(page.locator("#page-heading")).toHaveText("All tickets");await expect(page.locator("#d-key")).toContainText("INT-101");await page.locator("#d-close").click();await source.selectOption("internal");await expect(page.locator("#view .item")).toHaveCount(1);}
+  expect(mock.calls.filter(c=>["PUT","DELETE"].includes(c.method))).toHaveLength(0);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
 for(const width of [320,1440])test(`AI panel retains session chat and links verified tickets at ${width}px`,async({page})=>{
   await page.setViewportSize({width,height:900});const mock=await mockDashboard(page);await page.goto("/dashboard.html?page=overview");
@@ -129,7 +196,7 @@ for(const width of [320,1440])test(`filter labels and selections remain clear at
   await expect(page.locator("#filter-summary")).toHaveText("3 tickets match · 3 selected");await expect(page.locator(".quick-field > span").filter({hasText:"Assignee"})).toBeVisible();
   await expect(page.locator("#ftoggle")).toBeHidden();await expect(page.locator("#fgrid")).toBeHidden();
   for(const label of ["Reporter","Priority","Developer","Saved view"])await expect(page.getByRole("combobox",{name:label,exact:true})).toHaveCount(0);
-  await expect(page.locator("#quick-filters select:visible")).toHaveCount(2);
+  await expect(page.locator("#quick-filters select:visible")).toHaveCount(3);
   await selectAssignees(page,["Razan"]);await expect(page.locator("#view .item")).toHaveCount(1);await expect(page.locator("#filter-summary")).toHaveText("1 ticket match · 1 selected");
   await page.getByRole("button",{name:"Reset filters",exact:true}).click();await expect(page.locator("#view .item")).toHaveCount(3);await expect(page.locator("#filter-summary")).toHaveText("3 tickets match · 3 selected");
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.locator(".fpanel").screenshot({path:`test-results/filters-${width}.png`});expect(mock.errors).toEqual([]);
@@ -154,10 +221,10 @@ for(const role of ["admin"])for(const width of [320,1440])test(`${role} reporter
 for(const width of [320,1024,1440])test(`manager workspace keeps secondary tools accessible at ${width}px`,async({page})=>{
   await page.setViewportSize({width,height:1000});const mock=await mockDashboard(page);await page.goto("/dashboard.html");
   if(width<=820)await page.locator("#mobile-menu").click();
-  await expect(page.locator('#main-nav > a:not([hidden])')).toHaveCount(4);await expect(page.locator('[data-page="history"]')).toBeHidden();
+  await expect(page.locator('#main-nav > a:not([hidden])')).toHaveCount(5);await expect(page.locator('[data-page="history"]')).toBeHidden();
   await page.locator("#manager-more-nav summary").click();await expect(page.locator('[data-page="history"]')).toBeVisible();await page.locator('[data-page="history"]').click();await expect(page.locator("#page-heading")).toHaveText("Due date history");
   if(width<=820)await page.locator("#mobile-menu").click();await page.locator('[data-page="tickets"]').click();
-  await expect(page.locator("#quick-filters select")).toHaveCount(5);await expect(page.getByRole("combobox",{name:"Saved view",exact:true})).toBeHidden();await expect(page.locator("#bulk")).toBeHidden();
+  await expect(page.locator("#quick-filters select")).toHaveCount(6);await expect(page.getByRole("combobox",{name:"Saved view",exact:true})).toBeHidden();await expect(page.locator("#bulk")).toBeHidden();
   await expect(page.locator("#tiles > .tile")).toHaveCount(10);await expect(page.locator("#manager-more-focus")).toHaveCount(0);
   const row=page.locator("#view .gr.item").first();if(width>=1400)await expect(row.locator(".c-who")).toBeVisible();else await expect(row.locator(".c-who")).toBeHidden();await expect(row.locator(".c-dev")).toBeVisible();await expect(row.locator(".c-rep")).toBeHidden();
   await row.locator("input.ck").check();await expect(page.locator("#bulk")).toBeVisible();await page.locator("#b-clear").click();await expect(page.locator("#bulk")).toBeHidden();
@@ -183,6 +250,18 @@ test("pagination preserves selections across pages",async({page})=>{
   await page.getByRole("button",{name:"Previous page",exact:true}).click();await expect(page.getByRole("checkbox",{name:label,exact:true})).toBeChecked();expect(mock.errors).toEqual([]);
 });
 
+for(const width of [320,1440])test(`manager History beside Comments loads every Jira page safely at ${width}px`,async({page})=>{
+  await page.setViewportSize({width,height:900});const mock=await mockDashboard(page);await page.goto("/dashboard.html#AION-101");
+  await expect(page.getByRole("tab",{name:"History",exact:true})).toBeVisible();expect(mock.calls.some(c=>c.path.endsWith("/history"))).toBe(false);
+  await page.getByRole("tab",{name:"History",exact:true}).click();await expect(page.locator("#d-full-history")).toContainText("2 change events · Complete Jira field history");await expect(page.locator(".ticket-history-entry")).toHaveCount(2);
+  await expect(page.locator(".ticket-history-entry").first()).toContainText("Test Lead");await expect(page.locator("#d-full-history")).toContainText("In Development");await expect(page.locator("#d-full-history img")).toHaveCount(0);
+  await page.getByRole("tab",{name:"Comments",exact:true}).click();await page.locator("#d-reply").fill("Keep this draft");await page.getByRole("tab",{name:"History",exact:true}).click();await page.getByRole("tab",{name:"Comments",exact:true}).click();await expect(page.locator("#d-reply")).toHaveValue("Keep this draft");await page.locator("#d-reply").fill("");
+  expect(mock.calls.filter(c=>c.path.endsWith("/history"))).toHaveLength(2);expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.getByRole("tab",{name:"History",exact:true}).click();await page.screenshot({path:`test-results/full-history-${width}.png`,fullPage:true});expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test("partial history failure is disclosed and retry loads all pages",async({page})=>{
+  const mock=await mockDashboard(page,{historyFailure:true});await page.goto("/dashboard.html#AION-101");await page.getByRole("tab",{name:"History",exact:true}).click();await expect(page.locator("#d-full-history")).toContainText("History incomplete");await expect(page.locator(".ticket-history-entry")).toHaveCount(1);
+  await page.getByRole("button",{name:"Retry history",exact:true}).click();await expect(page.locator("#d-full-history")).toContainText("Complete Jira field history");await expect(page.locator(".ticket-history-entry")).toHaveCount(2);expect(mock.errors).toEqual([]);
+});
 test("drawer tabs retain draft and closing respects discard confirmation and focus",async({page})=>{
   const mock=await mockDashboard(page);await page.goto("/dashboard.html");const opener=page.locator("#view .ttl").filter({hasText:"Synthetic Jira task"});await opener.click();
   await page.getByRole("tab",{name:"Comments",exact:true}).click();await page.locator("#d-reply").fill("Keep my draft");await page.getByRole("tab",{name:"Overview",exact:true}).click();await page.getByRole("tab",{name:"Comments",exact:true}).click();await expect(page.locator("#d-reply")).toHaveValue("Keep my draft");
@@ -316,6 +395,7 @@ for(const role of ["admin","user"])test(`${role} due-date history visibility fol
   }else{
     await expect(page.locator("#page-heading")).toHaveText("All tickets");
     await expect(page.getByRole("tab",{name:"Activity",exact:true})).toHaveCount(0);
+    await expect(page.getByRole("tab",{name:"History",exact:true})).toHaveCount(0);expect(mock.calls.some(c=>c.path.endsWith("/history"))).toBe(false);
     await expect(page.locator("#d-hist")).toBeHidden();
     await expect(page.locator("#d-due")).toBeVisible();
     await page.getByRole("tab",{name:"Overview",exact:true}).focus();

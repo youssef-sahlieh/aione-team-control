@@ -2,11 +2,21 @@
 
 When a new **AION Jira ticket** is created and still has **no `ai1_` developer label**, the proxy emails **youssef@aione.biz** and **ellen@aione.biz**. The message includes its title, status, assignee, priority, due date, and links to the ticket in AION and Jira.
 
-This runs through Jira Automation, even with the dashboard closed. It does not depend on the current user's assignee filters or saved views. Tickets for any assignee in the AION project qualify. Internal tickets require a developer at creation, so they do not qualify.
+The existing email proxy now checks new tickets automatically when a manager dashboard loads or refreshes. This requires no Jira Automation rule and no new webhook secret. It does not depend on the current user's assignee filters or saved views. Internal tickets require a developer at creation, so they do not qualify.
 
-## Activate in production
+## Automatic dashboard checks (default)
 
-The code alone does not turn on alerts. Deploy the proxy, then configure this rule in Jira.
+1. Deploy the updated proxy to Vercel. The existing Gmail or Microsoft mailer and Upstash storage must be connected, as for the app's other email features.
+2. Sign in as a manager and load the dashboard once. This records the activation date; existing No developer tickets are not emailed.
+3. New Jira tickets created after activation, first observed open without an `ai1_` label, are emailed to both managers when the dashboard next loads or refreshes. Its existing auto-refresh runs about every two minutes while active. No extra browser controls or secret are needed.
+
+Checks reuse Jira rows from manager dashboard reads and re-read candidate details before sending. They are independent of display filters, but can only detect tickets returned by those reads; done tickets, Epics excluded by dashboard queries, and tickets outside the loaded query are not alerted. If a ticket is first observed with a developer or Done, removing its developer or reopening it does not later trigger a new-ticket alert. Up to three candidate deliveries are attempted per search request; pending failures can retry on later reads. Multiple managers share the same stored activation date, locks and sent markers. Email/storage failures leave the ticket list usable. AI lookups suppress automatic notifications to remain read-only.
+
+**Timing:** this approach needs a manager dashboard to be active. If all dashboards are closed, alerts wait until one is opened again. For notifications while everyone is offline, use the optional Jira trigger below (or add a separately scheduled server job).
+
+## Optional immediate Jira trigger
+
+The webhook remains available if you also want alerts while the dashboard is closed. Deploy the proxy, then configure this rule in Jira. Both paths share sent markers to prevent ordinary duplicate deliveries.
 
 1. In the **aione-team-proxy** Vercel project, ensure the existing Gmail mailer (`GMAIL_USER` and `GMAIL_APP_PASSWORD`) and Upstash storage are configured.
 2. Add `JIRA_NOTIFICATION_SECRET`: a new random secret with at least 32 characters. Keep it in Vercel and Jira's hidden header; do not use a Jira API token or team password. To generate one locally: `node -p "require('node:crypto').randomBytes(32).toString('hex')"`.

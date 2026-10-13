@@ -17,8 +17,9 @@
 //   emails in TEAM_EMAILS sign in with TEAM_PASSWORD as admins. The first sign-in with TEAM_PASSWORD
 //   after the database is added creates admin accounts for everyone in TEAM_EMAILS.
 import { internalRoutes } from "./internal.js";
+import { cookieSessionRequest } from "./sessions.js";
 import { aiChat, aiBrief, aiConfigured } from "./ai.js";
-import { newTicketNotification } from "./notifications.js";
+import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
 import { ROLES, checkPassword, createLinkToken, deleteUser, getUser, hashPassword, listUsers, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, useLinkToken, validDev, validEmail } from "./users.js";
 
 const enc = new TextEncoder();
@@ -83,8 +84,8 @@ const memoryLimit = {
 const teamEmails = (env) => String(env.TEAM_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
 
 // Sessions carry the account's version (v), so a password reset or removal ends them right away.
-export async function makeToken(env, email, now = Date.now(), v = 0) {
-  const body = b64url(enc.encode(JSON.stringify({ email, v, exp: now + SESSION_MS })));
+export async function makeToken(env, email, now = Date.now(), v = 0, sid = undefined) {
+  const body = b64url(enc.encode(JSON.stringify({ email, v, exp: now + SESSION_MS, ...(sid?{sid}:{}) })));
   return { token: body + "." + b64url(await hmac(env.SESSION_SECRET, body)), expiresAt: now + SESSION_MS };
 }
 
@@ -102,6 +103,8 @@ export async function readToken(env, header, now = Date.now()) {
   }
   const { email, exp, v } = claims;
   if (typeof exp !== "number" || exp < now || typeof email !== "string") return null;
+  if(claims.sid&&(!env.STORE||!await env.STORE.get("sess:"+claims.sid)))return null;
+  if(env.COOKIE_SESSIONS&&!claims.sid)return null;
   if (env.STORE) {
     const u = await getUser(env.STORE, email);
     if (!u || u.v !== v) return null;
@@ -170,8 +173,8 @@ async function sendMail(env, from, b) {
       await env.MAILER({ fromName: firstName(from) + " via AION Team Control", replyTo: from, to, subject, html });
       return json({ ok: true, to });
     } catch (err) {
-      console.log("mail error:", err && err.message);
-      return fail("mail", /auth|login|credential|535|534/i.test(String(err && err.message)) ? "The email account didn't accept its app password. Check GMAIL_USER and GMAIL_APP_PASSWORD." : "The email didn't send: " + ((err && err.message) || "unknown error"), 502);
+      console.warn("mail_failed");
+      return fail("mail", /auth|login|credential|535|534/i.test(String(err && err.message)) ? "The email account didn't accept its app password. Check GMAIL_USER and GMAIL_APP_PASSWORD." : "The email could not be sent. Please try again or contact an administrator.", 502);
     }
   }
   const token = await getGraphToken(env);
@@ -183,8 +186,7 @@ async function sendMail(env, from, b) {
   });
   if (res.ok) return json({ ok: true, to });
   const data = await res.json().catch(() => ({}));
-  const detail = data && data.error && data.error.message;
-  return fail("mail", res.status === 403 ? "Microsoft refused to send from " + from + ". Check the app's Mail.Send permission and admin consent." : detail || "Outlook answered " + res.status + ".", 502);
+  return fail("mail", res.status === 403 ? "Microsoft refused to send from " + from + ". Check the app's Mail.Send permission and admin consent." : "The email provider could not send the message. Please try again.", 502);
 }
 
 // Emails from the app itself (password links). Returns true when sent.
@@ -194,7 +196,7 @@ async function sendSystemMail(env, to, subject, html) {
     await env.MAILER({ fromName: "AION Team Control", replyTo: undefined, to: [to], subject, html });
     return true;
   } catch (err) {
-    console.log("system mail error:", err && err.message);
+    console.warn("system_mail_failed");
     return false;
   }
 }
@@ -329,6 +331,11 @@ async function route(request, env, url) {
       let u = await getUser(env.STORE, email);
       if (!u && (await bootstrapAdmins(env, email, password))) u = await getUser(env.STORE, email);
       if (!u || !(await checkPassword(password, u.pw))) return fail("login", "That email and password don't match.", 401);
+      if(u.pw.iterations<600000){
+        const upgraded={...u,pw:await hashPassword(password)};
+        if(await env.STORE.compareAndSet("u:"+u.email,JSON.stringify(u),JSON.stringify(upgraded)))u=upgraded;
+        else{u=await getUser(env.STORE,email);if(!u||!await checkPassword(password,u.pw))return fail("login","That email and password don't match.",401);}
+      }
       return json({ email: u.email, name: u.name, role: u.role, ...(await makeToken(env, u.email, Date.now(), u.v)) });
     }
     const { success } = await (env.LOGIN_LIMIT || memoryLimit).limit({ key: ip });
@@ -378,7 +385,7 @@ async function route(request, env, url) {
   if(path.startsWith("/ai/")){
     if(!["/ai/chat","/ai/brief"].includes(path))return fail("ai_read_only","Ticket actions are disabled in AION AI v1.",403);
     return (path==="/ai/brief"?aiBrief:aiChat)(request,env,{me,project:env.JIRA_PROJECT,readSearch:async body=>{
-      const result=await route(new Request(new URL("/jira/search",url),{method:"POST",headers:{Authorization:request.headers.get("Authorization"),"Content-Type":"application/json"},body:JSON.stringify(body)}),env,new URL("/jira/search",url));
+      const result=await route(new Request(new URL("/jira/search",url),{method:"POST",headers:{Authorization:request.headers.get("Authorization"),"Content-Type":"application/json","X-AION-Read-Only":"1"},body:JSON.stringify(body)}),env,new URL("/jira/search",url));
       if(!result.ok)throw new Error("Authorized Jira read failed");return result.json();
     }});
   }
@@ -415,6 +422,12 @@ async function route(request, env, url) {
       body: { jql, fields, maxResults: Math.min(Number(b.maxResults) || 100, 100), expand: "renderedFields", ...(typeof b.nextPageToken === "string" ? { nextPageToken: b.nextPageToken } : {}) }
     });
     if (!r.ok) return r.res;
+    if(isAdmin&&mailEnabled(env)&&env.STORE&&request.headers.get("X-AION-Read-Only")!=="1"){
+      try{await notifyTicketsFromSearch(env,r.data.issues||[],{
+        readIssue:key=>jira(env,"/rest/api/3/issue/"+key+"?fields=summary,labels,status,assignee,priority,duedate,project"),
+        sendMail:(from,body)=>sendMail(env,from,body)
+      });}catch{console.warn("Ticket notification check failed; Jira results remain available.");}
+    }
     // Only this project's tickets (and for users, only their own) ever leave the proxy, whatever the search asked for.
     return json({ ...r.data, issues: (r.data.issues || []).filter((i) => isOurKey(i.key) && (isAdmin || hasDevLabel(i.fields && i.fields.labels))) });
   }
@@ -425,9 +438,21 @@ async function route(request, env, url) {
     return pass(await jira(env, "/rest/api/3/user/search?maxResults=8&query=" + encodeURIComponent(q)));
   }
 
-  const m = /^\/jira\/issue\/([A-Z][A-Z0-9_]*-\d+)(\/changelog|\/transitions|\/comment)?$/.exec(path);
+  const m = /^\/jira\/issue\/([A-Z][A-Z0-9_]*-\d+)(\/changelog|\/history|\/transitions|\/comment)?$/.exec(path);
   if (m && isOurKey(m[1])) {
     const key = m[1], sub = m[2] || "";
+    if(sub==="/history"){
+      if(!isAdmin)return fail("forbidden","Only managers can view full ticket history.",403);
+      if(method!=="GET")return fail("method","Ticket history is read-only.",405);
+      const start=url.searchParams.get("startAt")||"0";
+      if(!/^\d{1,9}$/.test(start))return fail("bad_request","Invalid history page.",400);
+      const result=await jira(env,"/rest/api/3/issue/"+key+"/changelog?startAt="+Number(start)+"&maxResults=100");
+      if(!result.ok)return result.res;
+      // Never forward Jira's nextPage URL; callers paginate through this fixed authorized route.
+      const data=result.data;
+      if(!Array.isArray(data.values))return fail("jira","Jira returned invalid ticket history.",502);
+      return json({values:data.values,startAt:data.startAt??Number(start),total:data.total,isLast:data.isLast});
+    }
     if (!isAdmin) {
       const t = await jira(env, "/rest/api/3/issue/" + key + "?fields=labels");
       if (!t.ok) return t.res;
@@ -463,12 +488,13 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     let res;
     try {
-      res = await route(request, env, new URL(request.url));
+      res = env.COOKIE_SESSIONS?await cookieSessionRequest(request,env,req=>route(req,env,new URL(req.url)),{readToken,makeToken}):await route(request, env, new URL(request.url));
     } catch (err) {
-      console.log("proxy error:", err && err.message);
+      console.warn("proxy_failed");
       res = fail("server", "The proxy hit an error.", 500);
     }
     for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
+    res.headers.set("X-Content-Type-Options","nosniff");res.headers.set("X-Frame-Options","DENY");
     return res;
   }
 };

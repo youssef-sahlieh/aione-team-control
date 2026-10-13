@@ -1,27 +1,30 @@
 const $ = id => document.getElementById(id);
-export function createIssueDrawer({ isDirty, canViewHistory }) {
+export function createIssueDrawer({ isDirty, canViewHistory, canViewFullHistory = () => false, onSelect = () => {} }) {
   const drawer = $("drawer"), body = $("d-body"), tabs = $("drawer-tabs");
   let opener = null, active = "overview";
   const panels = {};
-  for (const [id, label] of [["overview", "Overview"], ["activity", "Activity"], ["comments", "Comments"], ["files", "Files"]]) {
+  for (const [id, label] of [["overview", "Overview"], ["activity", "Activity"], ["comments", "Comments"], ["history", "History"], ["files", "Files"]]) {
     const tab = document.createElement("button"); tab.type = "button"; tab.className = "drawer-tab"; tab.textContent = label;
     tab.id = "tab-" + id; tab.setAttribute("role", "tab"); tab.setAttribute("aria-controls", "panel-" + id);
     tab.addEventListener("click", () => select(id)); tabs.appendChild(tab);
     const panel = document.createElement("div"); panel.id = "panel-" + id; panel.className = "drawer-panel"; panel.setAttribute("role", "tabpanel"); panel.setAttribute("aria-labelledby", tab.id); panels[id] = panel;
   }
   for (const child of [...body.children]) {
-    const id = child.querySelector("#d-hist") ? "activity" : child.querySelector("#d-comments") ? "comments" : child.querySelector("#d-att,#i-att") ? "files" : "overview";
+    const id = child.querySelector("#d-full-history") ? "history" : child.querySelector("#d-hist") ? "activity" : child.querySelector("#d-comments") ? "comments" : child.querySelector("#d-att,#i-att") ? "files" : "overview";
     panels[id].appendChild(child);
   }
   const note = document.createElement("p"); note.className = "msg"; note.textContent = "Recorded due date changes. This timeline is not a complete ticket audit."; panels.activity.prepend(note);
   Object.values(panels).forEach(panel => body.appendChild(panel));
   function select(id) {
     if(id === "activity" && !canViewHistory()) id = "overview";
+    if(id === "history" && !canViewFullHistory()) id = "overview";
     $("tab-activity").hidden = !canViewHistory();
+    $("tab-history").hidden = !canViewFullHistory();
     active = id;
     for (const tab of tabs.children) { const selected = tab.id === "tab-" + id; tab.setAttribute("aria-selected", String(selected)); tab.tabIndex = selected ? 0 : -1; }
     for (const [key, panel] of Object.entries(panels)) panel.hidden = key !== id;
     body.scrollTop = 0;
+    onSelect(id);
   }
   tabs.addEventListener("keydown", e => {
     const list = [...tabs.children].filter(tab => !tab.hidden), index = list.indexOf(document.activeElement);

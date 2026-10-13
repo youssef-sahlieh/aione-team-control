@@ -6,6 +6,12 @@ import { jiraIssue, byId } from "../fixtures/issues.js";
 const issue=normalizeJiraIssue(jiraIssue,byId,x=>x);
 const today="2026-10-11";
 const matches=(i,f,skip,query="")=>matchesFilters(i,today,{filters:f,query,needsReply:x=>x.last&&!x.last.fromTeam,now:Date.parse(today+"T09:00:00Z")},skip);
+test("source distinguishes internal tickets from Jira issue types and combines with status",()=>{
+  const f=createFilters(),internal={...issue,key:"INT-101",internal:true,type:"Internal",status:"Open"};assert.equal(matches(issue,f),true);assert.equal(matches(internal,f),true);
+  f.source="internal";assert.equal(matches(internal,f),true);assert.equal(matches({...issue,type:"Internal"},f),false);
+  f.status.add("Pending QA");assert.equal(matches(internal,f),false);f.status.clear();f.source="jira";assert.equal(matches(internal,f),false);assert.equal(matches(issue,f),true);
+  f.source="internal";assert.equal(matches({...internal,internal:false},f),true);assert.equal(matches({...issue,internal:true},f),false,"AION IDs remain Jira tickets regardless of metadata");
+});
 test("filters OR selected values within a field and AND different fields",()=>{
   const f=createFilters();f.dev=new Set(["missing","builder"]);f.status.add("Pending QA");assert.equal(matches(issue,f),true);f.priority.add("Low");assert.equal(matches(issue,f),false);assert.equal(matches(issue,f,"priority"),true);assert.equal(matches(issue,f,"status"),false);
 });

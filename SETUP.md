@@ -1,5 +1,7 @@
 # AION Team Control: setup and changes
 
+**Security deployment:** the dashboard now needs the same-origin Vercel host. Change the project's Root Directory from `proxy` to the repository root before deploying this branch. Follow [security deployment](docs/security-deployment.md) for the complete migration and live verification. Legacy GitHub Pages links redirect after deployment; the secure dashboard is `https://aione-team-proxy.vercel.app/dashboard.html` and API routes are `/api/...`.
+
 - **Dashboard:** https://youssef-sahlieh.github.io/aione-team-control/ (GitHub Pages, publishes itself on every push to `main`)
 - **Jira proxy:** https://aione-team-proxy.vercel.app (Vercel project `aione-team-proxy`, team "aione")
 - **Who can sign in:** everyone with an account on the **Users** page (administrators only). Youssef and Ellen are administrators.
@@ -58,7 +60,11 @@ Until then, Youssef and Ellen sign in with the team password and the Users page 
 
 ## Internal tickets
 
-Tickets that live only in AION Team Control, never in Jira. They're numbered **INT-1, INT-2, …**, carry a teal **Internal** tag, and show up in every tile, filter, board and view next to the Jira tickets (filter on them with **Work type → Internal**).
+Tickets that live only in AION Team Control, never in Jira. They're numbered **INT-1, INT-2, …**, carry a teal **Internal** tag, and show up in every tile, filter, board and view next to the Jira tickets.
+
+To show only internal tickets, choose **Ticket source → Internal tickets only** in the main filter bar. This is available to managers and users, combines with the other visible filters, and preserves each user's authorized ticket scope. Choose **All tickets** or **Reset filters** to include Jira tickets again. Managers can also save an internal-only view.
+
+Managers also have a separate **Internal tickets** sidebar page, showing only `INT-` IDs with its own page scope. Users keep the source filter on All tickets. Jira tickets have `AION-` IDs; internal dashboard tickets have `INT-` IDs.
 
 - **Open one:** **+ Internal ticket** above the list. Administrators choose one or more developers; Users always open them for themselves.
 - **Assignee:** every internal ticket is assigned to Karim, Youssef or Rami, like the Jira tickets. Youssef is pre-selected; switch to Karim or Rami before creating it if needed. Administrators can change it later (click the assignee in the list, or **Change assignee** in the ticket panel).
@@ -112,7 +118,7 @@ Gmail allows about 500 emails a day from one account. To stop sending, delete th
 
 ## If something doesn't work
 
-For automatic emails when a new Jira ticket has no developer, see [ticket notification activation](docs/ticket-notifications.md). This needs a deployed proxy and a Jira Automation rule; it works without the dashboard open.
+For automatic emails when a new Jira ticket has no developer, see [ticket notification activation](docs/ticket-notifications.md). Deploy the proxy and open a manager dashboard once to activate automatic checks using the existing mailer and database. An optional Jira Automation rule enables alerts while all dashboards are closed.
 
 - **"Can't reach the AION server":** check that https://aione-team-proxy.vercel.app/config answers with `{"code":"session",...}`. If not, open the latest deployment in Vercel for errors.
 - **"Jira didn't accept the proxy's API token":** the token expired or was revoked. Replace it (above).

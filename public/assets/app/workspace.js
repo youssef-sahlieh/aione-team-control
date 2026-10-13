@@ -1,12 +1,14 @@
 import { readRoute, routeUrl } from "./router.js";
 import { calculateWorkload } from "../models/workload.js";
 import { assigneeOptions } from "../models/assignees.js";
+import { isInternalTicket } from "../models/filters.js";
 const $ = id => document.getElementById(id);
 const node = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const button = (text, cls, action) => { const b = node("button", cls, text); b.type = "button"; b.addEventListener("click", action); return b; };
 const icons = {
   overview: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z",
   tickets: "M4 4h16v16H4z M8 9h8 M8 14h5",
+  internal: "M4 3h12l4 4v14H4z M16 3v5h4 M8 12h8 M8 16h5",
   boards: "M3 4h5v16H3z M10 4h5v11h-5z M17 4h5v14h-5z",
   workload: "M4 20V10 M10 20V4 M16 20v-7 M22 20H2",
   calendar: "M4 5h16v16H4z M8 2v6 M16 2v6 M4 10h16 M8 14h2 M14 14h2",
@@ -15,6 +17,7 @@ const icons = {
 const pages = [
   ["overview", "Overview", "Your work, at a glance."],
   ["tickets", "All tickets", "A clear view of your team's work, from first task to final delivery."],
+  ["internal", "Internal tickets", "Dashboard-created tickets with INT- IDs, separate from AION Jira tickets."],
   ["boards", "Boards", "Keep work moving with a shared view of every stage."],
   ["workload", "Workload", "Understand assignments, deadlines, and where support is needed."],
   ["calendar", "Calendar", "Make space for what's next. Plan around your ticket due dates."],
@@ -87,6 +90,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     const a = node("a", "nav-link"); a.href = `dashboard.html?page=${id}`; a.dataset.page = id; a.title = label;
     a.append(icon(id), node("span", "", label));
     if (id === "tickets") { const count = node("span", "nav-count", "—"); count.id = "nav-ticket-count"; a.appendChild(count); }
+    if (id === "internal") { const count = node("span", "nav-count", "—"); count.id = "nav-internal-count"; a.appendChild(count); }
     a.addEventListener("click", e => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate(id); });
     nav.appendChild(a);
   }
@@ -99,11 +103,12 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     document.body.dataset.workspaceRole=context().admin?"manager":"user";
     moreNav.hidden=!context().admin;
     if(context().admin){
-      for(const id of ["overview","tickets","workload","calendar"])nav.insertBefore(nav.querySelector(`[data-page="${id}"]`),moreNav);
+      for(const id of ["overview","tickets","internal","workload","calendar"])nav.insertBefore(nav.querySelector(`[data-page="${id}"]`),moreNav);
       for(const id of ["boards","history"])moreLinks.appendChild(nav.querySelector(`[data-page="${id}"]`));
     }
     nav.querySelector('[data-page="history"]').hidden = !context().admin;
     nav.querySelector('[data-page="workload"]').hidden = !context().admin;
+    nav.querySelector('[data-page="internal"]').hidden = !context().admin;
     const current = new URL(location.href);
     if(current.searchParams.get("page") === "mytasks")history.replaceState(null,"",routeUrl("tickets",null,current));
     // Preserve the old saved ticket modes when there is no explicit page route.
@@ -218,6 +223,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     for (const link of nav.querySelectorAll("a[data-page]")) { if (link.dataset.page === route.page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); }
     if(context().admin&&["boards","history"].includes(route.page))moreNav.open=true;
     $("nav-ticket-count").textContent = String(state.issues?.length || 0);
+    $("nav-internal-count").textContent = String((state.issues||[]).filter(isInternalTicket).length);
     const custom = ["overview", "workload", "calendar"].includes(route.page);
     $("tickets-area").hidden = custom; $("workspace-content").hidden = !custom;
     if (!custom) return false;

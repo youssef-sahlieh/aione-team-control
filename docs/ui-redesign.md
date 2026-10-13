@@ -63,14 +63,14 @@ developer filters are ignored so they cannot silently narrow the user's list.
 Both roles default to Karim, Youssef and Rami in the assignee filter. Razan
 remains a separate option and is included only when explicitly selected.
 
-The manager sidebar keeps Overview, All tickets, Workload and Calendar as primary
+The manager sidebar keeps Overview, All tickets, Internal tickets, Workload and Calendar as primary
 pages, with Boards and Due date history under More. My tasks has been removed;
 old My tasks links open All tickets while preserving the ticket hash. Users
 continue to see only authorized tickets. Direct links still
 work and open the relevant navigation group. The manager's quick filters show
 Assignee, Developer, Reporter, Status, Priority and Due date; multi-select developer chips and saved-view controls are
 available in More filters. Users have a minimal Assignee, Status and Due date bar,
-with search in the top bar. Reporter, Priority, Developer, advanced filters and saved-view controls
+with a Ticket source selector (All tickets / Internal tickets only / Jira tickets only) and search in the top bar. Reporter, Priority, Developer, advanced filters and saved-view controls
 are manager-only. Users' default assignees are summarized as Default team instead of separate chips;
 custom selections remain removable and Razan/Others stay available through the assignee picker.
 Hidden advanced criteria are cleared for users so they cannot silently narrow the list.
@@ -83,6 +83,29 @@ All tickets retains its original dashboard layout: all ten focus cards are
 available directly, and list rows use their original desktop/mobile arrangement.
 The manager's compact card and row styling applies only to other ticket pages.
 The new Jira-style filters and three-person default selection remain in place.
+
+Managers have a dedicated **Internal tickets** page (`?page=internal`) containing
+only `INT-` ticket IDs. It reuses ticket controls and visible filters, ignores a
+conflicting Ticket source selection from other pages, and omits the Jira-only AI
+brief column. All tickets remains the combined view. Users retain the minimal
+Ticket source selector to choose Internal tickets only or Jira tickets only;
+they do not get the separate manager navigation page. Source classification uses
+the `INT-<number>` ID prefix rather than the Jira issue type. Server account scope
+still governs which internal tickets each user receives.
+
+Jira ticket details include a manager-only **History** tab immediately beside Comments.
+It loads all pages of Jira's field changelog on demand, newest first, with author,
+timestamp, field name and full before/after text. Status, assignee, labels, priority,
+due dates and custom field changes are included when Jira records them; Comments
+remain in their own tab. Internal tickets retain their existing due-date Activity
+timeline and have no Jira History tab. The proxy's `/jira/issue/<key>/history` route
+is authenticated, manager-only, restricted to this project, read-only, and fixes
+each Jira page to 100 entries. It uses Jira's [paginated changelog endpoint](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-issueidorkey-changelog-get).
+The frontend follows pages to completion, detects stalled pagination, discloses
+partial failures with retry, caches five ticket histories by updated timestamp
+for the page session, and ignores stale results when the selected ticket changes.
+Tab switching preserves comment drafts. Existing manager-only due-date history
+controls remain unchanged.
 
 The Jira-style filter toolbar has a searchable assignee picker with native
 checkboxes, default/optional groups, counts and staged Apply/Cancel controls.
