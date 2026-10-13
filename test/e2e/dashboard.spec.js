@@ -71,6 +71,23 @@ test('legacy Jira history cannot claim completeness when its expanded events are
   const mock=await mockDashboard(page,{legacyHistory:true,legacyTotal:150});await page.goto('/dashboard.html#AION-101');await page.getByRole('tab',{name:'History',exact:true}).click();await expect(page.locator('#d-full-history')).toContainText('1 of 150 change events · Older history may be missing');await expect(page.locator('#d-full-history')).not.toContainText('Complete Jira field history');await expect(page.getByRole('link',{name:'Open ticket in Jira',exact:true})).toHaveAttribute('href',/jira\.example\.invalid\/browse\/AION-101/);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
 
+for(const width of [320,1440])test(`internal note buttons open the email composer at ${width}px`,async({page})=>{
+  await page.setViewportSize({width,height:900});const mock=await mockDashboard(page);await page.goto('/dashboard.html#AION-101');await expect(page.locator('#d-note')).toBeInViewport();await page.locator('#d-note').click();await expect(page.locator('#pop')).toContainText('Internal note · AION-101');await expect(page.locator('#pop textarea')).toBeFocused();await page.keyboard.press('Escape');await page.getByRole('tab',{name:'Comments',exact:true}).click();await expect(page.locator('#d-comment-note')).toBeVisible();await page.locator('#d-comment-note').click();await expect(page.locator('#pop textarea')).toBeFocused();expect(mock.calls.some(c=>c.path==='/mail')).toBe(false);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('internal note buttons remain manager-only',async({page})=>{
+  const mock=await mockDashboard(page,{role:'user'});await page.goto('/dashboard.html#AION-101');await expect(page.locator('#d-note')).toBeHidden();await page.getByRole('tab',{name:'Comments',exact:true}).click();await expect(page.locator('#d-comment-note')).toBeHidden();expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+
+for(const width of [320,1024,1440])test(`manager Internal note column opens a ticket composer at ${width}px`,async({page})=>{
+  await page.setViewportSize({width,height:900});const mock=await mockDashboard(page);await page.goto('/dashboard.html');await expect(page.locator('#view .item')).toHaveCount(2);
+  if(width===1440)await expect(page.locator('#view .gr.head .c-note')).toHaveText('Internal note');
+  for(const key of ['AION-101','INT-101']){const button=page.getByRole('button',{name:'Internal note for '+key,exact:true});await expect(button).toBeVisible();await expect(button).toHaveText('Internal note');await button.click();await expect(page.locator('#drawer')).toBeHidden();await expect(page.locator('#pop')).toContainText('Internal note · '+key);await expect(page.locator('#pop textarea')).toBeFocused();await page.keyboard.press('Escape');}
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:`test-results/email-column-${width}.png`,fullPage:true});expect(mock.calls.some(c=>c.path==='/mail')).toBe(false);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('regular users have no Internal note column',async({page})=>{
+  const mock=await mockDashboard(page,{role:'user'});await page.goto('/dashboard.html');await expect(page.locator('#view .item')).toHaveCount(2);await expect(page.locator('#view .email-button')).toHaveCount(0);await expect(page.locator('.listwrap.with-email')).toHaveCount(0);expect(mock.errors).toEqual([]);
+});
+
 async function selectAssignees(page,names){
   await page.locator("#assignee-filter-trigger").click();const picker=page.locator("#assignee-filter-dialog");
   for(const check of await picker.getByRole("checkbox").all())await check.setChecked(names.includes(await check.getAttribute("aria-label")));

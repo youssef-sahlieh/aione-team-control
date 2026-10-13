@@ -330,11 +330,11 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   }
 
   function listView(items,t){
-    const w=el("div","listwrap"+(showTicketBriefs()?" with-ai-briefs":""));
+    const w=el("div","listwrap"+(showTicketBriefs()?" with-ai-briefs":"")+(IS_ADMIN?" with-email":""));
     const h=el("div","gr head"); const all=el("input","ck"); all.type="checkbox"; all.setAttribute("aria-label","Select all");
     all.checked=items.every(i=>state.sel.has(i.key)); all.addEventListener("change",()=>{ items.forEach(i=>all.checked?state.sel.add(i.key):state.sel.delete(i.key)); render(); });
     const hc=el("span","c-ck"); hc.appendChild(all); h.appendChild(hc);
-    [["c-key","Ticket ID"],["c-ttl","Title / Priority"],["c-who","Assignee"],["c-rep","Reporter"],["c-dev","Developers"],["c-st","Status"],["c-due","Due date"],["c-cre","Created"],["c-upd","Updated"],["c-note",""],["c-actions",""]].forEach(([c,x])=>h.appendChild(el("span",c,x)));
+    [["c-key","Ticket ID"],["c-ttl","Title / Priority"],["c-who","Assignee"],["c-rep","Reporter"],["c-dev","Developers"],["c-st","Status"],["c-due","Due date"],["c-cre","Created"],["c-upd","Updated"],["c-note",IS_ADMIN?"Internal note":""],["c-actions",""]].forEach(([c,x])=>h.appendChild(el("span",c,x)));
     if(showTicketBriefs()){const label=el("span","c-brief","AI brief");label.title="Generate a short AI explanation of each Jira ticket.";h.insertBefore(label,h.querySelector(".c-who"));}
     w.appendChild(h);
     const allSorted=sortItems(items), pages=Math.max(1,Math.ceil(allSorted.length/state.pageSize));
@@ -412,7 +412,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const dw=el("span","c-due"); dw.appendChild(dueButton(i,t)); r.appendChild(dw);
     { const cr=el("span","upd c-cre",fmtDate(i.created)); cr.title="Created "+i.created; cr.style.fontFamily="var(--mono)"; r.appendChild(cr); }
     r.appendChild(el("span","upd c-upd",ago(i.updated)));
-    if(IS_ADMIN){ const nb=el("button","notebtn c-note","✉ Internal notes"); nb.type="button"; nb.title="Email the developer directly (not posted in Jira)"; nb.addEventListener("click",e=>{ e.stopPropagation(); notePopover(nb,i.key); }); r.appendChild(nb); }
+    if(IS_ADMIN){ const nb=el("button","notebtn c-note email-button","Internal note"); nb.type="button"; nb.setAttribute("aria-label","Internal note for "+i.key);nb.title="Email the developer directly (not posted in Jira)"; nb.addEventListener("click",e=>{ e.stopPropagation(); notePopover(nb,i.key); }); r.appendChild(nb); }
     else r.appendChild(el("span","c-note"));
     const actions=el("span","c-actions"), menu=el("button","icon-btn row-menu","⋯");menu.type="button";menu.setAttribute("aria-label","Actions for "+i.key);menu.setAttribute("aria-haspopup","dialog");menu.addEventListener("click",()=>rowActions(menu,i));actions.appendChild(menu);r.appendChild(actions);
     return r;
@@ -974,6 +974,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     });
   }
   $("d-note").addEventListener("click",e=>{ if(dz.key) notePopover(e.currentTarget,dz.key); });
+  $("d-comment-note").addEventListener("click",e=>{ if(dz.key&&IS_ADMIN) notePopover(e.currentTarget,dz.key); });
   $("d-asg").addEventListener("click",e=>{ if(dz.key) assigneePopover(e.currentTarget,[dz.key]); });
   $("d-adddev").addEventListener("click",()=>{ const v=$("d-newdev").value.trim().replace(/^ai1_/i,"").replace(/\s+/g,"").toLowerCase(); if(!v){ setMsg("d-devmsg","Type a name first.",false); return; } dz.devs.add(v); $("d-newdev").value=""; renderDevChips(); setMsg("d-devmsg","Added ai1_"+v+". Press Save developers.",true); });
   $("d-newdev").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("d-adddev").click(); } });
