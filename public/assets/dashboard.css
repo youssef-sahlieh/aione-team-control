@@ -310,3 +310,6 @@ button.key.int:hover{text-decoration:underline}
 .mention-option{display:block;width:100%;border:0;background:transparent;text-align:start;padding:10px 12px;font:inherit;color:inherit;cursor:pointer;overflow-wrap:anywhere}
 .mention-option[aria-selected="true"],.mention-option:hover{background:#eaf1ff;color:#172b4d}
 .mention-message,.mention-hint{padding:8px 12px;font-size:12px;color:#526174}.mention-hint{padding:0;margin:6px 0 10px}
+.btn.note-action{background:var(--c4s);border-color:var(--c4);font-weight:600;min-height:40px;padding:8px 14px;white-space:nowrap}
+.btn.note-action:hover{background:var(--c4);color:var(--surface)}
+.btn.note-action:focus-visible{outline:2px solid var(--c4);outline-offset:3px}
