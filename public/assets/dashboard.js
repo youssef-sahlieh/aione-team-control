@@ -12,6 +12,7 @@ import { createAIAssistant } from "./ai-assistant.js";
 import { createAssigneeFilter } from "./components/assignee-filter.js";
 import { createTicketBriefs } from "./components/ticket-briefs.js";
 import { createTicketHistory } from "./components/ticket-history.js";
+import { createCommentMentions } from "./components/comment-mentions.js";
 
   // Filled in from the proxy's /config after sign-in (see applyConfig).
   let SITE="", PROJECT="", PEOPLE={}, DEVS=[], DEV_EMAIL={}, DEV_COLOR={}, BYID={}, JQL="", ME="", MAIL=false;
@@ -810,7 +811,7 @@ import { createTicketHistory } from "./components/ticket-history.js";
   function openDrawer(key){
     if(dz.key&&dz.key!==key&&!closeDrawer())return;
     const opening=!dz.key;dz.key=key;
-    if(opening){drawerUI.open();$("d-reply").value="";$("d-newdev").value="";}
+    if(opening){drawerUI.open();$("d-reply").value="";commentMentions.reset();$("d-newdev").value="";}
     ticketHistory.reset();drawerUI.select("overview");
     closePop(); dz.key=key; const i=issueByKey(key);
     $("drawer").hidden=false; $("scrim").hidden=false; $("drawer").classList.toggle("is-int",isInt(key));
@@ -979,7 +980,8 @@ import { createTicketHistory } from "./components/ticket-history.js";
   $("d-savedevs").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const labels=labelsWith(dz.labels,new Set(dz.devs)); const prev=new Set(dz.labels.filter(isDevLabel).map(devOf)); const r=await runBatch([{key,added:[...dz.devs].filter(d=>!prev.has(d)),run:()=>(isInt(key)?internalApi.update(key,{devs:[...dz.devs]}):jira.edit(key,{labels}))}],"Developers saved"); setMsg("d-devmsg",r.fail?"Not saved.":"Saved.",!r.fail); });
   $("d-savedue").addEventListener("click",async()=>{ const key=dz.key, v=$("d-due").value; if(!key) return; if(!/^\d{4}-\d{2}-\d{2}$/.test(v)){ setMsg("d-duemsg","Pick a date first.",false); return; } const r=await runBatch([{key,run:()=>setDue(key,v)}],"Due date set to "+fmtDate(v)); setMsg("d-duemsg",r.fail?"Not saved.":"Saved.",!r.fail); });
   $("d-cleardue").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const r=await runBatch([{key,run:()=>setDue(key,null)}],"Due date cleared"); setMsg("d-duemsg",r.fail?"Not saved.":"Cleared.",!r.fail); });
-  $("d-send").addEventListener("click",async()=>{ const key=dz.key, text=$("d-reply").value.trim(); if(!key) return; if(!text){ setMsg("d-cmsg","Write something first.",false); return; } const after=$("d-after").value; const r=await runBatch([{key,run:()=>doComment(key,text)}],"Comment added"); if(!r.fail) $("d-reply").value=""; setMsg("d-cmsg",r.fail?"Not sent.":"Sent.",!r.fail);
+  const commentMentions=createCommentMentions({textarea:$("d-reply"),search:q=>jira.users(q),enabled:()=>!!dz.key&&!isInt(dz.key)});
+  $("d-send").addEventListener("click",async()=>{ const key=dz.key, text=isInt(key)?$("d-reply").value.trim():commentMentions.text(); if(!key) return; if(!text){ setMsg("d-cmsg","Write something first.",false); return; } const after=$("d-after").value; const r=await runBatch([{key,run:()=>doComment(key,text)}],"Comment added"); if(!r.fail){$("d-reply").value="";commentMentions.reset();} setMsg("d-cmsg",r.fail?"Not sent.":"Sent.",!r.fail);
     if(!r.fail&&after){ const ix=after.indexOf("|"); const aid=after.slice(0,ix), aname=after.slice(ix+1); const r2=await doAssign([key],aid,aname); setMsg("d-cmsg",r2.fail?"Comment sent, but the assignee didn't change.":"Sent and assigned to "+aname+".",!r2.fail); } });
 
   setInterval(()=>{ const a=$("auto"); if(!a||!lastLoad) return; const left=Math.max(0,120-Math.round((Date.now()-lastLoad)/1000)); a.textContent="next refresh in "+(left>=60?Math.floor(left/60)+"m "+(left%60)+"s":left+"s");
