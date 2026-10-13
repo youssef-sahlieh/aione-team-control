@@ -18,7 +18,7 @@ export function createTicketHistory({api,getIssue,allowed,formatTime}) {
       }
       box.appendChild(entry);
     }
-    if(error){box.appendChild(node("p","msg err",error));const retry=node("button","btn","Retry history");retry.type="button";retry.addEventListener("click",()=>load(key,true));box.appendChild(retry);}
+    if(error){box.appendChild(node("p","msg err",error));const retry=node("button","btn","Retry history");retry.type="button";retry.addEventListener("click",()=>load(key,true));box.appendChild(retry);const href=document.getElementById('d-open')?.href;if(href&&/^https:\/\//.test(href)){const link=node('a','btn','Open ticket in Jira');link.href=href;link.target='_blank';link.rel='noopener';box.appendChild(link);}}
   }
   async function load(key,force=false){
     if(!allowed()||getIssue()?.key!==key)return;
@@ -30,7 +30,21 @@ export function createTicketHistory({api,getIssue,allowed,formatTime}) {
     paint(rows,"Loading ticket history…",null,key);box.setAttribute("aria-busy","true");
     try{
       while(current()){
-        const page=await api(`/jira/issue/${encodeURIComponent(key)}/history?startAt=${offset}`);
+        let page;
+        try{page=await api(`/jira/issue/${encodeURIComponent(key)}/history?startAt=${offset}`);}
+        catch(err){
+          if(offset!==0||!(err.status===404||err.code==='not_found'))throw err;
+          // Older deployed proxies expose expanded changelogs, but not the paginated route.
+          const legacy=await api(`/jira/issue/${encodeURIComponent(key)}/changelog`);
+          if(!current())return;
+          const log=legacy.changelog;
+          if(!log||!Array.isArray(log.histories))throw new Error('The server did not return Jira change history.');
+          const unique=[...new Map(log.histories.map(h=>[String(h.id??JSON.stringify(h)),h])).values()];
+          const complete=Number.isInteger(log.total)&&log.total>=0&&unique.length===log.total;
+          if(complete){cache.set(key,{version,rows:unique});if(cache.size>5)cache.delete(cache.keys().next().value);paint(unique,`${unique.length} change events · Complete Jira field history`,null,key);}
+          else{paint(unique,`${unique.length}${Number.isInteger(log.total)?' of '+log.total:''} change events · Older history may be missing`,'The deployed API needs the paginated history update to load every Jira change. Open the ticket in Jira for its full history.',key);}
+          return;
+        }
         if(!current())return;
         if(!Array.isArray(page.values)||page.startAt!==offset)throw new Error("Jira returned an invalid history page.");
         let added=0;for(const item of page.values){const id=String(item.id??JSON.stringify(item));if(!ids.has(id)){ids.add(id);rows.push(item);added++;}}
@@ -40,7 +54,7 @@ export function createTicketHistory({api,getIssue,allowed,formatTime}) {
         if(!page.values.length||!added||next<=offset)throw new Error("History pagination stopped before all changes were returned.");
         paint(rows,`${rows.length}${Number.isInteger(page.total)?" of "+page.total:""} change events loaded…`,null,key);offset=next;
       }
-    }catch(err){if(current())paint(rows,`${rows.length} change events loaded · History incomplete`,err.message||"Could not load history.",key);}
+    }catch(err){if(current())paint(rows,rows.length?`${rows.length} change events loaded · History incomplete`:'Could not load Jira history',err.message||"Could not load history.",key);}
     finally{if(turn===generation){busy="";box.setAttribute("aria-busy","false");}}
   }
   return {load,reset(){generation++;busy="";box.replaceChildren();box.setAttribute("aria-busy","false");}};

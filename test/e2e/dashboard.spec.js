@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { jiraIssue, internalTicket, people } from "../fixtures/issues.js";
 
-async function mockDashboard(page, { role = "admin", failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false } = {}) {
+async function mockDashboard(page, { role = "admin", failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1 } = {}) {
   await page.clock.setFixedTime(new Date("2026-10-11T09:00:00Z"));
   const calls = [], unexpected = [], errors = [];
   let historyFailures=historyFailure?1:0;
@@ -37,8 +37,11 @@ async function mockDashboard(page, { role = "admin", failure = false, expired = 
       const issues=assigneeTeam?["karim","youssef","rami","razan","someone"].map((key,n)=>({...jiraIssue,key:`AION-${201+n}`,fields:{...jiraIssue.fields,summary:`Task for ${key}`,assignee:{accountId:`test-${key}`,displayName:key[0].toUpperCase()+key.slice(1)}}})):many?Array.from({length:30},(_,n)=>({...jiraIssue,key:`AION-${101+n}`,fields:{...jiraIssue.fields,summary:`Synthetic Jira task ${n+1}`}})):[jiraIssue];
       return json({ issues: body.jql.includes("statusCategory = Done") ? [] : issues, isLast: true });
     }
-    if (path.endsWith("/changelog")) return json({ changelog: { histories: [] } });
+    if(path==="/jira/users")return json([{accountId:"synthetic-karim",displayName:"Karim Example",active:true},{accountId:"synthetic-youssef",displayName:"Youssef Example",active:true},{accountId:"synthetic-app",displayName:"App",accountType:"app"}]);
+    if(path.endsWith("/comment")&&method==="POST")return json({id:"synthetic-comment"});
+    if (path.endsWith("/changelog")) return json({ changelog: legacyHistory?{total:legacyTotal,histories:[{id:'legacy-1',created:'2026-10-09T10:00:00Z',author:{displayName:'Jira Manager'},items:[{field:'status',fromString:'Open',toString:'In Development'}]}]}:{ histories: [] } });
     if(path.endsWith("/history")){
+      if(legacyHistory)return route.fulfill({status:404,json:{code:'not_found',error:'Not found.'}});
       const start=Number(url.searchParams.get("startAt")||0);
       if(start===1&&historyFailures-->0)return route.fulfill({status:503,json:{code:"jira",error:"History unavailable"}});
       return json({startAt:start,total:2,isLast:start===1,values:[start===0?{id:"h1",created:"2026-10-09T10:00:00Z",author:{displayName:"Test Manager"},items:[{field:"status",fromString:"Open",toString:"In Development"}]}:{id:"h2",created:"2026-10-10T10:00:00Z",author:{displayName:"Test Lead"},items:[{field:"assignee",fromString:"Unassigned",toString:"Test Lead"},{field:"description",fromString:null,toString:"<img src=x onerror=alert(1)>"}]}]});
@@ -50,6 +53,26 @@ async function mockDashboard(page, { role = "admin", failure = false, expired = 
   });
   return { calls, unexpected, errors };
 }
+
+for(const role of ['admin','user'])test(`${role} Jira mentions pick people and send account IDs`,async({page})=>{
+  const mock=await mockDashboard(page,{role});await page.goto('/dashboard.html#AION-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();
+  const input=page.locator('#d-reply');await input.fill('Please check @ka');await expect(page.getByRole('option',{name:'Karim Example',exact:true})).toBeVisible();await input.press('Enter');await expect(input).toHaveValue('Please check @Karim Example ');
+  await input.press('Home');await input.press('Home');await input.press('Control+Home');await input.press('ArrowRight');await input.press('Control+Home');await input.press('Q');
+  await input.press('Control+End');await input.press('End');await input.press('Space');await input.press('@');await input.press('y');await input.press('o');await expect(page.getByRole('option',{name:'Youssef Example',exact:true})).toBeVisible();await input.press('ArrowDown');await input.press('Enter');
+  await page.locator('#d-send').click();await expect(page.locator('#d-cmsg')).toHaveText('Sent.');
+  const sent=mock.calls.find(c=>c.path==='/jira/issue/AION-101/comment');expect(sent.body.text).toBe('QPlease check [~accountid:synthetic-karim]  [~accountid:synthetic-youssef]');expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('editing a selected mention makes it plain text and internal tickets have no picker',async({page})=>{
+  const mock=await mockDashboard(page);await page.goto('/dashboard.html#AION-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();const input=page.locator('#d-reply');await input.fill('@ka');await expect(page.getByRole('option',{name:'Karim Example',exact:true})).toBeVisible();await input.press('Enter');await input.fill('@Karim Edited');await input.press('Escape');await page.locator('#d-send').click();await expect(page.locator('#d-cmsg')).toHaveText('Sent.');expect(mock.calls.find(c=>c.path.endsWith('/comment')).body.text).toBe('@Karim Edited');
+  await page.locator('#d-close').click();await page.goto('/dashboard.html#INT-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();await input.fill('@ka');await expect(page.locator('.mention-hint')).toBeHidden();await expect(page.locator('#comment-mention-picker')).toBeHidden();expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+
+test('legacy Jira history route displays real field changes when all events are returned',async({page})=>{
+  const mock=await mockDashboard(page,{legacyHistory:true});await page.goto('/dashboard.html#AION-101');await page.getByRole('tab',{name:'History',exact:true}).click();await expect(page.locator('#d-full-history')).toContainText('1 change events · Complete Jira field history');await expect(page.locator('#d-full-history')).toContainText('Jira Manager');await expect(page.locator('#d-full-history')).toContainText('In Development');await expect(page.locator('.ticket-history-entry')).toHaveCount(1);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('legacy Jira history cannot claim completeness when its expanded events are capped',async({page})=>{
+  const mock=await mockDashboard(page,{legacyHistory:true,legacyTotal:150});await page.goto('/dashboard.html#AION-101');await page.getByRole('tab',{name:'History',exact:true}).click();await expect(page.locator('#d-full-history')).toContainText('1 of 150 change events · Older history may be missing');await expect(page.locator('#d-full-history')).not.toContainText('Complete Jira field history');await expect(page.getByRole('link',{name:'Open ticket in Jira',exact:true})).toHaveAttribute('href',/jira\.example\.invalid\/browse\/AION-101/);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
 
 async function selectAssignees(page,names){
   await page.locator("#assignee-filter-trigger").click();const picker=page.locator("#assignee-filter-dialog");
