@@ -30,11 +30,7 @@ async function handle(request) {
   const url = new URL(request.url);
   url.pathname = "/" + (url.searchParams.get("__path") || "");
   url.searchParams.delete("__path");
-  const env = { ...settings, COOKIE_SESSIONS:true, MAILER: gmailMailer(), STORE: store() };
-  const appURL=new URL(process.env.APP_URL||"https://aione-team-proxy.vercel.app");
-  if(appURL.protocol!=="https:")return Response.json({code:"server_config",error:"APP_URL must use HTTPS."},{status:500});
-  env.APP_URL=appURL.origin;
-  env.ALLOWED_ORIGIN=appURL.origin;
+  const env = { ...settings, MAILER: gmailMailer(), STORE: store() };
   for (const name of SECRETS) env[name] = process.env[name] || "";
   env.NO_DEVELOPER_NOTIFY_TO = process.env.NO_DEVELOPER_NOTIFY_TO ?? settings.NO_DEVELOPER_NOTIFY_TO;
   const hasBody = !["GET", "HEAD"].includes(request.method);

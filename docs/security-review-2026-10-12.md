@@ -1,5 +1,7 @@
 # Security review — 12 October 2026
 
+**Hosting update, 13 October:** the user chose to retain GitHub Pages. `fix/github-pages-login` restores the existing bearer-session frontend and proxy entry point, while retaining atomic resets, safe error handling, stronger password hashes and environment ignores. HttpOnly frontend sessions and dashboard framing protection remain pending; cookie-service unit tests verify the optional implementation, not the deployed GitHub Pages session. See [current deployment setup](security-deployment.md).
+
 Reviewed local commit `fc8473a`, all 29 locally available commits/ref histories, 258 unique historical blobs, 71 current files, public hosting endpoints and installed dependency lockfiles. This is a source review and targeted verification, not a penetration-test certification.
 
 **Remediation update:** all six findings below now have implemented code changes and regression coverage. The updated suite passed 138 backend/frontend checks and 54 browser checks (192 total). A local benchmark of the new 600,000-iteration password hash took 174 ms. Original evidence is preserved as the audit baseline. Cookie isolation and framing protection require the repository-root Vercel deployment in [security deployment](security-deployment.md); production migration and live header verification remain pending. The reset, error-redaction and hashing changes also require deployment before protecting production.

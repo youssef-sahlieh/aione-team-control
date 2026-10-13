@@ -1,6 +1,10 @@
 # Deploying the security fixes
 
-All six audit findings have code fixes. Cookie isolation and framing protection take effect only after deploying the repository-root Vercel configuration. GitHub Pages cannot supply the necessary response headers or isolated same-origin API sessions.
+**Current setup (13 October 2026): GitHub Pages frontend + existing Vercel proxy.** The cookie-host migration was reverted to restore this setup. Keep Vercel Root Directory set to `proxy`; merge/deploy `fix/github-pages-login` and use `https://youssef-sahlieh.github.io/aione-team-control/index.html`. There is no redirect to the API host. Existing account data and Jira tickets are retained. If the Vercel project has a manually configured `APP_URL`, use the GitHub Pages URL; the proxy settings already default to it.
+
+Atomic reset-link consumption, safe mailer/proxy errors, stronger password hashing with upgrades, and broad environment-file exclusions remain implemented. GitHub Pages uses the existing JavaScript-accessible bearer session. HttpOnly browser sessions and dashboard frame-ancestor response headers remain unresolved under this hosting arrangement. Cookie service code and its isolated regression tests remain available, but the production entry point does not enable that service.
+
+The instructions below describe the **optional future migration**, using the repository-root configuration retained on `security/hardening`. They do not describe the active GitHub Pages setup. Do not apply them to restore current login.
 
 ## One-time hosting change
 

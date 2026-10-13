@@ -1,7 +1,5 @@
 # AION Team Control: setup and changes
 
-**Security deployment:** the dashboard now needs the same-origin Vercel host. Change the project's Root Directory from `proxy` to the repository root before deploying this branch. Follow [security deployment](docs/security-deployment.md) for the complete migration and live verification. Legacy GitHub Pages links redirect after deployment; the secure dashboard is `https://aione-team-proxy.vercel.app/dashboard.html` and API routes are `/api/...`.
-
 - **Dashboard:** https://youssef-sahlieh.github.io/aione-team-control/ (GitHub Pages, publishes itself on every push to `main`)
 - **Jira proxy:** https://aione-team-proxy.vercel.app (Vercel project `aione-team-proxy`, team "aione")
 - **Who can sign in:** everyone with an account on the **Users** page (administrators only). Youssef and Ellen are administrators.
