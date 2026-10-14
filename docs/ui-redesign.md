@@ -166,6 +166,6 @@ The [due-date approval workflow](due-date-approvals.md) supersedes the earlier d
 
 Date requests use a divided list with compact date comparisons and primary decision actions; blockers, full timestamps, history and admin withdrawal live under Details & history. Request forms keep optional dependency details collapsed. Focus indicators and mobile touch targets remain available.
 
-Date request cards explicitly show who requested the change, including the developer identifier recorded at submission. Administrators have Pending, Decisions and All views plus a Requesting developer filter; Mine is developer-only. The filter follows the original requester identity, independent of the ticket’s current developer assignment.
+Date request cards explicitly show who requested the change, including the developer identifier recorded at submission. Administrators have Pending, Decisions and All views plus a Requesting developer filter; Mine is removed for both roles; developers automatically see only their own requests, enforced by the API. The filter follows the original requester identity, independent of the ticket’s current developer assignment.
 
 Date requests also includes a manager-only Due date history view. It loads complete paginated Jira field history and internal dueHistory, including older changes made before the request workflow. Period and ticket-developer filters, before/after dates, change author and Jerusalem timestamps are available. Partial load failures are disclosed and retryable. The page states the coverage of currently loaded tickets.

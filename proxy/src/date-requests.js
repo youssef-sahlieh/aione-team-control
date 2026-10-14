@@ -19,7 +19,7 @@ export async function dateRequestRoutes(request,env,url,me,{readTicket,applyDate
   const key=url.searchParams.get('key');if(key&&!validKey(key))return fail('Invalid ticket.');
   const cursor=url.searchParams.get('cursor')||'0';if(!/^\d{1,8}$/.test(cursor))return fail('Invalid request page.');
   const allKeys=key?[key]:(await store.smembers(index)).sort(),start=key?0:Number(cursor),keys=allKeys.slice(start,start+20),requests=[];
-  for(let offset=0;offset<keys.length;offset+=5){const rows=await Promise.all(keys.slice(offset,offset+5).map(async k=>{const t=await accessible(k);if(!t)return null;const doc=await load(k);return doc.requests.map(r=>({...r,ticket:{key:k,title:t.title,due:t.due,developers:t.devs,closed:t.closed}}));}));for(const row of rows){if(row)requests.push(...row);else if(key)return fail('This ticket is unavailable.',404);}}
+  for(let offset=0;offset<keys.length;offset+=5){const rows=await Promise.all(keys.slice(offset,offset+5).map(async k=>{const t=await accessible(k);if(!t)return null;const doc=await load(k);return doc.requests.filter(r=>me.role==='admin'||r.requester.email===me.email).map(r=>({...r,ticket:{key:k,title:t.title,due:t.due,developers:t.devs,closed:t.closed}}));}));for(const row of rows){if(row)requests.push(...row);else if(key)return fail('This ticket is unavailable.',404);}}
   const isLast=start+keys.length>=allKeys.length;
   return json({requests:requests.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)),isLast,...(!isLast?{nextCursor:String(start+keys.length)}:{})});
  }
@@ -54,7 +54,7 @@ export async function dateRequestRoutes(request,env,url,me,{readTicket,applyDate
    doc.requests.push(r);await save();
    if(action==='submit'){await notify('submitted');return json({request:r},201);}
   }else{
-   if(!r)return fail('No such request.',404);
+   if(!r||(me.role!=='admin'&&r.requester.email!==me.email))return fail('No such request.',404);
    if(['revise','withdraw'].includes(action)&&me.role!=='admin'&&r.requester.email!==me.email)return fail('Only the requester can revise or withdraw this request.',403);
    if(action==='retry-email'){
     if(me.role!=='admin'&&r.requester.email!==me.email)return fail('Only admins or the requester can retry notifications.',403);
