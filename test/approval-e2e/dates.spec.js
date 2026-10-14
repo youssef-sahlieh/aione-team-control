@@ -32,7 +32,7 @@ test('admins filter by the requesting developer and do not have a Mine view',asy
  await select.selectOption('builder@aione.biz');await expect(page.locator('.date-request-card').filter({hasText:'AION-103'})).toHaveCount(0);await expect(page.locator('.date-request-card').first()).toContainText('Requested by Preview Developer (builder)');
  await page.getByRole('button',{name:'Decisions',exact:true}).click();await expect(page.locator('.date-request-card').filter({hasText:'AION-104'})).toBeVisible();
  await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
- await page.goto('/preview/user');await page.goto('/dashboard.html?page=requests');await expect(page.getByRole('button',{name:'Mine',exact:true})).toBeVisible();await expect(page.getByRole('combobox',{name:'Requesting developer',exact:true})).toHaveCount(0);
+ await page.goto('/preview/user');await page.goto('/dashboard.html?page=requests');await expect(page.getByRole('button',{name:'Mine',exact:true})).toHaveCount(0);await expect(page.getByRole('combobox',{name:'Requesting developer',exact:true})).toHaveCount(0);
 });
 
 test('due date history lives inside Date requests and includes older Jira and internal changes',async({page})=>{

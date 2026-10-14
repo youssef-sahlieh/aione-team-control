@@ -49,3 +49,13 @@ test('Jira initial setting checks existing history before allowing a first date'
 test('the request records its developer identity separately from current ticket assignments',async()=>{
  const f=fixture();const r=(await f.submit()).data.request;assert.equal(r.requester.dev,'builder');f.tickets.get(r.key).devs=['other'];const list=(await f.call('',undefined,f.admin)).data.requests;assert.equal(list[0].requester.dev,'builder');assert.deepEqual(list[0].ticket.developers,['other']);
 });
+
+test('developers see only their own requests even when they share a ticket developer label',async()=>{
+ const f=fixture();const other={email:'other@aione.biz',name:'Other Developer',role:'user',dev:'builder'};const own=(await f.submit()).data.request;
+ await f.call('submit',{key:'INT-1',proposedDate:'2026-10-25',reason:'Another developer estimate'},other);
+ const mine=(await f.call()).data.requests;assert.deepEqual(mine.map(r=>r.key),['AION-1']);
+ const theirs=(await f.call('',undefined,other)).data.requests;assert.deepEqual(theirs.map(r=>r.key),['INT-1']);
+ assert.equal((await f.call('',undefined,f.admin)).data.requests.length,2);
+ assert.equal((await f.call('revise',{key:own.key,id:own.id,version:own.version,proposedDate:'2026-10-26',reason:'Cannot edit someone else'},other)).status,404);
+ const url=new URL('https://test/date-requests?key=AION-1');const response=await dateRequestRoutes(new Request(url),{STORE:f.store,JIRA_PROJECT:'AION'},url,other,f.deps);assert.deepEqual((await response.json()).requests,[]);
+});

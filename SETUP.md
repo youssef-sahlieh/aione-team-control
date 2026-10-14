@@ -124,3 +124,7 @@ For automatic emails when a new Jira ticket has no developer, see [ticket notifi
 - **"The email account didn't accept its app password":** the Gmail app password was revoked (for example after a password change). Create a new one and update `GMAIL_APP_PASSWORD`.
 - **Emails don't arrive:** check the recipient's Junk folder, and the Gmail account's **Sent** folder to see whether they went out.
 - **Run the tests yourself:** `npm test` (Node 20+).
+
+## GitHub deployment through the existing Vercel connection
+
+Vercel deploys the proxy through its connected GitHub repository. GitHub Actions tests the app and waits for the production proxy's required API capabilities before publishing GitHub Pages. No new Vercel deployment secrets are needed. See [Git deployment and troubleshooting](docs/github-deployment.md).

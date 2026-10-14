@@ -30,6 +30,7 @@ jobs:
       - run: npm test
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+      - run: npm run test:approvals -- --output=test-results/approvals
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -42,9 +43,24 @@ jobs:
         with:
           path: public
 
-  deploy:
-    if: github.event_name != 'pull_request'
+  wait-for-proxy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Wait for the existing Vercel Git deployment
+        run: node scripts/wait-for-proxy.js
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [build, wait-for-proxy]
     runs-on: ubuntu-latest
     environment:
       name: github-pages

@@ -6,7 +6,7 @@ const status=r=>({pending:'Awaiting approval',needs_review:'Needs another review
 export function createDateRequests({api,context,openIssue,onChange,renderHistory}){
  let requests=[],error='',filter='pending',developer='',selectedKey=null;
  const dialog=node('dialog','date-dialog');document.body.appendChild(dialog);
- async function load(){try{const all=[];let cursor=null;const seen=new Set();do{const page=await api('/date-requests'+(cursor?'?cursor='+encodeURIComponent(cursor):''));all.push(...(page.requests||[]));cursor=page.isLast===false?page.nextCursor:null;if(cursor&&seen.has(cursor))throw new Error('Request pagination stalled. Refresh to retry.');if(cursor)seen.add(cursor);}while(cursor);requests=all;error='';}catch(e){error=e.message||'Date requests could not be loaded.';}return requests;}
+ async function load(){try{const all=[];let cursor=null;const seen=new Set();do{const page=await api('/date-requests'+(cursor?'?cursor='+encodeURIComponent(cursor):''));all.push(...(page.requests||[]));cursor=page.isLast===false?page.nextCursor:null;if(cursor&&seen.has(cursor))throw new Error('Request pagination stalled. Refresh to retry.');if(cursor)seen.add(cursor);}while(cursor);requests=context().admin?all:all.filter(r=>r.requester.email===context().email);error='';}catch(e){error=e.message||'Date requests could not be loaded.';}return requests;}
  const activeFor=key=>requests.find(r=>r.key===key&&pending(r));
  function fields(form,label,type,value=''){const wrap=node('label','date-field');wrap.append(node('span','',label));const input=node(type==='textarea'?'textarea':'input','inp');if(type!=='textarea')input.type=type;input.value=value??'';wrap.append(input);form.append(wrap);return input;}
  function show(title){dialog.replaceChildren();const heading=node('h2','',title);heading.id='date-dialog-title';dialog.setAttribute('aria-labelledby',heading.id);dialog.append(heading);const form=node('form','date-form');form.method='dialog';dialog.append(form);const msg=node('p','msg');msg.setAttribute('role','alert');form.append(msg);dialog.showModal();return {form,msg};}
@@ -65,9 +65,9 @@ export function createDateRequests({api,context,openIssue,onChange,renderHistory
   target.replaceChildren();if(error){target.append(node('p','msg err',error),button('Retry loading requests',async()=>{await load();await onChange();}));return;}
   let list=key?requests.filter(r=>r.key===key):requests;
   if(!key&&!summary){
-   if(context().admin&&filter==='mine')filter='pending';
+   if(filter==='mine')filter='pending';
    const tabs=node('div','date-filter-tabs');
-   const views=context().admin?[['pending','Pending'],['decisions','Decisions'],['all','All'],['history','Due date history']]:[['pending','Pending'],['mine','Mine'],['decisions','Decisions'],['all','All']];
+   const views=context().admin?[['pending','Pending'],['decisions','Decisions'],['all','All'],['history','Due date history']]:[['pending','Pending'],['decisions','Decisions'],['all','All']];
    for(const [id,label]of views){const b=button(label,()=>{filter=id;render(target);});b.setAttribute('aria-pressed',String(filter===id));tabs.append(b);}
    if(context().admin&&filter!=='history'){
     const people=new Map();for(const r of requests)people.set(r.requester.email,r.requester);
@@ -77,9 +77,9 @@ export function createDateRequests({api,context,openIssue,onChange,renderHistory
     for(const person of [...people.values()].sort((a,b)=>(a.name||a.email).localeCompare(b.name||b.email)))select.append(new Option((person.name||person.email)+(person.dev?' ('+person.dev+')':''),person.email));
     select.value=developer;select.addEventListener('change',()=>{developer=select.value;render(target);});field.append(select);tabs.append(field);
    }
-   target.append(tabs);if(context().admin&&filter==='history'){const history=node('section','date-history');target.append(history);renderHistory(history);return;}list=list.filter(r=>(!context().admin||!developer||r.requester.email===developer)&&(filter==='all'||filter==='pending'&&pending(r)||filter==='mine'&&r.requester.email===context().email||filter==='decisions'&&!pending(r)));
+   target.append(tabs);if(context().admin&&filter==='history'){const history=node('section','date-history');target.append(history);renderHistory(history);return;}list=list.filter(r=>(!context().admin||!developer||r.requester.email===developer)&&(filter==='all'||filter==='pending'&&pending(r)||filter==='decisions'&&!pending(r)));
   }
-  if(summary)list=list.filter(r=>context().admin?pending(r):pending(r)||r.requester.email===context().email);
+  if(summary&&context().admin)list=list.filter(pending);
   list=list.slice().sort((a,b)=>pending(a)&&pending(b)?a.createdAt.localeCompare(b.createdAt):Number(pending(b))-Number(pending(a))||b.updatedAt.localeCompare(a.updatedAt));
   if(summary)list=list.slice(0,4);
   if(!list.length)target.append(node('p','date-empty',key?'No date requests for this ticket.':'No requests in this view.'));

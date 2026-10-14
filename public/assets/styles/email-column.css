@@ -1,12 +1,12 @@
 /* Managers can compose a ticket email directly from each row. */
-body[data-workspace-role=manager] .listwrap.with-email .gr { grid-template-columns:24px 80px minmax(120px,1fr) 100px 100px 100px 85px 116px 40px;gap:8px; }
-body[data-workspace-role=manager] .listwrap.with-email.with-ai-briefs .gr { grid-template-columns:24px 80px minmax(100px,1fr) minmax(140px,1.2fr) 90px 90px 95px 85px 116px 40px;gap:8px; }
+.listwrap.with-email .gr { grid-template-columns:24px 80px minmax(120px,1fr) 100px 100px 100px 85px 116px 40px;gap:8px; }
+.listwrap.with-email.with-ai-briefs .gr { grid-template-columns:24px 80px minmax(100px,1fr) minmax(140px,1.2fr) 90px 90px 95px 85px 116px 40px;gap:8px; }
 .listwrap.with-email .gr .c-note { display:block;justify-self:start;grid-column:auto; }
 .listwrap.with-email .gr .email-button { display:inline-flex;align-items:center;justify-content:center;min-height:40px;min-width:72px;padding:8px 12px;font-size:13px;font-weight:600;border:1px solid var(--c4);border-radius:8px; }
 .email-button:focus-visible { outline:2px solid var(--c4);outline-offset:3px; }
 @media(max-width:1399px) {
-  body[data-workspace-role=manager] .listwrap.with-email .gr,
-  body[data-workspace-role=manager] .listwrap.with-email.with-ai-briefs .gr { grid-template-columns:24px minmax(0,1fr) minmax(0,1fr) 40px;grid-template-areas:'ck key key actions' 'ck ttl ttl actions' 'ck brief brief actions' 'ck who dev actions' 'ck st due actions' 'ck email email actions'; }
+  .listwrap.with-email .gr,
+  .listwrap.with-email.with-ai-briefs .gr { grid-template-columns:24px minmax(0,1fr) minmax(0,1fr) 40px;grid-template-areas:'ck key key actions' 'ck ttl ttl actions' 'ck brief brief actions' 'ck who dev actions' 'ck st due actions' 'ck email email actions'; }
   .listwrap.with-email .gr.head { display:none; }
   .listwrap.with-email .gr .c-ck { grid-area:ck; }
   .listwrap.with-email .gr .c-key { grid-area:key; }
@@ -20,6 +20,6 @@ body[data-workspace-role=manager] .listwrap.with-email.with-ai-briefs .gr { grid
   .listwrap.with-email .gr .c-actions { grid-area:actions; }
 }
 @media(max-width:820px) {
-  body[data-workspace-role=manager] .listwrap.with-email .gr,
-  body[data-workspace-role=manager] .listwrap.with-email.with-ai-briefs .gr { grid-template-columns:24px minmax(0,1fr) auto;grid-template-areas:'ck key actions' 'ck ttl ttl' 'ck brief brief' 'ck who who' 'ck dev st' 'ck due due' 'ck email email'; }
+  .listwrap.with-email .gr,
+  .listwrap.with-email.with-ai-briefs .gr { grid-template-columns:24px minmax(0,1fr) auto;grid-template-areas:'ck key actions' 'ck ttl ttl' 'ck brief brief' 'ck who who' 'ck dev st' 'ck due due' 'ck email email'; }
 }

@@ -3,7 +3,7 @@ export function createIssueDrawer({ isDirty, canViewHistory, canViewFullHistory 
   const drawer = $("drawer"), body = $("d-body"), tabs = $("drawer-tabs");
   let opener = null, active = "overview";
   const panels = {};
-  for (const [id, label] of [["overview", "Overview"], ["activity", "Activity"], ["comments", "Comments"], ["history", "History"], ["files", "Files"]]) {
+  for (const [id, label] of [["overview", "Overview"], ["activity", "Activity"], ["comments", "Comments"], ["notes", "Internal notes"], ["history", "History"], ["files", "Files"]]) {
     const tab = document.createElement("button"); tab.type = "button"; tab.className = "drawer-tab"; tab.textContent = label;
     tab.id = "tab-" + id; tab.setAttribute("role", "tab"); tab.setAttribute("aria-controls", "panel-" + id);
     tab.addEventListener("click", () => select(id)); tabs.appendChild(tab);
