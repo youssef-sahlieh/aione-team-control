@@ -3,7 +3,7 @@ const button=(text,action,cls='btn')=>{const b=node('button',cls,text);b.type='b
 const pending=r=>['pending','needs_review','applying'].includes(r.status);
 const date=v=>v?new Date(v+'T00:00:00Z').toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric',timeZone:'UTC'}):'Not set';
 const status=r=>({pending:'Awaiting approval',needs_review:'Needs another review',applying:'Applying date',set:'Initial date set',approved:'Approved',rejected:'Rejected',withdrawn:'Withdrawn'}[r.status]||r.status);
-export function createDateRequests({api,context,openIssue,onChange}){
+export function createDateRequests({api,context,openIssue,onChange,renderHistory}){
  let requests=[],error='',filter='pending',developer='',selectedKey=null;
  const dialog=node('dialog','date-dialog');document.body.appendChild(dialog);
  async function load(){try{const all=[];let cursor=null;const seen=new Set();do{const page=await api('/date-requests'+(cursor?'?cursor='+encodeURIComponent(cursor):''));all.push(...(page.requests||[]));cursor=page.isLast===false?page.nextCursor:null;if(cursor&&seen.has(cursor))throw new Error('Request pagination stalled. Refresh to retry.');if(cursor)seen.add(cursor);}while(cursor);requests=all;error='';}catch(e){error=e.message||'Date requests could not be loaded.';}return requests;}
@@ -67,9 +67,9 @@ export function createDateRequests({api,context,openIssue,onChange}){
   if(!key&&!summary){
    if(context().admin&&filter==='mine')filter='pending';
    const tabs=node('div','date-filter-tabs');
-   const views=context().admin?[['pending','Pending'],['decisions','Decisions'],['all','All']]:[['pending','Pending'],['mine','Mine'],['decisions','Decisions'],['all','All']];
+   const views=context().admin?[['pending','Pending'],['decisions','Decisions'],['all','All'],['history','Due date history']]:[['pending','Pending'],['mine','Mine'],['decisions','Decisions'],['all','All']];
    for(const [id,label]of views){const b=button(label,()=>{filter=id;render(target);});b.setAttribute('aria-pressed',String(filter===id));tabs.append(b);}
-   if(context().admin){
+   if(context().admin&&filter!=='history'){
     const people=new Map();for(const r of requests)people.set(r.requester.email,r.requester);
     if(developer&&!people.has(developer))developer='';
     const field=node('label','date-developer-filter');field.append(node('span','','Developer'));
@@ -77,7 +77,7 @@ export function createDateRequests({api,context,openIssue,onChange}){
     for(const person of [...people.values()].sort((a,b)=>(a.name||a.email).localeCompare(b.name||b.email)))select.append(new Option((person.name||person.email)+(person.dev?' ('+person.dev+')':''),person.email));
     select.value=developer;select.addEventListener('change',()=>{developer=select.value;render(target);});field.append(select);tabs.append(field);
    }
-   target.append(tabs);list=list.filter(r=>(!context().admin||!developer||r.requester.email===developer)&&(filter==='all'||filter==='pending'&&pending(r)||filter==='mine'&&r.requester.email===context().email||filter==='decisions'&&!pending(r)));
+   target.append(tabs);if(context().admin&&filter==='history'){const history=node('section','date-history');target.append(history);renderHistory(history);return;}list=list.filter(r=>(!context().admin||!developer||r.requester.email===developer)&&(filter==='all'||filter==='pending'&&pending(r)||filter==='mine'&&r.requester.email===context().email||filter==='decisions'&&!pending(r)));
   }
   if(summary)list=list.filter(r=>context().admin?pending(r):pending(r)||r.requester.email===context().email);
   list=list.slice().sort((a,b)=>pending(a)&&pending(b)?a.createdAt.localeCompare(b.createdAt):Number(pending(b))-Number(pending(a))||b.updatedAt.localeCompare(a.updatedAt));

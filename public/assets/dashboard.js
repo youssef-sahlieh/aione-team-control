@@ -12,6 +12,7 @@ import { createAIAssistant } from "./ai-assistant.js";
 import { createAssigneeFilter } from "./components/assignee-filter.js";
 import { createTicketBriefs } from "./components/ticket-briefs.js";
 import { createTicketHistory } from "./components/ticket-history.js";
+import { createDueDateHistory } from "./components/due-date-history.js";
 import { createDateRequests } from "./components/date-requests.js";
 import { createCommentMentions } from "./components/comment-mentions.js";
 
@@ -942,7 +943,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   $("signout").addEventListener("click",()=>signOut());
   const ticketHistory=createTicketHistory({api,getIssue:()=>issueByKey(dz.key),allowed:()=>IS_ADMIN&&!!dz.key&&!isInt(dz.key)&&!$("drawer").hidden,formatTime:value=>{const time=fmtWhen(value);return time.d+" "+time.t;}});
   const drawerUI=createIssueDrawer({canViewHistory:()=>IS_ADMIN,canViewFullHistory:()=>IS_ADMIN&&!!dz.key&&!isInt(dz.key),onSelect:id=>{if(id==="history")ticketHistory.load(dz.key);},isDirty:()=>{const issue=issueByKey(dz.key);if(!issue)return !!$("d-reply").value.trim();return !!$("d-reply").value.trim()||!!$("d-newdev").value.trim()||dz.devs.size!==issue.devs.length||issue.devs.some(d=>!dz.devs.has(d));}});
-  const dateRequests=createDateRequests({api,context:()=>({admin:IS_ADMIN,email:MY_EMAIL,ticket:issueByKey}),openIssue:openDrawer,onChange:async()=>{await reload();if(dz.key){dateRequests.renderDrawer(dz.key);loadDetail(dz.key);}}});
+  const dueDateHistory=createDueDateHistory({api,tickets:()=>state.issues||[],internal:key=>INT[key],openIssue:openDrawer});
+  const dateRequests=createDateRequests({api,renderHistory:target=>dueDateHistory.render(target),context:()=>({admin:IS_ADMIN,email:MY_EMAIL,ticket:issueByKey}),openIssue:openDrawer,onChange:async()=>{await reload();if(dz.key){dateRequests.renderDrawer(dz.key);loadDetail(dz.key);}}});
   const workspace=createWorkspace({state,context:()=>({admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount(),dateRequests:dateRequests.all(),pendingDates:dateRequests.pendingCount(),renderRequests:(target,options)=>dateRequests.render(target,options)}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>!dz.key||closeDrawer()});
   const aiAssistant=createAIAssistant({openIssue:openDrawer,beforeOpen:()=>{if(dz.key&&!closeDrawer())return false;closePop();return true;}});
   const ticketBriefs=createTicketBriefs({api});

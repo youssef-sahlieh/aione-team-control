@@ -12,11 +12,11 @@ const user={email:'builder@aione.biz',name:'Preview Developer',role:'user',dev:'
 const reviewer={email:'reviewer@aione.biz',name:'Preview Reviewer',role:'user',dev:'reviewer',v:1};
 for(const u of [admin,user,reviewer])await saveUser(store,u);
 const offset=n=>{const d=new Date();d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);};
-const issues=new Map();
+const issues=new Map(),dateHistories=new Map();
 for(const [index,title,due,dev,status] of [[101,'Add creation-date filters to the API',-2,'builder','In Development'],[102,'Improve retry handling for file uploads',2,'builder','Open'],[103,'Verify the checkout regression fixes',0,'reviewer','Pending QA'],[104,'Prepare deployment notes',5,'builder','Open'],[105,'Investigate intermittent export failures',null,'builder','Open'],[106,'Review integration error messages',7,'reviewer','Open']]){
- const i=structuredClone(jiraIssue);i.id=String(10000+index);i.key='AION-'+index;i.fields.summary=title;i.fields.project={key:'AION'};i.fields.labels=['ai1_'+dev];i.fields.duedate=due===null?null:offset(due);i.fields.status={name:status,statusCategory:{key:'indeterminate'}};i.fields.created=new Date(Date.now()-3*86400000).toISOString();i.fields.updated=new Date().toISOString();i.fields.parent=null;i.fields.description='Local sample ticket for reviewing the date request and approval workflow.';i.renderedFields.description='<p>Local sample ticket for reviewing the date request and approval workflow.</p>';issues.set(i.key,i);
+ const i=structuredClone(jiraIssue);i.id=String(10000+index);i.key='AION-'+index;i.fields.summary=title;i.fields.project={key:'AION'};i.fields.labels=['ai1_'+dev];i.fields.duedate=due===null?null:offset(due);i.fields.status={name:status,statusCategory:{key:'indeterminate'}};i.fields.created=new Date(Date.now()-3*86400000).toISOString();i.fields.updated=new Date().toISOString();i.fields.parent=null;i.fields.description='Local sample ticket for reviewing the date request and approval workflow.';i.renderedFields.description='<p>Local sample ticket for reviewing the date request and approval workflow.</p>';issues.set(i.key,i);dateHistories.set(i.key,i.fields.duedate?[{id:"initial-"+index,created:i.fields.created,author:{displayName:"Preview Developer"},items:[{field:"duedate",from:null,to:i.fields.duedate}]}]:[]);
 }
-const internal={...structuredClone(internalTicket),summary:'Review the internal release checklist',created:new Date().toISOString(),updated:new Date().toISOString(),due:offset(3)};
+const internal={...structuredClone(internalTicket),summary:'Review the internal release checklist',created:new Date().toISOString(),updated:new Date().toISOString(),due:offset(3),dueHistory:[{when:new Date().toISOString(),by:'Preview Admin',from:null,to:offset(3)}]};
 await store.set('it:'+internal.key,JSON.stringify(internal));await store.sadd('itickets',internal.key);
 globalThis.fetch=async(url,options={})=>{
  const u=new URL(url);if(u.hostname!=='jira.preview.invalid')throw new Error('External services are disabled in this preview.');
@@ -25,8 +25,8 @@ globalThis.fetch=async(url,options={})=>{
  if(u.pathname.endsWith('/user/search'))return Response.json([]);
  if(!i)return Response.json({errorMessages:['No sample ticket']},{status:404});
  if(u.pathname.endsWith('/transitions')){if(options.method==='POST'){i.fields.status.name='In Development';return new Response(null,{status:204});}return Response.json({transitions:[{id:'1',name:'Start development',to:{name:'In Development',statusCategory:{key:'indeterminate'}}}]});}
- if(u.pathname.endsWith('/changelog'))return Response.json({values:[],isLast:true,total:0});
- if(options.method==='PUT'){Object.assign(i.fields,body.fields);i.fields.updated=new Date().toISOString();return new Response(null,{status:204});}
+ if(u.pathname.endsWith('/changelog'))return Response.json({values:dateHistories.get(i.key)||[],isLast:true,total:(dateHistories.get(i.key)||[]).length});
+ if(options.method==='PUT'){if('duedate' in body.fields&&(i.fields.duedate||null)!==body.fields.duedate)dateHistories.get(i.key).push({id:crypto.randomUUID(),created:new Date().toISOString(),author:{displayName:'Preview Jira account'},items:[{field:'duedate',from:i.fields.duedate||null,to:body.fields.duedate}]});Object.assign(i.fields,body.fields);i.fields.updated=new Date().toISOString();return new Response(null,{status:204});}
  if(u.pathname.endsWith('/comment')&&options.method==='POST')return Response.json({id:'preview-comment'});
  return Response.json(i);
 };
