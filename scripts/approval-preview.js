@@ -3,6 +3,7 @@ import {createServer} from 'node:http';
 import {readFile} from 'node:fs/promises';
 import {resolve,sep,extname} from 'node:path';
 import handler,{makeToken} from '../proxy/src/handler.js';
+import settings from '../proxy/settings.js';
 import {memoryStore,saveUser} from '../proxy/src/users.js';
 import {jiraIssue,internalTicket,people} from '../test/fixtures/issues.js';
 const port=Number(process.env.PREVIEW_PORT||3100),base='http://localhost:'+port,root=resolve('public');
@@ -30,7 +31,7 @@ globalThis.fetch=async(url,options={})=>{
  if(u.pathname.endsWith('/comment')&&options.method==='POST')return Response.json({id:'preview-comment'});
  return Response.json(i);
 };
-const env={ALLOWED_ORIGIN:base,SESSION_SECRET:crypto.randomUUID(),JIRA_PROJECT:'AION',JIRA_SITE:'https://jira.preview.invalid',JIRA_EMAIL:'preview@aione.biz',JIRA_API_TOKEN:'local-only',STORE:store,MAIL_DOMAIN:'aione.biz',APP_URL:base,TEAM_EMAILS:admin.email,TEAM_CONFIG:JSON.stringify({people,devs:['builder','reviewer'],devEmails:{builder:user.email,reviewer:reviewer.email},devColors:{builder:'k1',reviewer:'k3'}}),MAILER:async mail=>{emails.push({...mail,at:new Date().toISOString()});}};
+const env={INTERNAL_NOTE_RECIPIENTS:settings.INTERNAL_NOTE_RECIPIENTS,ALLOWED_ORIGIN:base,SESSION_SECRET:crypto.randomUUID(),JIRA_PROJECT:'AION',JIRA_SITE:'https://jira.preview.invalid',JIRA_EMAIL:'preview@aione.biz',JIRA_API_TOKEN:'local-only',STORE:store,MAIL_DOMAIN:'aione.biz',APP_URL:base,TEAM_EMAILS:admin.email,TEAM_CONFIG:JSON.stringify({people,devs:['builder','reviewer'],devEmails:{builder:user.email,reviewer:reviewer.email},devColors:{builder:'k1',reviewer:'k3'}}),MAILER:async mail=>{emails.push({...mail,at:new Date().toISOString()});}};
 const tokens={admin:(await makeToken(env,admin.email,Date.now(),1)).token,user:(await makeToken(env,user.email,Date.now(),1)).token,reviewer:(await makeToken(env,reviewer.email,Date.now(),1)).token};
 const call=async(action,body,role='user')=>{const response=await handler.fetch(new Request(base+'/date-requests/'+action,{method:'POST',headers:{Authorization:'Bearer '+tokens[role],'Content-Type':'application/json'},body:JSON.stringify(body)}),env);if(!response.ok)throw new Error(await response.text());return (await response.json()).request;};
 await call('submit',{key:'AION-101',proposedDate:offset(3),reason:'API contract clarification is still pending. I need time for implementation and regression tests.',blocker:'Waiting for the integration team to confirm the filter format.'});

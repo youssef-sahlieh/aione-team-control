@@ -125,6 +125,6 @@ For automatic emails when a new Jira ticket has no developer, see [ticket notifi
 - **Emails don't arrive:** check the recipient's Junk folder, and the Gmail account's **Sent** folder to see whether they went out.
 - **Run the tests yourself:** `npm test` (Node 20+).
 
-## GitHub deployment without interactive CLI login
+## GitHub deployment through the existing Vercel connection
 
-The coordinated GitHub Actions workflow deploys the existing proxy before publishing GitHub Pages. Configure the three repository deployment secrets as described in [GitHub deployment](docs/github-deployment.md). Missing proxy credentials block dashboard publishing instead of releasing a frontend with missing backend routes.
+Vercel deploys the proxy through its connected GitHub repository. GitHub Actions tests the app and waits for the production proxy's required API capabilities before publishing GitHub Pages. No new Vercel deployment secrets are needed. See [Git deployment and troubleshooting](docs/github-deployment.md).

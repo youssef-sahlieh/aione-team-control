@@ -9,6 +9,12 @@ export default {
   JIRA_PROJECT: "AION",
   // Emails from the dashboard can only go to addresses at this domain.
   MAIL_DOMAIN: "aione.biz",
+  // Fixed note recipients authorized by the team. Selecting them never changes account roles.
+  INTERNAL_NOTE_RECIPIENTS: [
+    {name:"Ellen", email:"ellen@aione.biz"},
+    {name:"Youssef", email:"youssef@aione.biz"},
+    {name:"Karim", email:"karim@aione.biz"}
+  ],
   // Jira-created notifications go to the two managers, regardless of dashboard display filters.
   NO_DEVELOPER_NOTIFY_TO: "youssef@aione.biz,ellen@aione.biz",
   // Where password links in emails point (the dashboard on GitHub Pages).

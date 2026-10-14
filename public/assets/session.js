@@ -80,6 +80,9 @@ export async function api(path, { method = "GET", body } = {}) {
   if (!res.ok) {
     const code = (data && data.code) || "server";
     if (code === "session") signOut(true);
+    if (res.status === 404 && code === "not_found" && data?.error === "Not found." && /^\/(date-requests|ticket-notes)(\/|\?|$)/.test(path)) {
+      throw new ApiError("backend_outdated", "The connected backend has not been updated for date requests and internal notes. Deploy the current main branch in the existing Vercel project. Localhost:3000 also uses this live backend; the sample preview uses a separate local backend.", 404);
+    }
     throw new ApiError(code, (data && data.error) || "HTTP " + res.status, res.status);
   }
   return data;

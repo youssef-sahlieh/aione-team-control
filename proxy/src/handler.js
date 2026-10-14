@@ -17,6 +17,7 @@
 //   emails in TEAM_EMAILS sign in with TEAM_PASSWORD as admins. The first sign-in with TEAM_PASSWORD
 //   after the database is added creates admin accounts for everyone in TEAM_EMAILS.
 import { dateRequestRoutes } from "./date-requests.js";
+import { ticketNoteRoutes } from "./ticket-notes.js";
 import { internalRoutes } from "./internal.js";
 import { cookieSessionRequest } from "./sessions.js";
 import { aiChat, aiBrief, aiConfigured } from "./ai.js";
@@ -313,6 +314,9 @@ async function route(request, env, url) {
   const path = url.pathname;
   const method = request.method;
 
+  // Public compatibility check for Pages publishing; exposes no runtime credentials or ticket data.
+  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1"]});
+
   // Jira Automation uses its own secret, never a team password or a user's browser session.
   if (path === "/notifications/jira-created") {
     if (method !== "POST") return fail("method", "Use POST for Jira events.", 405);
@@ -393,6 +397,22 @@ async function route(request, env, url) {
   }
 
   if (path === "/users" || path.startsWith("/users/")) return accountRoutes(request, env, url, me);
+  if (path === "/ticket-notes") return ticketNoteRoutes(request, env, url, me, {
+    readTicket:async key => {
+      if (/^INT-\d+$/.test(key)) {
+        const raw = await env.STORE?.get("it:" + key);
+        if (!raw) return null;
+        const t = JSON.parse(raw);
+        return {title:t.summary, devs:t.devs || []};
+      }
+      const result = await jira(env, "/rest/api/3/issue/" + key + "?fields=summary,labels,project", {signal:AbortSignal.timeout(15000)});
+      if (!result.ok) { if ([403,404].includes(result.res.status)) return null; throw new Error("Ticket read failed"); }
+      const f = result.data.fields;
+      if (result.data.key !== key || f?.project?.key !== env.JIRA_PROJECT || !Array.isArray(f.labels)) return null;
+      return {title:f.summary, devs:f.labels.filter(l => /^ai1_/i.test(l)).map(l => l.slice(4).toLowerCase())};
+    },
+    sendMail:(from,body) => sendMail(env,from,body)
+  });
   if(path==="/date-requests"||path.startsWith("/date-requests/"))return dateRequestRoutes(request,env,url,me,{
     readTicket:async (key,{checkInitial=false}={})=>{
       if(/^INT-\d+$/.test(key)){const raw=await env.STORE?.get("it:"+key);if(!raw)return null;const t=JSON.parse(raw);return {title:t.summary,due:t.due||null,devs:t.devs||[],closed:t.status==="Closed",hasHadDue:!!t.due||(t.dueHistory||[]).some(h=>h.from||h.to),raw};}

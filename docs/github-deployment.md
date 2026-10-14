@@ -1,36 +1,34 @@
-# Automatic proxy and dashboard deployment
+# Deployment through the existing Vercel Git connection
 
-GitHub Actions validates the application, deploys the existing aione-team-proxy Vercel project, and then publishes the dashboard to GitHub Pages. Keeping this order prevents a new dashboard from calling endpoints absent from the running proxy.
+The existing Vercel project deploys the proxy from GitHub. GitHub Actions tests the application and publishes public/ to GitHub Pages after confirming the production proxy supports the dashboard's required API features. No Vercel token, organization ID or project ID is required in GitHub Actions.
 
-## One-time setup
+## Existing project settings
 
-A Vercel project owner must add three repository Actions secrets at:
+In aione-team-proxy, verify:
 
-https://github.com/youssef-sahlieh/aione-team-control/settings/secrets/actions
+- Settings → Git: repository youssef-sahlieh/aione-team-control, production branch main.
+- Settings → Build and Deployment: Root Directory proxy.
+- Production domain: https://aione-team-proxy.vercel.app points to this project's production deployment.
+- Keep the existing Jira, account database and mail environment variables in Vercel.
 
-- VERCEL_TOKEN: create a token at https://vercel.com/account/tokens with access to the existing Aione team/project. Store the value directly in GitHub; do not put it in repository files, issue comments, screenshots or chat.
-- VERCEL_ORG_ID: the team/organization ID for the existing Vercel project.
-- VERCEL_PROJECT_ID: the existing aione-team-proxy project ID.
+Vercel must successfully deploy the updated proxy from main. A Git connection alone does not guarantee a successful deployment; check the deployment logs for failed builds, authorization errors or skipped deployments.
 
-The project ID is available in Vercel project settings. The organization and project IDs are also in .vercel/project.json after linking that existing project. IDs are configuration, not passwords. The workflow validates that the project's Root Directory is proxy. It deploys from the repository root, using the existing Vercel project settings and production environment variables.
+## Publishing behavior
 
-No credentials for Jira, Redis, Gmail or AI need to move into GitHub. Existing runtime environment variables remain in Vercel. The workflow pulls the Vercel production configuration into the temporary runner workspace for its build; these values are never published as artifacts or printed by the workflow. The application repository .vercel directory remains ignored.
+The workflow is .github/workflows/deploy.yml. Pull requests run unit and browser tests without deploying. Pushes to main trigger the existing Vercel Git integration independently; after tests pass, the wait-for-proxy job polls the production /health endpoint for up to ten minutes. Pages publishes only when the backend advertises API version 1 and the date-requests-v1 and ticket-notes-v1 capabilities.
 
-## Deployment behavior
+The health endpoint is public and uncached. It exposes no secrets, account information or ticket content. This check establishes API compatibility; it does not require an identical frontend/backend commit and does not verify Jira, database or mail delivery. This allows frontend-only changes to publish when Vercel skips an unchanged proxy. When adding an incompatible API requirement, update the health contract and the required capabilities in scripts/wait-for-proxy.js together.
 
-The workflow is .github/workflows/deploy.yml. Pull requests run validation only and do not receive production secrets or deploy. Pushes to main validate, deploy the proxy, and then publish GitHub Pages. Production proxy deployments are serialized. A missing secret or failed proxy build/deployment blocks dashboard publishing and reports an explicit Actions error.
+If Vercel fails to deploy, the Pages job stays blocked with a message directing you to the existing Git deployment. Fix the deployment in Vercel and rerun the failed Actions jobs. Running the Pages workflow manually does not trigger Vercel; deploy the updated main branch through the connected project first.
 
-Vercel CLI is pinned to 64.0.2. The workflow uses vercel pull, vercel build --prod, and vercel deploy --prebuilt --prod. There is no interactive login during deployments once secrets are configured.
+## Release the fix
 
-## Deploy the fix
+1. Merge the updated application and workflow into main.
+2. In Vercel → aione-team-proxy → Deployments, confirm the new main deployment is Ready and assigned to production. If no deployment starts, use Vercel's Git deployment flow to deploy the current main commit; redeploying an older commit will not add the new routes.
+3. Open https://aione-team-proxy.vercel.app/health. It should show ok: true, apiVersion: 1 and both required capabilities.
+4. In GitHub Actions, confirm build, wait-for-proxy and deploy succeed.
+5. Sign in to the dashboard and verify Date requests, initial date setting, approval decisions and Internal notes. Verify email delivery separately using the existing mail settings.
 
-1. Add the three secrets above.
-2. Merge the deployment workflow into main.
-3. Open https://github.com/youssef-sahlieh/aione-team-control/actions and follow Deploy to GitHub Pages. Both deploy-proxy and deploy must succeed.
-4. Refresh Date requests while signed in. It should show requests or an empty-state message instead of Not found.
+Any VERCEL_TOKEN, VERCEL_ORG_ID or VERCEL_PROJECT_ID secrets added for the previous CLI workflow are unused by this workflow. No new Vercel account or team is needed.
 
-For a manual rerun, choose Run workflow on main. Do not run a production deployment from an unreviewed feature branch. GitHub Pages was previously deployed separately; this workflow now depends on a successful proxy deployment.
-
-This automation cannot deploy without the one-time Vercel credentials. Signing into GitHub alone does not grant access to Vercel. Deployment remains blocked until the repository owner adds the secrets.
-
-Reference: [Vercel's GitHub Actions deployment guide](https://vercel.com/kb/guide/how-can-i-use-github-actions-with-vercel).
+Reference: [Vercel's GitHub integration](https://vercel.com/docs/git/vercel-for-github).
