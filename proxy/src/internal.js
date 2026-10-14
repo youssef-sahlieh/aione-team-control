@@ -47,11 +47,12 @@ const json = (data, status = 200) => new Response(JSON.stringify(data), { status
 const fail = (code, error, status) => json({ code, error }, status);
 async function readJson(request) { try { return await request.json(); } catch { return null; } }
 
+const ticketSnapshot=Symbol("ticketSnapshot");
 async function getTicket(store, key) {
   const raw = await store.get("it:" + key);
-  try { return raw ? JSON.parse(raw) : null; } catch { return null; }
+  try { if(!raw)return null;const ticket=JSON.parse(raw);Object.defineProperty(ticket,ticketSnapshot,{value:raw,writable:true});return ticket; } catch { return null; }
 }
-const saveTicket = (store, t) => store.set("it:" + t.key, JSON.stringify(t));
+const saveTicket = async(store,t)=>{const value=JSON.stringify(t);if(t[ticketSnapshot]&&store.compareAndSet){if(!await store.compareAndSet("it:"+t.key,t[ticketSnapshot],value))throw new Error("Internal ticket changed. Refresh and retry.");t[ticketSnapshot]=value;}else await store.set("it:"+t.key,value);};
 
 // A user may only reach tickets that include their developer name.
 const canSee = (me, t) => me.role === "admin" || (me.dev && (t.devs || []).includes(me.dev));
@@ -86,11 +87,7 @@ function applyFields(t, b, me, creating, people = []) {
     t.priority = b.priority;
   }
   if (b.due !== undefined) {
-    if (!(b.due === null || /^\d{4}-\d{2}-\d{2}$/.test(b.due))) return "Pick a valid due date.";
-    if ((t.due || null) !== b.due) {
-      if (!creating) t.dueHistory = [{ when: now(), by: me.name, from: t.due || null, to: b.due }, ...(t.dueHistory || [])].slice(0, 100);
-      t.due = b.due;
-    }
+    return "Use the date request process; due dates cannot be set directly.";
   }
   if (b.status !== undefined) {
     if (!STATUSES.some((s) => s.name === b.status)) return "Unknown status.";
@@ -132,6 +129,7 @@ export async function internalRoutes(request, env, url, me) {
 
   if (path === "/internal" && method === "POST") {
     const b = (await readJson(request)) || {};
+    if("due" in b)return fail(me.role==="admin"?"date_request":"forbidden","Use the date request process to set an approved date.",me.role==="admin"?400:403);
     const t = { summary: "", description: "", priority: "Medium", due: null, status: "Open", assignee: null, devs: [], comments: [], dueHistory: [] };
     const people = teamPeople(env);
     if (people.length && b.assignee === undefined) return fail("bad_request", "Choose the assignee: " + people.join(", ") + ".", 400);
@@ -209,6 +207,7 @@ export async function internalRoutes(request, env, url, me) {
 
   if (!m[2] && method === "PUT") {
     const b = (await readJson(request)) || {};
+    if("due" in b)return fail(me.role==="admin"?"date_request":"forbidden","Use the date request process to change the approved date.",me.role==="admin"?400:403);
     const before = [...(t.devs || [])];
     const err = applyFields(t, b, me, false, teamPeople(env));
     if (err) return fail("bad_request", err, 400);

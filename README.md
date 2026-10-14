@@ -47,3 +47,5 @@ Browser ──► GitHub Pages (dashboard files, public)
 - `public/assets/config.js`: the proxy's address.
 - `proxy/src/handler.js`: the proxy. `proxy/src/users.js`: accounts, password hashing and one-time links. `proxy/src/internal.js`: internal tickets. `proxy/settings.js`: its allowed emails, Jira project and email domain. `proxy/api/proxy.js`, `proxy/vercel.json`: the Vercel wiring.
 - `.github/workflows/deploy.yml`: publishes the dashboard.
+
+For the due-date request and admin approval workflow, see [due-date approvals](docs/due-date-approvals.md). Run `npm run preview:approvals` for an isolated local review at http://localhost:3100/preview/admin, with sample tickets and no production writes.

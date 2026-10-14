@@ -1,7 +1,7 @@
-export const PAGES = new Set(["overview", "tickets", "internal", "boards", "workload", "calendar", "history"]);
+export const PAGES = new Set(["overview", "tickets", "internal", "boards", "workload", "calendar", "requests"]);
 export function readRoute(url, admin) {
-  const requested = url.searchParams.get("page");
-  const allowed = PAGES.has(requested) && (admin || !["history", "workload", "internal"].includes(requested));
+  const requested = url.searchParams.get("page")==="history"?"requests":url.searchParams.get("page");
+  const allowed = !(url.searchParams.get("page")==="history"&&!admin)&&PAGES.has(requested) && (admin || !["workload", "internal"].includes(requested));
   const page = allowed ? requested : "tickets";
   const requestedMode = url.searchParams.get("mode");
   const modes = admin ? ["status", "dev", "assignee"] : ["status"];

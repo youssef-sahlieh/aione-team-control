@@ -86,9 +86,9 @@ const tests = [
     assert.equal(jiraCalls[0].body.jql, 'labels = "ai1_bashar" AND (project = AION) ORDER BY updated DESC');
     assert.ok(jiraCalls[0].body.fields.includes("labels"));
   }],
-  ["user can set due dates, move status and comment on their tickets only", async () => {
+  ["user date edits are blocked while status and comments remain allowed", async () => {
     const u = await login("bashar.b@aione.biz", "Bashar-pass-123", "5.5.5.5");
-    assert.equal((await call("/jira/issue/AION-1", { method: "PUT", token: u.token, body: { fields: { duedate: "2026-12-01" } } })).status, 200);
+    assert.equal((await call("/jira/issue/AION-1", { method: "PUT", token: u.token, body: { fields: { duedate: "2026-12-01" } } })).status, 403);
     assert.equal((await call("/jira/issue/AION-1/transitions", { method: "POST", token: u.token, body: { id: 5 } })).status, 200);
     assert.equal((await call("/jira/issue/AION-2", { method: "PUT", token: u.token, body: { fields: { duedate: "2026-12-01" } } })).status, 403, "someone else's ticket");
     assert.equal((await call("/jira/issue/AION-2/changelog", { token: u.token })).status, 403);
@@ -157,7 +157,7 @@ const tests = [
       await call("/reset", { method: "POST", body: { token: linkToken(mails[0]), password: "Pass-for-" + dev } });
     }
     jiraCalls = [];
-    const r = await call("/internal", { method: "POST", token: a.token, body: { summary: "Set up staging DB", description: "Copy prod", devs: ["ai1_bashar"], due: "2026-11-01", priority: "High" } });
+    const r = await call("/internal", { method: "POST", token: a.token, body: { summary: "Set up staging DB", description: "Copy prod", devs: ["ai1_bashar"], priority: "High" } });
     assert.equal(r.status, 201);
     assert.equal(r.data.ticket.key, "INT-1"); assert.equal(r.data.ticket.status, "Open"); assert.equal(r.data.ticket.statusCat, "new");
     assert.deepEqual(r.data.ticket.devs, ["bashar"]); assert.equal(r.data.ticket.createdBy.name, "Youssef"); assert.equal(r.data.ticket.internal, true);
@@ -175,11 +175,13 @@ const tests = [
     assert.equal((await call("/internal/INT-1", { method: "PUT", token: u.token, body: { devs: ["sondos"] } })).status, 400, "can't hand it to someone else");
     assert.equal((await call("/internal/INT-1", { method: "DELETE", token: u.token })).status, 403);
   }],
-  ["internal tickets: status, due date history, comments, closing", async () => {
+  ["internal tickets: blocked date edits do not partially update status", async () => {
     const u = await login("bashar.b@aione.biz", "Pass-for-bashar", "10.0.0.3");
     let r = await call("/internal/INT-1", { method: "PUT", token: u.token, body: { status: "In Development", due: "2026-11-05" } });
+    assert.equal(r.status,403);
+    r=await call("/internal/INT-1", {method:"PUT",token:u.token,body:{status:"In Development"}});
     assert.equal(r.data.ticket.status, "In Development");
-    assert.deepEqual(r.data.ticket.dueHistory.map((h) => [h.by, h.from, h.to]), [["bashar", "2026-11-01", "2026-11-05"]]);
+    assert.deepEqual(r.data.ticket.dueHistory.map((h) => [h.by, h.from, h.to]), []);
     r = await call("/internal/INT-1/comment", { method: "POST", token: u.token, body: { text: "Started" } });
     assert.equal(r.data.ticket.comments[0].body, "Started"); assert.equal(r.data.ticket.comments[0].author.email, "bashar.b@aione.biz");
     r = await call("/internal/INT-1", { method: "PUT", token: u.token, body: { status: "Closed" } });
