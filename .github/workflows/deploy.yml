@@ -30,6 +30,7 @@ jobs:
       - run: npm test
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+      - run: npm run test:approvals -- --output=test-results/approvals
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -42,9 +43,50 @@ jobs:
         with:
           path: public
 
-  deploy:
-    if: github.event_name != 'pull_request'
+  deploy-proxy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    concurrency:
+      group: aion-proxy-production
+      cancel-in-progress: false
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check deployment configuration
+        shell: bash
+        run: |
+          missing=0
+          for name in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing GitHub Actions secret: $name. See docs/github-deployment.md."
+              missing=1
+            fi
+          done
+          exit "$missing"
+      - name: Install Vercel CLI
+        run: npm install --global vercel@64.0.2
+      - name: Pull production project settings
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+      - name: Verify proxy root directory
+        run: node -e "const p=require('./.vercel/project.json'); if(p.settings?.rootDirectory !== 'proxy') throw new Error('The Vercel project Root Directory must be proxy.');"
+      - name: Build production proxy
+        run: vercel build --prod --token="$VERCEL_TOKEN"
+      - name: Deploy production proxy
+        run: vercel deploy --prebuilt --prod --yes --token="$VERCEL_TOKEN"
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [build, deploy-proxy]
     runs-on: ubuntu-latest
     environment:
       name: github-pages

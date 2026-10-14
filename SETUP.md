@@ -124,3 +124,7 @@ For automatic emails when a new Jira ticket has no developer, see [ticket notifi
 - **"The email account didn't accept its app password":** the Gmail app password was revoked (for example after a password change). Create a new one and update `GMAIL_APP_PASSWORD`.
 - **Emails don't arrive:** check the recipient's Junk folder, and the Gmail account's **Sent** folder to see whether they went out.
 - **Run the tests yourself:** `npm test` (Node 20+).
+
+## GitHub deployment without interactive CLI login
+
+The coordinated GitHub Actions workflow deploys the existing proxy before publishing GitHub Pages. Configure the three repository deployment secrets as described in [GitHub deployment](docs/github-deployment.md). Missing proxy credentials block dashboard publishing instead of releasing a frontend with missing backend routes.
