@@ -27,6 +27,8 @@ async function mockDashboard(page, { role = "admin", failure = false, expired = 
     if (path === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people:assigneeTeam?{...people,...Object.fromEntries(["karim","youssef","rami","razan"].map(key=>[key,{id:`test-${key}`,name:key[0].toUpperCase()+key.slice(1),ini:key[0].toUpperCase()}]))}:people, devs: ["builder", "reviewer"], role, dev: "builder", email: "test@example.invalid", accounts: true, mail: false, ai:{enabled:!aiDisabled,readOnly:true} });
     if(path==="/ai/chat")return aiFailure?route.fulfill({status:503,json:{code:"ai_unavailable",error:"AI service unavailable. Try again."}}):json({answer:"Review AION-101 first. AION-9999 is unverified. <img src=x onerror=alert(1)>",references:[{key:"AION-101",title:"Synthetic Jira task"}],readOnly:true});
     if(path==="/ai/brief")return briefFailure?route.fulfill({status:503,json:{code:"ai_unavailable",error:"Brief service unavailable. Try again."}}):json({key:body.key,brief:"Fix the reported issue so the workflow works correctly. <img src=x onerror=alert(1)>",updated:jiraIssue.fields.updated,readOnly:true});
+    if(path==="/date-requests")return json({requests:[]});
+    if(path.startsWith("/date-requests/"))return mutationFailure?route.fulfill({status:503,json:{code:"date_request",error:"Synthetic save failure"}}):json({request:{status:"approved"}});
     if (path === "/login") return json({token:"synthetic-token",email:"test@example.invalid",expiresAt:Date.now()+3600000,role});
     if (path === "/internal" && method === "GET") return json({ tickets: [internalTicket] });
     if (path === "/jira/search") {
@@ -224,8 +226,8 @@ for(const role of ["admin"])for(const width of [320,1440])test(`${role} reporter
 for(const width of [320,1024,1440])test(`manager workspace keeps secondary tools accessible at ${width}px`,async({page})=>{
   await page.setViewportSize({width,height:1000});const mock=await mockDashboard(page);await page.goto("/dashboard.html");
   if(width<=820)await page.locator("#mobile-menu").click();
-  await expect(page.locator('#main-nav > a:not([hidden])')).toHaveCount(5);await expect(page.locator('[data-page="history"]')).toBeHidden();
-  await page.locator("#manager-more-nav summary").click();await expect(page.locator('[data-page="history"]')).toBeVisible();await page.locator('[data-page="history"]').click();await expect(page.locator("#page-heading")).toHaveText("Due date history");
+  await expect(page.locator('#main-nav > a:not([hidden])')).toHaveCount(6);await expect(page.locator('[data-page="history"]')).toHaveCount(0);
+  await expect(page.locator('[data-page="requests"]')).toBeVisible();await page.locator('[data-page="requests"]').click();await expect(page.locator("#page-heading")).toHaveText("Date requests");
   if(width<=820)await page.locator("#mobile-menu").click();await page.locator('[data-page="tickets"]').click();
   await expect(page.locator("#quick-filters select")).toHaveCount(6);await expect(page.getByRole("combobox",{name:"Saved view",exact:true})).toBeHidden();await expect(page.locator("#bulk")).toBeHidden();
   await expect(page.locator("#tiles > .tile")).toHaveCount(10);await expect(page.locator("#manager-more-focus")).toHaveCount(0);
@@ -279,7 +281,7 @@ test("personal saved view restores filters after a refresh",async({page})=>{
 });
 
 test("failed due-date save shows failure and preserves pending value",async({page})=>{
-  const mock=await mockDashboard(page,{mutationFailure:true});await page.goto("/dashboard.html#AION-101");await expect(page.locator("#d-desc")).toContainText("Rendered description");await page.locator("#d-due").fill("2026-10-20");await page.locator("#d-savedue").click();await expect(page.locator("#d-duemsg")).toHaveText("Not saved.");expect(mock.calls.some(c=>c.path==="/jira/issue/AION-101"&&c.method==="PUT"&&c.body.fields.duedate==="2026-10-20")).toBe(true);expect(mock.errors).toEqual([]);
+  const mock=await mockDashboard(page,{mutationFailure:true});await page.goto("/dashboard.html#AION-101");await expect(page.locator("#d-desc")).toContainText("Rendered description");await page.locator("#d-requestdate").click();const dialog=page.locator("dialog.date-dialog");await dialog.getByLabel("Requested date",{exact:true}).fill("2026-10-20");await dialog.getByLabel("Reason (required)",{exact:true}).fill("Updated delivery commitment");await dialog.getByRole("button",{name:"Apply date",exact:true}).click();await expect(dialog).toContainText("Synthetic save failure");expect(mock.calls.some(c=>c.path==="/date-requests/direct"&&c.method==="POST"&&c.body.proposedDate==="2026-10-20")).toBe(true);expect(mock.errors).toEqual([]);
 });
 
 for(const width of [320,375,390,768,1024,1440])test(`workspace navigation and overview fit ${width}px`,async({page})=>{
@@ -382,7 +384,7 @@ test("sign-in preserves both page route and ticket deep link",async({page})=>{
 test("developer workload links fall back to tickets and row menus retain role restrictions",async({page})=>{
   const mock=await mockDashboard(page,{role:"user"});await page.goto("/dashboard.html?page=workload#INT-101");await expect(page.locator("#page-heading")).toHaveText("All tickets");await expect(page.locator('[data-page="workload"]')).toBeHidden();await expect(page.locator(".workload-table")).toHaveCount(0);await expect(page.locator("#d-key")).toContainText("INT-101");await page.locator("#d-close").click();
   await page.goto("/dashboard.html?page=mytasks#AION-101");await expect(page).toHaveURL(/page=tickets#AION-101/);await expect(page.locator("#d-key")).toContainText("AION-101");await page.locator("#d-close").click();
-  await page.locator('[data-page="tickets"]').click();await page.getByRole("button",{name:"Actions for AION-101",exact:true}).click();await expect(page.locator("#pop")).toContainText("Set due date");await expect(page.locator("#pop")).not.toContainText("Assign developers");await expect(page.locator("#pop")).not.toContainText("Change assignee");expect(mock.unexpected).toEqual([]);expect(mock.errors).toEqual([]);
+  await page.locator('[data-page="tickets"]').click();await page.getByRole("button",{name:"Actions for AION-101",exact:true}).click();await expect(page.locator("#pop")).toContainText("Request date change");await expect(page.locator("#pop")).not.toContainText("Assign developers");await expect(page.locator("#pop")).not.toContainText("Change assignee");expect(mock.unexpected).toEqual([]);expect(mock.errors).toEqual([]);
 });
 
 for(const role of ["admin","user"])test(`${role} due-date history visibility follows manager role`,async({page})=>{
@@ -391,7 +393,7 @@ for(const role of ["admin","user"])test(`${role} due-date history visibility fol
   await page.goto("/dashboard.html?page=history#AION-101");
   await expect(page.locator("#drawer")).toBeVisible();
   if(role==="admin"){
-    await expect(page.locator("#page-heading")).toHaveText("Due date history");
+    await expect(page.locator("#page-heading")).toHaveText("Date requests");
     await expect(page.getByRole("tab",{name:"Activity",exact:true})).toBeVisible();
     await page.getByRole("tab",{name:"Activity",exact:true}).click();
     await expect(page.locator("#d-hist")).toBeVisible();
@@ -408,9 +410,8 @@ for(const role of ["admin","user"])test(`${role} due-date history visibility fol
   }
   await page.locator("#d-close").click();
   const nav=page.locator('[data-page="history"]'), switcher=page.locator('[data-v="history"]'), tile=page.locator("#tiles .tile").filter({hasText:"Due date moved"});
-  if(role==="admin"){await expect(nav).toBeVisible();await expect(switcher).toBeVisible();await page.locator("#manager-more-focus summary").click();await expect(tile).toBeVisible();}
-  else{
-    await expect(nav).toBeHidden();await expect(switcher).toBeHidden();await expect(tile).toHaveCount(0);
+  await expect(nav).toHaveCount(0);await expect(switcher).toHaveCount(0);await expect(tile).toHaveCount(0);
+  if(role!=="admin"){
     await page.goto("/dashboard.html");
     await expect(page.locator('#view .listwrap')).toBeVisible();
   }

@@ -19,6 +19,7 @@
 <link rel="stylesheet" href="assets/ai-assistant.css">
 <link rel="stylesheet" href="assets/styles/ticket-briefs.css">
 <link rel="stylesheet" href="assets/styles/email-column.css">
+<link rel="stylesheet" href="assets/styles/date-requests.css">
 </head>
 <body>
 <a class="skip-link" href="#main-content">Skip to content</a>
@@ -74,7 +75,6 @@
         <button type="button" class="admin-only" data-v="dev" aria-pressed="false">By developer</button>
         <button type="button" data-v="status" aria-pressed="false">By status</button>
         <button type="button" class="admin-only" data-v="assignee" aria-pressed="false">By assignee</button>
-        <button type="button" class="admin-only" data-v="history" aria-pressed="false">Due date changes</button>
       </div>
     </div>
   </div>
@@ -115,7 +115,7 @@
     <div class="blk admin-only"><h3>Developers</h3><div class="chips" id="d-devs"></div>
       <div class="inline"><input class="inp" id="d-newdev" placeholder="Other developer name" aria-label="Add another developer"><button class="btn" id="d-adddev" type="button">Add</button><button class="btn primary" id="d-savedevs" type="button">Save developers</button><span class="msg" id="d-devmsg"></span></div></div>
     <div class="blk"><h3>Due date</h3>
-      <div class="inline"><input class="inp" type="date" id="d-due" aria-label="Due date"><button class="btn primary" id="d-savedue" type="button">Save due date</button><button class="btn" id="d-cleardue" type="button">Clear</button><span class="msg" id="d-duemsg"></span></div></div>
+      <div class="inline"><input class="inp" type="date" id="d-due" aria-label="Approved due date" disabled><button class="btn primary" id="d-requestdate" type="button">Request date change</button><span class="msg" id="d-duemsg"></span></div><div id="d-date-requests" aria-live="polite"></div></div>
     <div class="blk"><h3>Due date history</h3><div id="d-hist"></div></div>
     <div class="blk admin-only"><h3>Assignee</h3><div class="inline"><span id="d-asgname" class="who"></span><button class="btn" id="d-asg" type="button">Change assignee</button></div></div>
     <div class="blk jira-only"><h3>Attachments <span id="d-acount"></span></h3><div id="d-att" class="atts"></div>

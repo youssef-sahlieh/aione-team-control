@@ -38,7 +38,7 @@ export function createIssueDrawer({ isDirty, canViewHistory, canViewFullHistory 
     e.preventDefault(); select(list[next].id.slice(4)); list[next].focus();
   });
   document.addEventListener("keydown", e => {
-    if (drawer.hidden || e.key !== "Tab" || !$("pop").hidden) return;
+    if (drawer.hidden || e.key !== "Tab" || !$("pop").hidden || document.querySelector("dialog[open]")) return;
     const targets = [...drawer.querySelectorAll('button,a[href],input,textarea,select,[tabindex="0"]')].filter(n => !n.disabled && n.getClientRects().length);
     const first = targets[0], last = targets.at(-1);
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }

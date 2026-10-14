@@ -12,7 +12,7 @@ const icons = {
   boards: "M3 4h5v16H3z M10 4h5v11h-5z M17 4h5v14h-5z",
   workload: "M4 20V10 M10 20V4 M16 20v-7 M22 20H2",
   calendar: "M4 5h16v16H4z M8 2v6 M16 2v6 M4 10h16 M8 14h2 M14 14h2",
-  history: "M3 5v6h6 M3 11a9 9 0 1 1 2 7 M12 7v5l3 2"
+  requests: "M3 5v6h6 M3 11a9 9 0 1 1 2 7 M12 7v5l3 2"
 };
 const pages = [
   ["overview", "Overview", "Your work, at a glance."],
@@ -21,7 +21,7 @@ const pages = [
   ["boards", "Boards", "Keep work moving with a shared view of every stage."],
   ["workload", "Workload", "Understand assignments, deadlines, and where support is needed."],
   ["calendar", "Calendar", "Make space for what's next. Plan around your ticket due dates."],
-  ["history", "Due date history", "Follow the due date changes recorded for your tickets."]
+  ["requests", "Date requests", "Review and decide proposed date changes."]
 ];
 function icon(name) {
   const box = node("span", "nav-icon");
@@ -66,7 +66,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
   });
   function synchronize() {
     if (route.page === "boards") state.view = route.mode;
-    else if (route.page === "history") state.view = "history";
+    else if (route.page === "requests") state.view = "list";
     else state.view = "list";
     state.sel.clear();
     state.pageIndex = 0;
@@ -90,6 +90,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     const a = node("a", "nav-link"); a.href = `dashboard.html?page=${id}`; a.dataset.page = id; a.title = label;
     a.append(icon(id), node("span", "", label));
     if (id === "tickets") { const count = node("span", "nav-count", "—"); count.id = "nav-ticket-count"; a.appendChild(count); }
+    if(id==="requests"){const count=node("span","nav-count","0");count.id="nav-date-count";a.append(count);}
     if (id === "internal") { const count = node("span", "nav-count", "—"); count.id = "nav-internal-count"; a.appendChild(count); }
     a.addEventListener("click", e => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate(id); });
     nav.appendChild(a);
@@ -103,10 +104,10 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     document.body.dataset.workspaceRole=context().admin?"manager":"user";
     moreNav.hidden=!context().admin;
     if(context().admin){
-      for(const id of ["overview","tickets","internal","workload","calendar"])nav.insertBefore(nav.querySelector(`[data-page="${id}"]`),moreNav);
-      for(const id of ["boards","history"])moreLinks.appendChild(nav.querySelector(`[data-page="${id}"]`));
+      for(const id of ["overview","tickets","requests","internal","workload","calendar"])nav.insertBefore(nav.querySelector(`[data-page="${id}"]`),moreNav);
+      for(const id of ["boards"])moreLinks.appendChild(nav.querySelector(`[data-page="${id}"]`));
     }
-    nav.querySelector('[data-page="history"]').hidden = !context().admin;
+    nav.querySelector('[data-page="requests"]').hidden = false;
     nav.querySelector('[data-page="workload"]').hidden = !context().admin;
     nav.querySelector('[data-page="internal"]').hidden = !context().admin;
     const current = new URL(location.href);
@@ -186,7 +187,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     table.appendChild(body); p.appendChild(table); if (!names.length) p.appendChild(node("div", "empty-copy", "No assignments in this view.")); target.appendChild(p);
   }
   function calendar(items, target) {
-    const p = panel("Due date calendar", "Select a ticket to review its details or change its due date."); p.classList.add("calendar-panel");
+    const p = panel("Approved deadlines", "Calendar dates change only after admin approval. Open a ticket to propose a change."); p.classList.add("calendar-panel");
     const controls = node("div", "calendar-controls");
     const anchor = new Date(month + "-01T00:00:00Z");
     const move = delta => { if(calendarMode === "week"){ const day=new Date(weekAnchor+"T00:00:00Z");day.setUTCDate(day.getUTCDate()+delta*7);weekAnchor=day.toISOString().slice(0,10);month=weekAnchor.slice(0,7);}else{anchor.setUTCMonth(anchor.getUTCMonth()+delta);month=anchor.toISOString().slice(0,7);weekAnchor=month+"-01";} render(); };
@@ -222,16 +223,18 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     $("page-heading").textContent = page[1]; $("page-description").textContent = route.page==="tickets"&&!context().admin?"The tickets you’re authorized to work on.":page[2]; $("breadcrumbs").textContent = page[1];
     for (const link of nav.querySelectorAll("a[data-page]")) { if (link.dataset.page === route.page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); }
     if(context().admin&&["boards","history"].includes(route.page))moreNav.open=true;
+    $("nav-date-count").textContent=String(context().pendingDates||0);
     $("nav-ticket-count").textContent = String(state.issues?.length || 0);
     $("nav-internal-count").textContent = String((state.issues||[]).filter(isInternalTicket).length);
-    const custom = ["overview", "workload", "calendar"].includes(route.page);
+    const custom = ["overview", "requests", "workload", "calendar"].includes(route.page);
     $("tickets-area").hidden = custom; $("workspace-content").hidden = !custom;
     if (!custom) return false;
     const target = $("workspace-content"); target.replaceChildren();
-    if(context().filterCount){const info=node("div","summary-filter-info");info.append(node("span","","Using your current ticket filters"),button("Adjust filters →","linkbtn",()=>navigate("tickets")));target.appendChild(info);}
+    if(context().filterCount&&route.page!=="requests"){const info=node("div","summary-filter-info");info.append(node("span","","Using your current ticket filters"),button("Adjust filters →","linkbtn",()=>navigate("tickets")));target.appendChild(info);}
     // Respect all active filters but include closed tickets for summary metrics.
     const data = allowedItems();
-    if (route.page === "overview") overview(data, target);
+    if (route.page === "requests") context().renderRequests(target);
+    if (route.page === "overview") {overview(data, target);const p=panel(context().admin?"Date requests awaiting review":"My date requests and decisions");p.classList.add("date-summary");const list=node("div");context().renderRequests(list,{summary:true});p.append(list,button("View all date requests →","linkbtn",()=>navigate("requests")));target.append(p);}
     if (route.page === "workload" && context().admin) workload(data, target);
     if (route.page === "calendar") calendar(data, target);
     return true;

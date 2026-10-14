@@ -58,12 +58,12 @@ const tests = [
     assert.deepEqual(d.issues.map((i) => i.key), ["AION-1"]);
   }],
   ["other projects' tickets can't be changed", async () => { jiraCalls = []; const r = await call("/jira/issue/SECRET-1", { method: "PUT", token: await login(), body: { fields: { duedate: null } } }); assert.equal(r.status, 404); assert.equal(jiraCalls.length, 0); }],
-  ["edit: due date, labels and assignee pass through", async () => {
+  ["edit: labels and assignee pass through; dates require approval", async () => {
     jiraCalls = []; jiraReply = () => new Response(null, { status: 204 });
-    const r = await call("/jira/issue/AION-7", { method: "PUT", token: await login(), body: { fields: { duedate: "2026-10-20", labels: ["ai1_ellen"], assignee: { accountId: "acc-1" } } } });
+    const r = await call("/jira/issue/AION-7", { method: "PUT", token: await login(), body: { fields: { labels: ["ai1_ellen"], assignee: { accountId: "acc-1" } } } });
     assert.equal(r.status, 200);
     assert.equal(jiraCalls[0].url, "https://example.atlassian.net/rest/api/3/issue/AION-7"); assert.equal(jiraCalls[0].method, "PUT");
-    assert.deepEqual(jiraCalls[0].body, { fields: { duedate: "2026-10-20", labels: ["ai1_ellen"], assignee: { accountId: "acc-1" } } });
+    assert.deepEqual(jiraCalls[0].body, { fields: { labels: ["ai1_ellen"], assignee: { accountId: "acc-1" } } });
   }],
   ["edit: other fields refused", async () => { jiraCalls = []; const r = await call("/jira/issue/AION-7", { method: "PUT", token: await login(), body: { fields: { summary: "hacked" } } }); assert.equal(r.status, 400); assert.equal(jiraCalls.length, 0); }],
   ["edit: bad due date refused", async () => assert.equal((await call("/jira/issue/AION-7", { method: "PUT", token: await login(), body: { fields: { duedate: "soon" } } })).status, 400)],

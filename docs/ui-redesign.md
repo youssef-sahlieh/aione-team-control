@@ -159,3 +159,11 @@ backend coverage stays in place. Remaining orchestration is still in the origina
 dashboard entrypoint for gradual extraction.
 
 Rollback: revert the UI change as a unit; no database migration is involved.
+
+## Due-date approval workflow
+
+The [due-date approval workflow](due-date-approvals.md) supersedes the earlier direct date editor and standalone date-change/history navigation described above. Users set the first date immediately; later changes require a request, and admins review it in Date requests before an approved date changes. Ticket-level history remains. The local isolated preview includes working request and approval APIs, role switching and captured emails.
+
+Date requests use a divided list with compact date comparisons and primary decision actions; blockers, full timestamps, history and admin withdrawal live under Details & history. Request forms keep optional dependency details collapsed. Focus indicators and mobile touch targets remain available.
+
+Date request cards explicitly show who requested the change, including the developer identifier recorded at submission. Administrators have Pending, Decisions and All views plus a Requesting developer filter; Mine is developer-only. The filter follows the original requester identity, independent of the ticket’s current developer assignment.

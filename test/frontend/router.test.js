@@ -5,7 +5,7 @@ test("unknown pages and disallowed developer boards fall back safely",()=>{
   assert.deepEqual(readRoute(new URL("http://localhost/dashboard.html?page=unknown&mode=dev"),false),{page:"tickets",mode:"status"});
   assert.deepEqual(readRoute(new URL("http://localhost/dashboard.html?page=boards&mode=dev"),false),{page:"boards",mode:"status"});
   assert.equal(readRoute(new URL("http://localhost/dashboard.html?page=history#AION-101"),false).page,"tickets");
-  assert.equal(readRoute(new URL("http://localhost/dashboard.html?page=history"),true).page,"history");
+  assert.equal(readRoute(new URL("http://localhost/dashboard.html?page=history"),true).page,"requests");
   assert.equal(readRoute(new URL("http://localhost/dashboard.html?page=workload#INT-101"),false).page,"tickets");
   assert.equal(readRoute(new URL("http://localhost/dashboard.html?page=tickets#AION-101"),false).page,"tickets");
   assert.equal(readRoute(new URL("http://localhost/dashboard.html?page=tickets"),true).page,"tickets");

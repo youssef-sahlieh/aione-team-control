@@ -1,0 +1,42 @@
+.date-filter-tabs,.date-actions,.date-request-top,.date-comparison{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.date-filter-tabs{margin-bottom:20px}.date-filter-tabs [aria-pressed=true]{background:#e8f1ff;color:#174eaa;border-color:#9dbbed}.date-request-card{border:1px solid #dce3eb;border-radius:12px;padding:18px 20px;background:#fff;margin-bottom:14px}.date-request-top{justify-content:space-between;margin-bottom:14px}.date-ticket-link{border:0;background:none;text-align:left;color:#174eaa;font-weight:600;font-size:15px;padding:0;cursor:pointer}.date-status{font-size:12px;font-weight:600;border-radius:5px;padding:5px 8px;background:#edf2f7;color:#475569}.date-status.pending,.date-status.needs_review{background:#fff3d6;color:#805600}.date-status.approved{background:#e4f5eb;color:#176340}.date-status.rejected{background:#ffe9e6;color:#993427}.date-comparison{background:#f7f9fc;padding:12px 14px;border-radius:8px;justify-content:space-between;font-size:14px}.date-context{color:#59677a;font-size:13px;line-height:1.6}.date-reason{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6}.date-warning{color:#99520d;font-size:13px}.date-impact{color:#475569;font-size:13px}.date-decision{border-left:3px solid #bccce0;padding-left:12px;white-space:pre-wrap}.date-actions{margin-top:14px}.date-timeline{margin-top:15px;border-top:1px solid #e5eaf1;padding-top:12px}.date-timeline summary{cursor:pointer;color:#59677a;font-size:13px}.date-empty{padding:24px 0;color:#59677a}.date-dialog{width:min(580px,calc(100vw - 32px));max-height:90vh;border:1px solid #dce3eb;border-radius:14px;padding:26px;box-shadow:0 22px 80px #132a4a33}.date-dialog::backdrop{background:#172b4d66}.date-dialog h2{font-size:21px;margin:0 0 16px}.date-form{display:grid;gap:14px}.date-field{display:grid;gap:7px;font-size:14px}.date-field:has(input[type=checkbox]){display:flex;align-items:center}.date-field input[type=checkbox]{width:18px;height:18px}.date-field textarea{min-height:95px;resize:vertical}.date-form .msg:empty{display:none}.date-pending-badge{font-size:11px;color:#805600;background:#fff3d6;padding:3px 6px;border-radius:4px}.date-summary{margin-top:22px}.date-summary h2{font-size:18px}.preview-banner{background:#eaf2ff;border-bottom:1px solid #c5d8f5;padding:9px 20px;font-size:13px;color:#244a79;display:flex;gap:18px;align-items:center;flex-wrap:wrap}.preview-banner a{font-weight:600;color:#174eaa}@media(max-width:650px){.date-request-card{padding:14px}.date-comparison{align-items:flex-start;flex-direction:column}.date-dialog{padding:18px}.date-actions .btn{min-height:42px}}
+
+.preview-banner{margin-left:236px}body.sidebar-collapsed .preview-banner{margin-left:76px}@media(max-width:820px){.preview-banner,body.sidebar-collapsed .preview-banner{margin-left:0}}
+
+/* Date request screens and isolated review preview only. */
+body[data-workspace-page=requests] #create-ticket,body[data-workspace-page=requests] #team{display:none}
+body[data-workspace-page=requests] #workspace-content{max-width:1100px}
+.date-filter-tabs{gap:4px;border-bottom:1px solid var(--line-strong);margin-bottom:0;padding-bottom:0}
+.date-filter-tabs .btn{background:transparent;border:0;border-radius:0;padding:12px 16px;min-height:44px;color:#64748b;box-shadow:none;border-bottom:2px solid transparent}
+.date-filter-tabs .btn[aria-pressed=true]{color:var(--accent);background:transparent;border-bottom-color:var(--accent);font-weight:600}
+.date-request-card{background:var(--surface);border:0;border-bottom:1px solid var(--line);border-radius:0;margin:0;padding:22px 24px}
+.date-request-card:last-child{border-radius:0 0 10px 10px}
+.date-request-top{gap:12px;margin-bottom:12px;align-items:start}
+.date-ticket-link{color:var(--fg);font-size:15px;font-weight:600;line-height:1.5;flex:1;min-width:160px}
+.date-ticket-link:hover{color:var(--accent)}
+.date-status{font-size:11px;padding:4px 7px;white-space:nowrap;font-weight:500}
+.date-comparison{background:transparent;padding:0;border-radius:0;justify-content:flex-start;gap:24px;font-size:13px;color:#66748a}
+.date-comparison strong{font-weight:600;color:var(--fg)}
+.date-reason{font-size:14px;line-height:1.6;margin:12px 0 8px}
+.date-context,.date-impact{font-size:12px;line-height:1.6;margin:8px 0;color:#66748a}
+.date-impact{margin:6px 0}
+.date-actions{gap:8px;margin-top:14px}
+.date-actions .btn{font-size:13px;min-height:38px;padding:8px 14px}
+.date-timeline{border:0;padding:0;margin-top:14px}
+.date-timeline summary,.date-optional summary{font-size:12px;color:#66748a;cursor:pointer;min-height:30px}
+.date-timeline[open]{padding-top:10px;border-top:1px solid var(--line)}
+.date-timeline[open] summary{margin-bottom:10px}
+.date-request-card.compact{padding:18px 0}
+.date-request-card.compact .date-actions{margin-top:10px}
+.date-summary .date-request-card:last-child{border-bottom:0}
+.date-dialog{padding:24px;border-radius:12px;box-shadow:0 18px 64px #132a4a26}
+.date-dialog h2{font-size:20px;letter-spacing:-.3px}
+.date-form{gap:14px}
+.date-form>.date-context{margin:0;font-size:12px}
+.date-field{font-size:13px}
+.date-field textarea{min-height:76px}
+.date-optional .date-field{margin-top:8px}
+.preview-banner{background:#f0f3f8;border-color:#e2e7ee;font-size:12px;padding:7px 24px;gap:14px;color:#66748a}
+.preview-banner a{font-size:12px;font-weight:500;color:#475569}
+@media(max-width:820px){.date-request-card{padding:18px 16px}.date-comparison{gap:6px;flex-direction:column;align-items:flex-start}.date-request-top{gap:8px}.date-ticket-link{flex-basis:100%}.date-dialog{padding:20px}.date-actions .btn{min-height:42px}.date-filter-tabs .btn{padding:10px 12px}.preview-banner{padding:7px 18px;gap:10px}}
+
+.date-developer-filter{margin-left:auto;display:flex;align-items:center;gap:10px;color:#66748a;font-size:12px;padding:6px 0}.date-developer-filter select{max-width:260px;min-height:36px;font-size:13px;background:var(--surface)}@media(max-width:650px){.date-developer-filter{margin-left:0;flex-basis:100%;padding:8px 0 12px;justify-content:space-between}.date-developer-filter select{max-width:calc(100% - 85px);flex:1}}

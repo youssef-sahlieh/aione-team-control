@@ -14,6 +14,7 @@ export function matchesFilters(i, today, { filters: f, query, needsReply, now = 
   if (f.epic && !(f.epic === "none" ? !i.parent : i.parent && i.parent.key === f.epic)) return false;
   if (f.due !== "any") {
     const d = i.due;
+    if(f.due === "pending"&&!i.pendingDateRequest)return false;
     if (f.due === "none" && d) return false;
     if (f.due === "overdue" && !(d && d < today)) return false;
     if (f.due === "today" && d !== today) return false;

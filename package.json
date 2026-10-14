@@ -5,9 +5,11 @@
   "type": "module",
   "description": "AION Team Control: dashboard on GitHub Pages, Jira proxy on Vercel.",
   "scripts": {
+    "preview:approvals": "node scripts/approval-preview.js",
     "dev": "node --env-file-if-exists=.env.local --use-system-ca --use-env-proxy scripts/dev-server.js",
-    "test": "node test/proxy.test.js && node test/accounts.test.js && node --test test/ai.test.js test/notifications.test.js test/security.test.js && npm run test:frontend",
+    "test": "node test/proxy.test.js && node test/accounts.test.js && node --test test/ai.test.js test/date-requests.test.js test/notifications.test.js test/security.test.js && npm run test:frontend",
     "test:frontend": "node --test test/frontend/*.test.js",
+    "test:approvals": "playwright test --config playwright.approvals.config.js",
     "test:e2e": "playwright test"
   },
   "devDependencies": {

@@ -16,6 +16,7 @@
 //   (admin: everything; user: only the tickets labelled with their developer name). Without it, the
 //   emails in TEAM_EMAILS sign in with TEAM_PASSWORD as admins. The first sign-in with TEAM_PASSWORD
 //   after the database is added creates admin accounts for everyone in TEAM_EMAILS.
+import { dateRequestRoutes } from "./date-requests.js";
 import { internalRoutes } from "./internal.js";
 import { cookieSessionRequest } from "./sessions.js";
 import { aiChat, aiBrief, aiConfigured } from "./ai.js";
@@ -127,6 +128,7 @@ async function jira(env, path, init = {}) {
       Accept: "application/json",
       ...(init.body ? { "Content-Type": "application/json" } : {})
     },
+    ...(init.signal?{signal:init.signal}:{}),
     body: init.body ? JSON.stringify(init.body) : undefined
   });
   const text = await res.text();
@@ -391,6 +393,31 @@ async function route(request, env, url) {
   }
 
   if (path === "/users" || path.startsWith("/users/")) return accountRoutes(request, env, url, me);
+  if(path==="/date-requests"||path.startsWith("/date-requests/"))return dateRequestRoutes(request,env,url,me,{
+    readTicket:async (key,{checkInitial=false}={})=>{
+      if(/^INT-\d+$/.test(key)){const raw=await env.STORE?.get("it:"+key);if(!raw)return null;const t=JSON.parse(raw);return {title:t.summary,due:t.due||null,devs:t.devs||[],closed:t.status==="Closed",hasHadDue:!!t.due||(t.dueHistory||[]).some(h=>h.from||h.to),raw};}
+      const result=await jira(env,"/rest/api/3/issue/"+key+"?fields=summary,labels,duedate,status,project",{signal:AbortSignal.timeout(15000)});if(!result.ok){if(result.res.status===404||result.res.status===403)return null;throw new Error("Ticket read failed");}const f=result.data.fields;
+      if(result.data.key!==key||f.project?.key!==env.JIRA_PROJECT||!Array.isArray(f.labels)||!f.status?.statusCategory?.key)throw new Error("Incomplete ticket details");
+      let hasHadDue=!!f.duedate;
+      if(checkInitial&&!hasHadDue){
+        const historyStarted=Date.now();
+        for(let page=0;page<20;page++){
+          if(Date.now()-historyStarted>15000)throw new Error("Initial date verification timed out");
+          const history=await jira(env,"/rest/api/3/issue/"+key+"/changelog?startAt="+(page*100)+"&maxResults=100",{signal:AbortSignal.timeout(5000)});
+          if(!history.ok||!Array.isArray(history.data.values))throw new Error("Could not verify initial due date history");
+          if(history.data.values.some(h=>(h.items||[]).some(it=>(it.field==="duedate"||it.fieldId==="duedate")&&(it.from||it.to||it.fromString||it.toString)))){hasHadDue=true;break;}
+          if(history.data.isLast===true||history.data.values.length<100||((page+1)*100>=history.data.total))break;
+          if(page===19)throw new Error("Initial due date history is incomplete");
+        }
+      }
+      return {title:f.summary,due:f.duedate||null,hasHadDue,devs:[...new Set(f.labels.filter(l=>/^ai1_/i.test(l)).map(l=>l.slice(4).toLowerCase()))],closed:f.status.statusCategory.key==="done"};
+    },
+    applyDate:async(key,date,t,r)=>{
+      if(/^INT-\d+$/.test(key)){const ticket=JSON.parse(t.raw);ticket.due=date;ticket.updated=new Date().toISOString();ticket.dueHistory=[{when:ticket.updated,by:me.name||me.email,from:t.due,to:date,requestId:r.id,reason:r.decision.reason},...(ticket.dueHistory||[])];if(!await env.STORE.compareAndSet("it:"+key,t.raw,JSON.stringify(ticket)))throw new Error("Ticket changed");return;}
+      const result=await jira(env,"/rest/api/3/issue/"+key,{method:"PUT",body:{fields:{duedate:date}},signal:AbortSignal.timeout(20000)});if(!result.ok)throw new Error("Date update failed");
+    },
+    sendMail:(from,body)=>sendMail(env,from,body)
+  });
   if (path === "/internal" || path.startsWith("/internal/")) return internalRoutes(request, env, url, me);
 
   const P = env.JIRA_PROJECT;
@@ -461,7 +488,8 @@ async function route(request, env, url) {
     if (sub === "" && method === "PUT") {
       const b = await readJson(request);
       if (!b || !validFields(b.fields)) return fail("bad_request", "Only labels, due date and assignee can be changed.", 400);
-      if (!isAdmin && Object.keys(b.fields).some((k) => k !== "duedate")) return fail("forbidden", "Only administrators can change developers and assignees.", 403);
+      if (!isAdmin) return fail("forbidden", "Users must request due date changes; only admins can edit ticket fields.", 403);
+      if("duedate" in b.fields)return fail("date_request", "Use the date approval process and provide a reason.",400);
       return pass(await jira(env, "/rest/api/3/issue/" + key, { method: "PUT", body: { fields: b.fields } }));
     }
     if (sub === "/changelog" && method === "GET") return pass(await jira(env, "/rest/api/3/issue/" + key + "?fields=duedate&expand=changelog"));
