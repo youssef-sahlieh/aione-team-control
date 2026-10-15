@@ -619,3 +619,19 @@ test('assigning a ticket that is already in progress keeps its status',async({pa
  await page.locator('#pop').getByRole('button',{name:'Save',exact:true}).click();await page.getByRole('dialog').getByLabel('Billing',{exact:true}).selectOption('not_billable');await page.getByRole('button',{name:'Save billing and continue'}).click();await expect(page.locator('#toast')).toContainText('Developers saved');
  expect(moves).toEqual([]);expect(mock.errors).toEqual([]);
 });
+
+test('billing offers only Billable or Not billable, and client pickers can be searched',async({page})=>{
+ const mock=await mockDashboard(page);
+ await page.route('**/clients',r=>r.request().method()==='GET'?r.fulfill({json:{revision:1,entries:[{id:'client',name:'Synthetic Client',parentId:null,archived:false},{id:'acme',name:'Acme Retail',parentId:null,archived:false},{id:'acme-tlv',name:'Tel Aviv Branch',parentId:'acme',archived:false},{id:'acme-hfa',name:'Haifa Branch',parentId:'acme',archived:false}]}}):r.fallback());
+ await page.goto('/dashboard.html#INT-101');const panel=page.locator('#business-fields');
+ const billing=panel.getByLabel('Billing (administrators only)');await expect(billing).toBeVisible();
+ expect(await billing.locator('option:not([hidden])').allTextContents()).toEqual(['Billable','Not billable']);
+ await panel.getByLabel('Search clients').fill('acm');await expect(panel.getByLabel('Client',{exact:true})).toHaveValue('acme');
+ expect(await panel.getByLabel('Client',{exact:true}).locator('option:not([hidden])').allTextContents()).toEqual(['Choose client…','Acme Retail']);
+ await panel.getByLabel('Search sub-clients').fill('haifa');await expect(panel.getByLabel('Sub-client',{exact:true})).toHaveValue('acme-hfa');await panel.locator('.business-client-section').screenshot({path:'test-results/client-search.png'});
+ const row=page.locator('#view .item').filter({hasText:'AION-101'});page.once('dialog',d=>d.accept());await page.locator('#d-close').click();await expect(page.locator('#drawer')).toBeHidden();
+ await row.getByRole('button',{name:'Edit Billing for AION-101'}).click();
+ expect(await page.locator('#pop').getByLabel('Billing').locator('option:not([hidden])').allTextContents()).toEqual(['Billable','Not billable']);
+ await page.locator('#pop').getByRole('button',{name:'Save',exact:true}).click();await expect(page.locator('#pop')).toContainText('Choose Billable or Not billable');
+ expect(mock.calls.some(c=>c.path==='/ticket-metadata'&&c.method==='PUT')).toBe(false);expect(mock.errors).toEqual([]);
+});

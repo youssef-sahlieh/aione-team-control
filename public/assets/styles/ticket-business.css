@@ -62,3 +62,5 @@
 .cell-edit:hover,.cell-edit:focus-visible{border-color:var(--line);background:var(--hover,rgb(0 0 0 / .04))}
 .quick-edit{display:grid;gap:10px;min-width:240px;margin-bottom:10px}
 .quick-edit textarea{width:100%;box-sizing:border-box;resize:vertical}
+/* Search box above the client and sub-client pickers. */
+.picker-search{margin-bottom:6px;width:100%;box-sizing:border-box}

@@ -3,6 +3,17 @@ const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className
 const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.addEventListener('click',fn);return b;};
 const field=(parent,label,node)=>{const l=el('label','business-field');node.setAttribute('aria-label',label);l.append(el('span','',label),node);parent.append(l);return node;};
 const option=(select,label,value)=>select.append(new Option(label,value));
+const billingOptions=(select,value)=>{const prompt=new Option('Choose billing…','');prompt.disabled=true;prompt.hidden=true;select.append(prompt);option(select,'Billable','billable');option(select,'Not billable','not_billable');select.value=value||'';};
+// A search box above a picker: typing narrows the list and picks the first match.
+function searchable(select,label){
+  const box=el('input','inp picker-search');box.type='search';box.placeholder='Search '+label.toLowerCase()+'…';box.setAttribute('aria-label','Search '+label.toLowerCase());box.autocomplete='off';
+  select.before(box);
+  const apply=()=>{const q=box.value.trim().toLowerCase();let first=null;
+    for(const o of select.options){const show=!o.value||!q||o.text.toLowerCase().includes(q);o.hidden=!show||(o.disabled&&!!o.value);if(show&&o.value&&!first)first=o;}
+    const cur=select.selectedOptions[0];if(q&&first&&(!cur||cur.hidden||!cur.value)&&select.value!==first.value){select.value=first.value;select.dispatchEvent(new Event('change',{bubbles:true}));}};
+  box.addEventListener('input',apply);box.addEventListener('keydown',e=>{if(e.key==='Enter')e.preventDefault();});
+  return {box,reset:()=>{box.value='';for(const o of select.options)o.hidden=false;},disable:d=>{box.disabled=d;}};
+}
 const input=(type,value)=>{const n=el('input','inp');n.type=type;n.value=value??'';return n;};
 const message=(target,e)=>{target.textContent=e.message||String(e);target.className='msg err';};
 export function createTicketBusiness({api,context,onChange,openIssue}){
@@ -20,13 +31,14 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const fill=()=>{sub.replaceChildren();option(sub,children(client.value).length?'Choose sub-client…':'No sub-client','');for(const c of children(client.value).sort((a,b)=>a.name.localeCompare(b.name)))option(sub,c.name,c.id);};fill();
     if(values.subClientId&&![...sub.options].some(o=>o.value===values.subClientId)){const old=catalog.entries.find(e=>e.id===values.subClientId);if(old)option(sub,old.name+' (archived)',old.id);}
     sub.value=values.subClientId||'';client.addEventListener('change',fill);
+    const findClient=searchable(client,'Clients'),findSub=searchable(sub,'Sub-clients');findClient.disable(disabled);findSub.disable(disabled);client.addEventListener('change',findSub.reset);
     return {client,sub,read:()=>({clientId:client.value||null,subClientId:sub.value||null})};
   }
   function createFields(parent,{values={},creating=false,closed=false}={}){
     const box=el('div','business-form');parent.append(box);
     const clientGroup=el('fieldset','business-section business-client-section');clientGroup.append(el('legend','','Client & billing'));box.append(clientGroup);
     const selects=selections(clientGroup,values,closed||(!admin()&&!creating));
-    let billing;if(admin()){billing=field(clientGroup,'Billing (administrators only)',el('select','fsel'));for(const [v,l]of [['','Not set'],['billable','Billable'],['not_billable','Not billable']])option(billing,l,v);billing.value=values.billing||'';billing.disabled=closed;if(creating)billing.setAttribute('aria-required','true');}
+    let billing;if(admin()){billing=field(clientGroup,'Billing (administrators only)',el('select','fsel'));billingOptions(billing,values.billing);billing.disabled=closed;if(creating)billing.setAttribute('aria-required','true');}
     const workGroup=el('fieldset','business-section business-work-section');workGroup.append(el('legend','','Work summary'));box.append(workGroup);
     const estimated=field(workGroup,'Estimated hours',input('number',values.estimatedHours)),actual=field(workGroup,'Actual hours',input('number',values.actualHours));
     for(const n of [estimated,actual]){n.min='0.01';n.max='1000000';n.step='0.01';n.disabled=closed;}
@@ -52,7 +64,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     if(r.closed){box.append(el('p','msg','Closed ticket: reopen it to edit these fields.'));return;}
     const v=r.metadata,form=el('div','quick-edit');box.append(form);let read,first;
     if(name==='client'){const s=selections(form,v);read=s.read;first=s.client;}
-    else if(name==='billing'){const b=field(form,'Billing',el('select','fsel'));for(const [val,l]of [['','Not set'],['billable','Billable'],['not_billable','Not billable']])option(b,l,val);b.value=v.billing||'';read=()=>({billing:b.value||null});first=b;}
+    else if(name==='billing'){const b=field(form,'Billing',el('select','fsel'));billingOptions(b,v.billing);read=()=>{if(!b.value)throw new Error('Choose Billable or Not billable.');return {billing:b.value};};first=b;}
     else if(name==='workDone'){const t=field(form,'Work done',el('textarea','inp'));t.value=v.workDone||'';t.maxLength=5000;t.rows=4;t.dir='auto';read=()=>({workDone:t.value});first=t;}
     else{const n=field(form,QUICK[name],input('number',v[name]));n.min='0.01';n.max='1000000';n.step='0.01';read=()=>{if(!n.checkValidity())throw new Error('Hours must be greater than zero, with up to two decimal places.');return {[name]:n.value===''?null:Number(n.value)};};first=n;}
     const status=el('p','msg'),save=button('Save',async()=>{
