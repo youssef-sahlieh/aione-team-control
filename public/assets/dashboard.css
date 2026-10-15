@@ -357,3 +357,22 @@ button.key.odoo:hover{text-decoration:underline}
 .mon-table td.nowrap{white-space:nowrap}
 .mon-table td.mon-acts{display:table-cell;white-space:nowrap}
 .mon-table td.mon-acts .btn{margin:0 4px 4px 0}
+
+/* Ticket details open full screen (the Side panel button switches back, remembered per browser). */
+.drawer.full{width:100%;left:0;border-left:0}
+.drawer.full .dhead,.drawer.full .dbody{width:100%;max-width:1280px;margin:0 auto;box-sizing:border-box}
+.drawer.full .dbody{padding-left:24px;padding-right:24px}
+/* Attachment preview inside the dashboard. */
+.file-preview{width:calc(100vw - 32px);height:calc(100vh - 32px);max-width:none;max-height:none;padding:0;border:1px solid var(--line);border-radius:12px;background:var(--surface,#fff);color:var(--text,#222);display:flex;flex-direction:column;overflow:hidden}
+.file-preview:not([open]){display:none}
+.file-preview::backdrop{background:rgb(0 0 0 / .55)}
+.fp-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.fp-head .sp{flex:1}
+.fp-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.fp-body{flex:1;min-height:0;overflow:auto;display:flex;align-items:center;justify-content:center;background:var(--sunk,#f6f7f9)}
+.fp-img{max-width:100%;max-height:100%;object-fit:contain}
+.fp-frame{width:100%;height:100%;border:0;background:#fff}
+.fp-media{max-width:100%;max-height:100%}
+.fp-text{align-self:stretch;margin:0;padding:16px;white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--mono,monospace);font-size:12px;width:100%;box-sizing:border-box}
+.fp-body .msg{padding:24px}
+.att .acts{display:flex;gap:6px;flex-wrap:wrap}

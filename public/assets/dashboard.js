@@ -2,6 +2,7 @@
 // sign-in and holds the Jira token. Team details (people, developers, emails) come from the proxy too,
 // so they aren't in this public code.
 import { createTicketBusiness } from "./components/ticket-business.js";
+import { previewFile, canPreview } from "./components/file-preview.js";
 import { INTERNAL_ASSIGNEE, sortTickets, validSort, createdDate } from "./models/ticket-business.js";
 import { api, apiFile, getSession, signOut } from "./session.js";
 import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normalizeInternalIssue, normalizeOdooIssue } from "./models/issue.js";
@@ -878,6 +879,10 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     [...names].sort().forEach(d=>{ const c=el("button","fc "+devK(d)); c.type="button"; c.appendChild(el("span","sw")); c.appendChild(el("span",null,"ai1_"+d)); c.setAttribute("aria-pressed",String(dz.devs.has(d)));
       c.addEventListener("click",()=>{ dz.devs.has(d)?dz.devs.delete(d):dz.devs.add(d); c.setAttribute("aria-pressed",String(dz.devs.has(d))); setMsg("d-devmsg",""); }); box.appendChild(c); }); }
   const fact=(dt,dd)=>{ const w=el("div"); w.appendChild(el("dt",null,dt)); w.appendChild(el("dd",null,dd||"—")); return w; };
+  const drawerFull=()=>{ try{ return localStorage.getItem("aion.drawer.full")!=="0"; }catch(_){ return true; } };
+  function applyDrawerSize(){ const full=drawerFull(); $("drawer").classList.toggle("full",full); $("d-size").textContent=full?"Side panel":"Full screen"; }
+  $("d-size").addEventListener("click",()=>{ try{ localStorage.setItem("aion.drawer.full",drawerFull()?"0":"1"); }catch(_){} applyDrawerSize(); });
+  applyDrawerSize();
   function openDrawer(key){
     if(dz.key&&dz.key!==key&&!closeDrawer())return;
     const opening=!dz.key;dz.key=key;
@@ -972,6 +977,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       const mid=el("div"); mid.style.minWidth="0"; const nm=el("div","nm",a.filename); nm.dir="auto"; mid.appendChild(nm);
       const fw=fmtWhen(a.created); mid.appendChild(el("div","mt",fmtSize(a.size)+" · "+((a.author&&a.author.name)||"")+" · "+fw.d+" "+fw.t)); row.appendChild(mid);
       const acts=el("div","inline");
+      if(canPreview(a.mimeType,a.filename)){ const pv=el("button","btn primary","Preview"); pv.type="button"; pv.addEventListener("click",()=>previewFile({name:a.filename,type:a.mimeType,load:()=>apiFile("/internal/"+key+"/attachments/"+a.id)})); acts.appendChild(pv); }
       const dl=el("button","btn","Download"); dl.type="button";
       dl.addEventListener("click",async()=>{ dl.disabled=true; dl.textContent="Downloading…";
         try{ const res=await apiFile("/internal/"+key+"/attachments/"+a.id); const url=URL.createObjectURL(await res.blob());
@@ -1051,7 +1057,18 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(!confirm("Delete "+key+"? This can't be undone. To finish a ticket, close it instead.")) return;
     try{ await internalApi.remove(key); closeDrawer(true); toast(key+" deleted."); await reload(); }catch(err){ toast("Not deleted",[errorText(err)],true); } });
   function fmtSize(b){ if(b==null) return ""; if(b<1024) return b+" B"; if(b<1048576) return Math.round(b/1024)+" KB"; return (b/1048576).toFixed(1)+" MB"; }
-  function renderAttachments(atts){
+  // Preview (shown inside the dashboard) and Download buttons for one attachment.
+  function fileActions(key,name,type,load){
+    const acts=el("div","acts");
+    if(canPreview(type,name)){ const pv=el("button","btn primary","Preview"); pv.type="button"; pv.addEventListener("click",()=>previewFile({name,type,load})); acts.appendChild(pv); }
+    const dl=el("button","btn","Download"); dl.type="button";
+    dl.addEventListener("click",async()=>{ dl.disabled=true; dl.textContent="Downloading…";
+      try{ const url=URL.createObjectURL(await (await load()).blob()); const link=document.createElement("a"); link.href=url; link.download=name; document.body.appendChild(link); link.click(); link.remove(); setTimeout(()=>URL.revokeObjectURL(url),60000); }
+      catch(err){ toast("Download failed",[errorText(err)],true); }
+      dl.disabled=false; dl.textContent="Download"; });
+    acts.appendChild(dl); return acts;
+  }
+  function renderAttachments(atts){ const key=dz.key;
     const box=$("d-att"); box.replaceChildren(); $("d-acount").textContent="("+atts.length+")";
     if(!atts.length){ box.appendChild(el("span","msg","No attachments on this ticket.")); return; }
     atts.slice().sort((a,b)=>a.created<b.created?1:-1).forEach(a=>{
@@ -1060,8 +1077,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       const row=el("div","att "+k); row.appendChild(el("span","ic",ext||"FILE"));
       const mid=el("div"); mid.style.minWidth="0"; const nm=el("div","nm",a.filename); nm.dir="auto"; mid.appendChild(nm);
       const fw=fmtWhen(a.created); mid.appendChild(el("div","mt",fmtSize(a.size)+" · "+((a.author&&a.author.displayName)||"")+" · "+fw.d+" "+fw.t)); row.appendChild(mid);
-      const v=el("a","btn","Open / download"); v.href=SITE+"/secure/attachment/"+a.id+"/"+encodeURIComponent(a.filename); v.target="_blank"; v.rel="noopener"; v.style.textDecoration="none"; v.title="Opens in a new tab; you need to be signed in to Jira in that browser";
-      row.appendChild(v); box.appendChild(row);
+      row.appendChild(fileActions(key,a.filename,a.mimeType,()=>apiFile("/jira/issue/"+key+"/attachments/"+a.id))); box.appendChild(row);
     });
   }
   $("d-note").addEventListener("click",e=>{ if(dz.key) notePopover(e.currentTarget,dz.key); });

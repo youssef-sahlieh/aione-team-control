@@ -635,3 +635,23 @@ test('billing offers only Billable or Not billable, and client pickers can be se
  await page.locator('#pop').getByRole('button',{name:'Save',exact:true}).click();await expect(page.locator('#pop')).toContainText('Choose Billable or Not billable');
  expect(mock.calls.some(c=>c.path==='/ticket-metadata'&&c.method==='PUT')).toBe(false);expect(mock.errors).toEqual([]);
 });
+
+test('ticket details open full screen and attachments preview inside the dashboard',async({page})=>{
+ const mock=await mockDashboard(page);
+ const withFile=structuredClone(jiraIssue);withFile.fields.attachment=[{id:'900',filename:'screen.png',mimeType:'image/png',size:68,created:'2026-10-11T08:00:00Z',author:{displayName:'Test Reporter'}},{id:'901',filename:'setup.zip',mimeType:'application/zip',size:10,created:'2026-10-10T08:00:00Z',author:{displayName:'Test Reporter'}}];
+ await page.route('**/jira/search',r=>r.fulfill({json:{issues:[withFile],isLast:true}}));
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==','base64');
+ await page.route('**/jira/issue/AION-101/attachments/900',r=>r.fulfill({status:200,contentType:'image/png',body:png}));
+ await page.goto('/dashboard.html#AION-101');
+ const drawer=page.locator('#drawer');await expect(drawer).toBeVisible();await expect(drawer).toHaveClass(/full/);
+ await page.screenshot({path:'test-results/fullscreen.png'});const box=await drawer.boundingBox();expect(box.width).toBeGreaterThan(1200);
+ await page.getByRole('tab',{name:'Files'}).click();const att=page.locator('#d-att .att').filter({hasText:'screen.png'});
+ await expect(att.getByRole('link')).toHaveCount(0);
+ await att.getByRole('button',{name:'Preview',exact:true}).click();
+ const viewer=page.locator('dialog.file-preview');await expect(viewer).toBeVisible();await expect(viewer.locator('img.fp-img')).toBeVisible();await page.screenshot({path:'test-results/preview.png'});
+ expect(await viewer.locator('img.fp-img').evaluate(i=>i.naturalWidth)).toBe(1);
+ await viewer.getByRole('button',{name:'Close',exact:true}).click();await expect(viewer).toHaveCount(0);
+ await expect(page.locator('#d-att .att').filter({hasText:'setup.zip'}).getByRole('button',{name:'Preview'})).toHaveCount(0);
+ await page.locator('#d-size').click();await expect(drawer).not.toHaveClass(/full/);await expect(page.locator('#d-size')).toHaveText('Full screen');
+ expect(mock.errors).toEqual([]);
+});

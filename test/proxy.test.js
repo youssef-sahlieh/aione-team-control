@@ -62,6 +62,21 @@ const tests = [
     const full = (await (await call("/jira/search", { method: "POST", token: await login(), body: { jql: "project = AION", fields: ["summary", "comment"] } })).json()).issues[0];
     assert.equal(full.fields.comment.comments.length, 3); assert.equal(full.renderedFields.description, "<p>long</p>");
   }],
+  ["Jira attachments come through the proxy, only from the ticket they belong to", async () => {
+    const token = await login();
+    jiraReply = (url) => url.includes("/attachment/content/")
+      ? new Response("PNGDATA", { headers: { "Content-Type": "image/png", "Content-Length": "7" } })
+      : Response.json({ key: "AION-5", fields: { labels: [], attachment: [{ id: "900", filename: "shot.png", mimeType: "image/png" }] } });
+    jiraCalls = [];
+    const r = await call("/jira/issue/AION-5/attachments/900", { token });
+    assert.equal(r.status, 200); assert.equal(r.headers.get("Content-Type"), "image/png"); assert.equal(await r.text(), "PNGDATA");
+    assert.equal(r.headers.get("Cache-Control"), "private, no-store");
+    assert.equal(jiraCalls[1].url, "https://example.atlassian.net/rest/api/3/attachment/content/900");
+    assert.equal(jiraCalls[1].headers.Authorization, "Basic " + btoa("bot@aione.biz:jira-token"));
+    assert.equal((await call("/jira/issue/AION-5/attachments/901", { token })).status, 404);
+    assert.equal((await call("/jira/issue/SECRET-5/attachments/900", { token })).status, 404);
+    assert.equal((await call("/jira/issue/AION-5/attachments/900")).status, 401);
+  }],
   ["search never returns other projects' tickets", async () => {
     jiraReply = () => Response.json({ issues: [{ key: "AION-1" }, { key: "SECRET-9" }, { key: "AIONX-2" }], isLast: true });
     const d = await (await call("/jira/search", { method: "POST", token: await login(), body: { jql: "project = AION OR project = SECRET", fields: [] } })).json();

@@ -530,6 +530,26 @@ async function route(request, env, url) {
     return pass(await jira(env, "/rest/api/3/user/search?maxResults=8&query=" + encodeURIComponent(q)));
   }
 
+  // A Jira attachment, fetched with the proxy's Jira login so it opens in the dashboard without Jira.
+  // Only for someone who can see the ticket, and only an attachment that belongs to that ticket.
+  const att = /^\/jira\/issue\/([A-Z][A-Z0-9_]*-\d+)\/attachments\/(\d{1,20})$/.exec(path);
+  if (att && isOurKey(att[1]) && method === "GET") {
+    const t = await jira(env, "/rest/api/3/issue/" + att[1] + "?fields=labels,attachment");
+    if (!t.ok) return t.res;
+    if (!isAdmin && !hasDevLabel(t.data.fields && t.data.fields.labels)) return fail("forbidden", "This ticket isn't assigned to you.", 403);
+    const meta = ((t.data.fields && t.data.fields.attachment) || []).find((a) => String(a.id) === att[2]);
+    if (!meta) return fail("not_found", "No such attachment on this ticket.", 404);
+    const file = await fetch(env.JIRA_SITE + "/rest/api/3/attachment/content/" + att[2], { headers: { Authorization: "Basic " + btoa(env.JIRA_EMAIL + ":" + env.JIRA_API_TOKEN) } });
+    if (!file.ok || !file.body) return fail("jira", "Jira didn't return the attachment (" + file.status + ").", 502);
+    const type = String(meta.mimeType || file.headers.get("Content-Type") || "application/octet-stream").split(";")[0].trim();
+    return new Response(file.body, { status: 200, headers: {
+      "Content-Type": /^[\w.+-]+\/[\w.+-]+$/.test(type) ? type : "application/octet-stream",
+      ...(file.headers.get("Content-Length") ? { "Content-Length": file.headers.get("Content-Length") } : {}),
+      "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+      "Content-Disposition": "attachment; filename*=UTF-8''" + encodeURIComponent(meta.filename || "attachment")
+    } });
+  }
+
   const m = /^\/jira\/issue\/([A-Z][A-Z0-9_]*-\d+)(\/changelog|\/history|\/transitions|\/comment)?$/.exec(path);
   if (m && isOurKey(m[1])) {
     const key = m[1], sub = m[2] || "";
