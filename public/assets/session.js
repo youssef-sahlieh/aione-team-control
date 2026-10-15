@@ -1,6 +1,6 @@
 // Sign-in session and calls to the AION proxy, shared by the sign-in page and the dashboard.
 // The sign-in is remembered in this browser (all tabs, also after closing it) until the proxy's
-// 24-hour token runs out or the person signs out, so links in emails open straight into the dashboard.
+// saved token expires (up to one year) or the person signs out, so email links open the dashboard.
 
 const KEY = "aione-session";
 

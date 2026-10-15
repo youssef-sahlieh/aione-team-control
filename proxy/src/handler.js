@@ -20,13 +20,13 @@ import { dateRequestRoutes } from "./date-requests.js";
 import { ticketNoteRoutes } from "./ticket-notes.js";
 import { internalRoutes } from "./internal.js";
 import { cookieSessionRequest } from "./sessions.js";
+import { SESSION_MS } from "./session-policy.js";
 import { aiChat, aiBrief, aiConfigured } from "./ai.js";
 import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
 import { ROLES, checkPassword, createLinkToken, deleteUser, getUser, hashPassword, listUsers, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, useLinkToken, validDev, validEmail } from "./users.js";
 
 const enc = new TextEncoder();
-// Sign-ins last 24 hours (the dashboard remembers them in the browser for that long).
-const SESSION_MS = 24 * 3600 * 1000;
+// Saved sign-ins last up to one year; account version changes still revoke tokens.
 const EDITABLE = new Set(["labels", "duedate", "assignee"]);
 
 const json = (data, status = 200) =>

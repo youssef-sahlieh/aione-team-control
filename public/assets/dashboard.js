@@ -77,7 +77,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     remove:key=>api("/internal/"+key,{method:"DELETE"})
   };
   const isInt=key=>/^INT-\d+$/.test(key);
-  // Links in emails open the ticket in this dashboard (the sign-in is remembered for 24 hours); Jira tickets also get their Jira link.
+  // Links in emails open the ticket using the saved sign-in; Jira tickets also get their Jira link.
   const dashUrl=key=>location.origin+location.pathname+"#"+key;
   const ticketUrl=key=>isInt(key)?dashUrl(key):SITE+"/browse/"+key;
   function setDevs(key,want){ const i=issueByKey(key); return isInt(key)?internalApi.update(key,{devs:[...want]}):jira.edit(key,{labels:labelsWith(i?i.labels:[],want)}); }
@@ -608,7 +608,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const chosen=new Set();let recipients=[],id=crypto.randomUUID();
     const changed=()=>{id=crypto.randomUUID();};ta.addEventListener("input",changed);subj.addEventListener("input",changed);details.addEventListener("change",changed);
     try{const result=await api("/ticket-notes?key="+encodeURIComponent(key));if(!p.contains(send))return;recipients=result.recipients||[];rc.replaceChildren();
-      for(const person of recipients){chosen.add(person.email);const chip=el("button","fc",person.name);chip.type="button";chip.title=person.email;chip.setAttribute("aria-pressed","true");chip.onclick=()=>{chosen.has(person.email)?chosen.delete(person.email):chosen.add(person.email);chip.setAttribute("aria-pressed",String(chosen.has(person.email)));changed();};rc.append(chip);}
+      for(const person of recipients){chosen.add(person.email);const chip=el("button","fc",person.name);chip.type="button";chip.title=person.email;chip.setAttribute("aria-label",person.name);chip.setAttribute("aria-pressed","true");chip.onclick=()=>{chosen.has(person.email)?chosen.delete(person.email):chosen.add(person.email);chip.setAttribute("aria-pressed",String(chosen.has(person.email)));changed();};rc.append(chip);}
       send.disabled=!recipients.length;if(!recipients.length)msg.textContent="No admin recipients are configured.";placePop(anchor);
     }catch(error){if(p.contains(send)){rc.textContent="";msg.textContent=error.message;msg.className="msg err";}}
     send.onclick=async()=>{if(!chosen.size){msg.textContent="Pick at least one admin.";return;}if(!ta.value.trim()){msg.textContent="Write the note first.";ta.focus();return;}
