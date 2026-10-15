@@ -26,7 +26,10 @@ export function publicHistory(m,me) {
   return m.history.map(h=>me.role==='admin'?h:{...h,changes:Object.fromEntries(Object.entries(h.changes||{}).filter(([k])=>k!=='billing'))})
     .filter(h=>me.role==='admin'||h.type!=='override').filter(h=>h.type!=='edit'||Object.keys(h.changes).length);
 }
-export function requireBilling(record) {
+// Billing before assignment is only enforced when BILLING_REQUIRED is on (settings.js).
+export const billingRequired = env => String(env?.BILLING_REQUIRED ?? '').toLowerCase() === 'true';
+export function requireBilling(record, env) {
+  if(!billingRequired(env))return;
   if(!['billable','not_billable'].includes(record?.billing))problem('Choose Billable or Not billable before assigning this ticket.',400,'billing_required');
 }
 export function validHours(n) { return typeof n==='number' && Number.isFinite(n) && n>0 && n<=1000000 && Math.round(n*100)/100===n; }

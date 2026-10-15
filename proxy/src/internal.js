@@ -134,7 +134,7 @@ export async function internalRoutes(request, env, url, me) {
     if("due" in b)return fail(me.role==="admin"?"date_request":"forbidden","Use the date request process to set an approved date.",me.role==="admin"?400:403);
     const t = { summary: "", description: "", priority: "Medium", due: null, status: "Open", assignee: null, devs: [], comments: [], dueHistory: [] };
     const people = teamPeople(env);
-    if(me.role==="admin")requireBilling(b.metadata);
+    if(me.role==="admin")requireBilling(b.metadata,env);
     if(b.assignee===undefined)b.assignee=INTERNAL_ASSIGNEE;
     const selection=selectionErrors(await readCatalog(env),b.metadata||{},{active:true});if(selection.length)throw new BusinessError(selection.join(". "));
     if (people.length && b.assignee === undefined) return fail("bad_request", "Choose the assignee: " + people.join(", ") + ".", 400);
@@ -220,7 +220,7 @@ export async function internalRoutes(request, env, url, me) {
     const before = [...(t.devs || [])];
     if(me.role==='admin'){
       const proposed=Array.isArray(b.devs)?cleanDevs(b.devs):null;
-      if(('assignee' in b&&b.assignee!==t.assignee)||(proposed&&JSON.stringify([...proposed].sort())!==JSON.stringify([...before].sort())))requireBilling(await readMetadata(env,t.key));
+      if(('assignee' in b&&b.assignee!==t.assignee)||(proposed&&JSON.stringify([...proposed].sort())!==JSON.stringify([...before].sort())))requireBilling(await readMetadata(env,t.key),env);
     }
     const err = applyFields(t, b, me, false, teamPeople(env));
     if (err) return fail("bad_request", err, 400);

@@ -16,7 +16,7 @@
 //   (admin: everything; user: only the tickets labelled with their developer name). Without it, the
 //   emails in TEAM_EMAILS sign in with TEAM_PASSWORD as admins. The first sign-in with TEAM_PASSWORD
 //   after the database is added creates admin accounts for everyone in TEAM_EMAILS.
-import { BusinessError, businessResponse, catalogRoutes, metadataRoutes, readMetadata, readCatalog, publicMetadata, requireBilling, withTicketLock, guardedTransition } from "./ticket-metadata.js";
+import { BusinessError, businessResponse, catalogRoutes, metadataRoutes, readMetadata, readCatalog, publicMetadata, requireBilling, billingRequired, withTicketLock, guardedTransition } from "./ticket-metadata.js";
 import { reportRoutes, buildReport } from "./reports.js";
 import { dateRequestRoutes } from "./date-requests.js";
 import { ticketNoteRoutes } from "./ticket-notes.js";
@@ -482,7 +482,7 @@ async function route(request, env, url) {
   if (path === "/config" && method === "GET") {
     let team = {};
     try { team = JSON.parse(env.TEAM_CONFIG || "{}"); } catch {}
-    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, capabilities:["ticket-business-v1"] });
+    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, capabilities:["ticket-business-v1"] });
   }
 
   if (!isAdmin && (path === "/mail" || path === "/jira/users")) return fail("forbidden", "Only administrators can do that.", 403);
@@ -598,7 +598,7 @@ async function route(request, env, url) {
       return withTicketLock(env,key,async()=>{
         const ticket=await readBusinessTicket(key);if(!ticket)return fail('not_found','Ticket unavailable.',404);
         const wantedDevs=Array.isArray(b.fields.labels)?[...new Set(b.fields.labels.filter(l=>/^ai1_/i.test(l)).map(l=>l.slice(4).toLowerCase()))].sort():null;
-        if('assignee' in b.fields || wantedDevs&&JSON.stringify(wantedDevs)!==JSON.stringify([...ticket.devs].sort()))requireBilling(await readMetadata(env,key));
+        if('assignee' in b.fields || wantedDevs&&JSON.stringify(wantedDevs)!==JSON.stringify([...ticket.devs].sort()))requireBilling(await readMetadata(env,key),env);
         return pass(await jira(env, '/rest/api/3/issue/'+key,{method:'PUT',body:{fields:b.fields},signal:AbortSignal.timeout(20000)}));
       });
     }

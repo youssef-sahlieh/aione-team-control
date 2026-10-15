@@ -19,6 +19,8 @@ export default {
   // Jira-created notifications go to the two managers, regardless of dashboard display filters.
   NO_DEVELOPER_NOTIFY_TO: "youssef@aione.biz,ellen@aione.biz",
   // "No developer" emails only for tickets assigned to these people.
+  // Ask for Billable / Not billable before a ticket can be assigned ("true" to turn on).
+  BILLING_REQUIRED: "false",
   NO_DEVELOPER_ASSIGNEES: "karim,youssef,rami,razan",
   // Product repositories whose pull requests are linked to tickets (needs the GITHUB_TOKEN secret).
   GITHUB_REPOS: "KAD-org/flutter_pos,KAD-org/flutter_pos_api,KAD-org/alam_portal,KAD-org/AlamPortal",

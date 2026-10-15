@@ -36,7 +36,7 @@ function combobox(select){
 const input=(type,value)=>{const n=el('input','inp');n.type=type;n.value=value??'';return n;};
 const message=(target,e)=>{target.textContent=e.message||String(e);target.className='msg err';};
 export function createTicketBusiness({api,context,onChange,openIssue}){
-  let enabled=false,catalog={revision:0,entries:[]},records={},editor=null,lastReport=null,reportOptions={workflow:'management',source:'all'};
+  let billingNeeded=false,enabled=false,catalog={revision:0,entries:[]},records={},editor=null,lastReport=null,reportOptions={workflow:'management',source:'all'};
   const admin=()=>context().admin;
   const clients=()=>catalog.entries.filter(e=>!e.parentId&&!e.archived);
   const children=id=>catalog.entries.filter(e=>e.parentId===id&&!e.archived);
@@ -57,14 +57,14 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const box=el('div','business-form');parent.append(box);
     const clientGroup=el('fieldset','business-section business-client-section');clientGroup.append(el('legend','','Client & billing'));box.append(clientGroup);
     const selects=selections(clientGroup,values,closed||(!admin()&&!creating));
-    let billing;if(admin()){billing=field(clientGroup,'Billing (administrators only)',el('select','fsel'));billingOptions(billing,values.billing);billing.disabled=closed;if(creating)billing.setAttribute('aria-required','true');}
+    let billing;if(admin()){billing=field(clientGroup,'Billing (administrators only)',el('select','fsel'));billingOptions(billing,values.billing);billing.disabled=closed;if(creating&&billingNeeded)billing.setAttribute('aria-required','true');}
     const workGroup=el('fieldset','business-section business-work-section');workGroup.append(el('legend','','Work summary'));box.append(workGroup);
     const estimated=field(workGroup,'Estimated hours',input('number',values.estimatedHours)),actual=field(workGroup,'Actual hours',input('number',values.actualHours));
     for(const n of [estimated,actual]){n.min='0.01';n.max='1000000';n.step='0.01';n.disabled=closed;}
     // Once set, the estimate is changed by administrators only.
     if(!admin()&&!creating&&values.estimatedHours!=null){estimated.disabled=true;estimated.title='The estimate is set. Ask an administrator to change it.';}
     const work=field(workGroup,'Work done',el('textarea','inp'));work.value=values.workDone||'';work.maxLength=5000;work.rows=4;work.dir='auto';work.disabled=closed;
-    const read=()=>{if(creating&&admin()&&!billing.value)throw new Error('Choose Billable or Not billable before assigning this ticket.');for(const n of [estimated,actual])if(!n.checkValidity())throw new Error('Hours must be greater than zero, with up to two decimal places.');const out={estimatedHours:estimated.value===''?null:Number(estimated.value),actualHours:actual.value===''?null:Number(actual.value),workDone:work.value};if(admin()||creating)Object.assign(out,selects.read());if(billing)out.billing=billing.value||null;return out;};
+    const read=()=>{if(creating&&admin()&&billingNeeded&&!billing.value)throw new Error('Choose Billable or Not billable before assigning this ticket.');for(const n of [estimated,actual])if(!n.checkValidity())throw new Error('Hours must be greater than zero, with up to two decimal places.');const out={estimatedHours:estimated.value===''?null:Number(estimated.value),actualHours:actual.value===''?null:Number(actual.value),workDone:work.value};if(admin()||creating)Object.assign(out,selects.read());if(billing)out.billing=billing.value||null;return out;};
     return {read,box,selects};
   }
   async function load(keys){
@@ -125,7 +125,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     body.append(button('Apply to '+keys.length+' tickets',async e=>{const action=e.currentTarget;action.disabled=true;const failures=[];for(const key of keys){try{const r=await api('/ticket-metadata?key='+encodeURIComponent(key));await api('/ticket-metadata',{method:'PUT',body:{key,fields:{revision:r.metadata.revision,...selects.read()}}});}catch(err){failures.push(key+': '+err.message);}}await onChange();if(failures.length){msg.textContent=failures.join('\n');action.disabled=false;}else d.close();},'btn primary'));
   }
   async function ensureBilling(key){
-    if(!admin())return;
+    if(!admin()||!billingNeeded)return;
     if(editor?.key===key&&editor.dirty())throw new Error('Save the ticket work fields before changing assignments.');
     const current=await api('/ticket-metadata?key='+encodeURIComponent(key));
     if(['billable','not_billable'].includes(current.metadata.billing))return;
@@ -179,5 +179,5 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     for(const c of catalog.entries.filter(e=>!e.parentId).sort((a,b)=>a.name.localeCompare(b.name))){const group=el('details','catalog-group');group.append(el('summary','',c.name+(c.archived?' (archived)':'')));for(const e of [c,...catalog.entries.filter(e=>e.parentId===c.id)]){const row=el('div','catalog-entry'),nm=input('text',e.name);nm.setAttribute('aria-label','Name for '+e.name);row.append(nm,button('Rename',async()=>change(e,{name:nm.value})),button(e.archived?'Restore':'Archive',async()=>change(e,{archived:!e.archived})));group.append(row);}panel.append(group);}
     async function change(e,patch){try{catalog=await api('/clients',{method:'PUT',body:{revision:catalog.revision,id:e.id,...patch}});await onChange();target.replaceChildren();renderCatalog(target);}catch(err){message(msg,err);}}
   }
-  return {configure:async cfg=>{enabled=cfg.capabilities?.includes('ticket-business-v1')===true;if(enabled){await loadCatalog();if(cfg.odoo)api('/clients/odoo-sync',{method:'POST',body:{}}).then(r=>{if(r.changed)return loadCatalog();}).catch(()=>{});}},enabled:()=>enabled,load,decorate,canQuickEdit,quickEdit,quickLabel:name=>QUICK[name],createFields,renderEditor,dirty:key=>editor?.key===key&&editor.dirty(),reset:()=>{editor=null;},bulk,ensureBilling,overrideReason,filters,matches,renderReports,renderCatalog,loadCatalog};
+  return {configure:async cfg=>{billingNeeded=cfg.billingRequired===true;enabled=cfg.capabilities?.includes('ticket-business-v1')===true;if(enabled){await loadCatalog();if(cfg.odoo)api('/clients/odoo-sync',{method:'POST',body:{}}).then(r=>{if(r.changed)return loadCatalog();}).catch(()=>{});}},enabled:()=>enabled,load,decorate,canQuickEdit,quickEdit,quickLabel:name=>QUICK[name],createFields,renderEditor,dirty:key=>editor?.key===key&&editor.dirty(),reset:()=>{editor=null;},bulk,ensureBilling,overrideReason,filters,matches,renderReports,renderCatalog,loadCatalog};
 }

@@ -5,7 +5,7 @@ import { jiraIssue, internalTicket, people } from "../fixtures/issues.js";
 // A synthetic Odoo Helpdesk ticket as the proxy returns it (developer "builder" from the Odoo assignee).
 const odooTicket = { key: "HD-300", id: 300, ref: "300", odoo: true, summary: "Synthetic Odoo request", status: "In Progress", statusCat: "indeterminate", devs: ["builder"], developerName: "Builder", customer: { name: "Ariel Amiri", email: "ariel@example.invalid" }, team: "ai1 | Support", priority: "Medium", created: "2026-10-09T08:00:00Z", updated: "2026-10-10T08:00:00Z", closed: "", due: null, url: "https://odoo.example.invalid/web#id=300&model=helpdesk.ticket&view_type=form" };
 
-async function mockDashboard(page, { role = "admin", failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1, odoo = false, github = false, missingEstimate = false } = {}) {
+async function mockDashboard(page, { role = "admin", failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1, odoo = false, github = false, billingRequired = false, missingEstimate = false } = {}) {
   await page.clock.setFixedTime(new Date("2026-10-11T09:00:00Z"));
   const calls = [], unexpected = [], errors = [];
   const internalTickets=[structuredClone(internalTicket)];
@@ -32,7 +32,7 @@ async function mockDashboard(page, { role = "admin", failure = false, expired = 
     const path = url.pathname, method = req.method(), body = req.postDataJSON();
     calls.push({ path, method, body, ...(url.search?{query:url.search}:{}) });
     const json = value => route.fulfill({ json: value });
-    if (path === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people:assigneeTeam?{...people,...Object.fromEntries(["karim","youssef","rami","razan"].map(key=>[key,{id:`test-${key}`,name:key[0].toUpperCase()+key.slice(1),ini:key[0].toUpperCase()}]))}:people, devs: ["builder", "reviewer"], role, dev: "builder", email: "test@example.invalid", accounts: true, odoo, github, mail: false, capabilities:["ticket-business-v1"], ai:{enabled:!aiDisabled,readOnly:true} });
+    if (path === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people:assigneeTeam?{...people,...Object.fromEntries(["karim","youssef","rami","razan"].map(key=>[key,{id:`test-${key}`,name:key[0].toUpperCase()+key.slice(1),ini:key[0].toUpperCase()}]))}:people, devs: ["builder", "reviewer"], role, dev: "builder", email: "test@example.invalid", accounts: true, odoo, github, billingRequired, mail: false, capabilities:["ticket-business-v1"], ai:{enabled:!aiDisabled,readOnly:true} });
     if(path==='/clients'&&method==='GET')return json(catalog);
     if(path==='/clients/odoo-sync'&&method==='POST'){if(url.searchParams.get('force')!=='1')return json({odoo:true,changed:false,syncedAt:1});catalog.entries.push({id:'odoo-client',name:'Odoo Customer',parentId:null,archived:false});catalog.revision++;return json({odoo:true,changed:true,added:1,projects:3,syncedAt:2});}
     if(path==='/clients/import/preview')return json({revision:1,rows:body.rows.length,added:1,clients:2,subClients:0,entries:[{id:'new-client',name:body.rows[0].displayName,parentId:null}]});
@@ -550,8 +550,8 @@ test('users must save an estimate before the due-date form is available',async({
  await page.getByRole('dialog').getByLabel('Estimated hours').fill('1.5');await page.getByRole('button',{name:'Save estimate and continue'}).click();await expect(page.getByRole('dialog')).toContainText('Set initial due date');
  expect(mock.calls.find(c=>c.path==='/ticket-metadata'&&c.method==='PUT').body.fields.estimatedHours).toBe(1.5);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
-test('administrator assignment asks for private billing before sending the assignment',async({page})=>{
- const mock=await mockDashboard(page);let assignments=[];await page.route('**/jira/issue/AION-101',route=>{const b=route.request().postDataJSON();assignments.push(b);return route.fulfill({json:{ok:true}});});
+test('with billing required, administrator assignment asks for private billing before sending the assignment',async({page})=>{
+ const mock=await mockDashboard(page,{billingRequired:true});let assignments=[];await page.route('**/jira/issue/AION-101',route=>{const b=route.request().postDataJSON();assignments.push(b);return route.fulfill({json:{ok:true}});});
  await page.goto('/dashboard.html');await page.locator('#view .item').filter({hasText:'AION-101'}).locator('.c-who').click();await page.locator('#pop .opt').filter({hasText:'Test Reporter'}).click();await expect(page.getByRole('dialog')).toContainText('Billing required');await page.getByRole('dialog').getByLabel('Billing',{exact:true}).selectOption('not_billable');await page.getByRole('button',{name:'Save billing and continue'}).click();
  await expect.poll(()=>assignments.length).toBe(1);expect(mock.calls.find(c=>c.path==='/ticket-metadata'&&c.method==='PUT').body.fields.billing).toBe('not_billable');expect(mock.errors).toEqual([]);
 });
@@ -602,7 +602,7 @@ test('an administrator assigning a not-started ticket moves it: Jira to Dev Appr
  for(const key of ['AION-101','INT-101']){
   await page.locator('#view .item').filter({hasText:key}).locator('.c-dev').click();
   await page.locator('#pop input[data-dev="reviewer"]').check();await page.locator('#pop').getByRole('button',{name:'Save',exact:true}).click();
-  await page.getByRole('dialog').getByLabel('Billing',{exact:true}).selectOption('not_billable');await page.getByRole('button',{name:'Save billing and continue'}).click();await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
  }
  await expect.poll(()=>jiraMoves).toEqual([{id:'21'}]);
  await expect.poll(()=>internalPuts.map(b=>b.status||null)).toEqual([null,'In Development']);
@@ -616,7 +616,7 @@ test('assigning a ticket that is already in progress keeps its status',async({pa
  await page.locator('#view .item').filter({hasText:'AION-101'}).locator('.c-dev').click();
  await page.locator('#pop input[data-dev="builder"]').uncheck();await page.locator('#pop input[data-dev="reviewer"]').uncheck();
  await page.locator('#pop').getByPlaceholder('Other name').fill('tester');await page.locator('#pop').getByRole('button',{name:'Add',exact:true}).click();
- await page.locator('#pop').getByRole('button',{name:'Save',exact:true}).click();await page.getByRole('dialog').getByLabel('Billing',{exact:true}).selectOption('not_billable');await page.getByRole('button',{name:'Save billing and continue'}).click();await expect(page.locator('#toast')).toContainText('Developers saved');
+ await page.locator('#pop').getByRole('button',{name:'Save',exact:true}).click();await expect(page.locator('#toast')).toContainText('Developers saved');
  expect(moves).toEqual([]);expect(mock.errors).toEqual([]);
 });
 
@@ -673,4 +673,11 @@ test('pull requests that mention a ticket show in the list and in the ticket',as
  await expect(section.locator('.pr-row').first()).toContainText('merged');
  await expect(section.locator('.pr-row').nth(1).locator('.pr-signals .pr-sig')).toHaveText(['Checks failed: build','Changes requested by ellen','6 comments · 1 unresolved thread']);
  expect(mock.errors).toEqual([]);
+});
+
+test('with billing optional, an administrator assigns without being asked for billing',async({page})=>{
+ const mock=await mockDashboard(page);let sent=0;await page.route('**/jira/issue/AION-101',r=>{sent++;return r.fulfill({json:{ok:true}});});
+ await page.goto('/dashboard.html');await page.locator('#view .item').filter({hasText:'AION-101'}).locator('.c-who').click();await page.locator('#pop .opt').filter({hasText:'Test Reporter'}).click();
+ await expect.poll(()=>sent).toBe(1);await expect(page.getByRole('dialog')).toHaveCount(0);
+ expect(mock.calls.some(c=>c.path==='/ticket-metadata'&&c.method==='PUT')).toBe(false);expect(mock.errors).toEqual([]);
 });

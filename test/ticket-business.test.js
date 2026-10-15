@@ -129,8 +129,8 @@ test('administrator AI reports retain computed totals, bounds, warnings and veri
  const report=await tools.execute('run_dashboard_report',{workflow:'hours',days:7});assert.equal(report.totals.open,3);assert.equal(report.tickets[0].billing,'billable');assert.deepEqual(report.warnings,['Partial Jira coverage']);assert.equal(tools.references()[0].key,'INT-1');
 });
 
-test('administrator assignment requires explicit billing for Jira assignees, developer labels and internal tickets',async()=>{
- const s=await setup(),t=await s.create();
+test('with BILLING_REQUIRED on, administrator assignment requires explicit billing for Jira assignees, developer labels and internal tickets',async()=>{
+ const s=await setup();s.env.BILLING_REQUIRED='true';const t=await s.create();
  for(const patch of [{assignee:'lead'},{devs:['builder','other']}]){const r=await s.call('/internal/'+t.key,'PUT',patch,admin);assert.equal(r.status,400);assert.equal((await r.json()).code,'billing_required');}
  for(const fields of [{assignee:{accountId:'lead'}},{labels:['ai1_builder','ai1_other']}]){const r=await s.call('/jira/issue/AION-1','PUT',{fields},admin);assert.equal(r.status,400);assert.equal((await r.json()).code,'billing_required');}
  assert.equal(s.calls.filter(c=>c.method==='PUT').length,0);
@@ -180,4 +180,11 @@ test('users set the estimate once; only administrators change it afterwards',asy
  await assert.rejects(saveMetadata(env,key,{revision:m.revision,estimatedHours:5},user),e=>e.code==='estimate_locked'&&e.status===403);
  await assert.rejects(saveMetadata(env,key,{revision:m.revision,estimatedHours:null},user),e=>e.code==='estimate_locked');
  m=await saveMetadata(env,key,{revision:m.revision,estimatedHours:5},admin);assert.equal(m.estimatedHours,5);
+});
+
+test('billing is optional by default: administrators assign and create without it',async()=>{
+ const s=await setup(),t=await s.create();
+ assert.equal((await s.call('/internal/'+t.key,'PUT',{assignee:'lead'},admin)).status,200);
+ assert.equal((await s.call('/internal','POST',{summary:'No billing yet',devs:['builder'],metadata:{clientId:s.client.id}},admin)).status,201);
+ assert.equal((await s.call('/config','GET',undefined,admin).then(r=>r.json())).billingRequired,false);
 });

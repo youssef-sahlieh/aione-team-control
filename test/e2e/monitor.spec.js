@@ -123,5 +123,5 @@ test("a second visit shows the saved tickets at once, and signing out removes th
   slow = false;
   await page.evaluate(() => document.querySelector(".account-menu").open = true);
   await page.locator("#signout").click();
-  await expect.poll(() => page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("aion.cache.")).length)).toBe(0);
+  await expect.poll(() => page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("aion.cache.")).length).catch(() => -1)).toBe(0);
 });
