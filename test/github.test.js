@@ -19,8 +19,8 @@ test("ticket numbers are read from titles, branches and the release note's Jira 
   assert.deepEqual(keys({ title: "fix: cash rounding", body: "Jira: None\nJira: ticket number / text / None\nRefs NEXO-1234 and PR 55", branch: "codex/forecourt-opening-71" }), []);
 });
 
-function setup() {
-  const STORE = memoryStore(), gh = [], jira = [];
+function setup({ noChecks = false } = {}) {
+  const STORE = memoryStore(), gh = [], jira = [], graphqlCalls = [];
   const pulls = {
     "KAD-org/flutter_pos": [
       { number: 553, title: "feat: forecourt opening (AION-71)", body: "Jira: AION-71", state: "closed", merged_at: "2026-10-12T10:00:00Z", draft: false, updated_at: "2026-10-12T10:00:00Z", html_url: "https://github.com/KAD-org/flutter_pos/pull/553", user: { login: "dev1" }, head: { ref: "codex/forecourt-opening-71" }, base: { ref: "main" } },
@@ -33,6 +33,14 @@ function setup() {
   };
   globalThis.fetch = async (url, init = {}) => {
     const u = new URL(String(url));
+    if (u.hostname === "api.github.com" && u.pathname === "/graphql") {
+      const { query, variables } = JSON.parse(init.body); graphqlCalls.push({ repo: variables.name, checks: query.includes("statusCheckRollup") });
+      if (noChecks && query.includes("statusCheckRollup")) return Response.json({ data: null, errors: [{ message: "Resource not accessible by personal access token", path: ["repository", "pullRequests", "nodes", 0, "commits"] }] });
+      const nodes = variables.name === "flutter_pos_api" ? [{ number: 175, comments: { totalCount: 2 }, reviewThreads: { totalCount: 2, nodes: [{ isResolved: false, comments: { totalCount: 3 } }, { isResolved: true, comments: { totalCount: 1 } }] },
+        reviewDecision: "CHANGES_REQUESTED", reviewRequests: { nodes: [{ requestedReviewer: { __typename: "User", login: "rami-alt" } }] }, latestOpinionatedReviews: { nodes: [{ author: { login: "ellen" }, state: "CHANGES_REQUESTED" }] },
+        ...(query.includes("statusCheckRollup") ? { commits: { nodes: [{ commit: { statusCheckRollup: { state: "FAILURE", contexts: { nodes: [{ __typename: "CheckRun", name: "build", status: "COMPLETED", conclusion: "FAILURE" }, { __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "SUCCESS" }, { __typename: "StatusContext", context: "deploy", state: "PENDING" }] } } } }] } } : {}) }] : [];
+      return Response.json({ data: { repository: { pullRequests: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } } });
+    }
     if (u.hostname === "api.github.com") {
       gh.push(u.pathname + u.search); assert.equal(init.headers.Authorization, "Bearer gh-token");
       const repo = u.pathname.replace(/^\/repos\//, "").replace(/\/pulls$/, "");
@@ -44,7 +52,7 @@ function setup() {
   const env = { JIRA_PROJECT: "AION", JIRA_SITE: "https://jira.test", JIRA_EMAIL: "bot", JIRA_API_TOKEN: "t", SESSION_SECRET: "s", STORE,
     TEAM_CONFIG: JSON.stringify({ people: {} }), GITHUB_TOKEN: "gh-token", GITHUB_REPOS: "KAD-org/flutter_pos,KAD-org/flutter_pos_api", GITHUB_JIRA_ALIASES: "AIONE" };
   const call = (path, token) => worker.fetch(new Request("https://p" + path, { headers: { Authorization: "Bearer " + token } }), env).then((r) => r.json());
-  return { env, gh, jira, pulls, call };
+  return { env, gh, jira, pulls, call, graphqlCalls };
 }
 
 test("each ticket gets its PRs from both repositories; later syncs read only what changed", async () => {
@@ -82,4 +90,22 @@ test("without a GitHub token nothing is requested", async () => {
   const { token } = await makeToken(env, admin.email, Date.now(), 1);
   const d = await worker.fetch(new Request("https://p/github/prs?keys=AION-71", { headers: { Authorization: "Bearer " + token } }), env).then((r) => r.json());
   assert.deepEqual(d, { configured: false, prs: {} }); assert.equal(gh.length, 0);
+});
+
+test("open PRs carry comments, reviewers and failed checks; a token without check access still gets the rest", async () => {
+  for (const noChecks of [false, true]) {
+    const { env, call } = setup({ noChecks });
+    const admin = { email: "admin@aione.biz", name: "Admin", role: "admin", dev: "", v: 1 };
+    await saveUser(env.STORE, admin);
+    const { token } = await makeToken(env, admin.email, Date.now(), 1);
+    const d = await call("/github/prs?keys=AION-71", token);
+    const pr = d.prs["AION-71"].find((p) => p.number === 175);
+    assert.equal(pr.status.comments, 6); assert.equal(pr.status.unresolved, 1);
+    assert.equal(pr.status.decision, "CHANGES_REQUESTED"); assert.deepEqual(pr.status.requested, ["rami-alt"]);
+    assert.deepEqual(pr.status.reviews, [{ by: "ellen", state: "CHANGES_REQUESTED" }]);
+    if (noChecks) { assert.equal(pr.status.checks, null); assert.equal(d.checks, false); }
+    else { assert.equal(pr.status.checks, "FAILURE"); assert.deepEqual(pr.status.failed, ["build"]); assert.equal(pr.status.running, 1); assert.equal(d.checks, true); }
+    // The merged PR has no live status.
+    assert.equal(d.prs["AION-71"].find((p) => p.number === 553).status, undefined);
+  }
 });

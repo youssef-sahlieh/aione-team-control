@@ -540,7 +540,7 @@ async function route(request, env, url) {
     }
     try {
       const { index } = await syncPulls(env, { force: isAdmin && url.searchParams.get("refresh") === "1" });
-      return json({ configured: true, syncedAt: index.syncedAt, prs: prsByKey(index, keys) });
+      return json({ configured: true, syncedAt: index.syncedAt, checks: index.checksAccess !== false, prs: prsByKey(index, keys) });
     } catch (e) { return fail("github", e.message || "Couldn't read pull requests.", 502); }
   }
 

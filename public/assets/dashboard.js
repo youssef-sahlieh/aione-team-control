@@ -103,12 +103,39 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   let ODOO=false; const ODOO_DETAIL={};
   const isOdoo=key=>/^HD-[0-9]+$/.test(key);
   // Pull requests in the product repositories that mention a ticket (matched by the proxy).
-  let GITHUB=false; const PRS={};
+  let GITHUB=false, PR_CHECKS=true; const PRS={};
+  // What needs attention on a PR: checks, reviews and comments ([class, short text, full text]).
+  function prSignals(p){
+    const s=p.status, out=[]; if(!s) return out;
+    if(s.checks==="FAILURE"||s.checks==="ERROR") out.push(["bad","✗ checks","Checks failed"+(s.failed&&s.failed.length?": "+s.failed.join(", "):"")]);
+    else if(s.checks==="PENDING"||s.checks==="EXPECTED") out.push(["wait","● checks","Checks running"+(s.running?" ("+s.running+")":"")]);
+    else if(s.checks==="SUCCESS") out.push(["ok","✓ checks","Checks passed"]);
+    const by=st=>(s.reviews||[]).filter(r=>r.state===st).map(r=>r.by);
+    if(s.decision==="CHANGES_REQUESTED") out.push(["bad","✎ changes","Changes requested by "+(by("CHANGES_REQUESTED").join(", ")||"a reviewer")]);
+    else if(s.decision==="APPROVED") out.push(["ok","✔ approved","Approved by "+(by("APPROVED").join(", ")||"a reviewer")]);
+    else if(s.requested&&s.requested.length) out.push(["wait","👤 "+s.requested.length,"Waiting for review: "+s.requested.join(", ")]);
+    else if(s.decision==="REVIEW_REQUIRED") out.push(["wait","👤 review","Review required"]);
+    if(s.comments) out.push([s.unresolved?"wait":"","💬 "+s.comments,s.comments+" comment"+(s.comments===1?"":"s")+(s.unresolved?" · "+s.unresolved+" unresolved thread"+(s.unresolved===1?"":"s"):"")]);
+    return out;
+  }
+  function prLink(p,text){ const a=el("a","pr-num pr-"+p.state,text); a.href=p.url; a.target="_blank"; a.rel="noopener"; a.addEventListener("click",e=>e.stopPropagation()); return a; }
+  // Table cell: each PR's number (linked), state and what needs attention.
+  function prCell(i){
+    const c=el("span","c-prs pr-cell"), list=PRS[i.key];
+    if(isInt(i.key)||isOdoo(i.key)){ c.textContent=""; return c; }
+    if(!list){ c.appendChild(el("span","pr-none","…")); return c; }
+    if(!list.length){ c.appendChild(el("span","pr-none","—")); return c; }
+    list.slice(0,3).forEach(p=>{ const line=el("div","pr-line"); const a=prLink(p,"#"+p.number); a.title=p.repo+" #"+p.number+" · "+p.state+" · "+p.title; line.appendChild(a);
+      line.appendChild(el("span","pr-st pr-"+p.state,p.state));
+      prSignals(p).forEach(([k,t,full])=>{ const b=el("span","pr-sig "+k,t); b.title=full; line.appendChild(b); }); c.appendChild(line); });
+    if(list.length>3){ const more=el("span","pr-none","+"+(list.length-3)+" more"); more.title=list.slice(3).map(p=>p.repo+" #"+p.number+" · "+p.state).join("\n"); c.appendChild(more); }
+    return c;
+  }
   const prState=list=>list.some(p=>p.state==="open")?"open":list.some(p=>p.state==="draft")?"draft":list.every(p=>p.state==="merged")?"merged":"closed";
   async function loadPrs(keys,refresh){
     keys=[...new Set(keys)].filter(k=>!isInt(k)&&!isOdoo(k)); if(!GITHUB||!keys.length) return;
     try{
-      for(let n=0;n<keys.length;n+=300){ const part=keys.slice(n,n+300); const r=await api("/github/prs?keys="+encodeURIComponent(part.join(","))+(refresh?"&refresh=1":"")); part.forEach(k=>{ PRS[k]=(r.prs&&r.prs[k])||[]; }); }
+      for(let n=0;n<keys.length;n+=300){ const part=keys.slice(n,n+300); const r=await api("/github/prs?keys="+encodeURIComponent(part.join(","))+(refresh?"&refresh=1":"")); part.forEach(k=>{ PRS[k]=(r.prs&&r.prs[k])||[]; }); if(r.checks===false) PR_CHECKS=false; }
       if($("pop").hidden&&!drag) render(); if(dz.key&&keys.includes(dz.key)) renderPrs(dz.key);
     }catch(err){ if(dz.key&&keys.includes(dz.key)) renderPrs(dz.key,errorText(err)); }
   }
@@ -118,12 +145,15 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(problem){ box.appendChild(el("span","msg err","Couldn't load pull requests: "+problem)); return; }
     if(!list){ $("d-prs-count").textContent=""; box.appendChild(el("span","msg","Looking for pull requests…")); loadPrs([key]); return; }
     $("d-prs-count").textContent="("+list.length+")";
+    if(!PR_CHECKS&&list.length) box.appendChild(el("p","msg","Check results aren't shown: the GitHub token needs read access to Checks and Commit statuses."));
     if(!list.length){ box.appendChild(el("span","msg","No pull request mentions "+key+" yet. Put "+key+" in the PR title, branch or the release note's Jira line.")); return; }
     list.forEach(p=>{
       const row=el("div","pr-row"), a=el("a","pr-link",p.repo+" #"+p.number); a.href=p.url; a.target="_blank"; a.rel="noopener";
       const t=el("span","pr-title",p.title); t.dir="auto";
       const meta=el("span","pr-meta",(p.author?p.author+" · ":"")+(p.branch&&p.base?p.branch+" → "+p.base+" · ":"")+(p.merged?"merged "+ago(p.merged):"updated "+ago(p.updated)));
-      row.append(el("span","pr-state pr-"+p.state,p.state),a,t,meta); box.appendChild(row);
+      row.append(el("span","pr-state pr-"+p.state,p.state),a,t,meta);
+      const sig=prSignals(p); if(sig.length){ const line=el("div","pr-signals"); sig.forEach(([k,,full])=>line.appendChild(el("span","pr-sig "+k,full))); row.appendChild(line); }
+      box.appendChild(row);
     });
   }
   const odooApi={
@@ -404,14 +434,15 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(showTicketBriefs()){const label=el("span","c-brief","AI brief");label.title="Generate a short AI explanation of each Jira ticket.";h.insertBefore(label,h.querySelector(".c-who"));}
     const businessColumns=[['clientName','Client',150],['subClientName','Sub-client',150],['estimatedHours','Estimated hours',130],['actualHours','Actual hours',120],['workDone','Work done',220],...(IS_ADMIN?[['billing','Billing',130]]:[])];
     businessColumns.forEach(([key,label])=>h.appendChild(el('span','c-'+key,label)));
+    if(GITHUB) h.appendChild(el('span','c-prs','Pull requests'));
     const sortMap={'c-key':'key','c-ttl':'summary','c-who':'assigneeName','c-rep':'reporter','c-dev':'developers','c-st':'status','c-due':'due','c-cre':'created','c-upd':'updated'};
     for(const header of h.children){const key=sortMap[header.className]||businessColumns.find(c=>header.classList.contains('c-'+c[0]))?.[0];if(!key)continue;const label=header.textContent;header.replaceChildren();const b=el('button','column-sort',label+(state.sort?.field===key?(state.sort.direction==='asc'?' ↑':' ↓'):' ▾'));b.type='button';b.setAttribute('aria-label','Sort '+label);b.setAttribute('aria-haspopup','menu');b.addEventListener('click',()=>columnSortMenu(b,key));header.addEventListener('contextmenu',e=>{e.preventDefault();columnSortMenu(b,key);});header.append(b);}
-    let widths=[28,92,300,...(showTicketBriefs()?[220]:[]),130,150,170,140,120,120,90,120,48,...businessColumns.map(c=>c[2])];
+    let widths=[28,92,300,...(showTicketBriefs()?[220]:[]),130,150,170,140,120,120,90,120,48,...businessColumns.map(c=>c[2]),...(GITHUB?[240]:[])];
     if(state.columnsMode!=='all'){
       // Work view fits the page: each column has a minimum width and shares the rest of the space
       // (the list scrolls sideways only on screens narrower than the minimums).
       applyWorkColumns(h);w.classList.add('work-columns');
-      const cols=[[28],[92],[180,2.2],[96,1],[112,1],[84,.8],[110,1.3],[84,.7],[78,.7],[140,1.8],...(IS_ADMIN?[[80,.7]]:[]),[100,.9],[40]];
+      const cols=[[28],[92],[180,2.2],[96,1],[112,1],[84,.8],...(GITHUB?[[170,1.4]]:[]),[110,1.3],[84,.7],[78,.7],[140,1.8],...(IS_ADMIN?[[80,.7]]:[]),[100,.9],[40]];
       const min=cols.reduce((a,[n])=>a+n,0)+10*(cols.length-1)+28;
       w.style.setProperty('--business-columns',cols.map(([n,fr])=>fr?'minmax('+n+'px,'+fr+'fr)':n+'px').join(' '));w.style.setProperty('--business-width','max(100%, '+min+'px)');
     }else{
@@ -453,7 +484,6 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(i.internal) tags.appendChild(el("span","flag int","Internal"));
     if(i.odoo){ tags.appendChild(el("span","flag odoo","Odoo")); if(i.team) tags.appendChild(el("span","epic",i.team.replace(/^ai1 \| /,""))); }
     if(needsReply(i)) tags.appendChild(el("span","flag k6","needs reply"));
-    { const prs=PRS[i.key]; if(prs&&prs.length){ const c=el("span","flag pr pr-"+prState(prs),prs.length===1?"PR #"+prs[0].number:prs.length+" PRs"); c.title=prs.map(p=>p.repo+" #"+p.number+" · "+p.state+" · "+p.title).join("\n"); tags.appendChild(c); } }
     const age=Math.round(dnum(t)-dnum(new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Jerusalem",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(i.created)))); if(age<=2&&i.cat!=="done") tags.appendChild(el("span","flag k7",age===0?"new today":"new "+age+"d"));
     if(/high|highest|critical|blocker/i.test(i.priority)) tags.appendChild(el("span","flag k2",i.priority));
     if(i.type==="Bug") tags.appendChild(el("span","flag k2","Bug"));
@@ -479,7 +509,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     ck.addEventListener("click",e=>e.stopPropagation()); ck.addEventListener("change",()=>{ ck.checked?state.sel.add(i.key):state.sel.delete(i.key); onChange(ck.checked); updateBulk(); }); return ck; }
 
   function applyWorkColumns(row){
-    const order=['c-ck','c-key','c-ttl','c-who','c-st','c-due','c-clientName','c-estimatedHours','c-actualHours','c-workDone',...(IS_ADMIN?['c-billing']:[]),'c-note','c-actions'];
+    const order=['c-ck','c-key','c-ttl','c-who','c-st','c-due',...(GITHUB?['c-prs']:[]),'c-clientName','c-estimatedHours','c-actualHours','c-workDone',...(IS_ADMIN?['c-billing']:[]),'c-note','c-actions'];
     for(const child of [...row.children])child.hidden=!order.some(c=>child.classList.contains(c));
     for(const c of order){const child=[...row.children].find(n=>n.classList.contains(c));if(child)row.append(child);}
   }
@@ -505,6 +535,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
 
     const actions=el("span","c-actions"), menu=el("button","icon-btn row-menu","⋯");menu.type="button";menu.setAttribute("aria-label","Actions for "+i.key);menu.setAttribute("aria-haspopup","dialog");menu.addEventListener("click",()=>rowActions(menu,i));actions.appendChild(menu);r.appendChild(actions);
     for(const key of ['clientName','subClientName','estimatedHours','actualHours','workDone',...(IS_ADMIN?['billing']:[])]){const value=i[key],text=key==='billing'?(value==='not_billable'?'Not billable':value==='billable'?'Billable':'Not set'):value??'Not set';const f=key==='clientName'||key==='subClientName'?'client':key,edit=business.canQuickEdit(i,f);const c=el(edit?'button':'span','business-cell c-'+key+(edit?' cell-edit':''),String(text||'Not set'));if(edit){c.type='button';c.setAttribute('aria-label','Edit '+business.quickLabel(f)+' for '+i.key);c.addEventListener('click',e=>{e.stopPropagation();businessPopover(c,i,f);});}if(key==='workDone'){c.textContent=value?value.slice(0,100)+(value.length>100?'…':''):'Not set';c.title=value||'';}r.append(c);}
+    if(GITHUB) r.appendChild(prCell(i));
     if(state.columnsMode!=='all'){applyWorkColumns(r);const client=r.querySelector('.c-clientName');if(i.subClientName)client.append(el('small','client-secondary',i.subClientName));}
     return r;
   }

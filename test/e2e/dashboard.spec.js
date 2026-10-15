@@ -659,13 +659,18 @@ test('ticket details open full screen and attachments preview inside the dashboa
 
 test('pull requests that mention a ticket show in the list and in the ticket',async({page})=>{
  const mock=await mockDashboard(page,{github:true});
- const prs={'AION-101':[{repo:'flutter_pos',number:553,title:'feat: forecourt opening (AION-101)',state:'merged',url:'https://github.com/KAD-org/flutter_pos/pull/553',author:'dev1',branch:'codex/x',base:'main',updated:'2026-10-12T10:00:00Z',merged:'2026-10-12T10:00:00Z'},{repo:'flutter_pos_api',number:175,title:'feat: forecourt opening cash',state:'open',url:'https://github.com/KAD-org/flutter_pos_api/pull/175',author:'dev1',updated:'2026-10-12T09:00:00Z',merged:null}]};
+ const prs={'AION-101':[{repo:'flutter_pos',number:553,title:'feat: forecourt opening (AION-101)',state:'merged',url:'https://github.com/KAD-org/flutter_pos/pull/553',author:'dev1',branch:'codex/x',base:'main',updated:'2026-10-12T10:00:00Z',merged:'2026-10-12T10:00:00Z'},{repo:'flutter_pos_api',number:175,title:'feat: forecourt opening cash',state:'open',url:'https://github.com/KAD-org/flutter_pos_api/pull/175',author:'dev1',updated:'2026-10-12T09:00:00Z',merged:null,status:{comments:6,unresolved:1,decision:'CHANGES_REQUESTED',requested:['rami-alt'],reviews:[{by:'ellen',state:'CHANGES_REQUESTED'}],checks:'FAILURE',failed:['build'],running:0}}]};
  await page.route('**/github/prs?*',r=>{const keys=new URL(r.request().url()).searchParams.get('keys').split(',');return r.fulfill({json:{configured:true,prs:Object.fromEntries(keys.filter(k=>prs[k]).map(k=>[k,prs[k]]))}});});
  await page.goto('/dashboard.html');
- const chip=page.locator('#view .item').filter({hasText:'AION-101'}).locator('.flag.pr');await expect(chip).toHaveText('2 PRs');await expect(chip).toHaveClass(/pr-open/);
+ const cell=page.locator('#view .item').filter({hasText:'AION-101'}).locator('.c-prs');await expect(cell.locator('.pr-line')).toHaveCount(2);
+ await expect(cell.getByRole('link',{name:'#175'})).toHaveAttribute('href','https://github.com/KAD-org/flutter_pos_api/pull/175');
+ await expect(cell.locator('.pr-line').filter({hasText:'#175'}).locator('.pr-sig')).toHaveText(['✗ checks','✎ changes','💬 6']);
+ await expect(cell.locator('.pr-sig.bad').first()).toHaveAttribute('title','Checks failed: build');
+ await expect(page.locator('#view .head .c-prs')).toHaveText('Pull requests');await page.setViewportSize({width:1920,height:900});await page.getByRole('button',{name:'Work view',exact:true}).click();await page.locator('.business-list').screenshot({path:'test-results/pr-column.png'});
  await page.locator('#view .item').filter({hasText:'AION-101'}).locator('.c-ttl').click();
  const section=page.locator('#d-prs-blk');await expect(section).toBeVisible();await expect(page.locator('#d-prs-count')).toHaveText('(2)');
  await expect(section.getByRole('link',{name:'flutter_pos #553'})).toHaveAttribute('href','https://github.com/KAD-org/flutter_pos/pull/553');
  await expect(section.locator('.pr-row').first()).toContainText('merged');
+ await expect(section.locator('.pr-row').nth(1).locator('.pr-signals .pr-sig')).toHaveText(['Checks failed: build','Changes requested by ellen','6 comments · 1 unresolved thread']);
  expect(mock.errors).toEqual([]);
 });

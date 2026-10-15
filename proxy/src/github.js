@@ -72,10 +72,60 @@ export async function syncPulls(env, { force = false } = {}) {
       }
       index.cursors[repo] = newest;
     }));
+    await Promise.all(repos(env).map((repo) => openStatus(env, repo, index).catch((e) => console.warn("github_status_failed", repo, String(e.message || e).slice(0, 200)))));
     index.syncedAt = Date.now();
     await env.STORE.set(INDEX_KEY, JSON.stringify(index));
     return { index, synced: true };
   } finally { await env.STORE.deleteIfValue(LOCK_KEY, owner); }
+}
+
+// Comments, reviewers and checks for a repository's open PRs, in one GraphQL query per 50 PRs.
+// (The PR list doesn't include them, and check results change without the PR changing.)
+// Closed and merged PRs keep the last status seen while they were open.
+const CHECKS = "commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:100){nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}";
+const statusQuery = (withChecks) => `query($owner:String!,$name:String!,$after:String){ repository(owner:$owner,name:$name){ pullRequests(first:50,states:[OPEN],orderBy:{field:UPDATED_AT,direction:DESC},after:$after){ pageInfo{hasNextPage endCursor} nodes{ number
+  comments{totalCount} reviewThreads(first:100){totalCount nodes{isResolved comments{totalCount}}}
+  reviewDecision reviewRequests(first:20){nodes{requestedReviewer{__typename ... on User{login} ... on Team{name} ... on Bot{login}}}}
+  latestOpinionatedReviews(first:20){nodes{author{login} state}} ${withChecks ? CHECKS : ""} } } } }`;
+const FAILED = new Set(["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
+
+async function graphql(env, query, variables) {
+  const res = await fetch("https://api.github.com/graphql", { method: "POST", headers: { Authorization: "Bearer " + env.GITHUB_TOKEN, "Content-Type": "application/json", "User-Agent": "aion-team-control" }, body: JSON.stringify({ query, variables }) });
+  if (!res.ok) throw new Error("GitHub GraphQL answered " + res.status);
+  return res.json();
+}
+
+async function openStatus(env, repo, index) {
+  const [owner, name] = repo.split("/");
+  let withChecks = index.checksAccess !== false || Date.now() - (index.checksTriedAt || 0) > 3600000, after = null;
+  for (let page = 0; page < 6; page++) {
+    let d = await graphql(env, statusQuery(withChecks), { owner, name, after });
+    // A token without "Checks"/"Commit statuses" access still gets comments and reviews.
+    if (withChecks && d.errors && d.errors.some((e) => /statusCheckRollup|commits|not accessible|permission/i.test(JSON.stringify(e)))) {
+      withChecks = false; index.checksAccess = false; index.checksTriedAt = Date.now(); d = await graphql(env, statusQuery(false), { owner, name, after });
+    } else if (withChecks && !d.errors) index.checksAccess = true;
+    const conn = d.data && d.data.repository && d.data.repository.pullRequests;
+    if (!conn) throw new Error((d.errors && d.errors[0] && d.errors[0].message) || "no data");
+    for (const p of conn.nodes) {
+      const pr = index.prs[repo + "#" + p.number]; if (!pr) continue;
+      const threads = (p.reviewThreads && p.reviewThreads.nodes) || [];
+      const roll = withChecks && p.commits && p.commits.nodes[0] && p.commits.nodes[0].commit.statusCheckRollup;
+      const contexts = (roll && roll.contexts && roll.contexts.nodes) || [];
+      pr.status = {
+        comments: p.comments.totalCount + threads.reduce((n, t) => n + ((t.comments && t.comments.totalCount) || 0), 0),
+        unresolved: threads.filter((t) => !t.isResolved).length,
+        decision: p.reviewDecision || null,
+        requested: p.reviewRequests.nodes.map((n) => n.requestedReviewer && (n.requestedReviewer.login || n.requestedReviewer.name)).filter(Boolean),
+        reviews: p.latestOpinionatedReviews.nodes.map((n) => ({ by: (n.author && n.author.login) || "someone", state: n.state })),
+        checks: withChecks ? (roll ? roll.state : "NONE") : null,
+        failed: contexts.filter((c) => FAILED.has(c.conclusion || c.state)).map((c) => c.name || c.context).slice(0, 10),
+        running: contexts.filter((c) => (c.status && c.status !== "COMPLETED") || c.state === "PENDING" || c.state === "EXPECTED").length,
+        at: Date.now()
+      };
+    }
+    if (!conn.pageInfo.hasNextPage) break;
+    after = conn.pageInfo.endCursor;
+  }
 }
 
 export function prsByKey(index, keys) {
