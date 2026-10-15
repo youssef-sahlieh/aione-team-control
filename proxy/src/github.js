@@ -38,6 +38,8 @@ function record(env, repo, pr) {
 async function gh(env, path) {
   const res = await fetch("https://api.github.com" + path, { headers: { Authorization: "Bearer " + env.GITHUB_TOKEN, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "aion-team-control" } });
   if (!res.ok) {
+    // Logged without the token: which repository and what GitHub answered.
+    console.warn("github_read_failed", path.split("?")[0], res.status, res.headers.get("x-accepted-github-permissions") || "");
     const why = res.status === 401 ? "the GitHub token isn't valid" : res.status === 403 || res.status === 404 ? "the GitHub token can't read this repository" : "GitHub answered " + res.status;
     throw new Error("Couldn't read pull requests: " + why + ".");
   }
