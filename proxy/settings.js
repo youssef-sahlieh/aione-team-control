@@ -20,6 +20,10 @@ export default {
   NO_DEVELOPER_NOTIFY_TO: "youssef@aione.biz,ellen@aione.biz",
   // "No developer" emails only for tickets assigned to these people.
   NO_DEVELOPER_ASSIGNEES: "karim,youssef,rami,razan",
+  // Product repositories whose pull requests are linked to tickets (needs the GITHUB_TOKEN secret).
+  GITHUB_REPOS: "KAD-org/flutter_pos,KAD-org/flutter_pos_api",
+  // Other spellings people use for this project's ticket keys in PRs (AIONE-12 means AION-12).
+  GITHUB_JIRA_ALIASES: "AIONE",
   // Where links in emails point (the dashboard, on GitHub Pages at its own domain).
   APP_URL: "https://dashboard.ai1.host"
 };

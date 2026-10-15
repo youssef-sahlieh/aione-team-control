@@ -27,6 +27,7 @@ import { odooAppRoutes, odooTranslations } from "./odoo-app.js";
 import { cookieSessionRequest } from "./sessions.js";
 import { SESSION_MS } from "./session-policy.js";
 import { aiChat, aiBrief, aiConfigured } from "./ai.js";
+import { githubConfigured, syncPulls, prsByKey } from "./github.js";
 import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
 import { ROLES, checkPassword, createLinkToken, deleteUser, getUser, hashPassword, listUsers, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, useLinkToken, validDev, validEmail } from "./users.js";
 
@@ -481,7 +482,7 @@ async function route(request, env, url) {
   if (path === "/config" && method === "GET") {
     let team = {};
     try { team = JSON.parse(env.TEAM_CONFIG || "{}"); } catch {}
-    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, capabilities:["ticket-business-v1"] });
+    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, capabilities:["ticket-business-v1"] });
   }
 
   if (!isAdmin && (path === "/mail" || path === "/jira/users")) return fail("forbidden", "Only administrators can do that.", 403);
@@ -522,6 +523,25 @@ async function route(request, env, url) {
     // Only this project's tickets (and for users, only their own) ever leave the proxy, whatever the search asked for.
     const issues = (r.data.issues || []).filter((i) => isOurKey(i.key) && (isAdmin || hasDevLabel(i.fields && i.fields.labels)));
     return json({ ...r.data, issues: b.slim === true ? issues.map(slimIssue) : issues });
+  }
+
+  // Pull requests in the product repositories that mention these tickets (see github.js).
+  // Users only get PRs for tickets that are theirs.
+  if (path === "/github/prs" && method === "GET") {
+    if (!githubConfigured(env) || !env.STORE) return json({ configured: false, prs: {} });
+    let keys = [...new Set(String(url.searchParams.get("keys") || "").split(",").map((k) => k.trim()).filter((k) => isOurKey(k)))];
+    if (keys.length > 300) return fail("bad_request", "Ask for at most 300 tickets at a time.", 400);
+    if (!keys.length) return json({ configured: true, prs: {} });
+    if (!isAdmin) {
+      const r = await jira(env, "/rest/api/3/search/jql", { method: "POST", body: { jql: 'labels = "' + devLabel + '" AND key in (' + keys.join(",") + ")", fields: ["labels"], maxResults: 100 } });
+      if (!r.ok) return r.res;
+      const mine = new Set((r.data.issues || []).filter((i) => hasDevLabel(i.fields && i.fields.labels)).map((i) => i.key));
+      keys = keys.filter((k) => mine.has(k));
+    }
+    try {
+      const { index } = await syncPulls(env, { force: isAdmin && url.searchParams.get("refresh") === "1" });
+      return json({ configured: true, syncedAt: index.syncedAt, prs: prsByKey(index, keys) });
+    } catch (e) { return fail("github", e.message || "Couldn't read pull requests.", 502); }
   }
 
   if (path === "/jira/users" && method === "GET") {

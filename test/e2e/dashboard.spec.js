@@ -5,7 +5,7 @@ import { jiraIssue, internalTicket, people } from "../fixtures/issues.js";
 // A synthetic Odoo Helpdesk ticket as the proxy returns it (developer "builder" from the Odoo assignee).
 const odooTicket = { key: "HD-300", id: 300, ref: "300", odoo: true, summary: "Synthetic Odoo request", status: "In Progress", statusCat: "indeterminate", devs: ["builder"], developerName: "Builder", customer: { name: "Ariel Amiri", email: "ariel@example.invalid" }, team: "ai1 | Support", priority: "Medium", created: "2026-10-09T08:00:00Z", updated: "2026-10-10T08:00:00Z", closed: "", due: null, url: "https://odoo.example.invalid/web#id=300&model=helpdesk.ticket&view_type=form" };
 
-async function mockDashboard(page, { role = "admin", failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1, odoo = false, missingEstimate = false } = {}) {
+async function mockDashboard(page, { role = "admin", failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1, odoo = false, github = false, missingEstimate = false } = {}) {
   await page.clock.setFixedTime(new Date("2026-10-11T09:00:00Z"));
   const calls = [], unexpected = [], errors = [];
   const internalTickets=[structuredClone(internalTicket)];
@@ -32,7 +32,7 @@ async function mockDashboard(page, { role = "admin", failure = false, expired = 
     const path = url.pathname, method = req.method(), body = req.postDataJSON();
     calls.push({ path, method, body, ...(url.search?{query:url.search}:{}) });
     const json = value => route.fulfill({ json: value });
-    if (path === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people:assigneeTeam?{...people,...Object.fromEntries(["karim","youssef","rami","razan"].map(key=>[key,{id:`test-${key}`,name:key[0].toUpperCase()+key.slice(1),ini:key[0].toUpperCase()}]))}:people, devs: ["builder", "reviewer"], role, dev: "builder", email: "test@example.invalid", accounts: true, odoo, mail: false, capabilities:["ticket-business-v1"], ai:{enabled:!aiDisabled,readOnly:true} });
+    if (path === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people:assigneeTeam?{...people,...Object.fromEntries(["karim","youssef","rami","razan"].map(key=>[key,{id:`test-${key}`,name:key[0].toUpperCase()+key.slice(1),ini:key[0].toUpperCase()}]))}:people, devs: ["builder", "reviewer"], role, dev: "builder", email: "test@example.invalid", accounts: true, odoo, github, mail: false, capabilities:["ticket-business-v1"], ai:{enabled:!aiDisabled,readOnly:true} });
     if(path==='/clients'&&method==='GET')return json(catalog);
     if(path==='/clients/odoo-sync'&&method==='POST'){if(url.searchParams.get('force')!=='1')return json({odoo:true,changed:false,syncedAt:1});catalog.entries.push({id:'odoo-client',name:'Odoo Customer',parentId:null,archived:false});catalog.revision++;return json({odoo:true,changed:true,added:1,projects:3,syncedAt:2});}
     if(path==='/clients/import/preview')return json({revision:1,rows:body.rows.length,added:1,clients:2,subClients:0,entries:[{id:'new-client',name:body.rows[0].displayName,parentId:null}]});
@@ -654,5 +654,18 @@ test('ticket details open full screen and attachments preview inside the dashboa
  await viewer.getByRole('button',{name:'Close',exact:true}).click();await expect(viewer).toHaveCount(0);
  await expect(page.locator('#d-att .att').filter({hasText:'setup.zip'}).getByRole('button',{name:'Preview'})).toHaveCount(0);
  await page.locator('#d-size').click();await expect(drawer).not.toHaveClass(/full/);await expect(page.locator('#d-size')).toHaveText('Full screen');
+ expect(mock.errors).toEqual([]);
+});
+
+test('pull requests that mention a ticket show in the list and in the ticket',async({page})=>{
+ const mock=await mockDashboard(page,{github:true});
+ const prs={'AION-101':[{repo:'flutter_pos',number:553,title:'feat: forecourt opening (AION-101)',state:'merged',url:'https://github.com/KAD-org/flutter_pos/pull/553',author:'dev1',branch:'codex/x',base:'main',updated:'2026-10-12T10:00:00Z',merged:'2026-10-12T10:00:00Z'},{repo:'flutter_pos_api',number:175,title:'feat: forecourt opening cash',state:'open',url:'https://github.com/KAD-org/flutter_pos_api/pull/175',author:'dev1',updated:'2026-10-12T09:00:00Z',merged:null}]};
+ await page.route('**/github/prs?*',r=>{const keys=new URL(r.request().url()).searchParams.get('keys').split(',');return r.fulfill({json:{configured:true,prs:Object.fromEntries(keys.filter(k=>prs[k]).map(k=>[k,prs[k]]))}});});
+ await page.goto('/dashboard.html');
+ const chip=page.locator('#view .item').filter({hasText:'AION-101'}).locator('.flag.pr');await expect(chip).toHaveText('2 PRs');await expect(chip).toHaveClass(/pr-open/);
+ await page.locator('#view .item').filter({hasText:'AION-101'}).locator('.c-ttl').click();
+ const section=page.locator('#d-prs-blk');await expect(section).toBeVisible();await expect(page.locator('#d-prs-count')).toHaveText('(2)');
+ await expect(section.getByRole('link',{name:'flutter_pos #553'})).toHaveAttribute('href','https://github.com/KAD-org/flutter_pos/pull/553');
+ await expect(section.locator('.pr-row').first()).toContainText('merged');
  expect(mock.errors).toEqual([]);
 });

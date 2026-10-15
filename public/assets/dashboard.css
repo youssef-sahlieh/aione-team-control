@@ -376,3 +376,14 @@ button.key.odoo:hover{text-decoration:underline}
 .fp-text{align-self:stretch;margin:0;padding:16px;white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--mono,monospace);font-size:12px;width:100%;box-sizing:border-box}
 .fp-body .msg{padding:24px}
 .att .acts{display:flex;gap:6px;flex-wrap:wrap}
+
+/* Pull requests linked to a ticket. */
+.flag.pr{font-family:var(--mono,monospace)}
+.flag.pr-open{background:#e6f4ea;color:#1a7f37}.flag.pr-draft{background:#eef1f4;color:#57606a}.flag.pr-merged{background:#f3eefe;color:#8250df}.flag.pr-closed{background:#fdecec;color:#cf222e}
+.prs{display:flex;flex-direction:column;gap:8px}
+.pr-row{display:grid;grid-template-columns:auto auto 1fr;grid-template-areas:"state link title" ". meta meta";column-gap:10px;row-gap:2px;align-items:baseline;padding:10px 12px;border:1px solid var(--line);border-radius:10px}
+.pr-state{grid-area:state;font-size:11px;font-weight:600;text-transform:capitalize;padding:2px 8px;border-radius:999px}
+.pr-state.pr-open{background:#e6f4ea;color:#1a7f37}.pr-state.pr-draft{background:#eef1f4;color:#57606a}.pr-state.pr-merged{background:#f3eefe;color:#8250df}.pr-state.pr-closed{background:#fdecec;color:#cf222e}
+.pr-link{grid-area:link;font-weight:600;font-family:var(--mono,monospace);font-size:13px;white-space:nowrap}
+.pr-title{grid-area:title;min-width:0;overflow-wrap:anywhere}
+.pr-meta{grid-area:meta;font-size:12px;color:var(--muted)}

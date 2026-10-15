@@ -31,7 +31,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const stIdx=s=>{ const i=STATUS_ORDER.indexOf(s.toLowerCase()); return i<0?99:i; };
   const FIELDS=["summary","status","assignee","labels","duedate","created","updated","priority","issuetype","comment","parent","reporter"];
   function applyConfig(cfg){
-    LAST_CFG=cfg;
+    LAST_CFG=cfg; GITHUB=!!cfg.github;
     SITE=cfg.site; PROJECT=cfg.project; MAIL=!!cfg.mail; PEOPLE=cfg.people||{}; DEVS=cfg.devs||[]; DEV_EMAIL=cfg.devEmails||{}; DEV_COLOR=cfg.devColors||{};
     PEOPLE={...PEOPLE,[INTERNAL_ASSIGNEE]:{name:"Internal Tickets",ini:"IT",id:INTERNAL_ASSIGNEE}};
     BYID={}; for(const k in PEOPLE) BYID[PEOPLE[k].id]=k;
@@ -102,6 +102,30 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // Odoo Helpdesk tickets (HD-…): read from Odoo through the proxy; stage, developer and notes are saved back to Odoo.
   let ODOO=false; const ODOO_DETAIL={};
   const isOdoo=key=>/^HD-[0-9]+$/.test(key);
+  // Pull requests in the product repositories that mention a ticket (matched by the proxy).
+  let GITHUB=false; const PRS={};
+  const prState=list=>list.some(p=>p.state==="open")?"open":list.some(p=>p.state==="draft")?"draft":list.every(p=>p.state==="merged")?"merged":"closed";
+  async function loadPrs(keys,refresh){
+    keys=[...new Set(keys)].filter(k=>!isInt(k)&&!isOdoo(k)); if(!GITHUB||!keys.length) return;
+    try{
+      for(let n=0;n<keys.length;n+=300){ const part=keys.slice(n,n+300); const r=await api("/github/prs?keys="+encodeURIComponent(part.join(","))+(refresh?"&refresh=1":"")); part.forEach(k=>{ PRS[k]=(r.prs&&r.prs[k])||[]; }); }
+      if($("pop").hidden&&!drag) render(); if(dz.key&&keys.includes(dz.key)) renderPrs(dz.key);
+    }catch(err){ if(dz.key&&keys.includes(dz.key)) renderPrs(dz.key,errorText(err)); }
+  }
+  function renderPrs(key,problem){
+    const blk=$("d-prs-blk"), box=$("d-prs"); blk.hidden=!GITHUB||isInt(key)||isOdoo(key); if(blk.hidden) return;
+    box.replaceChildren(); const list=PRS[key];
+    if(problem){ box.appendChild(el("span","msg err","Couldn't load pull requests: "+problem)); return; }
+    if(!list){ $("d-prs-count").textContent=""; box.appendChild(el("span","msg","Looking for pull requests…")); loadPrs([key]); return; }
+    $("d-prs-count").textContent="("+list.length+")";
+    if(!list.length){ box.appendChild(el("span","msg","No pull request mentions "+key+" yet. Put "+key+" in the PR title, branch or the release note's Jira line.")); return; }
+    list.forEach(p=>{
+      const row=el("div","pr-row"), a=el("a","pr-link",p.repo+" #"+p.number); a.href=p.url; a.target="_blank"; a.rel="noopener";
+      const t=el("span","pr-title",p.title); t.dir="auto";
+      const meta=el("span","pr-meta",(p.author?p.author+" · ":"")+(p.branch&&p.base?p.branch+" → "+p.base+" · ":"")+(p.merged?"merged "+ago(p.merged):"updated "+ago(p.updated)));
+      row.append(el("span","pr-state pr-"+p.state,p.state),a,t,meta); box.appendChild(row);
+    });
+  }
   const odooApi={
     list:days=>api("/odoo/tickets?closedDays="+days),
     detail:key=>api("/odoo/tickets/"+key),
@@ -429,6 +453,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(i.internal) tags.appendChild(el("span","flag int","Internal"));
     if(i.odoo){ tags.appendChild(el("span","flag odoo","Odoo")); if(i.team) tags.appendChild(el("span","epic",i.team.replace(/^ai1 \| /,""))); }
     if(needsReply(i)) tags.appendChild(el("span","flag k6","needs reply"));
+    { const prs=PRS[i.key]; if(prs&&prs.length){ const c=el("span","flag pr pr-"+prState(prs),prs.length===1?"PR #"+prs[0].number:prs.length+" PRs"); c.title=prs.map(p=>p.repo+" #"+p.number+" · "+p.state+" · "+p.title).join("\n"); tags.appendChild(c); } }
     const age=Math.round(dnum(t)-dnum(new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Jerusalem",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(i.created)))); if(age<=2&&i.cat!=="done") tags.appendChild(el("span","flag k7",age===0?"new today":"new "+age+"d"));
     if(/high|highest|critical|blocker/i.test(i.priority)) tags.appendChild(el("span","flag k2",i.priority));
     if(i.type==="Bug") tags.appendChild(el("span","flag k2","Bug"));
@@ -842,7 +867,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(closedBusy) return; const days=state.closedDays; closedBusy=true;
     try{
       const list=await searchAll('project = '+PROJECT+' AND issuetype != Epic AND statusCategory = Done AND updated >= -'+days+'d ORDER BY updated DESC',FIELDS);
-      state.closedIssues=list.map(norm); await business.load(list.map(i=>i.key));mergeIssues(); saveCache(); if($("pop").hidden&&!drag) render();
+      state.closedIssues=list.map(norm); await business.load(list.map(i=>i.key));mergeIssues(); saveCache(); loadPrs(list.map(i=>i.key)); if($("pop").hidden&&!drag) render();
     }catch(err){ if(state.focus==="closed") toast("Couldn't load closed tickets",[errorText(err)],true); }
     finally{ closedBusy=false; if(state.closedDays!==days) loadClosed(); }
   }
@@ -856,7 +881,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   async function reload(){
     if(loading) return; loading=true;
     try{ const [issues]=await Promise.all([searchAll(JQL,FIELDS),loadInternal(),loadOdoo(),dateRequests.load()]);
-      state.mainIssues=issues.map(norm);await business.load([...issues.map(i=>i.key),...state.internalIssues.map(i=>i.key)]);mergeIssues(); showState(""); saveCache(); setTimeout(()=>loadClosed(),0);
+      state.mainIssues=issues.map(norm);await business.load([...issues.map(i=>i.key),...state.internalIssues.map(i=>i.key)]);mergeIssues(); showState(""); saveCache(); setTimeout(()=>loadClosed(),0); loadPrs(issues.map(i=>i.key));
       lastLoad=Date.now(); $("updated").textContent="updated "+new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
       if($("pop").hidden&&!drag) render();
       if(dz.key)dateRequests.renderDrawer(dz.key);
@@ -883,7 +908,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   function applyDrawerSize(){ const full=drawerFull(); $("drawer").classList.toggle("full",full); $("d-size").textContent=full?"Side panel":"Full screen"; }
   $("d-size").addEventListener("click",()=>{ try{ localStorage.setItem("aion.drawer.full",drawerFull()?"0":"1"); }catch(_){} applyDrawerSize(); });
   applyDrawerSize();
-  function openDrawer(key){
+  function openDrawer(key){ setTimeout(()=>{ if(dz.key===key) renderPrs(key); },0);
     if(dz.key&&dz.key!==key&&!closeDrawer())return;
     const opening=!dz.key;dz.key=key;
     if(opening){drawerUI.open();$("d-reply").value="";commentMentions.reset();$("d-newdev").value="";}
