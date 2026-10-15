@@ -377,12 +377,12 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const hc=el("span","c-ck"); hc.appendChild(all); h.appendChild(hc);
     [["c-key","Ticket ID"],["c-ttl","Title / Priority"],["c-who","Assignee"],["c-rep","Reporter"],["c-dev","Developers"],["c-st","Status"],["c-due","Due date"],["c-cre","Created date"],["c-upd","Updated"],["c-note","Internal note"],["c-actions",""]].forEach(([c,x])=>h.appendChild(el("span",c,x)));
     if(showTicketBriefs()){const label=el("span","c-brief","AI brief");label.title="Generate a short AI explanation of each Jira ticket.";h.insertBefore(label,h.querySelector(".c-who"));}
-    const businessColumns=[['clientName','Client',150],['subClientName','Sub-client',150],['estimatedHours','Estimated hours',100],['actualHours','Actual hours',100],['workDone','Work done',220],...(IS_ADMIN?[['billing','Billing',130]]:[])];
+    const businessColumns=[['clientName','Client',150],['subClientName','Sub-client',150],['estimatedHours','Estimated hours',130],['actualHours','Actual hours',120],['workDone','Work done',220],...(IS_ADMIN?[['billing','Billing',130]]:[])];
     businessColumns.forEach(([key,label])=>h.appendChild(el('span','c-'+key,label)));
     const sortMap={'c-key':'key','c-ttl':'summary','c-who':'assigneeName','c-rep':'reporter','c-dev':'developers','c-st':'status','c-due':'due','c-cre':'created','c-upd':'updated'};
     for(const header of h.children){const key=sortMap[header.className]||businessColumns.find(c=>header.classList.contains('c-'+c[0]))?.[0];if(!key)continue;const label=header.textContent;header.replaceChildren();const b=el('button','column-sort',label+(state.sort?.field===key?(state.sort.direction==='asc'?' ↑':' ↓'):' ▾'));b.type='button';b.setAttribute('aria-label','Sort '+label);b.setAttribute('aria-haspopup','menu');b.addEventListener('click',()=>columnSortMenu(b,key));header.addEventListener('contextmenu',e=>{e.preventDefault();columnSortMenu(b,key);});header.append(b);}
     let widths=[28,92,300,...(showTicketBriefs()?[220]:[]),130,150,170,140,120,120,90,120,48,...businessColumns.map(c=>c[2])];
-    if(state.columnsMode!=='all'){applyWorkColumns(h);widths=[28,96,280,120,126,106,180,94,94,220,...(IS_ADMIN?[114]:[]),120,48];w.classList.add('work-columns');}
+    if(state.columnsMode!=='all'){applyWorkColumns(h);widths=[28,96,280,120,126,106,180,130,120,220,...(IS_ADMIN?[114]:[]),120,48];w.classList.add('work-columns');}
     w.style.setProperty('--business-columns',widths.map(n=>n+'px').join(' '));w.style.setProperty('--business-width',(widths.reduce((a,b)=>a+b,0)+10*(widths.length-1)+28)+'px');
     w.appendChild(h);
     const allSorted=sortItems(items), pages=Math.max(1,Math.ceil(allSorted.length/state.pageSize));
@@ -471,7 +471,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     { const nb=el("button","notebtn c-note email-button","Internal note"); nb.type="button"; nb.setAttribute("aria-label","Internal note for "+i.key);nb.title=IS_ADMIN?"Email the developer directly (not posted in Jira)":"Send a private note to admins"; nb.addEventListener("click",e=>{ e.stopPropagation(); notePopover(nb,i.key); }); r.appendChild(nb); }
 
     const actions=el("span","c-actions"), menu=el("button","icon-btn row-menu","⋯");menu.type="button";menu.setAttribute("aria-label","Actions for "+i.key);menu.setAttribute("aria-haspopup","dialog");menu.addEventListener("click",()=>rowActions(menu,i));actions.appendChild(menu);r.appendChild(actions);
-    for(const key of ['clientName','subClientName','estimatedHours','actualHours','workDone',...(IS_ADMIN?['billing']:[])]){const value=i[key],text=key==='billing'?(value==='not_billable'?'Not billable':value==='billable'?'Billable':'Not set'):value??'Not set';const c=el('span','business-cell c-'+key,String(text||'Not set'));if(key==='workDone'){c.textContent=value?value.slice(0,100)+(value.length>100?'…':''):'Not set';c.title=value||'';}r.append(c);}
+    for(const key of ['clientName','subClientName','estimatedHours','actualHours','workDone',...(IS_ADMIN?['billing']:[])]){const value=i[key],text=key==='billing'?(value==='not_billable'?'Not billable':value==='billable'?'Billable':'Not set'):value??'Not set';const f=key==='clientName'||key==='subClientName'?'client':key,edit=business.canQuickEdit(i,f);const c=el(edit?'button':'span','business-cell c-'+key+(edit?' cell-edit':''),String(text||'Not set'));if(edit){c.type='button';c.setAttribute('aria-label','Edit '+business.quickLabel(f)+' for '+i.key);c.addEventListener('click',e=>{e.stopPropagation();businessPopover(c,i,f);});}if(key==='workDone'){c.textContent=value?value.slice(0,100)+(value.length>100?'…':''):'Not set';c.title=value||'';}r.append(c);}
     if(state.columnsMode!=='all'){applyWorkColumns(r);const client=r.querySelector('.c-clientName');if(i.subClientName)client.append(el('small','client-secondary',i.subClientName));}
     return r;
   }
@@ -632,6 +632,12 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const r=await runBatch(ops,"Assigned to "+name);
     if(r.ok&&id&&!BYID[id]) setTimeout(()=>toast(name+" isn't "+teamNames()+", so "+(r.ok===1?"this ticket":"these tickets")+" will leave the dashboard."),3300);
     return r;
+  }
+  // Client, hours, work done and billing edited from the list, without opening the ticket.
+  function businessPopover(anchor,i,f){
+    const p=$("pop"); p.replaceChildren(); p.appendChild(el("h4",null,i.key+" · "+business.quickLabel(f)));
+    const body=el("div","body"); p.appendChild(body); placePop(anchor);
+    business.quickEdit(body,i.key,f,()=>{ closePop(); mergeIssues(); saveCache(); render(); toast(i.key+": "+business.quickLabel(f)+" saved"); }).then(()=>{ if(popAnchor===anchor) placePop(anchor); });
   }
   function assigneePopover(anchor,keys){
     const p=$("pop"); p.replaceChildren(); p.appendChild(el("h4",null,keys.length===1?"Assign "+keys[0]+" to":"Assign "+keys.length+" tickets to"));

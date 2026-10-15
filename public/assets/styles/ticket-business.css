@@ -53,7 +53,12 @@
 .business-list .gr>[hidden]{display:none!important}
 .client-secondary{display:block;color:var(--muted);font-size:11px;margin-top:5px;overflow:hidden;text-overflow:ellipsis}
 .business-list .c-billing{font-size:12px;font-weight:600;color:var(--accent)}
-.business-list .c-estimatedHours,.business-list .c-actualHours{font-variant-numeric:tabular-nums;text-align:right}
-.business-list .head .c-estimatedHours,.business-list .head .c-actualHours{text-align:left}
+/* Hours line up under their headers, like every other column. */
+.business-list .c-estimatedHours,.business-list .c-actualHours{font-variant-numeric:tabular-nums;text-align:left;white-space:nowrap}
 @media(min-width:900px){.business-list .gr>.c-ck,.business-list .gr>.c-key,.business-list .gr>.c-ttl{position:sticky;background:var(--surface);z-index:2}.business-list .gr>.c-ck{left:14px}.business-list .gr>.c-key{left:52px}.business-list .gr>.c-ttl{left:154px;padding-right:12px}.business-list .gr.head>.c-ck,.business-list .gr.head>.c-key,.business-list .gr.head>.c-ttl{background:var(--sunk)}}
 @media(max-width:620px){.business-section{grid-template-columns:1fr;padding:12px}.list-toolbar{align-items:flex-start;flex-direction:column}.list-toolbar-hint{font-size:11px}.work-readiness{gap:5px}.readiness-chip{font-size:11px;padding:4px 8px}}
+/* Business cells editable from the ticket list. */
+.cell-edit{font:inherit;font-size:12px;color:inherit;text-align:left;background:none;border:1px dashed transparent;border-radius:6px;padding:2px 4px;margin:-3px -5px;cursor:pointer;max-width:100%}
+.cell-edit:hover,.cell-edit:focus-visible{border-color:var(--line);background:var(--hover,rgb(0 0 0 / .04))}
+.quick-edit{display:grid;gap:10px;min-width:240px;margin-bottom:10px}
+.quick-edit textarea{width:100%;box-sizing:border-box;resize:vertical}

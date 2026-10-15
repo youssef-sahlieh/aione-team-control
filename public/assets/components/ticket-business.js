@@ -40,6 +40,28 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     for(let i=0;i<unique.length;i+=100){const r=await api('/ticket-metadata/batch',{method:'POST',body:{keys:unique.slice(i,i+100)}});Object.assign(records,r.records);}
   }
   function decorate(i){return {...i,...(records[i.key]?names(records[i.key]):{})};}
+  // One field (or the client pair) edited straight from the ticket list, with the same rules as the ticket panel
+  // (client and billing for administrators; closed tickets locked). The server checks all of it again.
+  const QUICK={client:'Client',billing:'Billing',estimatedHours:'Estimated hours',actualHours:'Actual hours',workDone:'Work done'};
+  function canQuickEdit(i,name){if(!enabled||!i||i.odoo||i.cat==='done'||!(name in QUICK))return false;return name==='client'||name==='billing'?admin():true;}
+  async function quickEdit(box,key,name,done){
+    const msg=el('p','msg','Loading…');box.replaceChildren(msg);
+    let r;try{r=await api('/ticket-metadata?key='+encodeURIComponent(key));}catch(e){message(msg,e);return;}
+    records[key]=r.metadata;box.replaceChildren();
+    if(r.closed){box.append(el('p','msg','Closed ticket: reopen it to edit these fields.'));return;}
+    const v=r.metadata,form=el('div','quick-edit');box.append(form);let read,first;
+    if(name==='client'){const s=selections(form,v);read=s.read;first=s.client;}
+    else if(name==='billing'){const b=field(form,'Billing',el('select','fsel'));for(const [val,l]of [['','Not set'],['billable','Billable'],['not_billable','Not billable']])option(b,l,val);b.value=v.billing||'';read=()=>({billing:b.value||null});first=b;}
+    else if(name==='workDone'){const t=field(form,'Work done',el('textarea','inp'));t.value=v.workDone||'';t.maxLength=5000;t.rows=4;t.dir='auto';read=()=>({workDone:t.value});first=t;}
+    else{const n=field(form,QUICK[name],input('number',v[name]));n.min='0.01';n.max='1000000';n.step='0.01';read=()=>{if(!n.checkValidity())throw new Error('Hours must be greater than zero, with up to two decimal places.');return {[name]:n.value===''?null:Number(n.value)};};first=n;}
+    const status=el('p','msg'),save=button('Save',async()=>{
+      save.disabled=true;
+      try{const data=await api('/ticket-metadata',{method:'PUT',body:{key,fields:{revision:v.revision,...read()}}});records[key]=data.metadata;done();}
+      catch(err){message(status,err);save.disabled=false;}
+    },'btn primary');
+    form.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.target.tagName!=='TEXTAREA'||e.ctrlKey||e.metaKey)){e.preventDefault();save.click();}});
+    box.append(save,status);first.focus();
+  }
   async function renderEditor(key){
     const target=document.getElementById('business-fields');target.hidden=key.startsWith('HD-');if(target.hidden){editor=null;return;}target.replaceChildren(el('h3','','Ticket work & client'));
     if(!enabled){target.append(el('p','msg err','Deploy the updated backend to enable ticket business fields and validated closure.'));return;}
@@ -125,5 +147,5 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     for(const c of catalog.entries.filter(e=>!e.parentId).sort((a,b)=>a.name.localeCompare(b.name))){const group=el('details','catalog-group');group.append(el('summary','',c.name+(c.archived?' (archived)':'')));for(const e of [c,...catalog.entries.filter(e=>e.parentId===c.id)]){const row=el('div','catalog-entry'),nm=input('text',e.name);nm.setAttribute('aria-label','Name for '+e.name);row.append(nm,button('Rename',async()=>change(e,{name:nm.value})),button(e.archived?'Restore':'Archive',async()=>change(e,{archived:!e.archived})));group.append(row);}panel.append(group);}
     async function change(e,patch){try{catalog=await api('/clients',{method:'PUT',body:{revision:catalog.revision,id:e.id,...patch}});await onChange();target.replaceChildren();renderCatalog(target);}catch(err){message(msg,err);}}
   }
-  return {configure:async cfg=>{enabled=cfg.capabilities?.includes('ticket-business-v1')===true;if(enabled)await loadCatalog();},enabled:()=>enabled,load,decorate,createFields,renderEditor,dirty:key=>editor?.key===key&&editor.dirty(),reset:()=>{editor=null;},bulk,ensureBilling,overrideReason,filters,matches,renderReports,renderCatalog,loadCatalog};
+  return {configure:async cfg=>{enabled=cfg.capabilities?.includes('ticket-business-v1')===true;if(enabled)await loadCatalog();},enabled:()=>enabled,load,decorate,canQuickEdit,quickEdit,quickLabel:name=>QUICK[name],createFields,renderEditor,dirty:key=>editor?.key===key&&editor.dirty(),reset:()=>{editor=null;},bulk,ensureBilling,overrideReason,filters,matches,renderReports,renderCatalog,loadCatalog};
 }

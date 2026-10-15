@@ -561,3 +561,26 @@ test('unsaved work uses its original revision after a background refresh',async(
  const refreshed=page.waitForResponse(r=>r.url().endsWith('/ticket-metadata/batch'));await page.evaluate(()=>document.getElementById('refresh').click());await refreshed;await page.evaluate(()=>new Promise(requestAnimationFrame));
  await panel.getByRole('button',{name:'Save ticket fields'}).click();await expect(panel).toContainText('Ticket fields changed');expect(submittedRevision).toBe(0);expect(mock.errors).toEqual([]);await expect(panel.getByLabel('Work done')).toHaveValue('My unsaved draft');
 });
+
+test('ticket fields are edited from the list, with client and billing for administrators only',async({page})=>{
+ const mock=await mockDashboard(page);await page.goto('/dashboard.html');
+ const row=page.locator('#view .item').filter({hasText:'INT-101'});
+ await row.getByRole('button',{name:'Edit Actual hours for INT-101'}).click();
+ await page.locator('#pop').getByLabel('Actual hours').fill('3.5');await page.locator('#pop').getByRole('button',{name:'Save',exact:true}).click();
+ await expect(page.locator('#pop')).toBeHidden();
+ const put=mock.calls.find(c=>c.path==='/ticket-metadata'&&c.method==='PUT');expect(put.body).toEqual({key:'INT-101',fields:{revision:0,actualHours:3.5}});
+ await expect(row.locator('.c-actualHours')).toHaveText('3.5');
+ await row.getByRole('button',{name:'Edit Billing for INT-101'}).click();await page.locator('#pop').getByLabel('Billing').selectOption('billable');await page.locator('#pop').getByRole('button',{name:'Save',exact:true}).click();
+ await expect(row.locator('.c-billing')).toHaveText('Billable');
+ await page.getByRole('button',{name:'Work view',exact:true}).click();
+ await page.setViewportSize({width:1920,height:1000});await page.locator('.business-list').evaluate(n=>n.scrollLeft=600);await page.locator('.business-list').screenshot({path:'test-results/list-edit-work-view.png'});
+ const head=await page.locator('#view .head .c-estimatedHours').boundingBox(),cell=await row.locator('.c-estimatedHours').boundingBox();expect(Math.abs(head.x-cell.x)).toBeLessThan(8);
+ expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('users edit hours and work done from the list but not client or billing',async({page})=>{
+ const mock=await mockDashboard(page,{role:'user'});await page.goto('/dashboard.html');
+ const row=page.locator('#view .item').filter({hasText:'INT-101'});
+ await expect(row.getByRole('button',{name:'Edit Work done for INT-101'})).toBeVisible();
+ await expect(row.getByRole('button',{name:/Edit Client/})).toHaveCount(0);await expect(row.locator('.c-billing')).toHaveCount(0);
+ expect(mock.errors).toEqual([]);
+});
