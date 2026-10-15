@@ -21,7 +21,7 @@ export function createAIAssistant({openIssue,beforeOpen}) {
     if(content.length>2000){status.textContent="Please keep your question under 2,000 characters.";return;}
     const previous=history.slice(-12);
     while(previous.length&&new TextEncoder().encode(JSON.stringify({message:content,history:previous})).length>28000)previous.splice(0,2);
-    addMessage("user",content);input.value="";setBusy(true);status.textContent="Reading your authorized Jira tickets…";
+    addMessage("user",content);input.value="";setBusy(true);status.textContent="Reading your authorized tickets…";
     const turn=++generation;
     try{
       const result=await api("/ai/chat",{method:"POST",body:{message:content,history:previous}});

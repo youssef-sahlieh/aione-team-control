@@ -23,7 +23,7 @@ test("no-developer saved views remain available only to managers",()=>{
   assert.equal(admin.focus,"nodev");assert.deepEqual([...admin.f.dev],["__none","builder"]);
 });
 test("saved views reconstruct Sets and preserve user defaults without elevating board mode",()=>{
-  const v=serializeView(state,"Work");const restored=restoreView(v,false,{lead:{}});assert.equal(restored.view,"list");assert.deepEqual([...restored.f.assignee],["lead"]);assert.equal(restored.focus,"overdue");assert.equal(restored.q,"test");assert.ok(restored.f.dev instanceof Set);
+  const v=serializeView(state,"Work");const restored=restoreView(v,false,{lead:{}});assert.equal(restored.view,"list");assert.deepEqual([...restored.f.assignee],["lead","__internal_tickets"]);assert.equal(restored.focus,"overdue");assert.equal(restored.q,"test");assert.ok(restored.f.dev instanceof Set);
 });
 test("corrupted and oversized definitions cannot crash or become views",()=>{
   assert.deepEqual(readViews({getItem:()=>"{broken"},"test@example.invalid"),[]);assert.deepEqual(readViews({getItem:()=>"{}"},"test@example.invalid"),[]);

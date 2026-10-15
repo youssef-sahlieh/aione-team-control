@@ -5,6 +5,9 @@ import {resolve,sep,extname} from 'node:path';
 import handler,{makeToken} from '../proxy/src/handler.js';
 import settings from '../proxy/settings.js';
 import {memoryStore,saveUser} from '../proxy/src/users.js';
+import {inflateRawSync} from 'node:zlib';
+import {readCatalogWorkbook} from '../public/assets/models/catalog-import.js';
+import {prepareImport,catalogKey,saveMetadata} from '../proxy/src/ticket-metadata.js';
 import {jiraIssue,internalTicket,people} from '../test/fixtures/issues.js';
 const port=Number(process.env.PREVIEW_PORT||3100),base='http://localhost:'+port,root=resolve('public');
 const store=memoryStore(),emails=[];
@@ -19,13 +22,21 @@ for(const [index,title,due,dev,status] of [[101,'Add creation-date filters to th
 }
 const internal={...structuredClone(internalTicket),summary:'Review the internal release checklist',created:new Date().toISOString(),updated:new Date().toISOString(),due:offset(3),dueHistory:[{when:new Date().toISOString(),by:'Preview Admin',from:null,to:offset(3)}]};
 await store.set('it:'+internal.key,JSON.stringify(internal));await store.sadd('itickets',internal.key);
+// Catalog contents stay in this local process; no workbook data is bundled in public assets.
+const catalogFile=process.argv.find(arg=>arg.startsWith('--catalog='))?.slice('--catalog='.length);
+let catalogRows=[{customer:'Sample client',displayName:'Sample sub-client',sourceRow:2},{customer:'',displayName:'Standalone sample client',sourceRow:3}];
+if(catalogFile){const bytes=await readFile(catalogFile);catalogRows=await readCatalogWorkbook(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),async data=>new Uint8Array(inflateRawSync(data)));}
+const initialCatalog=await prepareImport({revision:0,entries:[]},catalogRows);
+await store.set(catalogKey({JIRA_PROJECT:'AION'}),JSON.stringify({...initialCatalog.next,revision:1}));
+const sampleClient=initialCatalog.next.entries.find(e=>!e.parentId),sampleSub=initialCatalog.next.entries.find(e=>e.parentId===sampleClient.id);
+for(const [index,key]of [...issues.keys(),internal.key].entries())await saveMetadata({STORE:store,JIRA_PROJECT:'AION'},key,{revision:0,clientId:sampleClient.id,subClientId:sampleSub?.id||null,billing:index%2?'not_billable':'billable',estimatedHours:index===4?null:2,actualHours:index===0?3:index===1?0.5:null,workDone:index===0?'Investigated the issue, implemented the change, and verified the result.':index===1?'Initial investigation completed.':''},admin);
 globalThis.fetch=async(url,options={})=>{
  const u=new URL(url);if(u.hostname!=='jira.preview.invalid')throw new Error('External services are disabled in this preview.');
  const body=options.body?JSON.parse(options.body):{},match=/\/issue\/(AION-\d+)/.exec(u.pathname),i=match&&issues.get(match[1]);
- if(u.pathname.endsWith('/search/jql')){const key=/key = (AION-\d+)/.exec(body.jql||'');let list=key?[issues.get(key[1])].filter(Boolean):[...issues.values()];if((body.jql||'').includes('statusCategory = Done'))list=[];const label=/labels = "([^"]+)"/.exec(body.jql||'');if(label)list=list.filter(i=>i.fields.labels.includes(label[1]));return Response.json({issues:list,isLast:true});}
+ if(u.pathname.endsWith('/search/jql')){const key=/key = (AION-\d+)/.exec(body.jql||'');let list=key?[issues.get(key[1])].filter(Boolean):[...issues.values()];if((body.jql||'').includes('statusCategory = Done'))list=list.filter(i=>i.fields.status.statusCategory.key==='done');const label=/labels = "([^"]+)"/.exec(body.jql||'');if(label)list=list.filter(i=>i.fields.labels.includes(label[1]));return Response.json({issues:list,isLast:true});}
  if(u.pathname.endsWith('/user/search'))return Response.json([]);
  if(!i)return Response.json({errorMessages:['No sample ticket']},{status:404});
- if(u.pathname.endsWith('/transitions')){if(options.method==='POST'){i.fields.status.name='In Development';return new Response(null,{status:204});}return Response.json({transitions:[{id:'1',name:'Start development',to:{name:'In Development',statusCategory:{key:'indeterminate'}}}]});}
+ if(u.pathname.endsWith('/transitions')){const transitions=[{id:'1',name:'Start development',to:{name:'In Development',statusCategory:{key:'indeterminate'}}},{id:'2',name:'Close',to:{name:'Closed',statusCategory:{key:'done'}}},{id:'3',name:'Reopen',to:{name:'Open',statusCategory:{key:'new'}}}];if(options.method==='POST'){const target=transitions.find(t=>t.id===String(body.transition?.id));if(!target)return Response.json({errorMessages:['Invalid transition']},{status:400});i.fields.status=structuredClone(target.to);i.fields.updated=new Date().toISOString();i.fields.resolutiondate=target.to.statusCategory.key==='done'?i.fields.updated:null;return new Response(null,{status:204});}return Response.json({transitions:transitions.filter(t=>t.to.name!==i.fields.status.name)});}
  if(u.pathname.endsWith('/changelog'))return Response.json({values:dateHistories.get(i.key)||[],isLast:true,total:(dateHistories.get(i.key)||[]).length});
  if(options.method==='PUT'){if('duedate' in body.fields&&(i.fields.duedate||null)!==body.fields.duedate)dateHistories.get(i.key).push({id:crypto.randomUUID(),created:new Date().toISOString(),author:{displayName:'Preview Jira account'},items:[{field:'duedate',from:i.fields.duedate||null,to:body.fields.duedate}]});Object.assign(i.fields,body.fields);i.fields.updated=new Date().toISOString();return new Response(null,{status:204});}
  if(u.pathname.endsWith('/comment')&&options.method==='POST')return Response.json({id:'preview-comment'});
@@ -42,7 +53,7 @@ const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=
 createServer(async(req,res)=>{
  try{
   const url=new URL(req.url,base);if(!['localhost:'+port,'127.0.0.1:'+port].includes(req.headers.host)){res.writeHead(403).end();return;}
-  if(url.pathname==='/preview/admin'||url.pathname==='/preview/user'){const role=url.pathname.endsWith('/user')?'user':'admin';res.writeHead(302,{'Set-Cookie':'preview-role='+role+'; HttpOnly; SameSite=Strict; Path=/','Location':'/dashboard.html?page='+(role==='admin'?'requests':'overview')}).end();return;}
+  if(url.pathname==='/preview/admin'||url.pathname==='/preview/user'){const role=url.pathname.endsWith('/user')?'user':'admin';res.writeHead(302,{'Set-Cookie':'preview-role='+role+'; HttpOnly; SameSite=Strict; Path=/','Location':'/dashboard.html?page='+(role==='admin'?'tickets':'overview')}).end();return;}
   const role=/preview-role=user/.test(req.headers.cookie||'')?'user':'admin';
   if(url.pathname==='/preview/emails'){res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'}).end(JSON.stringify(emails,null,2));return;}
   if(url.pathname.startsWith('/api/')){const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>5*1024*1024){res.writeHead(413).end();return;}chunks.push(chunk);}const request=new Request(base+url.pathname.slice(4)+url.search,{method:req.method,headers:req.headers,body:['GET','HEAD'].includes(req.method)?undefined:Buffer.concat(chunks)});const response=await handler.fetch(request,env);res.writeHead(response.status,Object.fromEntries(response.headers)).end(Buffer.from(await response.arrayBuffer()));return;}
@@ -55,4 +66,4 @@ createServer(async(req,res)=>{
   const p=resolve(root,'.'+decodeURIComponent(url.pathname==='/'?'/dashboard.html':url.pathname));if(!p.startsWith(root+sep)){res.writeHead(403).end();return;}
   let body;try{body=await readFile(p);}catch{res.writeHead(404).end();return;}res.writeHead(200,{'Content-Type':types[extname(p)]||'application/octet-stream','Cache-Control':'no-store'}).end(req.method==='HEAD'?undefined:body);
  }catch{res.writeHead(500,{'Content-Type':'application/json'}).end(JSON.stringify({error:'The local preview could not complete this request.'}));}
-}).listen(port,'127.0.0.1',()=>console.log('Local approval preview: '+base+'/preview/admin\nDeveloper view: '+base+'/preview/user\nSample data resets on restart. No live tickets or emails are changed.'));
+}).listen(port,'127.0.0.1',()=>console.log('Local ticket preview: '+base+'/preview/admin\nDeveloper view: '+base+'/preview/user\nSample data resets on restart. No live tickets or emails are changed.'));

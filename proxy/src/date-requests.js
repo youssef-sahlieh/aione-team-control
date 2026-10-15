@@ -1,3 +1,4 @@
+import { readMetadata, validHours, withTicketLock, BusinessError, businessResponse } from './ticket-metadata.js';
 import { listUsers, validEmail } from './users.js';
 const json=(data,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store'}});
 const fail=(error,status=400)=>json({code:status===403?'forbidden':status===409?'conflict':'date_request',error},status);
@@ -33,10 +34,12 @@ export async function dateRequestRoutes(request,env,url,me,{readTicket,applyDate
  if(action==='reject'&&!reason(b.reason))return fail('Explain why the request is rejected.');
  if(action==='initial'&&(b.proposedDate===null||!validDate(b.proposedDate)))return fail('Choose a valid initial due date.');
  if(action==='initial')b.reason=reason(b.reason)?b.reason.trim():'Initial due date set';
+ return withTicketLock(env,b.key,async()=>{
  const lock=prefix+b.key+':lock',owner=crypto.randomUUID();
  if(!await store.setIfAbsent(lock,owner,120))return fail('This ticket is being reviewed. Retry shortly.',409);
  try{
   const t=await accessible(b.key,action==='initial');if(!t)return fail('This ticket is unavailable.',404);
+  if(me.role!=='admin'&&['initial','submit','revise'].includes(action)&&!validHours((await readMetadata(env,b.key)).estimatedHours))throw new BusinessError('Enter and save estimated hours greater than zero before setting or requesting a due date.',400,'estimate_required');
   let raw=await store.get(prefix+b.key);if(!raw){await store.sadd(index,b.key);await store.setIfAbsent(prefix+b.key,JSON.stringify({requests:[]}),315360000);raw=await store.get(prefix+b.key);}
   const doc=JSON.parse(raw);
   const save=async()=>{const next=JSON.stringify(doc);if(!await store.compareAndSet(prefix+b.key,raw,next))throw new Error('Date request changed concurrently');raw=next;};
@@ -92,4 +95,5 @@ export async function dateRequestRoutes(request,env,url,me,{readTicket,applyDate
   try{await applyDate(b.key,target,t,r);}catch{r.updatedAt=stamp();r.error='The date update was not confirmed. Retry approval after checking the ticket.';await save();return fail(r.error,502);}
   r.status=r.kind==='initial'?'set':'approved';r.appliedDate=target;r.updatedAt=stamp();r.version++;delete r.error;r.events.push({type:r.kind==='initial'?'initial_date_set':'approved',at:stamp(),by:actor(me),from:r.original.due,to:target});await save();await notify(['direct','initial'].includes(r.kind)?'direct':'decision');return json({request:r});
  }finally{await store.deleteIfValue(lock,owner);}
+ }).catch(error=>{if(error instanceof BusinessError)return businessResponse(error);throw error;});
 }

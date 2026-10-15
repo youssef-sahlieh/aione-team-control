@@ -35,7 +35,7 @@ export function normalizeJiraIssue(raw, byId, toText) {
     status: (f.status && f.status.name) || "", cat: (f.status && f.status.statusCategory && f.status.statusCategory.key) || "",
     assignee: byId[aid] || null, assigneeName: (f.assignee && f.assignee.displayName) || "Unassigned",
     labels, devs: [...new Set(labels.filter(isDevLabel).map(devOf))], due: f.duedate || null,
-    created: (f.created || "").slice(0, 10), updated: f.updated || "",
+    created: f.created || "", updated: f.updated || "",
     priority: (f.priority && f.priority.name) || "", type: (f.issuetype && f.issuetype.name) || "",
     reporter: (f.reporter && f.reporter.displayName) || "Unknown", reporterId: (f.reporter && f.reporter.accountId) || null, assigneeId: aid || null,
     parent: f.parent ? { key: f.parent.key, name: (f.parent.fields && f.parent.fields.summary) || f.parent.key } : null,
@@ -49,7 +49,7 @@ export function normalizeInternalIssue(t, people) {
     key: t.key, internal: true, summary: t.summary || "(no title)", status: t.status, cat: t.statusCat,
     assignee: people[t.assignee] ? t.assignee : null, assigneeName: people[t.assignee] ? people[t.assignee].name : "Unassigned",
     labels: (t.devs || []).map(d => "ai1_" + d), devs: (t.devs || []).slice(), due: t.due || null,
-    created: (t.created || "").slice(0, 10), updated: t.updated || "", priority: t.priority || "", type: "Internal",
+    created: t.created || "", updated: t.updated || "", priority: t.priority || "", type: "Internal",
     reporter: (t.createdBy && t.createdBy.name) || "Unknown", reporterId: null,
     assigneeId: people[t.assignee] ? people[t.assignee].id : null, parent: null,
     last: last ? { author: (last.author && last.author.name) || "Someone", fromTeam: true, when: last.created, text: last.body } : null

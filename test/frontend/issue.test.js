@@ -11,7 +11,7 @@ test("Jira retains raw workflow and priority and separates assignee from develop
   assert.equal(issue.assignee, "lead");
   assert.deepEqual(issue.devs, ["builder", "reviewer"]);
   assert.equal(issue.due, "2026-10-10");
-  assert.equal(issue.created, "2026-10-09");
+  assert.equal(issue.created, "2026-10-09T08:00:00Z");
   assert.deepEqual(issue.parent, { key: "AION-100", name: "Synthetic epic" });
   assert.equal(issue.last.fromTeam, false);
 });

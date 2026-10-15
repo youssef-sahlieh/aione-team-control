@@ -10,7 +10,7 @@ async function setup(role="user",provider){
   const env={TEAM_EMAILS:"",SESSION_SECRET:"synthetic-secret",JIRA_PROJECT:"AION",JIRA_SITE:"https://jira.test",JIRA_EMAIL:"synthetic@invalid",JIRA_API_TOKEN:"synthetic-jira-token",STORE:memoryStore(),AI_PROVIDER:provider};
   const me={email:"test@example.invalid",name:"Test",role,dev:"builder",v:1};await saveUser(env.STORE,me);
   const {token}=await makeToken(env,me.email,Date.now(),1),requests=[];
-  globalThis.fetch=async(url,init={})=>{requests.push({url:String(url),...init,body:init.body?JSON.parse(init.body):null});return Response.json({issues:[issue("AION-1"),issue("AION-2","other"),issue("OTHER-3")],isLast:true});};
+  globalThis.fetch=async(url,init={})=>{requests.push({url:String(url),...init,body:init.body?JSON.parse(init.body):null});if(String(url).includes("/issue/")){const key=String(url).match(/issue\/([A-Z]+-\d+)/)?.[1],t=issue(key,key==="AION-2"?"other":"builder");t.fields.project={key:"AION"};return Response.json(t);}return Response.json({issues:[issue("AION-1"),issue("AION-2","other"),issue("OTHER-3")],isLast:true});};
   const chat=(body={message:"My priorities",history:[]},path="/ai/chat",method="POST",auth=true)=>worker.fetch(new Request("https://proxy.test"+path,{method,headers:auth?{Authorization:"Bearer "+token}:{},body:["GET","HEAD"].includes(method)?undefined:JSON.stringify(body)}),env);
   return {env,chat,requests};
 }

@@ -5,6 +5,8 @@
 // Store keys: "it:<KEY>" ticket (JSON), "itickets" set of keys, "it:seq" counter for the next number,
 // "ia:<attachment id>:<n>" the attachment's bytes in base64 chunks (files are listed on the ticket).
 
+import { INTERNAL_ASSIGNEE, requireBilling, readMetadata, withTicketLock, guardedTransition, saveMetadata, readCatalog, selectionErrors, BusinessError } from "./ticket-metadata.js";
+
 export const MAX_FILE = 4 * 1024 * 1024; // Vercel accepts request bodies up to 4.5 MB
 export const MAX_FILES = 20;
 const CHUNK = 700 * 1024;
@@ -68,7 +70,7 @@ const by = (me) => ({ email: me.email, name: me.name });
 // Checks and applies the fields in b to ticket t. Returns an error message, or "" when fine.
 // The people a ticket can be assigned to: the team in TEAM_CONFIG (Karim, Youssef, Rami), by key.
 function teamPeople(env) {
-  try { return Object.keys(JSON.parse(env.TEAM_CONFIG || "{}").people || {}); } catch { return []; }
+  try { return [INTERNAL_ASSIGNEE,...Object.keys(JSON.parse(env.TEAM_CONFIG || "{}").people || {})]; } catch { return [INTERNAL_ASSIGNEE]; }
 }
 
 function applyFields(t, b, me, creating, people = []) {
@@ -132,6 +134,9 @@ export async function internalRoutes(request, env, url, me) {
     if("due" in b)return fail(me.role==="admin"?"date_request":"forbidden","Use the date request process to set an approved date.",me.role==="admin"?400:403);
     const t = { summary: "", description: "", priority: "Medium", due: null, status: "Open", assignee: null, devs: [], comments: [], dueHistory: [] };
     const people = teamPeople(env);
+    if(me.role==="admin")requireBilling(b.metadata);
+    if(b.assignee===undefined)b.assignee=INTERNAL_ASSIGNEE;
+    const selection=selectionErrors(await readCatalog(env),b.metadata||{},{active:true});if(selection.length)throw new BusinessError(selection.join(". "));
     if (people.length && b.assignee === undefined) return fail("bad_request", "Choose the assignee: " + people.join(", ") + ".", 400);
     const err = applyFields(t, { ...b, status: undefined, devs: me.role === "admin" ? b.devs || [] : [me.dev] }, me, true, people);
     if (err) return fail("bad_request", err, 400);
@@ -140,6 +145,7 @@ export async function internalRoutes(request, env, url, me) {
     t.key = "INT-" + (await store.incr("it:seq"));
     t.created = t.updated = now();
     t.createdBy = by(me);
+    await saveMetadata(env,t.key,{...b.metadata,revision:0},me,{creating:true});
     await saveTicket(store, t);
     await store.sadd("itickets", t.key);
     return json({ ticket: view(t) }, 201);
@@ -193,7 +199,7 @@ export async function internalRoutes(request, env, url, me) {
 
   const m = /^\/internal\/(INT-\d+)(\/comment)?$/.exec(path);
   if (!m) return fail("not_found", "Not found.", 404);
-  const t = await getTicket(store, m[1]);
+  let t = await getTicket(store, m[1]);
   if (!t || !canSee(me, t)) return fail("not_found", "No such internal ticket.", 404);
 
   if (m[2] && method === "POST") {
@@ -206,16 +212,25 @@ export async function internalRoutes(request, env, url, me) {
   }
 
   if (!m[2] && method === "PUT") {
+    return withTicketLock(env,m[1],async()=>{
+    t=await getTicket(store,m[1]);if(!t||!canSee(me,t))return fail("not_found","No such internal ticket.",404);
+    const wasClosed=t.status==="Closed";
     const b = (await readJson(request)) || {};
     if("due" in b)return fail(me.role==="admin"?"date_request":"forbidden","Use the date request process to change the approved date.",me.role==="admin"?400:403);
     const before = [...(t.devs || [])];
+    if(me.role==='admin'){
+      const proposed=Array.isArray(b.devs)?cleanDevs(b.devs):null;
+      if(('assignee' in b&&b.assignee!==t.assignee)||(proposed&&JSON.stringify([...proposed].sort())!==JSON.stringify([...before].sort())))requireBilling(await readMetadata(env,t.key));
+    }
     const err = applyFields(t, b, me, false, teamPeople(env));
     if (err) return fail("bad_request", err, 400);
     if (!t.devs.length) return fail("bad_request", "A ticket needs at least one developer.", 400);
     t.updated = now();
     t.updatedBy = by(me);
-    await saveTicket(store, t);
-    return json({ ticket: view(t), added: t.devs.filter((d) => !before.includes(d)) });
+    const apply=async()=>{await saveTicket(store,t);return json({ticket:view(t),added:t.devs.filter(d=>!before.includes(d))});};
+    if(b.status!==undefined && (t.status==="Closed"||wasClosed))return guardedTransition(env,t.key,me,{closing:t.status==="Closed",overrideReason:b.overrideReason},apply);
+    return apply();
+    });
   }
 
   if (!m[2] && method === "DELETE") {

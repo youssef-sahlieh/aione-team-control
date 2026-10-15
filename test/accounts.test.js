@@ -14,22 +14,24 @@ globalThis.fetch = async (url, init = {}) => {
   jiraCalls.push({ path: u.pathname + u.search, method: init.method || "GET", body });
   if (u.pathname === "/rest/api/3/search/jql") return Response.json({ issues: Object.entries(LABELS).map(([key, labels]) => ({ key, fields: { labels } })), isLast: true });
   const m = /\/issue\/(AION-\d+)$/.exec(u.pathname);
-  if (m && (init.method || "GET") === "GET") return Response.json({ key: m[1], fields: { labels: LABELS[m[1]] || [] } });
+  if (m && (init.method || "GET") === "GET") return Response.json({ key: m[1], fields: { labels: LABELS[m[1]] || [], project:{key:"AION"},status:{name:"Open",statusCategory:{key:"new"}} } });
   if ((init.method || "GET") === "PUT") return new Response(null, { status: 204 });
-  if (/\/transitions$/.test(u.pathname)) return init.method === "POST" ? new Response(null, { status: 204 }) : Response.json({ transitions: [] });
+  if (/\/transitions$/.test(u.pathname)) return init.method === "POST" ? new Response(null, { status: 204 }) : Response.json({ transitions: [{id:"5",to:{name:"In Development",statusCategory:{key:"indeterminate"}}}] });
   return Response.json({});
 };
 
 function makeEnv() {
+  const store=memoryStore();store.set("business:AION:catalog",JSON.stringify({revision:1,entries:[{id:"fixture-client",name:"Synthetic client",parentId:null,archived:false,sources:[]}]}));
   return {
     ALLOWED_ORIGIN: ORIGIN, TEAM_EMAILS: "youssef@aione.biz,ellen@aione.biz", JIRA_PROJECT: "AION", MAIL_DOMAIN: "aione.biz",
     APP_URL: "https://youssef-sahlieh.github.io/aione-team-control", TEAM_PASSWORD: "Team-password-1", SESSION_SECRET: "s3cret",
     TEAM_CONFIG: "{}", JIRA_SITE: "https://jira.test", JIRA_EMAIL: "bot@x", JIRA_API_TOKEN: "t",
-    STORE: memoryStore(), MAILER: async (m) => { mails.push(m); }
+    STORE: store, MAILER: async (m) => { mails.push(m); }
   };
 }
 let env = makeEnv();
 const call = async (path, { method = "GET", body, token, ip = "1.1.1.1" } = {}) => {
+  if(path==="/internal"&&method==="POST"){const email=token?JSON.parse(Buffer.from(token.split(".")[0],"base64url").toString()).email:"";const actor=JSON.parse(await env.STORE.get("u:"+email)||"{}");body={...body,metadata:body?.metadata||{clientId:"fixture-client",subClientId:null,...(actor.role==="admin"?{billing:"billable"}:{})}};}
   const r = await worker.fetch(new Request("https://p" + path, { method, headers: { Origin: ORIGIN, "x-real-ip": ip, ...(token ? { Authorization: "Bearer " + token } : {}) }, body: body !== undefined ? JSON.stringify(body) : undefined }), env);
   return { status: r.status, data: await r.json().catch(() => null) };
 };
@@ -184,6 +186,7 @@ const tests = [
     assert.deepEqual(r.data.ticket.dueHistory.map((h) => [h.by, h.from, h.to]), []);
     r = await call("/internal/INT-1/comment", { method: "POST", token: u.token, body: { text: "Started" } });
     assert.equal(r.data.ticket.comments[0].body, "Started"); assert.equal(r.data.ticket.comments[0].author.email, "bashar.b@aione.biz");
+    await call("/ticket-metadata",{method:"PUT",token:u.token,body:{key:"INT-1",fields:{revision:1,estimatedHours:1,actualHours:2,workDone:"Verified"}}});
     r = await call("/internal/INT-1", { method: "PUT", token: u.token, body: { status: "Closed" } });
     assert.equal(r.data.ticket.statusCat, "done"); assert.ok(r.data.ticket.closedAt);
     assert.equal((await call("/internal/INT-1", { method: "PUT", token: u.token, body: { status: "Done" } })).status, 400, "unknown status");
@@ -215,13 +218,14 @@ const tests = [
   ["internal tickets: assignee is Karim, Youssef or Rami; only admins change it", async () => {
     env.TEAM_CONFIG = JSON.stringify({ people: { karim: { id: "k" }, youssef: { id: "y" }, rami: { id: "r" } } });
     const u = await login("bashar.b@aione.biz", "Pass-for-bashar", "10.0.2.1");
-    assert.equal((await call("/internal", { method: "POST", token: u.token, body: { summary: "No assignee" } })).status, 400, "assignee required");
+    assert.equal((await call("/internal", { method: "POST", token: u.token, body: { summary: "No assignee" } })).status, 201, "shared assignee is the default");
     assert.equal((await call("/internal", { method: "POST", token: u.token, body: { summary: "Bad", assignee: "bashar" } })).status, 400, "only team members");
     const r = await call("/internal", { method: "POST", token: u.token, body: { summary: "For Rami", assignee: "rami" } });
     assert.equal(r.status, 201); assert.equal(r.data.ticket.assignee, "rami");
     assert.equal((await call("/internal/" + r.data.ticket.key, { method: "PUT", token: u.token, body: { assignee: "karim" } })).status, 400, "user can't reassign");
     assert.equal((await call("/internal/" + r.data.ticket.key, { method: "PUT", token: u.token, body: { assignee: "rami", status: "In Development" } })).status, 200, "unchanged assignee is fine");
     const a = await login("youssef@aione.biz", "Team-password-1", "10.0.2.2");
+    await call("/ticket-metadata",{method:"PUT",token:a.token,body:{key:r.data.ticket.key,fields:{revision:1,billing:"not_billable"}}});
     const c = await call("/internal/" + r.data.ticket.key, { method: "PUT", token: a.token, body: { assignee: "karim" } });
     assert.equal(c.data.ticket.assignee, "karim");
     env.TEAM_CONFIG = "{}";

@@ -125,3 +125,7 @@ rejected writes, malformed requests, pagination, limits, and the model adapter.
 safe rendering, role suggestions, hidden unavailable controls, failure states, keyboard focus,
 and layouts at 320/1440 px. Tests use synthetic Jira/model data and never contact
 production Jira, Claude or OpenAI. Live model quality and credentials have not been tested.
+
+## Dashboard business tools
+
+The ticket-business extension adds authorized internal ticket chat, dashboard business fields, and administrator-only deterministic report tools. See [ticket business fields](ticket-business.md) for setup, permissions, and report semantics. Internal briefs remain unsupported.

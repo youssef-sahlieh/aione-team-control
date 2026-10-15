@@ -16,6 +16,8 @@
 //   (admin: everything; user: only the tickets labelled with their developer name). Without it, the
 //   emails in TEAM_EMAILS sign in with TEAM_PASSWORD as admins. The first sign-in with TEAM_PASSWORD
 //   after the database is added creates admin accounts for everyone in TEAM_EMAILS.
+import { BusinessError, businessResponse, catalogRoutes, metadataRoutes, readMetadata, readCatalog, publicMetadata, requireBilling, withTicketLock, guardedTransition } from "./ticket-metadata.js";
+import { reportRoutes, buildReport } from "./reports.js";
 import { dateRequestRoutes } from "./date-requests.js";
 import { ticketNoteRoutes } from "./ticket-notes.js";
 import { internalRoutes } from "./internal.js";
@@ -310,6 +312,7 @@ function validFields(fields) {
   if (!keys.length || !keys.every((k) => EDITABLE.has(k))) return false;
   if ("labels" in fields && !(Array.isArray(fields.labels) && fields.labels.length <= 50 && fields.labels.every((l) => typeof l === "string" && /^\S{1,255}$/.test(l)))) return false;
   if ("duedate" in fields && !(fields.duedate === null || /^\d{4}-\d{2}-\d{2}$/.test(fields.duedate))) return false;
+  if ("assignee" in fields && fields.assignee?.accountId === "__internal_tickets") return false;
   if ("assignee" in fields && !(fields.assignee === null || (fields.assignee && typeof fields.assignee.accountId === "string" && Object.keys(fields.assignee).length === 1))) return false;
   return true;
 }
@@ -320,7 +323,7 @@ async function route(request, env, url) {
 
   // Public compatibility check for Pages publishing; exposes no runtime credentials or ticket data.
   if (path.startsWith("/monitor/odoo/translations") && method === "GET") return odooTranslations(env, url);
-  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1"]});
+  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1"]});
 
   // Jira Automation uses its own secret, never a team password or a user's browser session.
   if (path === "/notifications/jira-created") {
@@ -390,12 +393,33 @@ async function route(request, env, url) {
 
   const me = await readToken(env, request.headers.get("Authorization"));
   if (!me) return fail("session", "Please sign in again.", 401);
+  const readBusinessTicket = async key => {
+    if(typeof key!=="string" || !new RegExp("^(?:INT|"+env.JIRA_PROJECT+")-\\d+$").test(key))return null;
+    if(/^INT-/.test(key)){const raw=await env.STORE?.get("it:"+key);if(!raw)return null;const t=JSON.parse(raw);if(me.role!=="admin"&&(!me.dev||!t.devs?.includes(me.dev)))return null;return {key,title:t.summary,description:t.description,comments:t.comments||[],devs:t.devs||[],closed:t.status==="Closed",status:t.status,cat:t.status==="Closed"?"done":"new",created:t.created,updated:t.updated,completedAt:t.closedAt||null,due:t.due,assignee:t.assignee,internal:true};}
+    const result=await jira(env,"/rest/api/3/issue/"+key+"?fields=summary,description,labels,status,created,updated,duedate,project,assignee,resolutiondate",{signal:AbortSignal.timeout(15000)});
+    if(!result.ok){if([403,404].includes(result.res.status))return null;throw new Error("Ticket read failed");}
+    const t=result.data,f=t.fields;if(t.key!==key||f?.project?.key!==env.JIRA_PROJECT||!Array.isArray(f.labels)||!f.status?.statusCategory?.key)throw new Error("Incomplete ticket authorization data");
+    const devs=f.labels.filter(l=>/^ai1_/i.test(l)).map(l=>l.slice(4).toLowerCase());if(me.role!=="admin"&&(!me.dev||!devs.includes(me.dev)))return null;
+    return {key,title:f.summary,description:f.description,devs,closed:f.status.statusCategory.key==="done",status:f.status.name,cat:f.status.statusCategory.key,created:f.created,updated:f.updated,due:f.duedate,completedAt:f.resolutiondate||null,assignee:f.assignee?.displayName,internal:false};
+  };
+  if(path==="/clients"||path.startsWith("/clients/"))return catalogRoutes(request,env,url,me);
+  if(path==="/ticket-metadata"||path.startsWith("/ticket-metadata/"))return metadataRoutes(request,env,url,me,readBusinessTicket);
+  const readBusinessSearch=async body=>{const searchUrl=new URL("/jira/search",url);const r=await route(new Request(searchUrl,{method:"POST",headers:{Authorization:request.headers.get("Authorization"),"Content-Type":"application/json","X-AION-Read-Only":"1"},body:JSON.stringify(body)}),env,searchUrl);if(!r.ok)throw new Error("Authorized search failed");return r.json();};
+  const dashboardRead=async()=>{const keys=await env.STORE?.smembers("itickets")||[];const rows=[];for(const key of keys){const t=await readBusinessTicket(key);if(t)rows.push(t);}return rows;};
+  const reportDeps={readSearch:readBusinessSearch,readInternal:dashboardRead,readHistory:async(key,status)=>{
+    if(!key.startsWith(env.JIRA_PROJECT+"-"))return null;let latest=null;
+    for(let page=0;page<3;page++){const r=await jira(env,"/rest/api/3/issue/"+key+"/changelog?startAt="+(page*100)+"&maxResults=100",{signal:AbortSignal.timeout(3000)});if(!r.ok||!Array.isArray(r.data.values))return null;
+      for(const h of r.data.values)if((h.items||[]).some(i=>(i.field==="status"||i.fieldId==="status")&&i.toString===status)&&Number.isFinite(Date.parse(h.created))&&(!latest||h.created>latest))latest=h.created;
+      if(r.data.isLast===true||r.data.values.length<100||r.data.total<=(page+1)*100)return latest;
+    }return null;
+  }};
+  if(path==="/reports/run")return reportRoutes(request,env,me,reportDeps);
   const email = me.email;
   const isAdmin = me.role === "admin";
   const devLabel = "ai1_" + me.dev;
   if(path.startsWith("/ai/")){
     if(!["/ai/chat","/ai/brief"].includes(path))return fail("ai_read_only","Ticket actions are disabled in AION AI v1.",403);
-    return (path==="/ai/brief"?aiBrief:aiChat)(request,env,{me,project:env.JIRA_PROJECT,readSearch:async body=>{
+    return (path==="/ai/brief"?aiBrief:aiChat)(request,env,{me,project:env.JIRA_PROJECT,readDashboard:dashboardRead,readBusiness:async key=>{const t=await readBusinessTicket(key);if(!t)return null;return {...t,...publicMetadata(await readMetadata(env,key),me,await readCatalog(env))};},runReport:options=>buildReport(env,me,reportDeps,options),readSearch:async body=>{
       const result=await route(new Request(new URL("/jira/search",url),{method:"POST",headers:{Authorization:request.headers.get("Authorization"),"Content-Type":"application/json","X-AION-Read-Only":"1"},body:JSON.stringify(body)}),env,new URL("/jira/search",url));
       if(!result.ok)throw new Error("Authorized Jira read failed");return result.json();
     }});
@@ -457,7 +481,7 @@ async function route(request, env, url) {
   if (path === "/config" && method === "GET") {
     let team = {};
     try { team = JSON.parse(env.TEAM_CONFIG || "{}"); } catch {}
-    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true} });
+    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, capabilities:["ticket-business-v1"] });
   }
 
   if (!isAdmin && (path === "/mail" || path === "/jira/users")) return fail("forbidden", "Only administrators can do that.", 403);
@@ -519,14 +543,26 @@ async function route(request, env, url) {
       if (!b || !validFields(b.fields)) return fail("bad_request", "Only labels, due date and assignee can be changed.", 400);
       if (!isAdmin) return fail("forbidden", "Users must request due date changes; only admins can edit ticket fields.", 403);
       if("duedate" in b.fields)return fail("date_request", "Use the date approval process and provide a reason.",400);
-      return pass(await jira(env, "/rest/api/3/issue/" + key, { method: "PUT", body: { fields: b.fields } }));
+      return withTicketLock(env,key,async()=>{
+        const ticket=await readBusinessTicket(key);if(!ticket)return fail('not_found','Ticket unavailable.',404);
+        const wantedDevs=Array.isArray(b.fields.labels)?[...new Set(b.fields.labels.filter(l=>/^ai1_/i.test(l)).map(l=>l.slice(4).toLowerCase()))].sort():null;
+        if('assignee' in b.fields || wantedDevs&&JSON.stringify(wantedDevs)!==JSON.stringify([...ticket.devs].sort()))requireBilling(await readMetadata(env,key));
+        return pass(await jira(env, '/rest/api/3/issue/'+key,{method:'PUT',body:{fields:b.fields},signal:AbortSignal.timeout(20000)}));
+      });
     }
     if (sub === "/changelog" && method === "GET") return pass(await jira(env, "/rest/api/3/issue/" + key + "?fields=duedate&expand=changelog"));
     if (sub === "/transitions" && method === "GET") return pass(await jira(env, "/rest/api/3/issue/" + key + "/transitions"));
     if (sub === "/transitions" && method === "POST") {
       const b = await readJson(request);
       if (!b || !/^\d+$/.test(String(b.id))) return fail("bad_request", "Bad status move.", 400);
-      return pass(await jira(env, "/rest/api/3/issue/" + key + "/transitions", { method: "POST", body: { transition: { id: String(b.id) } } }));
+      return withTicketLock(env,key,async()=>{
+        const ticket=await readBusinessTicket(key);if(!ticket)return fail("not_found","Ticket unavailable.",404);
+        const transitions=await jira(env,"/rest/api/3/issue/"+key+"/transitions",{signal:AbortSignal.timeout(15000)});if(!transitions.ok)return transitions.res;
+        const target=transitions.data.transitions?.find(t=>String(t.id)===String(b.id)&&t.isAvailable!==false);if(!target?.to?.statusCategory?.key)return fail("bad_request","This transition is unavailable or has incomplete destination details.",400);
+        const closing=target.to.statusCategory.key==="done";
+        const apply=async()=>pass(await jira(env,"/rest/api/3/issue/"+key+"/transitions",{method:"POST",body:{transition:{id:String(b.id)}},signal:AbortSignal.timeout(20000)}));
+        return closing||ticket.closed?guardedTransition(env,key,me,{closing,overrideReason:b.overrideReason},apply):apply();
+      });
     }
     if (sub === "/comment" && method === "POST") {
       const b = await readJson(request);
@@ -547,8 +583,9 @@ export default {
     try {
       res = env.COOKIE_SESSIONS?await cookieSessionRequest(request,env,req=>route(req,env,new URL(req.url)),{readToken,makeToken}):await route(request, env, new URL(request.url));
     } catch (err) {
-      console.warn("proxy_failed");
-      res = fail("server", "The proxy hit an error.", 500);
+      if(err instanceof BusinessError)res=businessResponse(err);
+      else console.warn("proxy_failed");
+      if(!res)res = fail("server", "The proxy hit an error.", 500);
     }
     for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
     res.headers.set("X-Content-Type-Options","nosniff");res.headers.set("X-Frame-Options","DENY");

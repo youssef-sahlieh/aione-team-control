@@ -5,8 +5,8 @@ import { createFilters, matchesFilters } from "../../public/assets/models/filter
 import { restoreView, serializeView } from "../../public/assets/models/saved-views.js";
 const people={karim:{name:"Karim Team"},ys:{name:"Youssef Team"},rami:{name:"Rami"},rz:{name:"Razan"},ellen:{name:"Ellen"}};
 test("default assignees exclude Razan while keeping her available explicitly",()=>{
-  assert.deepEqual(defaultAssigneeKeys(people),["karim","ys","rami"]);
-  assert.deepEqual(assigneeOptions(people).map(([key])=>key),["karim","ys","rami","rz"]);
+  assert.deepEqual(defaultAssigneeKeys(people),["karim","ys","rami","__internal_tickets"]);
+  assert.deepEqual(assigneeOptions(people).map(([key])=>key),["karim","ys","rami","rz","__internal_tickets"]);
   const {rz,...withoutRazan}=people;
   assert.equal(defaultAssigneeKeys(withoutRazan).includes("razan"),false);
   assert.equal(assigneeFilterKey({assignee:null,assigneeName:"Razan Team"},withoutRazan),"razan");

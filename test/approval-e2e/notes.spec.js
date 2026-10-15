@@ -30,8 +30,8 @@ test('developer sends a private ticket note that admins can read',async({page})=
 
 test('missing live date-request route explains deployment rather than displaying Not found',async({page})=>{
   await page.route('**/api/date-requests',route=>route.fulfill({status:404,json:{code:'not_found',error:'Not found.'}}));
-  await page.goto('/preview/admin');
-  await expect(page.getByText('The connected backend has not been updated for date requests and internal notes.',{exact:false})).toBeVisible();
+  await page.goto('/preview/admin');await page.goto('/dashboard.html?page=requests');
+  await expect(page.getByText('The connected backend has not been updated for ticket business fields, clients, reports, date requests, and internal notes.',{exact:false})).toBeVisible();
   await expect(page.getByRole('button',{name:'Retry loading requests',exact:true})).toBeVisible();
 });
 
