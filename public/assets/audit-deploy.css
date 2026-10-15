@@ -1,0 +1,13 @@
+/* Frame around Odoo's own Audit & Deploy screen. The screen itself uses Odoo's styles. */
+html, body { height: 100%; margin: 0; }
+body.o_web_client { display: flex; flex-direction: column; overflow: hidden; }
+.ad-bar { position: relative; z-index: 1100; display: flex !important; align-items: center; gap: 12px; padding: 6px 14px; background: #1f2433; color: #fff; font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; flex: none; }
+.ad-bar a { color: #c9d4ff; text-decoration: none; }
+.ad-bar a:hover { text-decoration: underline; }
+.ad-sp { flex: 1; }
+.ad-me { color: #b8bfd0; font-size: 13px; }
+.ad-me b { color: #fff; }
+.ad-state { padding: 24px; font: 15px system-ui, sans-serif; color: #445; }
+.ad-state.err { color: #b42318; }
+/* transform makes the add-on's fixed panels stay inside this area instead of covering the bar */
+.ad-app { flex: 1; min-height: 0; overflow: auto; position: relative; transform: translateZ(0); }

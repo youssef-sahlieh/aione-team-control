@@ -90,18 +90,15 @@ Tickets from the Odoo Helpdesk (kadis.odoo.com) appear in the dashboard as **HD-
 
 ## Audit & Deploy
 
-**Audit & Deploy** in the sidebar (for users and administrators alike) brings Odoo's *Audit & Deployment System* add-on (log_monitor) into the dashboard. It uses the same Odoo connection as the Odoo Helpdesk tickets, so the Odoo user in `ODOO_LOGIN` needs the add-on's access (Odoo **Administration / Settings**).
+**Audit & Deploy** in the sidebar opens **Odoo's own Audit & Deployment System screen** (the log_monitor add-on) inside the dashboard: the same screen and every function (instances, add-on upgrades and branches, restarts, logs, database, test environments, backups, packages, deployments, fleet, approvals). Nobody signs in to Odoo.
 
-- **Overview:** instances and their health, test environments, requests waiting, and the latest actions.
-- **Instances:** search and filter all instances; open one to see its configuration, resources, add-ons, database activity and POS logs.
-- **Test environments:** create one (choose the instance, zone, database, storage and size, then *Check capacity & reserve* before *Create*), and refresh, extend by 24 hours, keep (persistent), set an expiry or destroy existing ones.
-- **Approvals & pipelines:** approve or deny database-access and add-on-unlock requests, and approve or reject staging for CI/CD pipeline runs.
-- **Odoo audit log:** everything the add-on recorded.
-- **Dashboard action log:** every change made from this page, with the real person's name and email, and whether Odoo accepted it.
+How it works:
 
-Every change is also written to the add-on's audit log in Odoo, as "via AION Team Control by <name>": Odoo itself shows the API user (Yousef Sahlieh) as the one who ran it, so the dashboard's log is the place to see who actually did it.
-
-Not included (stay in Odoo): deployments and upgrades, backups and restores, the database inspector and the Nexo device fleet.
+- The page loads the add-on's real front-end code and styles from kadis.odoo.com (always the version installed in Odoo, so add-on updates appear automatically).
+- The screen's data calls go to the proxy instead of an Odoo browser session. The proxy runs them with the Odoo API key and **only allows the add-on's own models** (plus names and logins of Odoo users for pickers); everything else in Odoo stays unreachable.
+- **Real names:** every change is written to the dashboard's action log (Audit & Deploy page → *Action log*) with the person's name and email. The add-on's own audit entries made through the dashboard get the person's name in Odoo's "User Name" ("Name (via AION)"); entries from people using Odoo directly are never touched.
+- Everyone signed in to the dashboard (users and administrators) has the same powers here as the Odoo account behind `ODOO_API_KEY`, which needs the add-on's access (Odoo **Administration / Settings**).
+- Things that need a personal Odoo session, like connecting a GitHub identity, aren't available from the dashboard; links to other Odoo pages open Odoo itself.
 
 ## Change the team shown on the dashboard
 

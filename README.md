@@ -1,6 +1,6 @@
 # AION Team Control
 
-The Aione team dashboard for the AION Jira project: tickets, filters, boards, due date history, comments, developer assignments and internal notes, plus **internal tickets** (INT-…) that live only in the dashboard, never in Jira, and **Odoo Helpdesk tickets** (HD-…) read from and updated in Odoo, plus an **Audit & Deploy** page for Odoo's Audit & Deployment System.
+The Aione team dashboard for the AION Jira project: tickets, filters, boards, due date history, comments, developer assignments and internal notes, plus **internal tickets** (INT-…) that live only in the dashboard, never in Jira, and **Odoo Helpdesk tickets** (HD-…) read from and updated in Odoo, plus **Audit & Deploy**: Odoo's own Audit & Deployment System screen running inside the dashboard.
 
 - **Dashboard:** https://youssef-sahlieh.github.io/aione-team-control/ (GitHub Pages, from `public/`)
 - **Jira proxy:** https://aione-team-proxy.vercel.app (Vercel, from `proxy/`), which checks the sign-in and talks to Jira
@@ -42,11 +42,11 @@ Browser ──► GitHub Pages (dashboard files, public)
 - `public/index.html`, `public/assets/signin.js`: the sign-in page and "Forgot password?".
 - `public/reset.html`, `public/assets/reset.js`: choosing a password from an emailed link.
 - `public/users.html`, `public/assets/users.js`: the Users page (administrators).
-- `public/monitor.html`, `public/assets/monitor.js`: the Audit & Deploy page.
+- `public/audit-deploy.html`, `public/assets/audit-deploy.js`: runs Odoo's Audit & Deploy screen. `public/monitor.html`: its action log.
 - `public/dashboard.html`, `public/assets/dashboard.js`, `public/assets/dashboard.css`: the dashboard.
 - `public/assets/session.js`: the session and the calls to the proxy.
 - `public/assets/config.js`: the proxy's address.
-- `proxy/src/handler.js`: the proxy. `proxy/src/users.js`: accounts, password hashing and one-time links. `proxy/src/internal.js`: internal tickets. `proxy/src/odoo.js`: Odoo Helpdesk tickets. `proxy/src/monitor.js`: Audit & Deploy (with its action log). `proxy/settings.js`: its allowed emails, Jira project and email domain. `proxy/api/proxy.js`, `proxy/vercel.json`: the Vercel wiring.
+- `proxy/src/handler.js`: the proxy. `proxy/src/users.js`: accounts, password hashing and one-time links. `proxy/src/internal.js`: internal tickets. `proxy/src/odoo.js`: Odoo Helpdesk tickets. `proxy/src/odoo-app.js`: the Audit & Deploy screen's data calls. `proxy/src/monitor.js`: the action log. `proxy/settings.js`: its allowed emails, Jira project and email domain. `proxy/api/proxy.js`, `proxy/vercel.json`: the Vercel wiring.
 - `.github/workflows/deploy.yml`: publishes the dashboard.
 
 For the due-date request and admin approval workflow, see [due-date approvals](docs/due-date-approvals.md). Run `npm run preview:approvals` for an isolated local review at http://localhost:3100/preview/admin, with sample tickets and no production writes.

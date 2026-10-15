@@ -91,5 +91,5 @@ test("dashboard sidebar links to Audit & Deploy when Odoo is connected", async (
   });
   await page.goto("/dashboard.html");
   await expect(page.locator("#monitor-link")).toBeVisible();
-  await expect(page.locator("#monitor-link")).toHaveAttribute("href", "monitor.html");
+  await expect(page.locator("#monitor-link")).toHaveAttribute("href", "audit-deploy.html");
 });

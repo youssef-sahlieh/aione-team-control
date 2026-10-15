@@ -21,6 +21,7 @@ import { ticketNoteRoutes } from "./ticket-notes.js";
 import { internalRoutes } from "./internal.js";
 import { odooConfigured, odooRoutes, odooTicketInfo } from "./odoo.js";
 import { monitorRoutes } from "./monitor.js";
+import { odooAppRoutes, odooTranslations } from "./odoo-app.js";
 import { cookieSessionRequest } from "./sessions.js";
 import { SESSION_MS } from "./session-policy.js";
 import { aiChat, aiBrief, aiConfigured } from "./ai.js";
@@ -317,6 +318,7 @@ async function route(request, env, url) {
   const method = request.method;
 
   // Public compatibility check for Pages publishing; exposes no runtime credentials or ticket data.
+  if (path.startsWith("/monitor/odoo/translations") && method === "GET") return odooTranslations(env, url);
   if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1"]});
 
   // Jira Automation uses its own secret, never a team password or a user's browser session.
@@ -443,6 +445,7 @@ async function route(request, env, url) {
   });
   if (path === "/internal" || path.startsWith("/internal/")) return internalRoutes(request, env, url, me);
   if (path === "/odoo/tickets" || path.startsWith("/odoo/tickets/")) return odooRoutes(request, env, url, me);
+  if (path.startsWith("/monitor/odoo/")) return odooAppRoutes(request, env, url, me);
   if (path.startsWith("/monitor/")) return monitorRoutes(request, env, url, me);
 
   const P = env.JIRA_PROJECT;

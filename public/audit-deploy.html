@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<!-- Odoo's own Audit & Deploy screen: its code and styles load from Odoo. Odoo's template engine needs
+     'unsafe-eval' and its components set inline styles, so this page (only) allows both. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' https://kadis.odoo.com; style-src 'self' 'unsafe-inline' https://kadis.odoo.com https://fonts.googleapis.com; font-src 'self' data: https://kadis.odoo.com https://fonts.gstatic.com; img-src 'self' data: blob: https://kadis.odoo.com; connect-src 'self' https://aione-team-proxy.vercel.app; frame-src 'none'; form-action 'none'; base-uri 'self'">
+<meta name="referrer" content="same-origin">
+<meta name="robots" content="noindex">
+<title>Audit &amp; Deploy · AION Team Control</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="assets/audit-deploy.css">
+</head>
+<body class="o_web_client">
+<div class="ad-bar" id="ad-bar">
+  <a class="ad-back" href="dashboard.html">← Dashboard</a>
+  <b>Audit &amp; Deploy</b>
+  <span class="ad-sp"></span>
+  <span class="ad-me">Signed in as <b id="ad-me">…</b></span>
+  <a class="ad-link" href="monitor.html#log">Action log</a>
+</div>
+<div id="ad-state" class="ad-state">Loading Audit &amp; Deploy from Odoo…</div>
+<div id="ad-app" class="o_action_manager ad-app"></div>
+<script src="assets/config.js"></script>
+<script type="module" src="assets/audit-deploy.js"></script>
+</body>
+</html>
