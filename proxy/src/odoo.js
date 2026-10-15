@@ -93,7 +93,8 @@ function view(env, t, maps, allStages) {
   const stage = allStages.find((s) => Array.isArray(t.stage_id) && s.id === t.stage_id[0]);
   const dev = Array.isArray(t.user_id) ? maps.toDev.get(t.user_id[0]) : null;
   return {
-    key: "HD-" + t.id, id: t.id, ref: t.ticket_ref || String(t.id), odoo: true,
+    // The key uses the ticket number people see in Odoo (ticket_ref, e.g. #302), not the record id.
+    key: "HD-" + (t.ticket_ref || t.id), id: t.id, ref: t.ticket_ref || String(t.id), odoo: true,
     summary: t.name || "(no subject)",
     status: stage ? stage.name : (Array.isArray(t.stage_id) ? t.stage_id[1] : "New"), statusCat: stageCat(stage, allStages),
     devs: dev ? [dev] : [], developerName: Array.isArray(t.user_id) ? t.user_id[1] : "",
@@ -105,12 +106,14 @@ function view(env, t, maps, allStages) {
   };
 }
 
-const ticketIdOf = (key) => { const m = /^HD-(\d+)$/.exec(String(key || "")); return m ? Number(m[1]) : 0; };
+// HD-302 -> Odoo domain for the ticket whose number (ticket_ref) is 302.
+const refOf = (key) => { const m = /^HD-(\d+)$/.exec(String(key || "")); return m ? m[1] : ""; };
+const byRef = (key) => [["ticket_ref", "=", refOf(key)]];
 
 // Title and developer of one Odoo ticket, for features that check access (private ticket notes).
 export async function odooTicketInfo(env, key) {
-  if (!odooConfigured(env) || !ticketIdOf(key)) return null;
-  const [t] = await odoo(env, "helpdesk.ticket", "search_read", [[["id", "=", ticketIdOf(key)]]], { fields: ["name", "user_id"], limit: 1 });
+  if (!odooConfigured(env) || !refOf(key)) return null;
+  const [t] = await odoo(env, "helpdesk.ticket", "search_read", [byRef(key)], { fields: ["name", "user_id"], limit: 1 });
   if (!t) return null;
   const maps = devMaps(env, await odooUsers(env));
   const dev = Array.isArray(t.user_id) ? maps.toDev.get(t.user_id[0]) : null;
@@ -147,9 +150,9 @@ export async function odooRoutes(request, env, url, me) {
 
     const m = /^\/odoo\/tickets\/(HD-\d+)(\/note)?$/.exec(path);
     if (!m) return fail("not_found", "Not found.", 404);
-    const id = ticketIdOf(m[1]);
-    const [t] = await odoo(env, "helpdesk.ticket", "search_read", [[["id", "=", id]]], { fields: [...FIELDS, "description"], limit: 1 });
+    const [t] = await odoo(env, "helpdesk.ticket", "search_read", [byRef(m[1])], { fields: [...FIELDS, "description"], limit: 1 });
     if (!t || !mine(t)) return fail("not_found", "No such Odoo ticket.", 404);
+    const id = t.id;
     const teamId = Array.isArray(t.team_id) ? t.team_id[0] : 0;
     const teamStages = allStages.filter((s) => !teamId || !s.team_ids.length || s.team_ids.includes(teamId));
 

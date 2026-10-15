@@ -6,7 +6,7 @@ import { customerOf } from "../proxy/src/odoo.js";
 
 const calls = [];
 const TICKETS = {
-  300: { id: 300, name: "Ready development", stage_id: [2, "In Progress"], user_id: [12, "Shahd Ghayadah"], partner_email: '"Ariel Amiri" <ariel@kadouri.co.il>', partner_name: "", partner_id: [5, "ariel@kadouri.co.il"], priority: "1", team_id: [1, "ai1 | Support"], create_date: "2026-10-01 08:00:00", write_date: "2026-10-14 09:00:00", close_date: false, sla_deadline: "2026-10-20 10:00:00", ticket_ref: "300", description: "<p>Please deploy</p>" },
+  300: { id: 300, name: "Ready development", stage_id: [2, "In Progress"], user_id: [12, "Shahd Ghayadah"], partner_email: '"Ariel Amiri" <ariel@kadouri.co.il>', partner_name: "", partner_id: [5, "ariel@kadouri.co.il"], priority: "1", team_id: [1, "ai1 | Support"], create_date: "2026-10-01 08:00:00", write_date: "2026-10-14 09:00:00", close_date: false, sla_deadline: "2026-10-20 10:00:00", ticket_ref: "302", description: "<p>Please deploy</p>" },
   293: { id: 293, name: "Cartons order", stage_id: [2, "In Progress"], user_id: [34, "Bashar Bannoura"], partner_email: "neor@suzume.co.il", partner_name: "Neor El Hai", partner_id: false, priority: "0", team_id: [1, "ai1 | Support"], create_date: "2026-10-02 08:00:00", write_date: "2026-10-13 09:00:00", close_date: false, sla_deadline: false, ticket_ref: "293", description: "" }
 };
 globalThis.fetch = async (url, init) => {
@@ -20,10 +20,10 @@ globalThis.fetch = async (url, init) => {
   if (model === "helpdesk.stage") return reply([{ id: 1, name: "New", fold: false, sequence: 1, team_ids: [1] }, { id: 2, name: "In Progress", fold: false, sequence: 2, team_ids: [1] }, { id: 3, name: "Solved", fold: true, sequence: 3, team_ids: [1] }, { id: 9, name: "Other team only", fold: false, sequence: 4, team_ids: [5] }]);
   if (model === "mail.message") return reply([{ body: "<p>Hello</p>", author_id: [5, "Ariel Amiri"], date: "2026-10-03 10:00:00", subtype_id: [1, "Discussions"], message_type: "email" }]);
   if (model === "helpdesk.ticket" && m === "search_read") {
-    const idTerm = a[0].find((t) => Array.isArray(t) && t[0] === "id");
+    const refTerm = a[0].find((t) => Array.isArray(t) && t[0] === "ticket_ref");
     const userTerm = a[0].find((t) => Array.isArray(t) && t[0] === "user_id");
     let rows = Object.values(TICKETS);
-    if (idTerm) rows = rows.filter((t) => t.id === idTerm[2]);
+    if (refTerm) rows = rows.filter((t) => t.ticket_ref === refTerm[2]);
     if (userTerm) rows = rows.filter((t) => t.user_id && t.user_id[0] === userTerm[2]);
     return reply(rows.map((t) => ({ ...t })));
   }
@@ -57,7 +57,8 @@ test("config says Odoo is connected", async () => {
 
 test("list maps Odoo tickets: developer from the Odoo assignee, customer, stage, SLA", async () => {
   const { data } = await req("/odoo/tickets", { token: await adminToken() });
-  const t300 = data.tickets.find((t) => t.key === "HD-300");
+  const t300 = data.tickets.find((t) => t.key === "HD-302");
+  assert.equal(t300.id, 300, "keyed by the number people see in Odoo (302), record id kept for links");
   assert.deepEqual(t300.devs, ["shahd"]);
   assert.deepEqual(t300.customer, { name: "Ariel Amiri", email: "ariel@kadouri.co.il" });
   assert.equal(t300.status, "In Progress"); assert.equal(t300.statusCat, "indeterminate");
@@ -67,7 +68,7 @@ test("list maps Odoo tickets: developer from the Odoo assignee, customer, stage,
 });
 
 test("detail: description, chatter and only this team's stages", async () => {
-  const { data } = await req("/odoo/tickets/HD-300", { token: await adminToken() });
+  const { data } = await req("/odoo/tickets/HD-302", { token: await adminToken() });
   assert.equal(data.description, "<p>Please deploy</p>");
   assert.equal(data.messages[0].author, "Ariel Amiri"); assert.equal(data.messages[0].email, true);
   assert.deepEqual(data.stages.map((s) => s.name), ["New", "In Progress", "Solved"]);
@@ -76,10 +77,10 @@ test("detail: description, chatter and only this team's stages", async () => {
 test("admin moves the stage and changes the developer in Odoo", async () => {
   const t = await adminToken();
   calls.length = 0;
-  let r = await req("/odoo/tickets/HD-300", { method: "PUT", token: t, body: { stage: 3 } });
+  let r = await req("/odoo/tickets/HD-302", { method: "PUT", token: t, body: { stage: 3 } });
   assert.equal(r.status, 200);
   assert.deepEqual(calls.find((c) => c.args[4] === "write").args[5], [[300], { stage_id: 3 }]);
-  assert.equal((await req("/odoo/tickets/HD-300", { method: "PUT", token: t, body: { stage: 9 } })).status, 400, "other team's stage refused");
+  assert.equal((await req("/odoo/tickets/HD-302", { method: "PUT", token: t, body: { stage: 9 } })).status, 400, "other team's stage refused");
   calls.length = 0;
   r = await req("/odoo/tickets/HD-293", { method: "PUT", token: t, body: { devs: ["ireen"] } });
   assert.equal(r.status, 200);
@@ -90,7 +91,7 @@ test("admin moves the stage and changes the developer in Odoo", async () => {
 
 test("notes go to the chatter as internal notes, signed by the dashboard user", async () => {
   calls.length = 0;
-  const r = await req("/odoo/tickets/HD-300/note", { method: "POST", token: await adminToken(), body: { text: "Checking <now>" } });
+  const r = await req("/odoo/tickets/HD-302/note", { method: "POST", token: await adminToken(), body: { text: "Checking <now>" } });
   assert.equal(r.status, 201);
   const post = calls.find((c) => c.args[4] === "message_post");
   assert.equal(post.args[6].subtype_xmlid, "mail.mt_note"); assert.equal(post.args[6].message_type, "comment");
