@@ -442,7 +442,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       // Work view fits the page: each column has a minimum width and shares the rest of the space
       // (the list scrolls sideways only on screens narrower than the minimums).
       applyWorkColumns(h);w.classList.add('work-columns');
-      const cols=[[28],[92],[180,2.2],[96,1],[112,1],[84,.8],...(GITHUB?[[170,1.4]]:[]),[110,1.3],[84,.7],[78,.7],[140,1.8],...(IS_ADMIN?[[80,.7]]:[]),[100,.9],[40]];
+      const cols=[[28],[92],[180,2.2],[96,1],[100,1],[112,1],[84,.8],...(GITHUB?[[170,1.4]]:[]),[110,1.3],[84,.7],[78,.7],[140,1.8],...(IS_ADMIN?[[80,.7]]:[]),[100,.9],[40]];
       const min=cols.reduce((a,[n])=>a+n,0)+10*(cols.length-1)+28;
       w.style.setProperty('--business-columns',cols.map(([n,fr])=>fr?'minmax('+n+'px,'+fr+'fr)':n+'px').join(' '));w.style.setProperty('--business-width','max(100%, '+min+'px)');
     }else{
@@ -509,7 +509,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     ck.addEventListener("click",e=>e.stopPropagation()); ck.addEventListener("change",()=>{ ck.checked?state.sel.add(i.key):state.sel.delete(i.key); onChange(ck.checked); updateBulk(); }); return ck; }
 
   function applyWorkColumns(row){
-    const order=['c-ck','c-key','c-ttl','c-who','c-st','c-due',...(GITHUB?['c-prs']:[]),'c-clientName','c-estimatedHours','c-actualHours','c-workDone',...(IS_ADMIN?['c-billing']:[]),'c-note','c-actions'];
+    const order=['c-ck','c-key','c-ttl','c-who','c-dev','c-st','c-due',...(GITHUB?['c-prs']:[]),'c-clientName','c-estimatedHours','c-actualHours','c-workDone',...(IS_ADMIN?['c-billing']:[]),'c-note','c-actions'];
     for(const child of [...row.children])child.hidden=!order.some(c=>child.classList.contains(c));
     for(const c of order){const child=[...row.children].find(n=>n.classList.contains(c));if(child)row.append(child);}
   }
