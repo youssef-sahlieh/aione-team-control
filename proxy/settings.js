@@ -1,7 +1,8 @@
 // Public proxy settings. Secrets (password, tokens, team details) are Vercel environment variables.
 export default {
-  // The dashboard's address. Browsers on any other site can't call the proxy.
-  ALLOWED_ORIGIN: "https://youssef-sahlieh.github.io",
+  // The dashboard's addresses (comma separated). Browsers on any other site can't call the proxy.
+  // The GitHub Pages address stays allowed while people switch to dashboard.ai1.host; remove it later.
+  ALLOWED_ORIGIN: "https://dashboard.ai1.host,https://youssef-sahlieh.github.io",
   // Before the user database is added: who may sign in, with the team password. When the database is
   // added, the first sign-in creates administrator accounts for these people.
   TEAM_EMAILS: "youssef@aione.biz,ellen@aione.biz",
@@ -17,6 +18,6 @@ export default {
   ],
   // Jira-created notifications go to the two managers, regardless of dashboard display filters.
   NO_DEVELOPER_NOTIFY_TO: "youssef@aione.biz,ellen@aione.biz",
-  // Where password links in emails point (the dashboard on GitHub Pages).
-  APP_URL: "https://youssef-sahlieh.github.io/aione-team-control"
+  // Where links in emails point (the dashboard, on GitHub Pages at its own domain).
+  APP_URL: "https://dashboard.ai1.host"
 };

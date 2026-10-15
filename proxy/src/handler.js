@@ -39,7 +39,8 @@ const fail = (code, error, status) => json({ code, error }, status);
 function corsHeaders(env, request) {
   const origin = request.headers.get("Origin");
   const h = { Vary: "Origin" };
-  if (origin && origin === env.ALLOWED_ORIGIN) {
+  // ALLOWED_ORIGIN may list several addresses, comma separated (e.g. while moving to a new domain).
+  if (origin && String(env.ALLOWED_ORIGIN || "").split(",").map((o) => o.trim()).filter(Boolean).includes(origin)) {
     h["Access-Control-Allow-Origin"] = origin;
     h["Access-Control-Allow-Headers"] = "Authorization, Content-Type";
     h["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS";

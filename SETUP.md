@@ -1,6 +1,6 @@
 # AION Team Control: setup and changes
 
-- **Dashboard:** https://youssef-sahlieh.github.io/aione-team-control/ (GitHub Pages, publishes itself on every push to `main`)
+- **Dashboard:** https://dashboard.ai1.host/ (GitHub Pages, publishes itself on every push to `main`)
 - **Jira proxy:** https://aione-team-proxy.vercel.app (Vercel project `aione-team-proxy`, team "aione")
 - **Who can sign in:** everyone with an account on the **Users** page (administrators only). Youssef and Ellen are administrators.
 

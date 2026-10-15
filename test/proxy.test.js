@@ -160,6 +160,15 @@ const tests = [
   }],
 
   ["CORS allows the dashboard", async () => { const r = await call("/login", { method: "OPTIONS" }); assert.equal(r.status, 204); assert.equal(r.headers.get("Access-Control-Allow-Origin"), ORIGIN); }],
+  ["CORS allows each listed dashboard address (new domain and old one during the move)", async () => {
+    const both = { ...env, ALLOWED_ORIGIN: "https://dashboard.ai1.host, https://youssef-sahlieh.github.io" };
+    for (const origin of ["https://dashboard.ai1.host", "https://youssef-sahlieh.github.io"]) {
+      const r = await worker.fetch(new Request("https://proxy.test/login", { method: "OPTIONS", headers: { Origin: origin } }), both);
+      assert.equal(r.headers.get("Access-Control-Allow-Origin"), origin);
+    }
+    const r = await worker.fetch(new Request("https://proxy.test/login", { method: "OPTIONS", headers: { Origin: "https://dashboard.ai1.host.evil.example" } }), both);
+    assert.equal(r.headers.get("Access-Control-Allow-Origin"), null);
+  }],
   ["CORS refuses other sites", async () => { const r = await call("/login", { method: "OPTIONS", origin: "https://evil.example" }); assert.equal(r.headers.get("Access-Control-Allow-Origin"), null); }],
 
   ["pages have no inline scripts or style attributes (blocked by their security policy)", () => {

@@ -2,7 +2,7 @@
 
 The Aione team dashboard for the AION Jira project: tickets, filters, boards, due date history, comments, developer assignments and internal notes, plus **internal tickets** (INT-…) that live only in the dashboard, never in Jira, and **Odoo Helpdesk tickets** (HD-…) read from and updated in Odoo, plus **Audit & Deploy**: Odoo's own Audit & Deployment System screen running inside the dashboard.
 
-- **Dashboard:** https://youssef-sahlieh.github.io/aione-team-control/ (GitHub Pages, from `public/`)
+- **Dashboard:** https://dashboard.ai1.host/ (GitHub Pages, from `public/`)
 - **Jira proxy:** https://aione-team-proxy.vercel.app (Vercel, from `proxy/`), which checks the sign-in and talks to Jira
 - **Setup and changes:** see [SETUP.md](SETUP.md)
 - **Tests:** `npm test` (Node 20+) checks the proxy's sign-in, its limits on Jira, and that no team details are in the public code
