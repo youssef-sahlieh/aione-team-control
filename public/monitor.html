@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://aione-team-proxy.vercel.app; form-action 'none'; base-uri 'self'">
+<meta name="referrer" content="same-origin">
+<meta name="robots" content="noindex">
+<title>Audit &amp; Deploy · AION Team Control</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="assets/dashboard.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand">
+      <h1>Audit &amp; Deploy</h1>
+      <div class="sub">AION Team Control · instances, test environments, approvals and audit logs from Odoo's Audit &amp; Deployment System</div>
+    </div>
+    <a class="btn" href="dashboard.html">← Dashboard</a>
+    <span class="me">Signed in as <b id="me">…</b> <button class="btn" id="signout" type="button">Sign out</button></span>
+  </div>
+
+  <div id="pagestate" class="state">Loading…</div>
+
+  <div class="seg mon-tabs" role="tablist" aria-label="Audit &amp; Deploy sections" id="tabs" hidden>
+    <button type="button" role="tab" data-tab="overview" aria-selected="true">Overview</button>
+    <button type="button" role="tab" data-tab="instances" aria-selected="false">Instances</button>
+    <button type="button" role="tab" data-tab="testenvs" aria-selected="false">Test environments</button>
+    <button type="button" role="tab" data-tab="approvals" aria-selected="false">Approvals &amp; pipelines</button>
+    <button type="button" role="tab" data-tab="audit" aria-selected="false">Odoo audit log</button>
+    <button type="button" role="tab" data-tab="log" aria-selected="false">Dashboard action log</button>
+  </div>
+
+  <section class="upanel mon-panel" data-panel="overview" hidden>
+    <div class="mon-cards" id="ov-cards"></div>
+    <div class="mon-two">
+      <div><h2>Recent actions in Odoo</h2><div id="ov-audit" class="mon-list"></div></div>
+      <div><h2>Recent actions from this dashboard</h2><div id="ov-log" class="mon-list"></div></div>
+    </div>
+  </section>
+
+  <section class="upanel mon-panel" data-panel="instances" hidden>
+    <div class="mon-bar">
+      <input class="inp" id="in-q" type="search" placeholder="Search name, domain or database host…" aria-label="Search instances">
+      <select class="fsel auto" id="in-zone" aria-label="Server zone"><option value="">All zones</option></select>
+      <select class="fsel auto" id="in-health" aria-label="Health"><option value="">Any health</option><option value="healthy">Healthy</option><option value="__unknown">Unknown</option></select>
+      <button class="btn" id="in-refresh" type="button">Refresh from servers</button>
+      <span class="msg" id="in-count"></span>
+    </div>
+    <div class="mon-table-wrap"><table class="mon-table" id="in-table"><thead><tr><th>Instance</th><th>Domain</th><th>Health</th><th>Status</th><th>Zone</th><th>Database host</th><th>Created</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="upanel mon-panel" data-panel="testenvs" hidden>
+    <div class="mon-bar">
+      <button class="btn primary" id="te-new" type="button">+ New test environment</button>
+      <button class="btn" id="te-reload" type="button">Reload</button>
+      <span class="msg" id="te-count"></span>
+    </div>
+    <form class="mon-form" id="te-form" hidden novalidate>
+      <h2>New test environment</h2>
+      <div class="uform">
+        <label class="ufield"><span>Copy from instance</span><select class="fsel" id="te-source" required></select></label>
+        <label class="ufield"><span>Server zone</span><select class="fsel" id="te-zone"><option value="test">Test Server</option><option value="development">Development Server</option></select></label>
+        <label class="ufield"><span>Database to copy</span><select class="fsel" id="te-db"></select></label>
+        <label class="ufield"><span>Storage target</span><select class="fsel" id="te-target"></select></label>
+        <label class="ufield"><span>Size</span><select class="fsel" id="te-template"><option value="minimal">Minimal (1 CPU, 512 MB)</option><option value="standard" selected>Standard (2 CPU, 1 GB)</option><option value="performance">Performance (4 CPU, 2 GB)</option></select></label>
+        <label class="ufield"><span>Name (optional)</span><input class="inp" id="te-name" maxlength="80" placeholder="e.g. 519 QA"></label>
+        <label class="ufield"><span>Keeps running for</span><select class="fsel" id="te-ttl"><option value="24">24 hours</option><option value="72" selected>3 days</option><option value="168">1 week</option><option value="0">Until destroyed (persistent)</option></select></label>
+      </div>
+      <div class="mon-estimate" id="te-estimate" hidden></div>
+      <div class="uactions">
+        <button class="btn" id="te-reserve" type="button">1. Check capacity &amp; reserve</button>
+        <button class="btn primary" id="te-create" type="button" disabled>2. Create test environment</button>
+        <button class="btn" id="te-cancel" type="button">Cancel</button>
+        <span class="msg" id="te-msg" role="status"></span>
+      </div>
+    </form>
+    <div class="mon-table-wrap"><table class="mon-table" id="te-table"><thead><tr><th>Environment</th><th>Domain</th><th>Copied from</th><th>Status</th><th>Expires</th><th>Size</th><th>Actions</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="upanel mon-panel" data-panel="approvals" hidden>
+    <h2>Database access requests</h2><div id="ap-access" class="mon-list"></div>
+    <h2>Add-on unlock requests</h2><div id="ap-unlock" class="mon-list"></div>
+    <h2>Test environments about to expire</h2><div id="ap-expiry" class="mon-list"></div>
+    <h2>CI/CD pipeline runs</h2><div id="ap-runs" class="mon-list"></div>
+  </section>
+
+  <section class="upanel mon-panel" data-panel="audit" hidden>
+    <p class="uhelp">Everything recorded by Odoo's Audit &amp; Deployment System. Actions taken from this dashboard appear here as "other" with "via AION Team Control by …" and the person's name.</p>
+    <div id="au-list" class="mon-list"></div>
+    <button class="btn" id="au-more" type="button" hidden>Load more</button>
+  </section>
+
+  <section class="upanel mon-panel" data-panel="log" hidden>
+    <p class="uhelp">Every change made from this page, with the name of the person who made it and whether Odoo accepted it.</p>
+    <div id="lg-list" class="mon-list"></div>
+    <button class="btn" id="lg-more" type="button" hidden>Load more</button>
+  </section>
+</div>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer mon-drawer" id="drawer" hidden aria-label="Instance details" role="dialog">
+  <div class="dhead"><div class="dtop"><b id="dr-title" class="dtitle"></b><span class="sp"><a class="btn" id="dr-open" target="_blank" rel="noopener">Open site ↗</a><button class="btn" id="dr-close" type="button">Close</button></span></div>
+    <div class="seg" role="tablist" id="dr-tabs">
+      <button type="button" data-part="config" aria-selected="true">Configuration</button>
+      <button type="button" data-part="resources" aria-selected="false">Resources</button>
+      <button type="button" data-part="addons" aria-selected="false">Add-ons</button>
+      <button type="button" data-part="activity" aria-selected="false">Database activity</button>
+      <button type="button" data-part="pos-logs" aria-selected="false">POS logs</button>
+    </div>
+  </div>
+  <div class="dbody" id="dr-body"></div>
+</aside>
+<div class="toast" id="toast" hidden role="status"></div>
+
+<script src="assets/config.js"></script>
+<script type="module" src="assets/monitor.js"></script>
+</body>
+</html>

@@ -88,6 +88,21 @@ Tickets from the Odoo Helpdesk (kadis.odoo.com) appear in the dashboard as **HD-
 
 **Settings** (Vercel environment variables): `ODOO_URL` (https://kadis.odoo.com), `ODOO_DB` (the database name), `ODOO_LOGIN` and `ODOO_API_KEY` (an Odoo user and its API key from Odoo → Preferences → Account Security → New API Key). Replace the key there when it expires or if it leaks, then redeploy.
 
+## Audit & Deploy
+
+**Audit & Deploy** in the sidebar (for users and administrators alike) brings Odoo's *Audit & Deployment System* add-on (log_monitor) into the dashboard. It uses the same Odoo connection as the Odoo Helpdesk tickets, so the Odoo user in `ODOO_LOGIN` needs the add-on's access (Odoo **Administration / Settings**).
+
+- **Overview:** instances and their health, test environments, requests waiting, and the latest actions.
+- **Instances:** search and filter all instances; open one to see its configuration, resources, add-ons, database activity and POS logs.
+- **Test environments:** create one (choose the instance, zone, database, storage and size, then *Check capacity & reserve* before *Create*), and refresh, extend by 24 hours, keep (persistent), set an expiry or destroy existing ones.
+- **Approvals & pipelines:** approve or deny database-access and add-on-unlock requests, and approve or reject staging for CI/CD pipeline runs.
+- **Odoo audit log:** everything the add-on recorded.
+- **Dashboard action log:** every change made from this page, with the real person's name and email, and whether Odoo accepted it.
+
+Every change is also written to the add-on's audit log in Odoo, as "via AION Team Control by <name>": Odoo itself shows the API user (Yousef Sahlieh) as the one who ran it, so the dashboard's log is the place to see who actually did it.
+
+Not included (stay in Odoo): deployments and upgrades, backups and restores, the database inspector and the Nexo device fleet.
+
 ## Change the team shown on the dashboard
 
 Replace `TEAM_CONFIG` in Vercel, then redeploy. It looks like this:

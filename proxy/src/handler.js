@@ -20,6 +20,7 @@ import { dateRequestRoutes } from "./date-requests.js";
 import { ticketNoteRoutes } from "./ticket-notes.js";
 import { internalRoutes } from "./internal.js";
 import { odooConfigured, odooRoutes, odooTicketInfo } from "./odoo.js";
+import { monitorRoutes } from "./monitor.js";
 import { cookieSessionRequest } from "./sessions.js";
 import { SESSION_MS } from "./session-policy.js";
 import { aiChat, aiBrief, aiConfigured } from "./ai.js";
@@ -442,6 +443,7 @@ async function route(request, env, url) {
   });
   if (path === "/internal" || path.startsWith("/internal/")) return internalRoutes(request, env, url, me);
   if (path === "/odoo/tickets" || path.startsWith("/odoo/tickets/")) return odooRoutes(request, env, url, me);
+  if (path.startsWith("/monitor/")) return monitorRoutes(request, env, url, me);
 
   const P = env.JIRA_PROJECT;
   const isOurKey = (k) => new RegExp("^" + P + "-\\d+$").test(k);
