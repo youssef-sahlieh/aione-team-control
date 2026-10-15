@@ -54,7 +54,8 @@ export async function syncPulls(env, { force = false } = {}) {
   const owner = crypto.randomUUID();
   if (!(await env.STORE.setIfAbsent(LOCK_KEY, owner, 120))) return { index, synced: false };
   try {
-    for (const repo of repos(env)) {
+    // Repositories are read at the same time (each one's pages in order).
+    await Promise.all(repos(env).map(async (repo) => {
       const cursor = index.cursors[repo] || "";
       let newest = cursor, done = false;
       for (let page = 1; !done && page <= (cursor ? 10 : MAX_PAGES_FIRST_SYNC); page++) {
@@ -68,7 +69,7 @@ export async function syncPulls(env, { force = false } = {}) {
         if (list.length < 100) done = true;
       }
       index.cursors[repo] = newest;
-    }
+    }));
     index.syncedAt = Date.now();
     await env.STORE.set(INDEX_KEY, JSON.stringify(index));
     return { index, synced: true };
