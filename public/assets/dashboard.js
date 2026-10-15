@@ -1076,13 +1076,14 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       applyConfig(cached.cfg); workspace.configure();
       state.mainIssues=cached.main||[]; state.closedIssues=cached.closed||[]; state.internalIssues=cached.internal||[]; state.odooIssues=cached.odoo||[]; INT=cached.INT||{}; Object.values(INT).forEach(t=>{ if(!HIST[t.key]) HIST[t.key]={updated:t.updated,changes:(t.dueHistory||[]).map(h=>({when:h.when,by:h.by,from:h.from,to:h.to}))}; });
       mergeIssues(); showState(""); $("updated").textContent="saved "+new Date(cached.at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})+" · refreshing…"; render();
-      try{const h=decodeURIComponent(location.hash.slice(1));if(/^[A-Z][A-Z0-9_]*-\d+$/.test(h)&&issueByKey(h))openDrawer(h);}catch(_){}
     }
     try{ const cfg=await api("/config"); if(!cached||JSON.stringify(cfg)!==JSON.stringify(cached.cfg)){ applyConfig(cfg); workspace.configure(); }
       await business.configure(cfg);if(!business.enabled())toast("Backend update required",["Deploy the updated proxy to enable ticket fields and validated status changes."],true); }
     catch(err){ if(!cached){ showState(errorText(err),true); $("updated").textContent="not connected"; return; } }
+    // A linked ticket opens once its fields are set up: from the saved copy if it has it, otherwise after loading.
+    const openFromHash=()=>{ try{const h=decodeURIComponent(location.hash.slice(1));if(/^[A-Z][A-Z0-9_]*-\d+$/.test(h)&&issueByKey(h)&&dz.key!==h)openDrawer(h);}catch(_){} };
+    const opened=cached&&(openFromHash(),dz.key!==null);
     await reload();
-    if(cached) return;
-    try{const h=decodeURIComponent(location.hash.slice(1));if(/^[A-Z][A-Z0-9_]*-\d+$/.test(h)&&issueByKey(h))openDrawer(h);}catch(_){}
+    if(!opened) openFromHash();
   }
   start();
