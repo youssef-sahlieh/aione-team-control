@@ -99,6 +99,7 @@ export function memoryStore() {
   const alive = (k) => { const t = expires.get(k); if (t && t < Date.now()) { data.delete(k); expires.delete(k); } return data.has(k); };
   return {
     async get(k) { return alive(k) ? data.get(k) : null; },
+    async mget(keys) { return keys.map((k) => (alive(k) ? data.get(k) : null)); },
     async set(k, v, ttl) { data.set(k, String(v)); if (ttl) expires.set(k, Date.now() + ttl * 1000); else expires.delete(k); },
     async del(k) { data.delete(k); expires.delete(k); },
     async getdel(k) { if(!alive(k))return null;const value=data.get(k);data.delete(k);expires.delete(k);return value; },
@@ -123,6 +124,7 @@ export function redisStore(url, token) {
   };
   return {
     get: (k) => cmd("GET", k),
+    mget: (keys) => cmd("MGET", ...keys),
     set: (k, v, ttl) => (ttl ? cmd("SET", k, String(v), "EX", String(ttl)) : cmd("SET", k, String(v))),
     del: (k) => cmd("DEL", k),
     getdel: (k) => cmd("GETDEL", k),

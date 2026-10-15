@@ -98,3 +98,30 @@ test("dashboard sidebar links to Audit & Deploy when Odoo is connected", async (
   expect(order.indexOf("Audit & Deploy")).toBe(order.indexOf("All tickets") + 1);
   expect(order.indexOf("Boards")).toBe(order.indexOf("Calendar") - 1);
 });
+
+test("a second visit shows the saved tickets at once, and signing out removes them", async ({ page }) => {
+  await page.addInitScript(() => { localStorage.setItem("aione-session", JSON.stringify({ token: "t", email: "x@example.invalid", expiresAt: Date.now() + 3600000, role: "user" })); });
+  let slow = false; const searches = [];
+  await page.route("**/*", async (route) => {
+    const req = route.request(), url = new URL(req.url());
+    if (url.origin === "http://127.0.0.1:4173") return route.continue();
+    if (url.hostname !== "aione-team-proxy.vercel.app") return route.abort();
+    if (slow) await new Promise((r) => setTimeout(r, 4000));
+    if (url.pathname === "/config") return route.fulfill({ json: { site: "https://jira.example.invalid", project: "AION", people: { builder: { id: "acc-b", name: "Builder" } }, devs: ["builder"], role: "user", dev: "builder", email: "x@example.invalid", accounts: true, odoo: false, mail: false, ai: { enabled: false } } });
+    if (url.pathname === "/jira/search") { searches.push(req.postDataJSON()); return route.fulfill({ json: { issues: [{ key: "AION-7", fields: { summary: "Saved ticket", status: { name: "To Do", statusCategory: { key: "new" } }, labels: ["ai1_builder"], assignee: { accountId: "acc-b", displayName: "Builder" }, updated: "2026-10-14T10:00:00.000+0000", created: "2026-10-01T10:00:00.000+0000" } }], isLast: true } }); }
+    if (url.pathname === "/internal") return route.fulfill({ json: { tickets: [] } });
+    if (url.pathname === "/date-requests") return route.fulfill({ json: { requests: [] } });
+    return route.fulfill({ status: 403, json: { code: "forbidden", error: "x" } });
+  });
+  await page.goto("/dashboard.html#tickets");
+  await expect(page.locator("#view")).toContainText("Saved ticket");
+  expect(searches.every((b) => b.slim === true)).toBe(true);
+  slow = true;
+  await page.reload();
+  await expect(page.locator("#view")).toContainText("Saved ticket", { timeout: 2000 });
+  await expect(page.locator("#updated")).toContainText("refreshing");
+  slow = false;
+  await page.evaluate(() => document.querySelector(".account-menu").open = true);
+  await page.locator("#signout").click();
+  await expect.poll(() => page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("aion.cache.")).length)).toBe(0);
+});

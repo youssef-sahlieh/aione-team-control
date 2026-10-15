@@ -20,11 +20,16 @@ export async function notifyTicketsFromSearch(env, issues, dependencies, now = D
   if(!await store.setIfAbsent(lock,owner,120))return {skipped:"busy"};
   let sent=0,attempted=0;const checkStarted=Date.now();
   try {
-    for(const issue of issues){
+    const candidates=issues.filter(issue=>{
       const created=Date.parse(issue.fields?.created);
-      if(!Number.isFinite(created)||created<started||created>now||typeof issue.key!=="string"||!issue.key.startsWith(env.JIRA_PROJECT+"-")||!/^\d+$/.test(issue.key.slice(env.JIRA_PROJECT.length+1))||!/^\d+$/.test(String(issue.id||"")))continue;
+      return !(!Number.isFinite(created)||created<started||created>now||typeof issue.key!=="string"||!issue.key.startsWith(env.JIRA_PROJECT+"-")||!/^\d+$/.test(issue.key.slice(env.JIRA_PROJECT.length+1))||!/^\d+$/.test(String(issue.id||"")));
+    });
+    // Every ticket's "already handled" flags in one database round trip (not two per ticket, one after another).
+    const keys=candidates.flatMap(issue=>[prefix+":seen:"+issue.id,"notify:no-developer:"+env.JIRA_PROJECT+":"+issue.id]);
+    const values=!keys.length?[]:store.mget?await store.mget(keys):await Promise.all(keys.map(k=>store.get(k)));
+    for(const [i,issue] of candidates.entries()){
       const seen=prefix+":seen:"+issue.id;
-      if(await store.get(seen)||await store.get("notify:no-developer:"+env.JIRA_PROJECT+":"+issue.id))continue;
+      if(values[2*i]||values[2*i+1])continue;
       if(!Array.isArray(issue.fields?.labels)||!issue.fields?.status?.statusCategory?.key)continue;
       // A ticket first observed with a developer/Done is not a new unassigned ticket later.
       if(issue.fields.labels.some(label=>/^ai1_/i.test(label))||issue.fields.status.statusCategory.key==="done"){

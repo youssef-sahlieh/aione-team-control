@@ -52,6 +52,16 @@ const tests = [
     assert.equal(c.headers.Authorization, "Basic " + btoa("bot@aione.biz:jira-token"));
     assert.equal(c.body.expand, "renderedFields"); assert.equal(c.body.maxResults, 100);
   }],
+  ["slim search keeps only the latest comment; full search keeps everything", async () => {
+    const comments = (n) => ({ total: n, comments: Array.from({ length: n }, (_, i) => ({ id: String(i), body: "c" + i })) });
+    jiraReply = () => Response.json({ issues: [{ key: "AION-1", fields: { summary: "s", description: "long", comment: comments(3) }, renderedFields: { description: "<p>long</p>", comment: comments(3), summary: "s" } }], isLast: true });
+    const slim = (await (await call("/jira/search", { method: "POST", token: await login(), body: { jql: "project = AION", fields: ["summary", "comment"], slim: true } })).json()).issues[0];
+    assert.deepEqual(slim.fields.comment.comments.map((c) => c.id), ["2"]); assert.equal(slim.fields.comment.total, 3);
+    assert.deepEqual(slim.renderedFields.comment.comments.map((c) => c.id), ["2"]);
+    assert.equal(slim.fields.description, undefined); assert.equal(slim.renderedFields.description, undefined); assert.equal(slim.fields.summary, "s");
+    const full = (await (await call("/jira/search", { method: "POST", token: await login(), body: { jql: "project = AION", fields: ["summary", "comment"] } })).json()).issues[0];
+    assert.equal(full.fields.comment.comments.length, 3); assert.equal(full.renderedFields.description, "<p>long</p>");
+  }],
   ["search never returns other projects' tickets", async () => {
     jiraReply = () => Response.json({ issues: [{ key: "AION-1" }, { key: "SECRET-9" }, { key: "AIONX-2" }], isLast: true });
     const d = await (await call("/jira/search", { method: "POST", token: await login(), body: { jql: "project = AION OR project = SECRET", fields: [] } })).json();

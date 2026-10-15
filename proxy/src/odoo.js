@@ -28,11 +28,16 @@ async function rpc(env, service, method, args) {
 }
 async function uid(env) {
   const key = env.ODOO_URL + "|" + env.ODOO_DB + "|" + env.ODOO_LOGIN;
+  // One sign-in is shared by every request at the same time (and reused afterwards); a failed one is retried next time.
   if (uidCache.key === key && uidCache.uid) return uidCache.uid;
-  const id = await rpc(env, "common", "authenticate", [env.ODOO_DB, env.ODOO_LOGIN, env.ODOO_API_KEY, {}]);
-  if (!id) throw new Error("Odoo didn't accept the proxy's login and API key. Check ODOO_LOGIN and ODOO_API_KEY.");
-  uidCache = { key, uid: id };
-  return id;
+  const pending = (async () => {
+    const id = await rpc(env, "common", "authenticate", [env.ODOO_DB, env.ODOO_LOGIN, env.ODOO_API_KEY, {}]);
+    if (!id) throw new Error("Odoo didn't accept the proxy's login and API key. Check ODOO_LOGIN and ODOO_API_KEY.");
+    return id;
+  })();
+  uidCache = { key, uid: pending };
+  pending.catch(() => { if (uidCache.uid === pending) uidCache = { key: "", uid: 0 }; });
+  return pending;
 }
 export async function odoo(env, model, method, args, kwargs = {}) {
   return rpc(env, "object", "execute_kw", [env.ODOO_DB, await uid(env), env.ODOO_API_KEY, model, method, args, kwargs]);

@@ -4,6 +4,7 @@
 // When the Upstash Redis storage is connected (KV_REST_API_* or UPSTASH_REDIS_REST_* variables), user
 // accounts are on.
 import nodemailer from "nodemailer";
+import { AsyncLocalStorage } from "node:async_hooks";
 import handler from "../src/handler.js";
 import settings from "../settings.js";
 import { redisStore } from "../src/users.js";
@@ -26,7 +27,32 @@ function store() {
   return url && token ? redisStore(url, token) : undefined;
 }
 
+// Server-Timing on every answer: how long this request waited on the database, Jira and Odoo
+// (used to keep the proxy in the region closest to them). Only durations, never content.
+const timing = new AsyncLocalStorage();
+const baseFetch = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const t = timing.getStore(), t0 = performance.now();
+  try { return await baseFetch(input, init); }
+  finally {
+    if (t) {
+      const host = new URL(typeof input === "string" || input instanceof URL ? input : input.url).hostname;
+      const kind = /upstash\.io$/.test(host) ? "db" : /atlassian\.net$/.test(host) ? "jira" : /odoo\.com$/.test(host) ? "odoo" : "other";
+      t[kind] = (t[kind] || 0) + (performance.now() - t0);
+    }
+  }
+};
+
 async function handle(request) {
+  const t = {}, t0 = performance.now();
+  const res = await timing.run(t, () => answer(request));
+  const parts = Object.entries(t).map(([k, v]) => k + ";dur=" + Math.round(v));
+  parts.push("total;dur=" + Math.round(performance.now() - t0), "region;desc=" + (process.env.VERCEL_REGION || "local"));
+  try { res.headers.set("Server-Timing", parts.join(", ")); return res; }
+  catch { const copy = new Response(res.body, res); copy.headers.set("Server-Timing", parts.join(", ")); return copy; }
+}
+
+async function answer(request) {
   const url = new URL(request.url);
   url.pathname = "/" + (url.searchParams.get("__path") || "");
   url.searchParams.delete("__path");

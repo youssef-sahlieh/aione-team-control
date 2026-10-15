@@ -24,6 +24,7 @@ export function saveSession(s) {
 
 // Back to the sign-in page. A ticket in the address (#AION-123) is kept, so it opens after signing in.
 export function signOut(keepTicket) {
+  try { Object.keys(localStorage).filter((k) => k.startsWith("aion.cache.")).forEach((k) => localStorage.removeItem(k)); } catch {}
   try { store().removeItem(KEY); } catch {}
   location.replace("index.html" + (keepTicket ? location.search + location.hash : ""));
 }

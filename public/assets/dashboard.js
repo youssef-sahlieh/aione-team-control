@@ -30,6 +30,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const stIdx=s=>{ const i=STATUS_ORDER.indexOf(s.toLowerCase()); return i<0?99:i; };
   const FIELDS=["summary","status","assignee","labels","duedate","created","updated","priority","issuetype","comment","parent","reporter"];
   function applyConfig(cfg){
+    LAST_CFG=cfg;
     SITE=cfg.site; PROJECT=cfg.project; MAIL=!!cfg.mail; PEOPLE=cfg.people||{}; DEVS=cfg.devs||[]; DEV_EMAIL=cfg.devEmails||{}; DEV_COLOR=cfg.devColors||{};
     PEOPLE={...PEOPLE,[INTERNAL_ASSIGNEE]:{name:"Internal Tickets",ini:"IT",id:INTERNAL_ASSIGNEE}};
     BYID={}; for(const k in PEOPLE) BYID[PEOPLE[k].id]=k;
@@ -63,7 +64,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
 
   // Jira actions, all through the proxy.
   const jira={
-    search:(jql,fields,nextPageToken)=>api("/jira/search",{method:"POST",body:{jql,fields,maxResults:100,nextPageToken}}),
+    search:(jql,fields,nextPageToken,slim)=>api("/jira/search",{method:"POST",body:{jql,fields,maxResults:100,nextPageToken,slim:!!slim}}),
     edit:(key,fields)=>api("/jira/issue/"+key,{method:"PUT",body:{fields}}),
     transitions:key=>api("/jira/issue/"+key+"/transitions"),
     transition:(key,id)=>api("/jira/issue/"+key+"/transitions",{method:"POST",body:{id}}),
@@ -121,9 +122,11 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       state.internalIssues=r.tickets.map(normInternal);
     }catch(err){ toast("Couldn't load internal tickets",[errorText(err)],true); }
   }
-  async function searchAll(jql,fields){
-    let r=await jira.search(jql,fields); let list=(r.issues||[]).slice(); const tokens=new Set();
-    while(r.isLast===false&&r.nextPageToken){ if(tokens.has(r.nextPageToken))throw new Error("Jira repeated a pagination token.");tokens.add(r.nextPageToken);r=await jira.search(jql,fields,r.nextPageToken);list=list.concat(r.issues||[]); }
+  // full=true for one ticket's details; lists get only each ticket's latest comment (much smaller and faster).
+  async function searchAll(jql,fields,full){
+    const slim=!full;
+    let r=await jira.search(jql,fields,undefined,slim); let list=(r.issues||[]).slice(); const tokens=new Set();
+    while(r.isLast===false&&r.nextPageToken){ if(tokens.has(r.nextPageToken))throw new Error("Jira repeated a pagination token.");tokens.add(r.nextPageToken);r=await jira.search(jql,fields,r.nextPageToken,slim);list=list.concat(r.issues||[]); }
     return list.map(withRendered);
   }
   const fmtWhen=iso=>{ try{ const d=new Date(iso); return {d:d.toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric",timeZone:"Asia/Jerusalem"}),t:d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Jerusalem"})}; }catch(e){ return {d:iso.slice(0,10),t:iso.slice(11,16)}; } };
@@ -812,15 +815,21 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(closedBusy) return; const days=state.closedDays; closedBusy=true;
     try{
       const list=await searchAll('project = '+PROJECT+' AND issuetype != Epic AND statusCategory = Done AND updated >= -'+days+'d ORDER BY updated DESC',FIELDS);
-      state.closedIssues=list.map(norm); await business.load(list.map(i=>i.key));mergeIssues(); if($("pop").hidden&&!drag) render();
+      state.closedIssues=list.map(norm); await business.load(list.map(i=>i.key));mergeIssues(); saveCache(); if($("pop").hidden&&!drag) render();
     }catch(err){ if(state.focus==="closed") toast("Couldn't load closed tickets",[errorText(err)],true); }
     finally{ closedBusy=false; if(state.closedDays!==days) loadClosed(); }
   }
+  // The last loaded tickets are kept in this browser (per person, removed on sign-out), so opening the
+  // dashboard shows them at once and refreshes in the background.
+  let LAST_CFG=null;
+  const cacheKey=()=>"aion.cache.v1."+((getSession()||{}).email||"");
+  function saveCache(){ try{ localStorage.setItem(cacheKey(),JSON.stringify({at:Date.now(),cfg:LAST_CFG,main:state.mainIssues,closed:state.closedIssues,internal:state.internalIssues,odoo:state.odooIssues,INT})); }catch(_){} }
+  function readCache(){ try{ const c=JSON.parse(localStorage.getItem(cacheKey())||"null"); if(c&&c.cfg&&Date.now()-c.at<7*86400000) return c; }catch(_){} return null; }
   let loading=false;
   async function reload(){
     if(loading) return; loading=true;
     try{ const [issues]=await Promise.all([searchAll(JQL,FIELDS),loadInternal(),loadOdoo(),dateRequests.load()]);
-      state.mainIssues=issues.map(norm);await business.load([...issues.map(i=>i.key),...state.internalIssues.map(i=>i.key)]);mergeIssues(); showState(""); setTimeout(()=>loadClosed(),0);
+      state.mainIssues=issues.map(norm);await business.load([...issues.map(i=>i.key),...state.internalIssues.map(i=>i.key)]);mergeIssues(); showState(""); saveCache(); setTimeout(()=>loadClosed(),0);
       lastLoad=Date.now(); $("updated").textContent="updated "+new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
       if($("pop").hidden&&!drag) render();
       if(dz.key)dateRequests.renderDrawer(dz.key);
@@ -871,7 +880,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     $("d-reply").placeholder="Write a comment or answer…";
     if(isOdoo(key)){ renderOdoo(key); return; }
     if(IS_ADMIN) fetchHistory(key).then(ch=>{ const i=issueByKey(key); HIST[key]={updated:i?i.updated:"",changes:ch}; if(dz.key===key) renderDrawerHist(key); }).catch(()=>{ if(dz.key===key&&!HIST[key]) $("d-hist").replaceChildren(el("span","msg err","Couldn't load the history.")); });
-    try{ const list=await searchAll("key = "+key,["summary","description","status","assignee","reporter","labels","duedate","created","updated","priority","issuetype","comment","parent","attachment"]);
+    try{ const list=await searchAll("key = "+key,["summary","description","status","assignee","reporter","labels","duedate","created","updated","priority","issuetype","comment","parent","attachment"],true);
       if(dz.key!==key) return; const raw=list[0]; if(!raw){ $("d-desc").replaceChildren(el("span",null,"Ticket not found.")); return; }
       const f=raw.fields||{}, ni=norm(raw);
       $("d-title").textContent=f.summary||key; $("d-status").textContent=ni.status; $("d-status").className="stbtn "+stK(ni);
@@ -1061,10 +1070,19 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const s=getSession(); if(!s){ signOut(true); return; }
     $("me").textContent=s.email; ME=s.email.split("@")[0].replace(/^./,c=>c.toUpperCase());
     $("today").textContent=fmtDate(todayStr())+" "+todayStr().slice(0,4);
-    try{ const cfg=await api("/config");applyConfig(cfg);await business.configure(cfg);if(!business.enabled())toast("Backend update required",["Deploy the updated proxy to enable ticket fields and validated status changes."],true); }
-    catch(err){ showState(errorText(err),true); $("updated").textContent="not connected"; return; }
-    workspace.configure();
+    // Show the last loaded tickets straight away, then refresh.
+    const cached=readCache();
+    if(cached){
+      applyConfig(cached.cfg); workspace.configure();
+      state.mainIssues=cached.main||[]; state.closedIssues=cached.closed||[]; state.internalIssues=cached.internal||[]; state.odooIssues=cached.odoo||[]; INT=cached.INT||{}; Object.values(INT).forEach(t=>{ if(!HIST[t.key]) HIST[t.key]={updated:t.updated,changes:(t.dueHistory||[]).map(h=>({when:h.when,by:h.by,from:h.from,to:h.to}))}; });
+      mergeIssues(); showState(""); $("updated").textContent="saved "+new Date(cached.at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})+" · refreshing…"; render();
+      try{const h=decodeURIComponent(location.hash.slice(1));if(/^[A-Z][A-Z0-9_]*-\d+$/.test(h)&&issueByKey(h))openDrawer(h);}catch(_){}
+    }
+    try{ const cfg=await api("/config"); if(!cached||JSON.stringify(cfg)!==JSON.stringify(cached.cfg)){ applyConfig(cfg); workspace.configure(); }
+      await business.configure(cfg);if(!business.enabled())toast("Backend update required",["Deploy the updated proxy to enable ticket fields and validated status changes."],true); }
+    catch(err){ if(!cached){ showState(errorText(err),true); $("updated").textContent="not connected"; return; } }
     await reload();
+    if(cached) return;
     try{const h=decodeURIComponent(location.hash.slice(1));if(/^[A-Z][A-Z0-9_]*-\d+$/.test(h)&&issueByKey(h))openDrawer(h);}catch(_){}
   }
   start();

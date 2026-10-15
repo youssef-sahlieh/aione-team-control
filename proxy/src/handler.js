@@ -488,6 +488,17 @@ async function route(request, env, url) {
 
   if (path === "/mail" && method === "POST") return sendMail(env, email, await readJson(request));
 
+  // Ticket lists only show each ticket's latest comment: slim results drop the rest (and the
+  // description), which makes list loads several times smaller. One ticket's details are never slim.
+  const slimIssue = (i) => {
+    const lastOnly = (c) => (c && Array.isArray(c.comments) ? { ...c, comments: c.comments.slice(-1) } : c);
+    const fields = { ...(i.fields || {}) }, rendered = { ...(i.renderedFields || {}) };
+    delete fields.description; delete rendered.description;
+    if (fields.comment) fields.comment = lastOnly(fields.comment);
+    if (rendered.comment) rendered.comment = lastOnly(rendered.comment);
+    for (const k of Object.keys(rendered)) if (k !== "comment") delete rendered[k];
+    return { ...i, fields, renderedFields: rendered };
+  };
   if (path === "/jira/search" && method === "POST") {
     const b = await readJson(request);
     if (!b || typeof b.jql !== "string" || b.jql.length > 2000 || !Array.isArray(b.fields) || b.fields.length > 30 || !b.fields.every((f) => typeof f === "string")) return fail("bad_request", "Bad search.", 400);
@@ -509,7 +520,8 @@ async function route(request, env, url) {
       });}catch{console.warn("Ticket notification check failed; Jira results remain available.");}
     }
     // Only this project's tickets (and for users, only their own) ever leave the proxy, whatever the search asked for.
-    return json({ ...r.data, issues: (r.data.issues || []).filter((i) => isOurKey(i.key) && (isAdmin || hasDevLabel(i.fields && i.fields.labels))) });
+    const issues = (r.data.issues || []).filter((i) => isOurKey(i.key) && (isAdmin || hasDevLabel(i.fields && i.fields.labels)));
+    return json({ ...r.data, issues: b.slim === true ? issues.map(slimIssue) : issues });
   }
 
   if (path === "/jira/users" && method === "GET") {
