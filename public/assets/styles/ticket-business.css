@@ -58,8 +58,11 @@
 @media(min-width:900px){.business-list .gr>.c-ck,.business-list .gr>.c-key,.business-list .gr>.c-ttl{position:sticky;background:var(--surface);z-index:2}.business-list .gr>.c-ck{left:14px}.business-list .gr>.c-key{left:52px}.business-list .gr>.c-ttl{left:154px;padding-right:12px}.business-list .gr.head>.c-ck,.business-list .gr.head>.c-key,.business-list .gr.head>.c-ttl{background:var(--sunk)}}
 @media(max-width:620px){.business-section{grid-template-columns:1fr;padding:12px}.list-toolbar{align-items:flex-start;flex-direction:column}.list-toolbar-hint{font-size:11px}.work-readiness{gap:5px}.readiness-chip{font-size:11px;padding:4px 8px}}
 /* Business cells editable from the ticket list. */
-.cell-edit{font:inherit;font-size:12px;color:inherit;text-align:left;background:none;border:1px dashed transparent;border-radius:6px;padding:2px 4px;margin:-3px -5px;cursor:pointer;max-width:100%}
-.cell-edit:hover,.cell-edit:focus-visible{border-color:var(--line);background:var(--hover,rgb(0 0 0 / .04))}
+/* Editable cells look like small fields (with a pencil), so it's clear they can be changed from the list. */
+.cell-edit{font:inherit;font-size:12px;color:inherit;text-align:left;background:var(--surface,#fff);border:1px solid var(--line);border-radius:6px;padding:4px 22px 4px 8px;margin:-5px 0;cursor:pointer;max-width:100%;position:relative;box-sizing:border-box}
+.cell-edit::after{content:'✎';position:absolute;right:6px;top:50%;transform:translateY(-50%);font-size:11px;color:var(--muted);opacity:.7}
+.cell-edit:hover,.cell-edit:focus-visible{border-color:var(--accent);background:var(--hover,rgb(0 0 0 / .03))}
+.cell-edit:hover::after,.cell-edit:focus-visible::after{color:var(--accent);opacity:1}
 .quick-edit{display:grid;gap:10px;min-width:240px;margin-bottom:10px}
 .quick-edit textarea{width:100%;box-sizing:border-box;resize:vertical}
 /* Search box above the client and sub-client pickers. */
