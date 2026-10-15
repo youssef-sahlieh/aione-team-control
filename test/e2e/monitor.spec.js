@@ -92,4 +92,9 @@ test("dashboard sidebar links to Audit & Deploy when Odoo is connected", async (
   await page.goto("/dashboard.html");
   await expect(page.locator("#monitor-link")).toBeVisible();
   await expect(page.locator("#monitor-link")).toHaveAttribute("href", "audit-deploy.html");
+  // Sidebar order: no "More" menu; Audit & Deploy right after All tickets; Boards right before Calendar.
+  await expect(page.locator("#manager-more-nav")).toHaveCount(0);
+  const order = await page.locator("#main-nav > a:visible").evaluateAll((links) => links.map((a) => a.textContent.replace(/[—\d]+$/, "").trim()));
+  expect(order.indexOf("Audit & Deploy")).toBe(order.indexOf("All tickets") + 1);
+  expect(order.indexOf("Boards")).toBe(order.indexOf("Calendar") - 1);
 });

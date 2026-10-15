@@ -12,7 +12,8 @@ const icons = {
   boards: "M3 4h5v16H3z M10 4h5v11h-5z M17 4h5v14h-5z",
   workload: "M4 20V10 M10 20V4 M16 20v-7 M22 20H2",
   calendar: "M4 5h16v16H4z M8 2v6 M16 2v6 M4 10h16 M8 14h2 M14 14h2",
-  requests: "M3 5v6h6 M3 11a9 9 0 1 1 2 7 M12 7v5l3 2"
+  requests: "M3 5v6h6 M3 11a9 9 0 1 1 2 7 M12 7v5l3 2",
+  audit: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z M9 12l2 2 4-4"
 };
 const pages = [
   ["overview", "Overview", "Your work, at a glance."],
@@ -95,18 +96,16 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     a.addEventListener("click", e => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate(id); });
     nav.appendChild(a);
   }
-  const moreNav=node("details","nav-more");moreNav.id="manager-more-nav";
-  const moreSummary=node("summary","nav-link");moreSummary.title="More workspace pages";moreSummary.append(node("span","nav-icon","⋯"),node("span","","More"));moreNav.appendChild(moreSummary);
-  const moreLinks=node("div","nav-more-links");moreNav.appendChild(moreLinks);
-  nav.appendChild(moreNav);
+  // Audit & Deploy is its own page (Odoo's Audit & Deployment System); shown when Odoo is connected.
+  const audit = node("a", "nav-link"); audit.id = "monitor-link"; audit.href = "audit-deploy.html"; audit.dataset.link = "audit"; audit.title = "Audit & Deploy"; audit.hidden = true;
+  audit.append(icon("audit"), node("span", "", "Audit & Deploy"));
+  nav.insertBefore(audit, nav.querySelector('[data-page="tickets"]').nextSibling);
+  const navOrder = ["overview", "tickets", "audit", "requests", "internal", "workload", "boards", "calendar"];
+  const navItem = id => nav.querySelector(id === "audit" ? "#monitor-link" : `[data-page="${id}"]`);
   function configure() {
     route = readRoute(new URL(location.href), context().admin);
     document.body.dataset.workspaceRole=context().admin?"manager":"user";
-    moreNav.hidden=!context().admin;
-    if(context().admin){
-      for(const id of ["overview","tickets","requests","internal","workload","calendar"])nav.insertBefore(nav.querySelector(`[data-page="${id}"]`),moreNav);
-      for(const id of ["boards"])moreLinks.appendChild(nav.querySelector(`[data-page="${id}"]`));
-    }
+    for (const id of navOrder) nav.appendChild(navItem(id));
     nav.querySelector('[data-page="requests"]').hidden = false;
     nav.querySelector('[data-page="workload"]').hidden = !context().admin;
     nav.querySelector('[data-page="internal"]').hidden = !context().admin;
