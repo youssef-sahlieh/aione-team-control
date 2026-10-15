@@ -4,15 +4,34 @@ const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button'
 const field=(parent,label,node)=>{const l=el('label','business-field');node.setAttribute('aria-label',label);l.append(el('span','',label),node);parent.append(l);return node;};
 const option=(select,label,value)=>select.append(new Option(label,value));
 const billingOptions=(select,value)=>{const prompt=new Option('Choose billing…','');prompt.disabled=true;prompt.hidden=true;select.append(prompt);option(select,'Billable','billable');option(select,'Not billable','not_billable');select.value=value||'';};
-// A search box above a picker: typing narrows the list and picks the first match.
-function searchable(select,label){
-  const box=el('input','inp picker-search');box.type='search';box.placeholder='Search '+label.toLowerCase()+'…';box.setAttribute('aria-label','Search '+label.toLowerCase());box.autocomplete='off';
-  select.before(box);
-  const apply=()=>{const q=box.value.trim().toLowerCase();let first=null;
-    for(const o of select.options){const show=!o.value||!q||o.text.toLowerCase().includes(q);o.hidden=!show||(o.disabled&&!!o.value);if(show&&o.value&&!first)first=o;}
-    const cur=select.selectedOptions[0];if(q&&first&&(!cur||cur.hidden||!cur.value)&&select.value!==first.value){select.value=first.value;select.dispatchEvent(new Event('change',{bubbles:true}));}};
-  box.addEventListener('input',apply);box.addEventListener('keydown',e=>{if(e.key==='Enter')e.preventDefault();});
-  return {box,reset:()=>{box.value='';for(const o of select.options)o.hidden=false;},disable:d=>{box.disabled=d;}};
+// A picker you can type into: the list narrows as you type; click, or use the arrow keys and Enter.
+// The original <select> stays (hidden) as the value everything else reads and listens to.
+function combobox(select){
+  const wrap=el('div','combo'),input=el('input','inp combo-input'),list=el('ul','combo-list');
+  const id='cb'+Math.random().toString(36).slice(2,9);list.id=id;list.setAttribute('role','listbox');list.hidden=true;
+  input.type='text';input.autocomplete='off';input.setAttribute('role','combobox');input.setAttribute('aria-autocomplete','list');input.setAttribute('aria-controls',id);input.setAttribute('aria-expanded','false');
+  select.removeAttribute('aria-label');select.classList.add('combo-native');select.tabIndex=-1;select.setAttribute('aria-hidden','true');
+  select.before(wrap);wrap.append(input,list);
+  let items=[],active=-1;
+  const sync=()=>{const o=select.selectedOptions[0];input.value=o&&o.value?o.text:'';input.placeholder=(select.options[0]&&select.options[0].text)||'Choose…';input.disabled=select.disabled;};
+  const close=()=>{list.hidden=true;input.setAttribute('aria-expanded','false');input.removeAttribute('aria-activedescendant');};
+  const mark=n=>{active=n;[...list.children].forEach((li,i)=>li.classList.toggle('active',i===n));const li=list.children[n];if(li){input.setAttribute('aria-activedescendant',li.id);li.scrollIntoView({block:'nearest'});}};
+  const choose=o=>{if(select.value!==o.value){select.value=o.value;select.dispatchEvent(new Event('change',{bubbles:true}));}sync();close();};
+  const open=q=>{q=String(q||'').trim().toLowerCase();items=[...select.options].filter(o=>o.value&&!o.disabled&&(!q||o.text.toLowerCase().includes(q)));
+    list.replaceChildren(...(items.length?items.map((o,i)=>{const li=el('li','combo-opt'+(o.value===select.value?' current':''),o.text);li.id=id+'-'+i;li.setAttribute('role','option');li.dir='auto';li.addEventListener('mousedown',e=>{e.preventDefault();choose(o);});return li;}):[el('li','combo-empty',q?'No match':'Nothing to choose')]));
+    list.hidden=false;input.setAttribute('aria-expanded','true');mark(items.length?0:-1);};
+  input.addEventListener('focus',()=>{input.select();open('');});
+  input.addEventListener('click',()=>{if(list.hidden)open('');});
+  input.addEventListener('input',()=>open(input.value));
+  input.addEventListener('keydown',e=>{
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();if(list.hidden)open('');else if(items.length)mark((active+(e.key==='ArrowDown'?1:-1)+items.length)%items.length);}
+    else if(e.key==='Enter'){e.preventDefault();if(!list.hidden&&items[active])choose(items[active]);}
+    else if(e.key==='Escape'&&!list.hidden){e.preventDefault();e.stopPropagation();sync();close();}
+  });
+  // Leaving the field: an emptied field clears the choice; anything else goes back to the chosen name.
+  input.addEventListener('blur',()=>{if(!input.value.trim()&&select.value&&select.options[0]&&!select.options[0].value)choose(select.options[0]);else sync();close();});
+  select.addEventListener('change',sync);sync();
+  return {refresh:sync};
 }
 const input=(type,value)=>{const n=el('input','inp');n.type=type;n.value=value??'';return n;};
 const message=(target,e)=>{target.textContent=e.message||String(e);target.className='msg err';};
@@ -31,7 +50,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const fill=()=>{sub.replaceChildren();option(sub,children(client.value).length?'Choose sub-client…':'No sub-client','');for(const c of children(client.value).sort((a,b)=>a.name.localeCompare(b.name)))option(sub,c.name,c.id);};fill();
     if(values.subClientId&&![...sub.options].some(o=>o.value===values.subClientId)){const old=catalog.entries.find(e=>e.id===values.subClientId);if(old)option(sub,old.name+' (archived)',old.id);}
     sub.value=values.subClientId||'';client.addEventListener('change',fill);
-    const findClient=searchable(client,'Clients'),findSub=searchable(sub,'Sub-clients');findClient.disable(disabled);findSub.disable(disabled);client.addEventListener('change',findSub.reset);
+    combobox(client);const subBox=combobox(sub);client.addEventListener('change',subBox.refresh);
     return {client,sub,read:()=>({clientId:client.value||null,subClientId:sub.value||null})};
   }
   function createFields(parent,{values={},creating=false,closed=false}={}){

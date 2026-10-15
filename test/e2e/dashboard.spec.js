@@ -517,7 +517,7 @@ for(const width of [320,1440])test('business list sorting and original created d
 });
 test('business internal creation defaults to Internal Tickets and includes client selection',async({page})=>{
  const mock=await mockDashboard(page,{role:'user'});await page.goto('/dashboard.html');await page.locator('#create-ticket').click();await page.locator('#pop input.inp').first().fill('New internal work');await expect(page.locator('#pop select:has(option[value="__internal_tickets"])')).toHaveValue('__internal_tickets');
- await page.locator('#pop').getByLabel('Client',{exact:true}).selectOption('client');await page.locator('#pop').getByRole('button',{name:'Create ticket',exact:true}).click();await expect(page.locator('#d-key')).toContainText('INT-102');
+ await page.locator('#pop').getByRole('combobox',{name:'Client',exact:true}).fill('Synth');await page.locator('#pop').getByRole('option',{name:'Synthetic Client'}).click();await page.locator('#pop').getByRole('button',{name:'Create ticket',exact:true}).click();await expect(page.locator('#d-key')).toContainText('INT-102');
  const sent=mock.calls.find(c=>c.path==='/internal'&&c.method==='POST');expect(sent.body.assignee).toBe('__internal_tickets');expect(sent.body.metadata.clientId).toBe('client');expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
 test('business report workflow runs without AI and exports findings',async({page})=>{
@@ -626,9 +626,10 @@ test('billing offers only Billable or Not billable, and client pickers can be se
  await page.goto('/dashboard.html#INT-101');const panel=page.locator('#business-fields');
  const billing=panel.getByLabel('Billing (administrators only)');await expect(billing).toBeVisible();
  expect(await billing.locator('option:not([hidden])').allTextContents()).toEqual(['Billable','Not billable']);
- await panel.getByLabel('Search clients').fill('acm');await expect(panel.getByLabel('Client',{exact:true})).toHaveValue('acme');
- expect(await panel.getByLabel('Client',{exact:true}).locator('option:not([hidden])').allTextContents()).toEqual(['Choose client…','Acme Retail']);
- await panel.getByLabel('Search sub-clients').fill('haifa');await expect(panel.getByLabel('Sub-client',{exact:true})).toHaveValue('acme-hfa');await panel.locator('.business-client-section').screenshot({path:'test-results/client-search.png'});
+ const clientBox=panel.getByRole('combobox',{name:'Client',exact:true}),subBox=panel.getByRole('combobox',{name:'Sub-client',exact:true});
+ await clientBox.fill('acm');await expect(panel.locator('.combo-list:not([hidden]) [role=option]')).toHaveText(['Acme Retail']);await clientBox.press('Enter');await expect(clientBox).toHaveValue('Acme Retail');
+ await subBox.click();await expect(panel.locator('.combo-list:not([hidden]) [role=option]')).toHaveText(['Haifa Branch','Tel Aviv Branch']);await subBox.fill('haif');await panel.getByRole('option',{name:'Haifa Branch'}).click();await expect(subBox).toHaveValue('Haifa Branch');
+ await expect(panel.locator('select.combo-native').first()).toHaveValue('acme');await panel.locator('.business-client-section').screenshot({path:'test-results/client-search.png'});
  const row=page.locator('#view .item').filter({hasText:'AION-101'});page.once('dialog',d=>d.accept());await page.locator('#d-close').click();await expect(page.locator('#drawer')).toBeHidden();
  await row.getByRole('button',{name:'Edit Billing for AION-101'}).click();await expect(page.locator('#pop').getByLabel('Billing')).toBeVisible();
  expect(await page.locator('#pop').getByLabel('Billing').locator('option:not([hidden])').allTextContents()).toEqual(['Billable','Not billable']);

@@ -65,5 +65,24 @@
 .cell-edit:hover::after,.cell-edit:focus-visible::after{color:var(--accent);opacity:1}
 .quick-edit{display:grid;gap:10px;min-width:240px;margin-bottom:10px}
 .quick-edit textarea{width:100%;box-sizing:border-box;resize:vertical}
-/* Search box above the client and sub-client pickers. */
-.picker-search{margin-bottom:6px;width:100%;box-sizing:border-box}
+
+/* Searchable pickers. */
+.combo{position:relative}
+.combo-native{display:none!important}
+.combo-input{width:100%;box-sizing:border-box;padding-right:28px;background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2394a3b8'/%3E%3C/svg%3E") no-repeat right 10px center;cursor:text}
+.combo-list{position:absolute;z-index:30;left:0;right:0;top:calc(100% + 4px);margin:0;padding:4px;list-style:none;background:var(--surface,#fff);border:1px solid var(--line);border-radius:8px;box-shadow:0 10px 28px rgb(15 23 42 / .14);max-height:260px;overflow:auto}
+.combo-opt{padding:7px 10px;border-radius:6px;font-size:13px;cursor:pointer}
+.combo-opt.active{background:var(--hover,#eef2ff)}
+.combo-opt.current{font-weight:600}
+.combo-empty{padding:8px 10px;font-size:13px;color:var(--muted)}
+/* Compact, even fields in the ticket's work & client form. */
+.business-form .inp,.business-form .fsel{height:38px;padding:6px 10px;font-size:13px;border-radius:8px;box-sizing:border-box;background-color:var(--surface)}
+.business-form textarea.inp{height:auto;min-height:84px}
+.business-field>span{font-size:12px;font-weight:600;color:var(--muted)}
+.business-form{grid-template-columns:1fr;gap:14px}
+.business-client-section{grid-template-columns:repeat(3,minmax(0,1fr))}
+.business-work-section{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media(max-width:900px){.business-client-section{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:620px){.business-client-section,.business-work-section{grid-template-columns:1fr}}
+.business-client-section .business-field:last-child:nth-child(4){grid-column:auto}
+#business-fields>.btn.primary{display:block;width:auto;min-width:180px;margin:4px 0 0 auto;padding:9px 18px}

@@ -360,8 +360,8 @@ button.key.odoo:hover{text-decoration:underline}
 
 /* Ticket details open full screen (the Side panel button switches back, remembered per browser). */
 .drawer.full{width:100%;left:0;border-left:0}
-.drawer.full .dhead,.drawer.full .dbody{width:100%;max-width:1280px;margin:0 auto;box-sizing:border-box}
-.drawer.full .dbody{padding-left:24px;padding-right:24px}
+.drawer.full{--gutter:max(24px,calc((100% - 1200px) / 2))}
+.drawer.full .dhead,.drawer.full .drawer-tabs,.drawer.full .dbody{padding-left:var(--gutter);padding-right:var(--gutter);box-sizing:border-box}
 /* Attachment preview inside the dashboard. */
 .file-preview{width:calc(100vw - 32px);height:calc(100vh - 32px);max-width:none;max-height:none;padding:0;border:1px solid var(--line);border-radius:12px;background:var(--surface,#fff);color:var(--text,#222);display:flex;flex-direction:column;overflow:hidden}
 .file-preview:not([open]){display:none}
