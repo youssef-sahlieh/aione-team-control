@@ -16,7 +16,7 @@ export async function ticketNoteRoutes(request, env, url, me, {readTicket, sendM
     try { body = JSON.parse(raw); } catch { return fail('Invalid note.'); }
   }
   const key = body?.key ?? url.searchParams.get('key');
-  if (typeof key !== 'string' || key.length > 80 || !/^[A-Z][A-Z0-9_]*-\d+$/.test(key) || !['INT',env.JIRA_PROJECT].includes(key.split('-')[0])) return fail('Choose a valid ticket.');
+  if (typeof key !== 'string' || key.length > 80 || !/^[A-Z][A-Z0-9_]*-\d+$/.test(key) || !['INT','HD',env.JIRA_PROJECT].includes(key.split('-')[0])) return fail('Choose a valid ticket.');
   const ticket = await readTicket(key);
   if (!ticket || (me.role !== 'admin' && (!me.dev || !ticket.devs.includes(me.dev)))) return fail('This ticket is unavailable.', 404);
   const storageKey = 'notes:' + env.JIRA_PROJECT + ':' + key;

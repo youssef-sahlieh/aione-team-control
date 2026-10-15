@@ -16,6 +16,7 @@ The proxy's secrets are **Vercel environment variables**: vercel.com → aione-t
 | `JIRA_API_TOKEN` | That account's API token |
 | `KV_REST_API_URL`, `KV_REST_API_TOKEN` | Added by Vercel when you connect the Upstash Redis database (user accounts) |
 | `GMAIL_USER`, `GMAIL_APP_PASSWORD` | Sends the dashboard's emails automatically through a Gmail account |
+| `ODOO_URL`, `ODOO_DB`, `ODOO_LOGIN`, `ODOO_API_KEY` | The Odoo Helpdesk connection (see "Odoo Helpdesk tickets") |
 | `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET` | Not used now: the Microsoft 365 alternative to Gmail, if an admin ever sets it up |
 | `JIRA_NOTIFICATION_SECRET` | Secret for the new-ticket Jira Automation webhook (at least 32 characters) |
 | `NO_DEVELOPER_NOTIFY_TO` | Optional recipient override; defaults to `youssef@aione.biz,ellen@aione.biz` |
@@ -72,6 +73,20 @@ Managers also have a separate **Internal tickets** sidebar page, showing only `I
 - With "Email developer on assign" on, developers get an email when an administrator opens a ticket for them or adds them to one.
 
 They're stored in the same Upstash Redis database as the user accounts. The free plan holds 256 MB in total, which is plenty for tickets; attachments use most of it, so keep large files in Jira or a shared drive.
+
+## Odoo Helpdesk tickets
+
+Tickets from the Odoo Helpdesk (kadis.odoo.com) appear in the dashboard as **HD-<number>** with a purple **Odoo** tag, next to the Jira and internal tickets: in every tile, filter and board. Choose **Ticket source → Odoo Helpdesk only** to see just them.
+
+- **Which tickets:** every open Odoo ticket, plus the ones closed within the "Closed" tile's period.
+- **Developer:** the Odoo **Assigned to** user, matched by email to the ai1_ developer list (for example Bashar Bannoura → ai1_bashar). Someone not on the list gets the part of their email before the @ (ireen@aione.biz → ai1_ireen).
+- **Assignee column:** the customer who opened the ticket (name and email). The Karim/Youssef/Rami assignee filter doesn't hide Odoo tickets, so developers always see theirs.
+- **Due date:** Odoo's SLA deadline, read-only (Odoo has no other deadline field).
+- **Changes saved to Odoo** (as the Odoo user in ODOO_LOGIN): moving the stage, changing the developer (administrators; one developer per ticket) and comments, which become **internal notes in Odoo's chatter**, never emailed to the customer, signed with the dashboard user's name.
+- **Users (developers)** see only the Odoo tickets assigned to them and can move the stage and add notes.
+- **Open in Odoo** in the ticket panel opens the ticket in Odoo.
+
+**Settings** (Vercel environment variables): `ODOO_URL` (https://kadis.odoo.com), `ODOO_DB` (the database name), `ODOO_LOGIN` and `ODOO_API_KEY` (an Odoo user and its API key from Odoo → Preferences → Account Security → New API Key). Replace the key there when it expires or if it leaks, then redeploy.
 
 ## Change the team shown on the dashboard
 

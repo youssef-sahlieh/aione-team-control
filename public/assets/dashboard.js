@@ -2,7 +2,7 @@
 // sign-in and holds the Jira token. Team details (people, developers, emails) come from the proxy too,
 // so they aren't in this public code.
 import { api, apiFile, getSession, signOut } from "./session.js";
-import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normalizeInternalIssue } from "./models/issue.js";
+import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normalizeInternalIssue, normalizeOdooIssue } from "./models/issue.js";
 import { createFilters, matchesFilters } from "./models/filters.js";
 import { readViews, restoreView, savedViewKey, serializeView } from "./models/saved-views.js";
 import { createWorkspace } from "./app/workspace.js";
@@ -30,7 +30,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   function applyConfig(cfg){
     SITE=cfg.site; PROJECT=cfg.project; MAIL=!!cfg.mail; PEOPLE=cfg.people||{}; DEVS=cfg.devs||[]; DEV_EMAIL=cfg.devEmails||{}; DEV_COLOR=cfg.devColors||{};
     BYID={}; for(const k in PEOPLE) BYID[PEOPLE[k].id]=k;
-    IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||""; MY_EMAIL=cfg.email||""; INTERNAL=!!cfg.accounts; $("new-int").hidden=!INTERNAL;
+    IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||""; MY_EMAIL=cfg.email||""; INTERNAL=!!cfg.accounts; ODOO=!!cfg.odoo; $("new-int").hidden=!INTERNAL;
     document.body.classList.toggle("role-user",!IS_ADMIN);
     $("users-link").hidden=!(IS_ADMIN&&cfg.accounts);
     if(IS_ADMIN){
@@ -79,12 +79,28 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const isInt=key=>/^INT-\d+$/.test(key);
   // Links in emails open the ticket using the saved sign-in; Jira tickets also get their Jira link.
   const dashUrl=key=>location.origin+location.pathname+"#"+key;
-  const ticketUrl=key=>isInt(key)?dashUrl(key):SITE+"/browse/"+key;
-  function setDevs(key,want){ const i=issueByKey(key); return isInt(key)?internalApi.update(key,{devs:[...want]}):jira.edit(key,{labels:labelsWith(i?i.labels:[],want)}); }
-  const doTransition=(key,id)=>isInt(key)?internalApi.update(key,{status:id}):jira.transition(key,id);
-  const doComment=(key,text)=>isInt(key)?internalApi.comment(key,text):jira.comment(key,text);
+  const ticketUrl=key=>isInt(key)?dashUrl(key):isOdoo(key)?((issueByKey(key)||{}).odooUrl||dashUrl(key)):SITE+"/browse/"+key;
+  const sourceName=key=>isOdoo(key)?"Odoo":"Jira";
+  function setDevs(key,want){ const i=issueByKey(key); if(isOdoo(key)) return odooApi.update(key,{devs:[...want]}); return isInt(key)?internalApi.update(key,{devs:[...want]}):jira.edit(key,{labels:labelsWith(i?i.labels:[],want)}); }
+  const doTransition=(key,id)=>isOdoo(key)?odooApi.update(key,{stage:id}).then(r=>{delete ODOO_DETAIL[key];return r;}):isInt(key)?internalApi.update(key,{status:id}):jira.transition(key,id);
+  const doComment=(key,text)=>isOdoo(key)?odooApi.note(key,text).then(r=>{delete ODOO_DETAIL[key];return r;}):isInt(key)?internalApi.comment(key,text):jira.comment(key,text);
   // Same shape as a Jira ticket after norm(), so tiles, filters, boards and history all work unchanged.
   const normInternal=t=>normalizeInternalIssue(t,PEOPLE);
+  // Odoo Helpdesk tickets (HD-…): read from Odoo through the proxy; stage, developer and notes are saved back to Odoo.
+  let ODOO=false; const ODOO_DETAIL={};
+  const isOdoo=key=>/^HD-[0-9]+$/.test(key);
+  const odooApi={
+    list:days=>api("/odoo/tickets?closedDays="+days),
+    detail:key=>api("/odoo/tickets/"+key),
+    update:(key,b)=>api("/odoo/tickets/"+key,{method:"PUT",body:b}),
+    note:(key,text)=>api("/odoo/tickets/"+key+"/note",{method:"POST",body:{text}})
+  };
+  async function loadOdoo(){
+    if(!ODOO) return;
+    try{ const r=await odooApi.list(state.closedDays); state.odooIssues=r.tickets.map(normalizeOdooIssue); }
+    catch(err){ toast("Couldn't load Odoo tickets",[errorText(err)],true); }
+  }
+  async function odooDetail(key,fresh){ if(fresh||!ODOO_DETAIL[key]) ODOO_DETAIL[key]=await odooApi.detail(key); return ODOO_DETAIL[key]; }
   async function loadInternal(){
     if(!INTERNAL) return;
     try{
@@ -140,7 +156,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const needsReply=i=>i.last&&!i.last.fromTeam&&Date.parse(i.updated)>=Date.now()-(typeof state!=="undefined"?state.updDays:3)*dayMs;
 
   const F=createFilters;
-  const state={issues:null,focus:"open",f:F(),q:"",view:"list",group:"",sel:new Set(),fopen:false,hperiod:7,updDays:3,dueDays:7,closedDays:30,mainIssues:[],closedIssues:[],internalIssues:[],pageIndex:0,pageSize:25};
+  const state={issues:null,focus:"open",f:F(),q:"",view:"list",group:"",sel:new Set(),fopen:false,hperiod:7,updDays:3,dueDays:7,closedDays:30,mainIssues:[],closedIssues:[],internalIssues:[],odooIssues:[],pageIndex:0,pageSize:25};
   try{ const u=+localStorage.getItem("aion.upd"), d=+localStorage.getItem("aion.due"); if(u>=1&&u<=30) state.updDays=u; if(d>=1&&d<=90) state.dueDays=d; const cd=+localStorage.getItem("aion.closed"); if(cd>=1&&cd<=365) state.closedDays=cd; }catch(e){}
   try{ const v=localStorage.getItem("aion.view"); if(v) state.view=v; state.fopen=localStorage.getItem("aion.fopen")==="1"; const gg=localStorage.getItem("aion.group"); if(gg!==null) state.group=gg; }catch(e){}
 
@@ -173,7 +189,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const pick=(label,options,value,onChange)=>{ const field=el("label","quick-field"), select=el("select"); field.appendChild(el("span",null,label)); select.setAttribute("aria-label",label); options.forEach(([v,l])=>select.appendChild(new Option(l,v))); if(value==="__multiple"){const o=new Option("Multiple selected",value);o.disabled=true;select.appendChild(o);} select.value=value;select.addEventListener("change",()=>{onChange(select.value);state.sel.clear();state.pageIndex=0;render();});field.appendChild(select);box.appendChild(field);return select;};
     const val=set=>set.size>1?"__multiple":[...set][0]||"";
     box.appendChild(assigneeFilter.renderButton());
-    if(workspace.route().page!=="internal")pick("Ticket source",[["all","All tickets"],["internal","Internal tickets only"],["jira","Jira tickets only"]],state.f.source,v=>state.f.source=v);
+    if(workspace.route().page!=="internal")pick("Ticket source",[["all","All tickets"],["internal","Internal tickets only"],["jira","Jira tickets only"],...(ODOO?[["odoo","Odoo Helpdesk only"]]:[])],state.f.source,v=>state.f.source=v);
     if(IS_ADMIN)pick("Developer",[["","All developers"],["__none","No developer"],...[...new Set([...allDevs(),...state.f.dev])].filter(d=>d!=="__none").sort().map(d=>[d,d])],val(state.f.dev),v=>state.f.dev=new Set(v?[v]:[]));
     if(IS_ADMIN)pick("Reporter",[["","All reporters"],...[...new Set([...(state.issues||[]).map(i=>i.reporter),...state.f.reporter])].filter(Boolean).sort((a,b)=>a.localeCompare(b)).map(x=>[x,x])],val(state.f.reporter),v=>state.f.reporter=new Set(v?[v]:[]));
     pick("Status",[["","All statuses"],...[...new Set([...(state.issues||[]).map(i=>i.status),...state.f.status])].sort((a,b)=>stIdx(a)-stIdx(b)).map(x=>[x,x])],val(state.f.status),v=>state.f.status=new Set(v?[v]:[]));
@@ -292,7 +308,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(f.epic) addA(f.epic==="none"?"No epic":(eps[f.epic]||f.epic),"k8",()=>f.epic="");
     if(f.due!=="any") addA("Due: "+DUE_OPTS.find(x=>x[0]===f.due)[1],"k3",()=>f.due="any");
     if(f.activity!=="any") addA(ACT_OPTS.find(x=>x[0]===f.activity)[1],"k6",()=>f.activity="any");
-    if(f.source!=="all"&&workspace.route().page!=="internal")addA(f.source==="internal"?"Internal tickets only":"Jira tickets only","k7",()=>f.source="all");
+    if(f.source!=="all"&&workspace.route().page!=="internal")addA(f.source==="internal"?"Internal tickets only":f.source==="odoo"?"Odoo Helpdesk only":"Jira tickets only","k7",()=>f.source="all");
     if(state.q) addA("“"+state.q+"”","k1",()=>{ state.q=""; $("q").value=""; });
     if(!act.childNodes.length) act.appendChild(el("span","filter-empty","All tickets in this focus"));
     const matches=visible().length;$("filter-summary").textContent=matches+" ticket"+(matches===1?"":"s")+" match · "+filterCount()+" selected";
@@ -368,10 +384,12 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   }
 
   function keyLink(i){
+    if(i.odoo){ const b=el("button","key odoo",i.key); b.type="button"; b.title="Odoo Helpdesk ticket #"+i.odooId; b.draggable=false; b.addEventListener("click",e=>{ e.stopPropagation(); openDrawer(i.key); }); return b; }
     if(i.internal){ const b=el("button","key int",i.key); b.type="button"; b.title="Internal ticket (not in Jira)"; b.draggable=false; b.addEventListener("click",e=>{ e.stopPropagation(); openDrawer(i.key); }); return b; } const a=el("a","key",i.key+" ↗"); a.href=ticketUrl(i.key); a.target="_blank"; a.rel="noopener"; a.title="Open in Jira"; a.draggable=false; a.addEventListener("click",e=>e.stopPropagation()); return a; }
   function tagsFor(i,t,withEpic){
     const tags=el("span","tags");
     if(i.internal) tags.appendChild(el("span","flag int","Internal"));
+    if(i.odoo){ tags.appendChild(el("span","flag odoo","Odoo")); if(i.team) tags.appendChild(el("span","epic",i.team.replace(/^ai1 \| /,""))); }
     if(needsReply(i)) tags.appendChild(el("span","flag k6","needs reply"));
     const age=Math.round(dnum(t)-dnum(i.created)); if(age<=2&&i.cat!=="done") tags.appendChild(el("span","flag k7",age===0?"new today":"new "+age+"d"));
     if(/high|highest|critical|blocker/i.test(i.priority)) tags.appendChild(el("span","flag k2",i.priority));
@@ -389,6 +407,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   function statusButton(i){ const sb=el("button","stbtn menu "+stK(i),i.status); sb.type="button"; sb.title="Change status"; sb.addEventListener("click",e=>{ e.stopPropagation(); statusPopover(sb,[i.key]); }); return sb; }
   function dueButton(i,t){
     const late=i.due&&i.due<t&&i.cat!=="done";
+    if(i.odoo){ const sp=el("span","duebtn"+(late?" late":i.due===t?" today":!i.due?" none":""),i.due?(late?Math.round(dnum(t)-dnum(i.due))+"d late":i.due===t?"Today":fmtDate(i.due)):"no SLA"); sp.title="Odoo SLA deadline (set in Odoo)"; return sp; }
     const db=el("button","duebtn"+(late?" late":i.due===t?" today":!i.due?" none":""), i.due?(late?Math.round(dnum(t)-dnum(i.due))+"d late":i.due===t?"Today":fmtDate(i.due)):(dateRequests.all().some(r=>r.key===i.key&&(r.appliedDate||r.original?.due))?"Request date change":"+ set date"));
     db.type="button"; db.title=(i.due?"Due "+fmtDate(i.due)+" · ":"")+(!i.due?"Set initial due date":IS_ADMIN?"Change approved date":"Request date change"); db.addEventListener("click",e=>{ e.stopPropagation(); duePopover(db,[i.key]); }); return db;
   }
@@ -425,14 +444,15 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const action=(label,fn)=>{const b=el("button","opt",label);b.type="button";b.addEventListener("click",()=>{closePop();fn();});body.appendChild(b);};
     action("Open details",()=>openDrawer(i.key));
     action("Copy ticket link",async()=>{try{await navigator.clipboard.writeText(dashUrl(i.key));toast("Ticket link copied.");}catch(_){toast("Couldn't copy the link.",[],true);}});
-    action("Change status",()=>statusPopover(anchor,[i.key]));action(IS_ADMIN?"Change approved date":"Request date change",()=>duePopover(anchor,[i.key]));
-    if(IS_ADMIN){action("Assign developers",()=>devPopover(anchor,[i.key],"set"));action("Change assignee",()=>assigneePopover(anchor,[i.key]));}action("Internal notes",()=>notePopover(anchor,i.key));
-    if(!i.internal){const a=el("a","opt","Open in Jira ↗");a.href=ticketUrl(i.key);a.target="_blank";a.rel="noopener";body.appendChild(a);}
+    action("Change status",()=>statusPopover(anchor,[i.key]));if(!i.odoo)action(IS_ADMIN?"Change approved date":"Request date change",()=>duePopover(anchor,[i.key]));
+    if(IS_ADMIN){action(i.odoo?"Change developer":"Assign developers",()=>devPopover(anchor,[i.key],"set"));if(!i.odoo)action("Change assignee",()=>assigneePopover(anchor,[i.key]));}action("Internal notes",()=>notePopover(anchor,i.key));
+    if(!i.internal){const a=el("a","opt","Open in "+sourceName(i.key)+" ↗");a.href=ticketUrl(i.key);a.target="_blank";a.rel="noopener";body.appendChild(a);}
     placePop(anchor);body.querySelector("button")?.focus({preventScroll:true});
   }
 
   function shiftOf(c){ if(!c.from) return {txt:"first set",k:"k1"}; if(!c.to) return {txt:"cleared",k:"k8"}; const n=Math.round(dnum(c.to)-dnum(c.from)); if(n>0) return {txt:"+"+n+"d later",k:n>=7?"k2":"k3"}; if(n<0) return {txt:n+"d earlier",k:"k7"}; return {txt:"same",k:"k8"}; }
   async function fetchHistory(key){
+    if(isOdoo(key)) return [];
     if(isInt(key)) return ((INT[key]&&INT[key].dueHistory)||[]).map(h=>({when:h.when,by:h.by,from:h.from,to:h.to}));
     const d=await jira.changelog(key); const hs=(d.changelog&&d.changelog.histories)||[]; const out=[];
     hs.forEach(h=>(h.items||[]).forEach(it=>{ if(it.field==="duedate"||it.fieldId==="duedate") out.push({when:h.created,by:(h.author&&h.author.displayName)||"Someone",from:it.from?String(it.from).slice(0,10):null,to:it.to?String(it.to).slice(0,10):null}); }));
@@ -564,11 +584,12 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     foot.appendChild(save); p.appendChild(foot); placePop(anchor);
   }
   function duePopover(anchor,keys){
+    if(keys.some(isOdoo)){toast("Odoo tickets use Odoo's SLA deadline, which can't be changed from here.");return;}
     if(keys.length!==1){toast("Choose one ticket to request or approve a date change.");return;}
     dateRequests.formRequest(keys[0]);
   }
   const initialsOf=n=>String(n||"?").split(/\s+/).filter(Boolean).map(x=>x[0]).join("").slice(0,2).toUpperCase()||"?";
-  function assignOps(keys,id){ return keys.map(k=>{ const i=issueByKey(k); if(i&&i.assigneeId===id) return null; if(isInt(k)) return BYID[id]?{key:k,run:()=>internalApi.update(k,{assignee:BYID[id]})}:null; return {key:k,run:()=>jira.edit(k,{assignee:id?{accountId:id}:null})}; }).filter(Boolean); }
+  function assignOps(keys,id){ return keys.map(k=>{ const i=issueByKey(k); if(i&&i.assigneeId===id) return null; if(isOdoo(k)) return null; if(isInt(k)) return BYID[id]?{key:k,run:()=>internalApi.update(k,{assignee:BYID[id]})}:null; return {key:k,run:()=>jira.edit(k,{assignee:id?{accountId:id}:null})}; }).filter(Boolean); }
   async function doAssign(keys,id,name){
     const ops=assignOps(keys,id); if(!ops.length){ toast("Already assigned to "+name+"."); return {ok:0,fail:0}; }
     const r=await runBatch(ops,"Assigned to "+name);
@@ -641,14 +662,14 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       const names=[...chosen].map(devFirstName), subject=subj.value.trim()||("Internal note: "+key);
       if(!MAIL){
         let plain="Hi "+(names.length?names.join(", "):"team")+",\n\n"+text+"\n";
-        if(cc.checked) plain+="\n---\nTicket: "+key+" – "+i.summary+"\n"+dashUrl(key)+(isInt(key)?"":"\nIn Jira: "+ticketUrl(key))+"\nStatus: "+i.status+" · Due: "+(i.due?fmtDate(i.due):"Not set")+" · Assignee: "+(i.assignee?PEOPLE[i.assignee].name:i.assigneeName)+(i.parent?" · Epic: "+i.parent.name:"")+"\n";
+        if(cc.checked) plain+="\n---\nTicket: "+key+" – "+i.summary+"\n"+dashUrl(key)+(isInt(key)?"":"\nIn "+sourceName(key)+": "+ticketUrl(key))+"\nStatus: "+i.status+" · Due: "+(i.due?fmtDate(i.due):"Not set")+" · Assignee: "+(i.assignee?PEOPLE[i.assignee].name:i.assigneeName)+(i.parent?" · Epic: "+i.parent.name:"")+"\n";
         plain+="\nThanks,\n"+ME+"\n";
         openEmail(to,subject,plain);
         closePop(); toast("Email opened in Outlook. Check it and press Send there.",to); return;
       }
       send.disabled=true; send.textContent="Sending…"; msg.textContent="";
       let html="<p>Hi "+esc(names.length?names.join(", "):"team")+",</p>"+text.split(/\n{2,}/).map(par=>"<p>"+esc(par).replace(/\n/g,"<br>")+"</p>").join("");
-      if(cc.checked) html+="<hr><p><b>Ticket:</b> <a href=\""+esc(dashUrl(key))+"\">"+esc(key)+"</a> – "+esc(i.summary)+(isInt(key)?"":" (<a href=\""+esc(ticketUrl(key))+"\">Jira</a>)")+"<br><b>Status:</b> "+esc(i.status)+" · <b>Due:</b> "+esc(i.due?fmtDate(i.due):"Not set")+" · <b>Assignee:</b> "+esc(i.assignee?PEOPLE[i.assignee].name:i.assigneeName)+(i.parent?" · <b>Epic:</b> "+esc(i.parent.name):"")+"</p>";
+      if(cc.checked) html+="<hr><p><b>Ticket:</b> <a href=\""+esc(dashUrl(key))+"\">"+esc(key)+"</a> – "+esc(i.summary)+(isInt(key)?"":" (<a href=\""+esc(ticketUrl(key))+"\">"+sourceName(key)+"</a>)")+"<br><b>Status:</b> "+esc(i.status)+" · <b>Due:</b> "+esc(i.due?fmtDate(i.due):"Not set")+" · <b>Assignee:</b> "+esc(i.assignee?PEOPLE[i.assignee].name:i.assigneeName)+(i.parent?" · <b>Epic:</b> "+esc(i.parent.name):"")+"</p>";
       html+="<p>Thanks,<br>"+esc(ME)+"</p>";
       try{ await api("/mail",{method:"POST",body:{to,subject,html}});
         closePop(); toast("Internal note sent to "+to.length+" recipient"+(to.length===1?"":"s"),to);
@@ -658,6 +679,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     foot.appendChild(msg); foot.appendChild(send); p.appendChild(foot); placePop(anchor); ta.focus();
   }
   async function getTransitions(key){
+    if(isOdoo(key)){ const d=await odooDetail(key); return (d.stages||[]).filter(s=>s.name!==d.ticket.status).map(s=>({id:s.id,name:"Move to "+s.name,to:{name:s.name,statusCategory:{key:s.cat}}})); }
     if(isInt(key)){ const t=INT[key]; return INT_STATUSES.filter(s=>!t||s.name!==t.status).map(s=>({id:s.name,name:s.name==="Closed"?"Close":"Move to "+s.name,to:{name:s.name,statusCategory:{key:s.cat}}})); }
   const d=(await jira.transitions(key))||{}; return (d.transitions||[]).filter(x=>x.isAvailable!==false); }
   async function statusPopover(anchor,keys){
@@ -721,7 +743,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       const keys=byDev[d], items=keys.map(k=>issueByKey(k)).filter(Boolean);
       const subject=keys.length===1?("New Jira assignment: "+keys[0]+(items[0]?" – "+items[0].summary:"")):("New Jira assignments: "+keys.length+" tickets");
       if(MAIL){
-        const rows=items.map(i=>"<tr><td><a href=\""+esc(dashUrl(i.key))+"\">"+esc(i.key)+"</a>"+(i.internal?"":" (<a href=\""+esc(ticketUrl(i.key))+"\">Jira</a>)")+"</td><td>"+esc(i.summary)+"</td><td>"+esc(i.status)+"</td><td>"+esc(i.due?fmtDate(i.due):"Not set")+"</td><td>"+esc(i.parent?i.parent.name:"")+"</td><td>"+esc(i.reporter)+"</td></tr>").join("");
+        const rows=items.map(i=>"<tr><td><a href=\""+esc(dashUrl(i.key))+"\">"+esc(i.key)+"</a>"+(i.internal?"":" (<a href=\""+esc(ticketUrl(i.key))+"\">"+sourceName(i.key)+"</a>)")+"</td><td>"+esc(i.summary)+"</td><td>"+esc(i.status)+"</td><td>"+esc(i.due?fmtDate(i.due):"Not set")+"</td><td>"+esc(i.parent?i.parent.name:"")+"</td><td>"+esc(i.reporter)+"</td></tr>").join("");
         const html="<p>Hi "+esc(devFirstName(d))+",</p><p>You have been assigned as the developer (ai1_"+esc(d)+") on the following Jira "+(keys.length===1?"ticket":"tickets")+":</p>"
           +"<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\"><thead><tr><th>Ticket</th><th>Title</th><th>Status</th><th>Due date</th><th>Epic</th><th>Reporter</th></tr></thead><tbody>"+rows+"</tbody></table>"
           +"<p>Please review "+(keys.length===1?"it":"them")+" and request a due date in AION Team Control based on the development time.</p><p>Thanks,<br>"+esc(ME)+"</p>";
@@ -750,7 +772,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(c==="rate_limited") return "Jira is busy. Wait a moment and try again.";
     if(c==="jira") return "Jira refused: "+(err.message||"unknown error");
     return "Couldn't reach Jira"+(err&&err.message?": "+err.message:"."); }
-  function mergeIssues(){ const m=new Map(); state.mainIssues.forEach(i=>m.set(i.key,i)); state.closedIssues.forEach(i=>{ if(!m.has(i.key)) m.set(i.key,i); }); state.internalIssues.forEach(i=>m.set(i.key,i)); state.issues=[...m.values()].map(i=>({...i,pendingDateRequest:!!dateRequests.activeFor(i.key)})); }
+  function mergeIssues(){ const m=new Map(); state.mainIssues.forEach(i=>m.set(i.key,i)); state.closedIssues.forEach(i=>{ if(!m.has(i.key)) m.set(i.key,i); }); state.internalIssues.forEach(i=>m.set(i.key,i)); state.odooIssues.forEach(i=>m.set(i.key,i)); state.issues=[...m.values()].map(i=>({...i,pendingDateRequest:!!dateRequests.activeFor(i.key)})); }
   let closedBusy=false;
   async function loadClosed(){
     if(closedBusy) return; const days=state.closedDays; closedBusy=true;
@@ -763,7 +785,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   let loading=false;
   async function reload(){
     if(loading) return; loading=true;
-    try{ const [issues]=await Promise.all([searchAll(JQL,FIELDS),loadInternal(),dateRequests.load()]);
+    try{ const [issues]=await Promise.all([searchAll(JQL,FIELDS),loadInternal(),loadOdoo(),dateRequests.load()]);
       state.mainIssues=issues.map(norm); mergeIssues(); showState(""); setTimeout(()=>loadClosed(),0);
       lastLoad=Date.now(); $("updated").textContent="updated "+new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
       if($("pop").hidden&&!drag) render();
@@ -793,7 +815,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(opening){drawerUI.open();$("d-reply").value="";commentMentions.reset();$("d-newdev").value="";}
     ticketHistory.reset();drawerUI.select("overview");dateRequests.renderDrawer(key);
     closePop(); dz.key=key; const i=issueByKey(key);
-    $("drawer").hidden=false; $("scrim").hidden=false; $("drawer").classList.toggle("is-int",isInt(key));
+    $("drawer").hidden=false; $("scrim").hidden=false; $("drawer").classList.toggle("is-int",isInt(key)); $("drawer").classList.toggle("is-odoo",isOdoo(key));
     $("d-key").textContent=key+(isInt(key)?"":" ↗"); $("d-key").href=$("d-open").href=ticketUrl(key); if(isInt(key)) $("d-key").removeAttribute("href");
     $("d-title").textContent=i?i.summary:key; $("d-status").textContent=i?i.status:""; $("d-status").className="stbtn "+(i?stK(i):"");
     $("d-facts").replaceChildren(); $("d-desc").replaceChildren(el("span",null,"Loading…")); $("d-comments").replaceChildren(); $("d-ccount").textContent=""; $("d-trans").replaceChildren(el("span","msg","Loading…"));
@@ -811,6 +833,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   async function loadDetail(key){
     loadTransitions(key);
     if(isInt(key)){ renderInternal(key); return; }
+    $("d-reply").placeholder="Write a comment or answer…";
+    if(isOdoo(key)){ renderOdoo(key); return; }
     if(IS_ADMIN) fetchHistory(key).then(ch=>{ const i=issueByKey(key); HIST[key]={updated:i?i.updated:"",changes:ch}; if(dz.key===key) renderDrawerHist(key); }).catch(()=>{ if(dz.key===key&&!HIST[key]) $("d-hist").replaceChildren(el("span","msg err","Couldn't load the history.")); });
     try{ const list=await searchAll("key = "+key,["summary","description","status","assignee","reporter","labels","duedate","created","updated","priority","issuetype","comment","parent","attachment"]);
       if(dz.key!==key) return; const raw=list[0]; if(!raw){ $("d-desc").replaceChildren(el("span",null,"Ticket not found.")); return; }
@@ -835,6 +859,21 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     }catch(err){ if(dz.key===key) $("d-desc").replaceChildren(el("span","msg err",errorText(err))); }
   }
   // Drawer contents for an internal ticket (all data is already loaded).
+  // Drawer contents for an Odoo ticket: details, description and chatter come from Odoo.
+  async function renderOdoo(key){
+    const i=issueByKey(key); $("d-odoo").href=(i&&i.odooUrl)||"#";
+    try{
+      const d=await odooDetail(key,true); if(dz.key!==key) return; const t=d.ticket, c=t.customer||{};
+      $("d-title").textContent=t.summary; $("d-status").textContent=t.status; $("d-status").className="stbtn "+stK({status:t.status,cat:t.statusCat});
+      $("d-facts").replaceChildren(fact("Type","Odoo Helpdesk"),fact("Customer",c.name&&c.email?c.name+" <"+c.email+">":(c.name||c.email)),fact("Developer",(t.devs||[]).map(x=>"ai1_"+x).join(", ")||t.developerName||"not assigned"),fact("Team",t.team),fact("Priority",t.priority),fact("Created",ago(t.created)),fact("Updated",ago(t.updated)),fact("SLA deadline",t.due?fmtDate(t.due):"none"),fact("Odoo ref","#"+t.ref));
+      dz.labels=(t.devs||[]).map(x=>"ai1_"+x); dz.devs=new Set(t.devs||[]); renderDevChips();
+      $("d-desc").replaceChildren(richNode(d.description||""));
+      const box=$("d-comments"); box.replaceChildren(); $("d-ccount").textContent="("+d.messages.length+")";
+      if(!d.messages.length) box.appendChild(el("div","msg","No messages yet."));
+      d.messages.forEach(m=>{ const cd=el("div","cmt"+(m.note?" mine":" ext")); const meta=el("div","cmeta"); meta.appendChild(el("b",null,m.author)); meta.appendChild(el("span",null,ago(m.when)+(m.note?" · internal note":m.email?" · email":""))); cd.appendChild(meta); const b=richNode(m.body); b.classList.add("rich"); b.dir="auto"; cd.appendChild(b); box.appendChild(cd); });
+      $("d-reply").placeholder="Write an internal note (saved in Odoo's chatter, not emailed to the customer)…";
+    }catch(err){ if(dz.key===key) $("d-desc").replaceChildren(el("span","msg err",errorText(err))); }
+  }
   function renderInternal(key){
     const t=INT[key]; if(!t){ $("d-desc").replaceChildren(el("span",null,"Ticket not found.")); return; }
     const ni=normInternal(t);
@@ -957,16 +996,16 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   $("d-asg").addEventListener("click",e=>{ if(dz.key) assigneePopover(e.currentTarget,[dz.key]); });
   $("d-adddev").addEventListener("click",()=>{ const v=$("d-newdev").value.trim().replace(/^ai1_/i,"").replace(/\s+/g,"").toLowerCase(); if(!v){ setMsg("d-devmsg","Type a name first.",false); return; } dz.devs.add(v); $("d-newdev").value=""; renderDevChips(); setMsg("d-devmsg","Added ai1_"+v+". Press Save developers.",true); });
   $("d-newdev").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("d-adddev").click(); } });
-  $("d-savedevs").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const labels=labelsWith(dz.labels,new Set(dz.devs)); const prev=new Set(dz.labels.filter(isDevLabel).map(devOf)); const r=await runBatch([{key,added:[...dz.devs].filter(d=>!prev.has(d)),run:()=>(isInt(key)?internalApi.update(key,{devs:[...dz.devs]}):jira.edit(key,{labels}))}],"Developers saved"); setMsg("d-devmsg",r.fail?"Not saved.":"Saved.",!r.fail); });
-  const commentMentions=createCommentMentions({textarea:$("d-reply"),search:q=>jira.users(q),enabled:()=>!!dz.key&&!isInt(dz.key)});
-  $("d-send").addEventListener("click",async()=>{ const key=dz.key, text=isInt(key)?$("d-reply").value.trim():commentMentions.text(); if(!key) return; if(!text){ setMsg("d-cmsg","Write something first.",false); return; } const after=$("d-after").value; const r=await runBatch([{key,run:()=>doComment(key,text)}],"Comment added"); if(!r.fail){$("d-reply").value="";commentMentions.reset();} setMsg("d-cmsg",r.fail?"Not sent.":"Sent.",!r.fail);
+  $("d-savedevs").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const labels=labelsWith(dz.labels,new Set(dz.devs)); const prev=new Set(dz.labels.filter(isDevLabel).map(devOf)); const r=await runBatch([{key,added:[...dz.devs].filter(d=>!prev.has(d)),run:()=>(isOdoo(key)?odooApi.update(key,{devs:[...dz.devs]}):isInt(key)?internalApi.update(key,{devs:[...dz.devs]}):jira.edit(key,{labels}))}],"Developers saved"); setMsg("d-devmsg",r.fail?"Not saved.":"Saved.",!r.fail); });
+  const commentMentions=createCommentMentions({textarea:$("d-reply"),search:q=>jira.users(q),enabled:()=>!!dz.key&&!isInt(dz.key)&&!isOdoo(dz.key)});
+  $("d-send").addEventListener("click",async()=>{ const key=dz.key, text=(isInt(key)||isOdoo(key))?$("d-reply").value.trim():commentMentions.text(); if(!key) return; if(!text){ setMsg("d-cmsg","Write something first.",false); return; } const after=$("d-after").value; const r=await runBatch([{key,run:()=>doComment(key,text)}],"Comment added"); if(!r.fail){$("d-reply").value="";commentMentions.reset();} setMsg("d-cmsg",r.fail?"Not sent.":"Sent.",!r.fail);
     if(!r.fail&&after){ const ix=after.indexOf("|"); const aid=after.slice(0,ix), aname=after.slice(ix+1); const r2=await doAssign([key],aid,aname); setMsg("d-cmsg",r2.fail?"Comment sent, but the assignee didn't change.":"Sent and assigned to "+aname+".",!r2.fail); } });
 
   setInterval(()=>{ const a=$("auto"); if(!a||!lastLoad) return; const left=Math.max(0,120-Math.round((Date.now()-lastLoad)/1000)); a.textContent="next refresh in "+(left>=60?Math.floor(left/60)+"m "+(left%60)+"s":left+"s");
     if(Date.now()-lastLoad>120000&&document.visibilityState==="visible"&&!batchBusy&&$("pop").hidden&&!drag){ lastLoad=Date.now(); reload(); } },1000);
   $("signout").addEventListener("click",()=>signOut());
-  const ticketHistory=createTicketHistory({api,getIssue:()=>issueByKey(dz.key),allowed:()=>IS_ADMIN&&!!dz.key&&!isInt(dz.key)&&!$("drawer").hidden,formatTime:value=>{const time=fmtWhen(value);return time.d+" "+time.t;}});
-  const drawerUI=createIssueDrawer({canViewHistory:()=>IS_ADMIN,canViewFullHistory:()=>IS_ADMIN&&!!dz.key&&!isInt(dz.key),onSelect:id=>{if(id==="history")ticketHistory.load(dz.key);if(id==="notes")ticketNotes.load(dz.key);},isDirty:()=>{if(ticketNotes.dirty(dz.key))return true;const issue=issueByKey(dz.key);if(!issue)return !!$("d-reply").value.trim();return !!$("d-reply").value.trim()||!!$("d-newdev").value.trim()||dz.devs.size!==issue.devs.length||issue.devs.some(d=>!dz.devs.has(d));}});
+  const ticketHistory=createTicketHistory({api,getIssue:()=>issueByKey(dz.key),allowed:()=>IS_ADMIN&&!!dz.key&&!isInt(dz.key)&&!isOdoo(dz.key)&&!$("drawer").hidden,formatTime:value=>{const time=fmtWhen(value);return time.d+" "+time.t;}});
+  const drawerUI=createIssueDrawer({canViewHistory:()=>IS_ADMIN,canViewFullHistory:()=>IS_ADMIN&&!!dz.key&&!isInt(dz.key)&&!isOdoo(dz.key),onSelect:id=>{if(id==="history")ticketHistory.load(dz.key);if(id==="notes")ticketNotes.load(dz.key);},isDirty:()=>{if(ticketNotes.dirty(dz.key))return true;const issue=issueByKey(dz.key);if(!issue)return !!$("d-reply").value.trim();return !!$("d-reply").value.trim()||!!$("d-newdev").value.trim()||dz.devs.size!==issue.devs.length||issue.devs.some(d=>!dz.devs.has(d));}});
   const ticketNotes=createTicketNotes({api,isAdmin:IS_ADMIN});
   const dueDateHistory=createDueDateHistory({api,tickets:()=>state.issues||[],internal:key=>INT[key],openIssue:openDrawer});
   const dateRequests=createDateRequests({api,renderHistory:target=>dueDateHistory.render(target),context:()=>({admin:IS_ADMIN,email:MY_EMAIL,ticket:issueByKey}),openIssue:openDrawer,onChange:async()=>{await reload();if(dz.key){dateRequests.renderDrawer(dz.key);loadDetail(dz.key);}}});

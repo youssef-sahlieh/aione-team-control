@@ -19,6 +19,7 @@
 import { dateRequestRoutes } from "./date-requests.js";
 import { ticketNoteRoutes } from "./ticket-notes.js";
 import { internalRoutes } from "./internal.js";
+import { odooConfigured, odooRoutes, odooTicketInfo } from "./odoo.js";
 import { cookieSessionRequest } from "./sessions.js";
 import { SESSION_MS } from "./session-policy.js";
 import { aiChat, aiBrief, aiConfigured } from "./ai.js";
@@ -315,7 +316,7 @@ async function route(request, env, url) {
   const method = request.method;
 
   // Public compatibility check for Pages publishing; exposes no runtime credentials or ticket data.
-  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1"]});
+  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1"]});
 
   // Jira Automation uses its own secret, never a team password or a user's browser session.
   if (path === "/notifications/jira-created") {
@@ -399,6 +400,7 @@ async function route(request, env, url) {
   if (path === "/users" || path.startsWith("/users/")) return accountRoutes(request, env, url, me);
   if (path === "/ticket-notes") return ticketNoteRoutes(request, env, url, me, {
     readTicket:async key => {
+      if (key.startsWith("HD-")) return odooTicketInfo(env, key);
       if (/^INT-\d+$/.test(key)) {
         const raw = await env.STORE?.get("it:" + key);
         if (!raw) return null;
@@ -439,6 +441,7 @@ async function route(request, env, url) {
     sendMail:(from,body)=>sendMail(env,from,body)
   });
   if (path === "/internal" || path.startsWith("/internal/")) return internalRoutes(request, env, url, me);
+  if (path === "/odoo/tickets" || path.startsWith("/odoo/tickets/")) return odooRoutes(request, env, url, me);
 
   const P = env.JIRA_PROJECT;
   const isOurKey = (k) => new RegExp("^" + P + "-\\d+$").test(k);
@@ -448,7 +451,7 @@ async function route(request, env, url) {
   if (path === "/config" && method === "GET") {
     let team = {};
     try { team = JSON.parse(env.TEAM_CONFIG || "{}"); } catch {}
-    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true} });
+    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true} });
   }
 
   if (!isAdmin && (path === "/mail" || path === "/jira/users")) return fail("forbidden", "Only administrators can do that.", 403);

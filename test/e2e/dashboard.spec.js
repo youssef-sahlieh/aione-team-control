@@ -1,7 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { jiraIssue, internalTicket, people } from "../fixtures/issues.js";
 
-async function mockDashboard(page, { role = "admin", failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1 } = {}) {
+// A synthetic Odoo Helpdesk ticket as the proxy returns it (developer "builder" from the Odoo assignee).
+const odooTicket = { key: "HD-300", id: 300, ref: "300", odoo: true, summary: "Synthetic Odoo request", status: "In Progress", statusCat: "indeterminate", devs: ["builder"], developerName: "Builder", customer: { name: "Ariel Amiri", email: "ariel@example.invalid" }, team: "ai1 | Support", priority: "Medium", created: "2026-10-09T08:00:00Z", updated: "2026-10-10T08:00:00Z", closed: "", due: null, url: "https://odoo.example.invalid/web#id=300&model=helpdesk.ticket&view_type=form" };
+
+async function mockDashboard(page, { role = "admin", failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1, odoo = false } = {}) {
   await page.clock.setFixedTime(new Date("2026-10-11T09:00:00Z"));
   const calls = [], unexpected = [], errors = [];
   let historyFailures=historyFailure?1:0;
@@ -24,13 +27,17 @@ async function mockDashboard(page, { role = "admin", failure = false, expired = 
     const path = url.pathname, method = req.method(), body = req.postDataJSON();
     calls.push({ path, method, body });
     const json = value => route.fulfill({ json: value });
-    if (path === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people:assigneeTeam?{...people,...Object.fromEntries(["karim","youssef","rami","razan"].map(key=>[key,{id:`test-${key}`,name:key[0].toUpperCase()+key.slice(1),ini:key[0].toUpperCase()}]))}:people, devs: ["builder", "reviewer"], role, dev: "builder", email: "test@example.invalid", accounts: true, mail: false, ai:{enabled:!aiDisabled,readOnly:true} });
+    if (path === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people:assigneeTeam?{...people,...Object.fromEntries(["karim","youssef","rami","razan"].map(key=>[key,{id:`test-${key}`,name:key[0].toUpperCase()+key.slice(1),ini:key[0].toUpperCase()}]))}:people, devs: ["builder", "reviewer"], role, dev: "builder", email: "test@example.invalid", accounts: true, odoo, mail: false, ai:{enabled:!aiDisabled,readOnly:true} });
     if(path==="/ai/chat")return aiFailure?route.fulfill({status:503,json:{code:"ai_unavailable",error:"AI service unavailable. Try again."}}):json({answer:"Review AION-101 first. AION-9999 is unverified. <img src=x onerror=alert(1)>",references:[{key:"AION-101",title:"Synthetic Jira task"}],readOnly:true});
     if(path==="/ai/brief")return briefFailure?route.fulfill({status:503,json:{code:"ai_unavailable",error:"Brief service unavailable. Try again."}}):json({key:body.key,brief:"Fix the reported issue so the workflow works correctly. <img src=x onerror=alert(1)>",updated:jiraIssue.fields.updated,readOnly:true});
     if(path==="/date-requests")return json({requests:[]});
     if(path.startsWith("/date-requests/"))return mutationFailure?route.fulfill({status:503,json:{code:"date_request",error:"Synthetic save failure"}}):json({request:{status:"approved"}});
     if (path === "/login") return json({token:"synthetic-token",email:"test@example.invalid",expiresAt:Date.now()+3600000,role});
     if (path === "/internal" && method === "GET") return json({ tickets: [internalTicket] });
+    if (odoo && path === "/odoo/tickets" && method === "GET") return json({ tickets: [odooTicket] });
+    if (odoo && path === "/odoo/tickets/HD-300" && method === "GET") return json({ ticket: odooTicket, description: "<p>Customer description</p>", messages: [{ author: "Ariel Amiri", when: "2026-10-10T10:00:00Z", body: "<p>Any update?</p>", note: false, email: true }], stages: [{ id: 1, name: "New", cat: "new" }, { id: 2, name: "In Progress", cat: "indeterminate" }, { id: 3, name: "Solved", cat: "done" }] });
+    if (odoo && path === "/odoo/tickets/HD-300" && method === "PUT") return json({ ticket: { ...odooTicket, status: "Solved", statusCat: "done" }, added: [] });
+    if (odoo && path === "/odoo/tickets/HD-300/note" && method === "POST") return route.fulfill({ status: 201, json: { ok: true } });
     if (path === "/jira/search") {
       if (failure) return route.fulfill({ status: 503, json: { code: "jira", error: "Synthetic outage" } });
       const issues=assigneeTeam?["karim","youssef","rami","razan","someone"].map((key,n)=>({...jiraIssue,key:`AION-${201+n}`,fields:{...jiraIssue.fields,summary:`Task for ${key}`,assignee:{accountId:`test-${key}`,displayName:key[0].toUpperCase()+key.slice(1)}}})):many?Array.from({length:30},(_,n)=>({...jiraIssue,key:`AION-${101+n}`,fields:{...jiraIssue.fields,summary:`Synthetic Jira task ${n+1}`}})):[jiraIssue];
@@ -440,3 +447,41 @@ for (const width of [320, 768, 1440]) {
     expect(mock.errors).toEqual([]);
   });
 }
+
+test("admin sees Odoo Helpdesk tickets, filters them, opens one and writes back to Odoo", async ({ page }) => {
+  const mock = await mockDashboard(page, { odoo: true });
+  await page.goto("/dashboard.html");
+  await expect(page.locator("#view")).toContainText("HD-300");
+  await expect(page.locator("#view")).toContainText("Ariel Amiri <ariel@example.invalid>");
+  await expect(page.locator("#view .flag.odoo")).toHaveCount(1);
+  await page.getByRole("combobox", { name: "Ticket source", exact: true }).selectOption("odoo");
+  await expect(page.locator("#view .item")).toHaveCount(1);
+  await expect(page.locator("#view")).toContainText("HD-300");
+  await page.locator("#fclear").click();
+  await page.goto("/dashboard.html#HD-300");
+  await expect(page.locator("#d-key")).toContainText("HD-300");
+  await expect(page.locator("#d-facts")).toContainText("ariel@example.invalid");
+  await expect(page.locator("#d-odoo")).toBeVisible();
+  await expect(page.locator("#d-open")).toBeHidden();
+  await expect(page.locator("#d-desc")).toContainText("Customer description");
+  await page.getByRole("tab", { name: "Comments", exact: true }).click();
+  await expect(page.locator("#d-comments")).toContainText("Any update?");
+  await page.locator("#d-reply").fill("Looking into it");
+  await page.locator("#d-send").click();
+  await expect.poll(() => mock.calls.find(c => c.path === "/odoo/tickets/HD-300/note")?.body?.text).toBe("Looking into it");
+  await page.getByRole("tab", { name: "Overview", exact: true }).click();
+  await page.locator("#d-trans .stbtn", { hasText: "Solved" }).click();
+  await expect.poll(() => mock.calls.find(c => c.path === "/odoo/tickets/HD-300" && c.method === "PUT")?.body).toEqual({ stage: 3 });
+  expect(mock.calls.some(c => c.path.startsWith("/jira/issue/HD-"))).toBe(false);
+  expect(mock.unexpected).toEqual([]); expect(mock.errors).toEqual([]);
+});
+
+test("developer sees their Odoo tickets even with the team assignee filter", async ({ page }) => {
+  const mock = await mockDashboard(page, { role: "user", odoo: true });
+  await page.goto("/dashboard.html");
+  await expect(page.locator("#view")).toContainText("HD-300");
+  await page.getByRole("button", { name: "Actions for HD-300", exact: true }).click();
+  await expect(page.locator("#pop")).not.toContainText("Request date change");
+  await expect(page.locator("#pop")).toContainText("Open in Odoo");
+  expect(mock.unexpected).toEqual([]); expect(mock.errors).toEqual([]);
+});

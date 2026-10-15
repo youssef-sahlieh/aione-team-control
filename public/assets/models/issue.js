@@ -55,3 +55,16 @@ export function normalizeInternalIssue(t, people) {
     last: last ? { author: (last.author && last.author.name) || "Someone", fromTeam: true, when: last.created, text: last.body } : null
   };
 }
+
+// Odoo Helpdesk tickets (HD-<id>): the developer is the Odoo assignee; the Assignee column shows the
+// customer who opened the ticket. due is Odoo's SLA deadline (read-only).
+export function normalizeOdooIssue(t) {
+  const who = t.customer || {}, label = who.name && who.email ? who.name + " <" + who.email + ">" : (who.name || who.email || "Customer");
+  return {
+    key: t.key, odoo: true, odooId: t.id, odooUrl: t.url, team: t.team || "", customer: who,
+    summary: t.summary || "(no subject)", status: t.status, cat: t.statusCat,
+    assignee: null, assigneeName: label, labels: (t.devs || []).map(d => "ai1_" + d), devs: (t.devs || []).slice(), due: t.due || null,
+    created: (t.created || "").slice(0, 10), updated: t.updated || "", priority: t.priority || "", type: "Odoo",
+    reporter: who.name || who.email || "Customer", reporterId: null, assigneeId: null, parent: null, last: null
+  };
+}

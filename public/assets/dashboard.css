@@ -317,3 +317,11 @@ button.key.int:hover{text-decoration:underline}
 .btn.note-action{background:var(--c4s);border-color:var(--c4);font-weight:600;min-height:40px;padding:8px 14px;white-space:nowrap}
 .btn.note-action:hover{background:var(--c4);color:var(--surface)}
 .btn.note-action:focus-visible{outline:2px solid var(--c4);outline-offset:3px}
+
+/* Odoo Helpdesk tickets (HD-…) */
+.drawer.is-odoo .jira-only{display:none!important}
+.drawer:not(.is-odoo) .odoo-only{display:none!important}
+.flag.odoo{--k:#714b67;--ks:#f3ecf1;border:1px solid #714b67}
+button.key.odoo{font-family:var(--mono);font-size:12.5px;color:#714b67;font-weight:600;text-align:left;cursor:pointer;background:none;border:0;padding:0}
+button.key.odoo:hover{text-decoration:underline}
+@media (prefers-color-scheme: dark){ .flag.odoo{--k:#d6a4c8;--ks:#3a2434;border-color:#d6a4c8} button.key.odoo{color:#d6a4c8} }
