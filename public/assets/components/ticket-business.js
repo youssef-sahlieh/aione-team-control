@@ -30,6 +30,8 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const workGroup=el('fieldset','business-section business-work-section');workGroup.append(el('legend','','Work summary'));box.append(workGroup);
     const estimated=field(workGroup,'Estimated hours',input('number',values.estimatedHours)),actual=field(workGroup,'Actual hours',input('number',values.actualHours));
     for(const n of [estimated,actual]){n.min='0.01';n.max='1000000';n.step='0.01';n.disabled=closed;}
+    // Once set, the estimate is changed by administrators only.
+    if(!admin()&&!creating&&values.estimatedHours!=null){estimated.disabled=true;estimated.title='The estimate is set. Ask an administrator to change it.';}
     const work=field(workGroup,'Work done',el('textarea','inp'));work.value=values.workDone||'';work.maxLength=5000;work.rows=4;work.dir='auto';work.disabled=closed;
     const read=()=>{if(creating&&admin()&&!billing.value)throw new Error('Choose Billable or Not billable before assigning this ticket.');for(const n of [estimated,actual])if(!n.checkValidity())throw new Error('Hours must be greater than zero, with up to two decimal places.');const out={estimatedHours:estimated.value===''?null:Number(estimated.value),actualHours:actual.value===''?null:Number(actual.value),workDone:work.value};if(admin()||creating)Object.assign(out,selects.read());if(billing)out.billing=billing.value||null;return out;};
     return {read,box,selects};
@@ -42,7 +44,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   // One field (or the client pair) edited straight from the ticket list, with the same rules as the ticket panel
   // (client and billing for administrators; closed tickets locked). The server checks all of it again.
   const QUICK={client:'Client',billing:'Billing',estimatedHours:'Estimated hours',actualHours:'Actual hours',workDone:'Work done'};
-  function canQuickEdit(i,name){if(!enabled||!i||i.odoo||i.cat==='done'||!(name in QUICK))return false;return name==='client'||name==='billing'?admin():true;}
+  function canQuickEdit(i,name){if(!enabled||!i||i.odoo||i.cat==='done'||!(name in QUICK))return false;if(name==='estimatedHours'&&!admin()&&i.estimatedHours!=null)return false;return name==='client'||name==='billing'?admin():true;}
   async function quickEdit(box,key,name,done){
     const msg=el('p','msg','Loading…');box.replaceChildren(msg);
     let r;try{r=await api('/ticket-metadata?key='+encodeURIComponent(key));}catch(e){message(msg,e);return;}

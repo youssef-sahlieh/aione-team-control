@@ -61,6 +61,8 @@ export async function saveMetadata(env,key,patch,me,{closed=false,creating=false
   if(!Number.isInteger(patch.revision)||patch.revision!==old.revision)problem('Ticket fields changed. Refresh and retry.',409,'conflict');
   if(me.role!=='admin'&&'billing' in patch)problem('Only administrators can access billing.',403,'forbidden');
   if(me.role!=='admin'&&!creating&&('clientId' in patch||'subClientId' in patch))problem('Only administrators can change the client selection.',403,'forbidden');
+  // Once an estimate is set, only an administrator can change it.
+  if(me.role!=='admin'&&'estimatedHours' in patch&&old.estimatedHours!=null&&Number(patch.estimatedHours)!==Number(old.estimatedHours))problem('The estimate is already set. Ask an administrator to change it.',403,'estimate_locked');
   for(const k of ['clientId','subClientId'])if(k in patch){if(patch[k]!==null&&(typeof patch[k]!=='string'||patch[k].length>80))problem('Invalid client selection.');m[k]=patch[k];}
   if('clientId' in patch && patch.clientId!==old.clientId && !('subClientId' in patch))m.subClientId=null;
   if('clientId' in patch||'subClientId' in patch){const errors=selectionErrors(catalog,m,{active:m.clientId!==old.clientId||m.subClientId!==old.subClientId});if(errors.length)problem(errors.join('. '));}

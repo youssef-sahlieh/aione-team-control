@@ -146,7 +146,9 @@ test('user initial dates, submissions and revisions require a saved positive est
  await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,estimatedHours:2}});
  assert.equal((await s.call('/date-requests/initial','POST',body)).status,200);
  const submitted=await s.call('/date-requests/submit','POST',{...body,proposedDate:'2026-11-02'});assert.equal(submitted.status,201);const request=(await submitted.json()).request;
- await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:2,estimatedHours:null}});
+ // Users can't change a set estimate; an administrator clears it.
+ assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:2,estimatedHours:null}})).status,403);
+ await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:2,estimatedHours:null}},admin);
  assert.equal((await s.call('/date-requests/revise','POST',{...body,id:request.id,version:request.version,proposedDate:'2026-11-03'})).status,400);
  assert.equal((await s.call('/date-requests/withdraw','POST',{key:t.key,id:request.id,version:request.version})).status,200);
  assert.equal((await s.call('/date-requests/submit','POST',{...body,proposedDate:'2026-11-04'})).status,400);
@@ -169,4 +171,13 @@ test('clients sync from Odoo projects: customer is the client, project the sub-c
   // A fresh catalog is not read from Odoo again on the automatic refresh, and nothing changes.
   const before=odooCalls,again=await (await call(user)).json();assert.equal(again.changed,false);assert.equal(odooCalls,before);
  }finally{globalThis.fetch=realFetch;}
+});
+
+test('users set the estimate once; only administrators change it afterwards',async()=>{
+ const {env}=await setup();const key='AION-77';
+ let m=await saveMetadata(env,key,{revision:0,estimatedHours:3},user);assert.equal(m.estimatedHours,3);
+ m=await saveMetadata(env,key,{revision:m.revision,estimatedHours:3,actualHours:1},user);assert.equal(m.actualHours,1);
+ await assert.rejects(saveMetadata(env,key,{revision:m.revision,estimatedHours:5},user),e=>e.code==='estimate_locked'&&e.status===403);
+ await assert.rejects(saveMetadata(env,key,{revision:m.revision,estimatedHours:null},user),e=>e.code==='estimate_locked');
+ m=await saveMetadata(env,key,{revision:m.revision,estimatedHours:5},admin);assert.equal(m.estimatedHours,5);
 });

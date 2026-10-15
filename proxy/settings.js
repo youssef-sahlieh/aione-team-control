@@ -18,6 +18,8 @@ export default {
   ],
   // Jira-created notifications go to the two managers, regardless of dashboard display filters.
   NO_DEVELOPER_NOTIFY_TO: "youssef@aione.biz,ellen@aione.biz",
+  // "No developer" emails only for tickets assigned to these people.
+  NO_DEVELOPER_ASSIGNEES: "karim,youssef,rami,razan",
   // Where links in emails point (the dashboard, on GitHub Pages at its own domain).
   APP_URL: "https://dashboard.ai1.host"
 };

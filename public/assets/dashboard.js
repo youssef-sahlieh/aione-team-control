@@ -371,7 +371,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const w=el("div","listwrap business-list"+(showTicketBriefs()?" with-ai-briefs":"")+" with-email");
     const tools=el('div','list-toolbar'),presets=el('div','seg');presets.setAttribute('aria-label','Ticket columns');
     for(const [mode,label]of [['work','Work view'],['all','All columns']]){const b=el('button','',label);b.type='button';b.setAttribute('aria-pressed',String(state.columnsMode===mode));b.addEventListener('click',()=>{state.columnsMode=mode;try{localStorage.setItem('aion.columns.'+encodeURIComponent(MY_EMAIL),mode);}catch{}render();});presets.append(b);}
-    tools.append(presets,el('span','list-toolbar-hint','Right-click a header to sort · Scroll for more columns'));w.append(tools);
+    tools.append(presets,el('span','list-toolbar-hint','Right-click a header to sort'+(state.columnsMode==='all'?' · Scroll for more columns':'')));w.append(tools);
     const h=el("div","gr head"); const all=el("input","ck"); all.type="checkbox"; all.setAttribute("aria-label","Select all");
     all.checked=items.every(i=>state.sel.has(i.key)); all.addEventListener("change",()=>{ items.forEach(i=>all.checked?state.sel.add(i.key):state.sel.delete(i.key)); render(); });
     const hc=el("span","c-ck"); hc.appendChild(all); h.appendChild(hc);
@@ -382,8 +382,15 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const sortMap={'c-key':'key','c-ttl':'summary','c-who':'assigneeName','c-rep':'reporter','c-dev':'developers','c-st':'status','c-due':'due','c-cre':'created','c-upd':'updated'};
     for(const header of h.children){const key=sortMap[header.className]||businessColumns.find(c=>header.classList.contains('c-'+c[0]))?.[0];if(!key)continue;const label=header.textContent;header.replaceChildren();const b=el('button','column-sort',label+(state.sort?.field===key?(state.sort.direction==='asc'?' ↑':' ↓'):' ▾'));b.type='button';b.setAttribute('aria-label','Sort '+label);b.setAttribute('aria-haspopup','menu');b.addEventListener('click',()=>columnSortMenu(b,key));header.addEventListener('contextmenu',e=>{e.preventDefault();columnSortMenu(b,key);});header.append(b);}
     let widths=[28,92,300,...(showTicketBriefs()?[220]:[]),130,150,170,140,120,120,90,120,48,...businessColumns.map(c=>c[2])];
-    if(state.columnsMode!=='all'){applyWorkColumns(h);widths=[28,96,280,120,126,106,180,130,120,220,...(IS_ADMIN?[114]:[]),120,48];w.classList.add('work-columns');}
-    w.style.setProperty('--business-columns',widths.map(n=>n+'px').join(' '));w.style.setProperty('--business-width',(widths.reduce((a,b)=>a+b,0)+10*(widths.length-1)+28)+'px');
+    if(state.columnsMode!=='all'){
+      // Work view fits the page: each column has a minimum width and shares the rest of the space
+      // (the list scrolls sideways only on screens narrower than the minimums).
+      applyWorkColumns(h);w.classList.add('work-columns');
+      const cols=[[28],[92],[180,2.2],[96,1],[112,1],[84,.8],[110,1.3],[84,.7],[78,.7],[140,1.8],...(IS_ADMIN?[[80,.7]]:[]),[100,.9],[40]];
+      const min=cols.reduce((a,[n])=>a+n,0)+10*(cols.length-1)+28;
+      w.style.setProperty('--business-columns',cols.map(([n,fr])=>fr?'minmax('+n+'px,'+fr+'fr)':n+'px').join(' '));w.style.setProperty('--business-width','max(100%, '+min+'px)');
+    }else{
+    w.style.setProperty('--business-columns',widths.map(n=>n+'px').join(' '));w.style.setProperty('--business-width',(widths.reduce((a,b)=>a+b,0)+10*(widths.length-1)+28)+'px');}
     w.appendChild(h);
     const allSorted=sortItems(items), pages=Math.max(1,Math.ceil(allSorted.length/state.pageSize));
     state.pageIndex=Math.min(state.pageIndex,pages-1);
@@ -566,7 +573,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
         return {key:k,added:[...want].filter(x=>!i.devs.includes(x)),run:()=>setDevs(k,want)};
       }).filter(Boolean);
       if(!ops.length){ toast("Nothing to change."); return; }
-      await runBatch(ops,target==="__none"?"Developer removed":"Assigned to ai1_"+target);
+      await runBatch(startingOps(ops),target==="__none"?"Developer removed":"Assigned to ai1_"+target);
     } else if(mode==="status"){
       toast("Checking allowed moves…");
       const ops=[], skipped=[];
@@ -617,7 +624,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
         const same=want.size===cur.size&&[...want].every(d=>cur.has(d));
         return same?null:{key:k,added:[...want].filter(d=>!cur.has(d)),run:()=>setDevs(k,want)}; }).filter(Boolean);
       if(!ops.length){ toast("Nothing to change."); return; }
-      await runBatch(ops,mode==="remove"?"Developers removed":"Developers saved"); });
+      await runBatch(startingOps(ops),mode==="remove"?"Developers removed":"Developers saved"); });
     foot.appendChild(save); p.appendChild(foot); placePop(anchor);
   }
   function duePopover(anchor,keys){
@@ -627,8 +634,21 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   }
   const initialsOf=n=>String(n||"?").split(/\s+/).filter(Boolean).map(x=>x[0]).join("").slice(0,2).toUpperCase()||"?";
   function assignOps(keys,id){ return keys.map(k=>{ const i=issueByKey(k); if(i&&i.assigneeId===id) return null; if(isOdoo(k)) return null; if(isInt(k)) return BYID[id]?{key:k,run:async()=>{await business.ensureBilling(k);return internalApi.update(k,{assignee:BYID[id]});}}:null; if(id===INTERNAL_ASSIGNEE)return null; return {key:k,run:async()=>{await business.ensureBilling(k);return jira.edit(k,{assignee:id?{accountId:id}:null});}}; }).filter(Boolean); }
+  // When an administrator assigns a ticket that hasn't started yet, it moves forward: Jira tickets to
+  // "Dev Approved"; internal and Odoo tickets (which have no such status) to "In Development".
+  // Tickets already in progress or done keep their status.
+  async function startAssigned(key){
+    const i=issueByKey(key); if(!IS_ADMIN||!i||i.cat!=="new") return;
+    const want=isInt(key)||isOdoo(key)?"in development":"dev approved";
+    if(String(i.status||"").trim().toLowerCase()===want) return;
+    const t=(await getTransitions(key)).find(x=>String((x.to&&x.to.name)||"").trim().toLowerCase()===want);
+    if(!t){ setTimeout(()=>toast(key+" was assigned, but its workflow can't move to “"+(want==="dev approved"?"Dev Approved":"In Development")+"” from "+i.status+"."),3500); return; }
+    try{ await doTransition(key,t.id); }
+    catch(err){ setTimeout(()=>toast(key+" was assigned, but the status didn't change",[errorText(err)],true),3500); }
+  }
+  const startingOps=ops=>IS_ADMIN?ops.map(o=>o.added&&!o.added.length?o:{...o,run:async()=>{ const r=await o.run(); await startAssigned(o.key); return r; }}):ops;
   async function doAssign(keys,id,name){
-    const ops=assignOps(keys,id); if(!ops.length){ toast("Already assigned to "+name+"."); return {ok:0,fail:0}; }
+    const ops=id?startingOps(assignOps(keys,id)):assignOps(keys,id); if(!ops.length){ toast("Already assigned to "+name+"."); return {ok:0,fail:0}; }
     const r=await runBatch(ops,"Assigned to "+name);
     if(r.ok&&id&&!BYID[id]) setTimeout(()=>toast(name+" isn't "+teamNames()+", so "+(r.ok===1?"this ticket":"these tickets")+" will leave the dashboard."),3300);
     return r;

@@ -503,7 +503,8 @@ test("developer sees their Odoo tickets even with the team assignee filter", asy
 for(const role of ['admin','user'])test('business fields save and billing visibility for '+role,async({page})=>{
  const mock=await mockDashboard(page,{role});await page.goto('/dashboard.html#INT-101');const panel=page.locator('#business-fields');await expect(panel.getByLabel('Estimated hours')).toBeVisible();
  await expect(panel.getByLabel('Billing (administrators only)')).toHaveCount(role==='admin'?1:0);
- await panel.getByLabel('Estimated hours').fill('1.25');await panel.getByLabel('Actual hours').fill('2.5');await panel.getByLabel('Work done').fill('Implemented and verified the task.');
+ // A set estimate is locked for users; administrators can still change it.
+ if(role==='admin')await panel.getByLabel('Estimated hours').fill('1.25');else await expect(panel.getByLabel('Estimated hours')).toBeDisabled();await panel.getByLabel('Actual hours').fill('2.5');await panel.getByLabel('Work done').fill('Implemented and verified the task.');
  await panel.getByRole('button',{name:'Save ticket fields',exact:true}).click();await expect(panel).toContainText('Ticket fields saved.');const sent=mock.calls.find(c=>c.path==='/ticket-metadata'&&c.method==='PUT');expect(sent.body.fields.actualHours).toBe(2.5);expect('billing'in sent.body.fields).toBe(role==='admin');
  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
@@ -578,7 +579,7 @@ test('ticket fields are edited from the list, with client and billing for admini
  await row.getByRole('button',{name:'Edit Billing for INT-101'}).click();await page.locator('#pop').getByLabel('Billing').selectOption('billable');await page.locator('#pop').getByRole('button',{name:'Save',exact:true}).click();
  await expect(row.locator('.c-billing')).toHaveText('Billable');
  await page.getByRole('button',{name:'Work view',exact:true}).click();
- await page.setViewportSize({width:1920,height:1000});await page.locator('.business-list').evaluate(n=>n.scrollLeft=600);await page.locator('.business-list').screenshot({path:'test-results/list-edit-work-view.png'});
+ await page.setViewportSize({width:1920,height:1000});expect(await page.locator('.business-list').evaluate(n=>n.scrollWidth<=n.clientWidth+1)).toBe(true);await page.locator('.business-list').screenshot({path:'test-results/list-edit-work-view.png'});
  const head=await page.locator('#view .head .c-estimatedHours').boundingBox(),cell=await row.locator('.c-estimatedHours').boundingBox();expect(Math.abs(head.x-cell.x)).toBeLessThan(8);
  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
@@ -588,4 +589,33 @@ test('users edit hours and work done from the list but not client or billing',as
  await expect(row.getByRole('button',{name:'Edit Work done for INT-101'})).toBeVisible();
  await expect(row.getByRole('button',{name:/Edit Client/})).toHaveCount(0);await expect(row.locator('.c-billing')).toHaveCount(0);
  expect(mock.errors).toEqual([]);
+});
+
+test('an administrator assigning a not-started ticket moves it: Jira to Dev Approved, internal to In Development',async({page})=>{
+ const mock=await mockDashboard(page);const internalPuts=[],jiraMoves=[];
+ const fresh=structuredClone(jiraIssue);fresh.fields.status={name:'Pending Approval',statusCategory:{key:'new'}};fresh.fields.labels=['keep-label'];
+ await page.route('**/jira/search',r=>r.fulfill({json:{issues:[fresh],isLast:true}}));
+ await page.route('**/jira/issue/AION-101',r=>r.fulfill({json:{ok:true}}));
+ await page.route('**/jira/issue/AION-101/transitions',r=>{if(r.request().method()==='GET')return r.fulfill({json:{transitions:[{id:'21',name:'Approve',to:{name:'Dev Approved',statusCategory:{key:'indeterminate'}}},{id:'22',name:'Start',to:{name:'In Progress',statusCategory:{key:'indeterminate'}}}]}});jiraMoves.push(r.request().postDataJSON());return r.fulfill({json:{ok:true}});});
+ await page.route('**/internal/INT-101',r=>{internalPuts.push(r.request().postDataJSON());return r.fulfill({json:{ticket:{...internalTicket,devs:['builder','reviewer']}}});});
+ await page.goto('/dashboard.html');
+ for(const key of ['AION-101','INT-101']){
+  await page.locator('#view .item').filter({hasText:key}).locator('.c-dev').click();
+  await page.locator('#pop input[data-dev="reviewer"]').check();await page.locator('#pop').getByRole('button',{name:'Save',exact:true}).click();
+  await page.getByRole('dialog').getByLabel('Billing',{exact:true}).selectOption('not_billable');await page.getByRole('button',{name:'Save billing and continue'}).click();await expect(page.getByRole('dialog')).toHaveCount(0);
+ }
+ await expect.poll(()=>jiraMoves).toEqual([{id:'21'}]);
+ await expect.poll(()=>internalPuts.map(b=>b.status||null)).toEqual([null,'In Development']);
+ expect(mock.errors).toEqual([]);
+});
+test('assigning a ticket that is already in progress keeps its status',async({page})=>{
+ const mock=await mockDashboard(page);const moves=[];
+ await page.route('**/jira/issue/AION-101',r=>r.fulfill({json:{ok:true}}));
+ await page.route('**/jira/issue/AION-101/transitions',r=>{moves.push(r.request().method());return r.fulfill({json:{transitions:[]}});});
+ await page.goto('/dashboard.html');
+ await page.locator('#view .item').filter({hasText:'AION-101'}).locator('.c-dev').click();
+ await page.locator('#pop input[data-dev="builder"]').uncheck();await page.locator('#pop input[data-dev="reviewer"]').uncheck();
+ await page.locator('#pop').getByPlaceholder('Other name').fill('tester');await page.locator('#pop').getByRole('button',{name:'Add',exact:true}).click();
+ await page.locator('#pop').getByRole('button',{name:'Save',exact:true}).click();await page.getByRole('dialog').getByLabel('Billing',{exact:true}).selectOption('not_billable');await page.getByRole('button',{name:'Save billing and continue'}).click();await expect(page.locator('#toast')).toContainText('Developers saved');
+ expect(moves).toEqual([]);expect(mock.errors).toEqual([]);
 });

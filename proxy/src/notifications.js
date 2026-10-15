@@ -8,6 +8,20 @@ const escape = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&a
 
 // Manager Jira reads already run when the dashboard loads and refreshes. Reuse that trigger and
 // the existing mail proxy, without requiring a Jira Automation rule or another service secret.
+// "No developer" emails go out only for tickets assigned to one of NO_DEVELOPER_ASSIGNEES (team keys or
+// first names, e.g. "karim,youssef,rami,razan"), matched by the team's Jira account id or the Jira
+// display name. Left empty, every ticket qualifies.
+export function notifiableAssignee(env, assignee) {
+  const wanted = String(env.NO_DEVELOPER_ASSIGNEES || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (!wanted.length) return true;
+  if (!assignee) return false;
+  let people = {};
+  try { people = JSON.parse(env.TEAM_CONFIG || "{}").people || {}; } catch {}
+  const ids = new Set(Object.entries(people).filter(([k, p]) => wanted.includes(k.toLowerCase()) || wanted.includes(String(p?.name || "").trim().split(/\s+/)[0].toLowerCase())).map(([, p]) => p?.id).filter(Boolean));
+  const first = String(assignee.displayName || "").trim().split(/\s+/)[0].toLowerCase();
+  return ids.has(assignee.accountId) || wanted.includes(first);
+}
+
 export async function notifyTicketsFromSearch(env, issues, dependencies, now = Date.now()) {
   const store=env.STORE;
   if(!store?.setIfAbsent||!store?.deleteIfValue)return {skipped:"no_storage"};
@@ -35,6 +49,8 @@ export async function notifyTicketsFromSearch(env, issues, dependencies, now = D
       if(issue.fields.labels.some(label=>/^ai1_/i.test(label))||issue.fields.status.statusCategory.key==="done"){
         await store.set(seen,"excluded");continue;
       }
+      // Assigned to someone outside the notified leads: check again on a later refresh (no Jira read now).
+      if("assignee" in issue.fields&&!notifiableAssignee(env,issue.fields.assignee))continue;
       // Bound the extra work on each Jira read; pending tickets are retried on later refreshes.
       if(attempted>=3||Date.now()-checkStarted>20000)break;
       attempted++;
@@ -73,6 +89,8 @@ export async function newTicketNotification(request, env, { readIssue, sendMail 
   }
   if (fields.status.statusCategory.key === "done") return json({ skipped: "ticket_closed" });
   if (fields.labels.some(label => /^ai1_/i.test(label))) return json({ skipped: "has_developer" });
+  // Not marked as handled: if the ticket is later assigned to one of the leads, the email still goes out.
+  if (!notifiableAssignee(env, fields.assignee)) return json({ skipped: "assignee_not_notified" });
 
   // A permanent sent marker survives redeployments. A separate atomic lock prevents parallel
   // webhook deliveries from both sending, and expires if the process stops unexpectedly.

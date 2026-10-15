@@ -274,3 +274,23 @@ test("read-only AI lookups do not activate or send automatic email alerts",async
   const response=await handler.fetch(new Request("https://proxy.test/jira/search",{method:"POST",headers:{Authorization:"Bearer "+token,"X-AION-Read-Only":"1"},body:JSON.stringify({jql:"project = AION",fields:["created"]})}),f.env);
   assert.equal(response.status,200);assert.equal(await f.env.STORE.get("notify:search:AION:started"),null);assert.equal(f.mails.length,0);
 });
+
+test("no-developer emails only go out for tickets assigned to the listed leads", async t => {
+  const f = fixture(); t.after(f.restore);
+  f.env.NO_DEVELOPER_ASSIGNEES = "karim,youssef,rami,razan";
+  f.env.TEAM_CONFIG = JSON.stringify({ people: { rami: { id: "acc-rami", name: "Rami" } } });
+  f.issue.fields.assignee = { displayName: "Someone Else", accountId: "acc-x" };
+  let d = await (await f.call()).json();
+  assert.equal(d.skipped, "assignee_not_notified"); assert.equal(f.mails.length, 0);
+  f.issue.fields.assignee = null;
+  d = await (await f.call()).json();
+  assert.equal(d.skipped, "assignee_not_notified"); assert.equal(f.mails.length, 0);
+  // Matched by team account id (whatever the Jira display name) ...
+  f.issue.fields.assignee = { displayName: "R. Haddad", accountId: "acc-rami" };
+  assert.equal((await f.call()).status, 200); assert.equal(f.mails.length, 1);
+  // ... or by first name for someone not in the team list.
+  const g = fixture(); t.after(g.restore);
+  g.env.NO_DEVELOPER_ASSIGNEES = "karim,youssef,rami,razan";
+  g.issue.fields.assignee = { displayName: "Razan Example", accountId: "acc-razan" };
+  await g.call(); assert.equal(g.mails.length, 1);
+});
