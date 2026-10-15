@@ -151,3 +151,22 @@ test('user initial dates, submissions and revisions require a saved positive est
  assert.equal((await s.call('/date-requests/withdraw','POST',{key:t.key,id:request.id,version:request.version})).status,200);
  assert.equal((await s.call('/date-requests/submit','POST',{...body,proposedDate:'2026-11-04'})).status,400);
 });
+
+test('clients sync from Odoo projects: customer is the client, project the sub-client; only admins force it',async()=>{
+ const {env,call:api}=await setup();const realFetch=globalThis.fetch;let odooCalls=0;
+ Object.assign(env,{ODOO_URL:'https://odoo.invalid',ODOO_DB:'db',ODOO_LOGIN:'bot@example.invalid',ODOO_API_KEY:'k'});
+ globalThis.fetch=async(u,init)=>{const p=JSON.parse(init.body).params;if(p.service==='common')return Response.json({result:7});odooCalls++;
+  assert.equal(p.args[3],'project.project');assert.equal(p.args[4],'search_read');
+  return Response.json({result:[{id:10,display_name:'Branch A',partner_id:[1,'Acme']},{id:11,display_name:'Branch B',partner_id:[1,'Acme']},{id:12,display_name:'In-house',partner_id:false}]});};
+ try{
+  const call=(me,q='')=>api('/clients/odoo-sync'+q,'POST',{},me);
+  assert.equal((await call(user,'?force=1')).status,403);
+  const r=await (await call(admin,'?force=1')).json();
+  assert.equal(r.changed,true);assert.equal(r.added,2);assert.equal(r.projects,3);
+  const c=await readCatalog(env),acme=c.entries.find(e=>e.name==='Acme'&&!e.parentId);
+  assert.deepEqual(c.entries.filter(e=>e.parentId===acme.id).map(e=>e.name).sort(),['Branch A','Branch B']);
+  assert.ok(c.entries.some(e=>e.name==='In-house'&&!e.parentId));assert.equal(c.entries.filter(e=>e.name==='Branch A').length,1);
+  // A fresh catalog is not read from Odoo again on the automatic refresh, and nothing changes.
+  const before=odooCalls,again=await (await call(user)).json();assert.equal(again.changed,false);assert.equal(odooCalls,before);
+ }finally{globalThis.fetch=realFetch;}
+});

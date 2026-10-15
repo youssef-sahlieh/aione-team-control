@@ -1,4 +1,5 @@
 // Private dashboard business data. Never include these fields in Jira mutations.
+import { odoo, odooConfigured } from './odoo.js';
 export const INTERNAL_ASSIGNEE = '__internal_tickets';
 export class BusinessError extends Error {
   constructor(message, status=400, code='ticket_metadata', details={}) { super(message); Object.assign(this,{status,code,details}); }
@@ -86,13 +87,42 @@ export async function guardedTransition(env,key,me,{closing,overrideReason},appl
 const nameKey=n=>n.trim().normalize('NFC').toLocaleLowerCase('en-US');
 async function idFor(parent,name) { const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode((parent||'root')+'\0'+nameKey(name)));return 'c_'+Array.from(new Uint8Array(bytes).slice(0,16),x=>x.toString(16).padStart(2,'0')).join(''); }
 function cleanName(n) {if(typeof n!=='string'||!n.trim()||n.trim().length>300)problem('Client names must contain 1–300 characters.');return n.trim();}
-export async function prepareImport(catalog,rows) {
+// Clients come straight from Odoo, the same way the project workbook did: each project's customer
+// is a client and the project is its sub-client (a project without a customer is a client itself).
+// Entries are only added (ids are stable by name), so tickets keep their client when Odoo changes.
+const odooSyncKey=env=>prefix(env)+'catalog:odoo-sync';
+async function odooRows(env){
+  const projects=await odoo(env,'project.project','search_read',[[]],{fields:['display_name','partner_id'],order:'id',limit:5000});
+  return projects.map(p=>({displayName:String(p.display_name||'').trim(),customer:Array.isArray(p.partner_id)?String(p.partner_id[1]||'').trim():'',sourceRow:p.id}))
+    .filter(r=>r.displayName&&r.displayName.length<=300&&r.customer.length<=300);
+}
+export async function syncCatalogFromOdoo(env,{force=false}={}){
+  if(!odooConfigured(env))return {odoo:false};
+  const store=requireStore(env),last=Number(await store.get(odooSyncKey(env)))||0;
+  if(!force&&Date.now()-last<10*60*1000)return {odoo:true,changed:false,syncedAt:last};
+  const lock=odooSyncKey(env)+':lock',owner=crypto.randomUUID();
+  if(!await store.setIfAbsent(lock,owner,120))return {odoo:true,changed:false,busy:true,syncedAt:last};
+  try{
+    const rows=await odooRows(env);let changed=false,added=0;
+    if(rows.length)for(let attempt=0;;attempt++){
+      const key=catalogKey(env),previous=await store.get(key),catalog=previous?JSON.parse(previous):{revision:0,entries:[]};
+      const {next,preview}=await prepareImport(catalog,rows,'odoo');
+      if(JSON.stringify(next.entries)===JSON.stringify(catalog.entries))break;
+      next.revision=catalog.revision+1;
+      if(previous===null?await store.setIfAbsent(key,JSON.stringify(next),315360000):await store.compareAndSet(key,previous,JSON.stringify(next))){changed=true;added=preview.added;break;}
+      if(attempt>=2)problem('Catalog changed during the Odoo sync. Try again.',409,'conflict');
+    }
+    const at=Date.now();await store.set(odooSyncKey(env),String(at));
+    return {odoo:true,changed,added,projects:rows.length,syncedAt:at};
+  }finally{await store.deleteIfValue(lock,owner);}
+}
+export async function prepareImport(catalog,rows,source='project-workbook') {
   if(!Array.isArray(rows)||!rows.length||rows.length>5000)problem('Import 1–5,000 catalog rows.');
   const next=structuredClone(catalog),added=[];
   async function ensure(name,parentId,sourceRow){
     name=cleanName(name);let e=next.entries.find(e=>e.parentId===parentId&&nameKey(e.name)===nameKey(name));
     if(!e){const id=await idFor(parentId,name);e=next.entries.find(e=>e.id===id);if(!e){e={id,name,parentId,archived:false,sources:[]};next.entries.push(e);added.push(e.id);}}
-    if(sourceRow&&!e.sources.some(s=>s.row===sourceRow&&s.source==='project-workbook'))e.sources.push({source:'project-workbook',row:sourceRow});
+    if(sourceRow&&!e.sources.some(s=>s.row===sourceRow&&s.source===source))e.sources.push({source,row:sourceRow});
     return e;
   }
   for(const [i,r] of rows.entries()){
@@ -104,6 +134,14 @@ export async function prepareImport(catalog,rows) {
   return {next,preview:{rows:rows.length,added:added.length,existing:next.entries.length-added.length,clients:next.entries.filter(e=>!e.parentId).length,subClients:next.entries.filter(e=>e.parentId).length,entries:next.entries.filter(e=>added.includes(e.id))}};
 }
 export async function catalogRoutes(request,env,url,me) {
+  // Odoo sync: anyone signed in may refresh a stale catalog (it only copies Odoo's projects in);
+  // forcing an immediate sync is for administrators.
+  if(url.pathname==='/clients/odoo-sync'){
+    if(request.method!=='POST')problem('Use POST.',405);
+    const force=url.searchParams.get('force')==='1';if(force&&me.role!=='admin')problem('Only administrators manage the client catalog.',403,'forbidden');
+    let result;try{result=await syncCatalogFromOdoo(env,{force});}catch(e){if(e instanceof BusinessError)throw e;problem("Couldn't read projects from Odoo: "+(e.message||'unknown error'),502,'odoo');}
+    return Response.json({...result,...(result.changed?{catalog:await catalogRoutes(new Request(url,{method:'GET'}),env,new URL('/clients',url),me).then(r=>r.json())}:{})},{headers:{'Cache-Control':'no-store'}});
+  }
   const store=requireStore(env),catalog=await readCatalog(env),admin=me.role==='admin';
   if(request.method==='GET')return Response.json({revision:catalog.revision,entries:catalog.entries.map(e=>admin?e:({id:e.id,name:e.name,parentId:e.parentId,archived:e.archived}))},{headers:{'Cache-Control':'no-store'}});
   if(!admin)problem('Only administrators manage the client catalog.',403,'forbidden');

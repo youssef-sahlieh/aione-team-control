@@ -30,10 +30,11 @@ async function mockDashboard(page, { role = "admin", failure = false, expired = 
     if (url.origin === "http://127.0.0.1:4173") return route.continue();
     if (url.hostname !== "aione-team-proxy.vercel.app") return route.abort();
     const path = url.pathname, method = req.method(), body = req.postDataJSON();
-    calls.push({ path, method, body });
+    calls.push({ path, method, body, ...(url.search?{query:url.search}:{}) });
     const json = value => route.fulfill({ json: value });
     if (path === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people:assigneeTeam?{...people,...Object.fromEntries(["karim","youssef","rami","razan"].map(key=>[key,{id:`test-${key}`,name:key[0].toUpperCase()+key.slice(1),ini:key[0].toUpperCase()}]))}:people, devs: ["builder", "reviewer"], role, dev: "builder", email: "test@example.invalid", accounts: true, odoo, mail: false, capabilities:["ticket-business-v1"], ai:{enabled:!aiDisabled,readOnly:true} });
     if(path==='/clients'&&method==='GET')return json(catalog);
+    if(path==='/clients/odoo-sync'&&method==='POST'){if(url.searchParams.get('force')!=='1')return json({odoo:true,changed:false,syncedAt:1});catalog.entries.push({id:'odoo-client',name:'Odoo Customer',parentId:null,archived:false});catalog.revision++;return json({odoo:true,changed:true,added:1,projects:3,syncedAt:2});}
     if(path==='/clients/import/preview')return json({revision:1,rows:body.rows.length,added:1,clients:2,subClients:0,entries:[{id:'new-client',name:body.rows[0].displayName,parentId:null}]});
     if(path==='/clients/import'){catalog.entries.push({id:'new-client',name:body.rows[0].displayName,parentId:null,archived:false});catalog.revision++;return json(catalog);}
     if(path==='/ticket-metadata/batch')return json({records:Object.fromEntries(body.keys.map(key=>[key,record(key)]))});
@@ -522,9 +523,13 @@ test('business report workflow runs without AI and exports findings',async({page
  const mock=await mockDashboard(page,{aiDisabled:true});await page.goto('/dashboard.html?page=reports');await page.getByRole('button',{name:'Run now',exact:true}).click();await expect(page.locator('.report-results')).toContainText('not hours worked during the period');await expect(page.locator('.report-totals')).toContainText('Open: 2');
  const download=page.waitForEvent('download');await page.getByRole('button',{name:'Export ticket findings CSV'}).click();expect((await download).suggestedFilename()).toContain('aion-management');await page.screenshot({path:'test-results/business-reports.png',fullPage:true});expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
-test('business workbook import requires review before applying private catalog changes',async({page})=>{
- const mock=await mockDashboard(page);await page.goto('/dashboard.html?page=clients');await page.getByLabel('Import project workbook (.xlsx)').setInputFiles({name:'synthetic.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:Buffer.from(catalogWorkbook())});
- await expect(page.getByRole('dialog')).toContainText('Imported standalone');expect(mock.calls.some(c=>c.path==='/clients/import')).toBe(false);await page.getByRole('button',{name:'Apply reviewed import',exact:true}).click();await expect(page.locator('.catalog-group')).toContainText(['Imported standalone','Synthetic Client']);expect(mock.calls.filter(c=>c.path==='/clients/import')).toHaveLength(1);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+test('clients are read from Odoo: background refresh on load and a sync button, no file upload',async({page})=>{
+ const mock=await mockDashboard(page,{odoo:true});await page.goto('/dashboard.html?page=clients');
+ await expect.poll(()=>mock.calls.some(c=>c.path==='/clients/odoo-sync'&&c.method==='POST'&&!c.query)).toBe(true);
+ await expect(page.getByLabel('Import project workbook (.xlsx)')).toHaveCount(0);
+ await page.getByRole('button',{name:'Sync from Odoo now',exact:true}).click();
+ await expect(page.locator('.catalog-group')).toContainText(['Odoo Customer']);await expect(page.locator('.business-panel .msg')).toContainText('1 new from Odoo');
+ expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
 test('business fields lock on closed tickets and unsaved edits trigger discard confirmation',async({page})=>{
  const mock=await mockDashboard(page);await page.goto('/dashboard.html#INT-101');await page.locator('#business-fields').getByLabel('Work done').fill('Draft work');page.once('dialog',d=>d.dismiss());await page.locator('#d-close').click();await expect(page.locator('#drawer')).toBeVisible();page.once('dialog',d=>d.accept());await page.locator('#d-close').click();
