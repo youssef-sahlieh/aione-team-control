@@ -9,7 +9,7 @@ The proxy's secrets are **Vercel environment variables**: vercel.com → aione-t
 | Variable | What it is |
 |---|---|
 | `TEAM_PASSWORD` | Before user accounts are on: the password Youssef and Ellen sign in with. Their first sign-in after the database is added turns it into their own account password. |
-| `SESSION_SECRET` | A long random string that signs the 24-hour sign-ins |
+| `SESSION_SECRET` | A long random string that signs the saved sign-ins (up to one year) |
 | `TEAM_CONFIG` | Team details: people and their Jira IDs, developers and their emails (JSON) |
 | `JIRA_SITE` | The Jira address, like `https://<site>.atlassian.net` |
 | `JIRA_EMAIL` | The Atlassian account the proxy acts as |
@@ -34,7 +34,7 @@ Until then, deploy by hand from the repository's top folder (not from `proxy/`):
 
 ## User accounts
 
-Everyone signs in with their own email and password. The sign-in is remembered in that browser for 24 hours (also in new tabs and after closing it), so links in emails open the ticket straight away; **Sign out** ends it. Avoid staying signed in on a shared computer. There are two roles:
+Everyone signs in with their own email and password. The sign-in is remembered in that browser for up to one year (also in new tabs and after closing it), so links in emails open the ticket straight away; **Sign out** ends it. Avoid staying signed in on a shared computer. There are two roles:
 
 - **Administrator** (Youssef, Ellen): sees and changes everything, and manages people on the **Users** page (button at the top of the dashboard).
 - **User**: sees only the tickets labelled with their developer name (for example `ai1_bashar`) and assigned to Karim, Youssef or Rami; their Assignee filter always starts with those three. They can move status, set due dates and comment on those tickets; they can't change developers or assignees, send internal notes, or see other tickets. The proxy enforces this, not just the page.
@@ -128,3 +128,7 @@ For automatic emails when a new Jira ticket has no developer, see [ticket notifi
 ## GitHub deployment through the existing Vercel connection
 
 Vercel deploys the proxy through its connected GitHub repository. GitHub Actions tests the app and waits for the production proxy's required API capabilities before publishing GitHub Pages. No new Vercel deployment secrets are needed. See [Git deployment and troubleshooting](docs/github-deployment.md).
+
+### Saved login sessions
+
+New sign-ins are saved for up to one year, replacing the previous 24-hour expiry. Browser restarts retain the login. Sign out to remove it from that browser; password resets and account removal revoke access. Clearing browser storage also removes the saved login. Existing 24-hour tokens are not extended: sign in once after deploying the updated proxy to receive the longer session.

@@ -24,7 +24,7 @@ test("reset token is consumed atomically and Redis uses GETDEL",async t=>{
 
 test("cookie login returns no bearer token and bootstrap exposes only session metadata",async()=>{
   const f=await fixture(),{response,data,cookie}=await f.login();
-  assert.equal(data.token,undefined);assert.equal(data.password,undefined);assert.ok(data.csrf);assert.match(response.headers.get("Set-Cookie"),/^__Host-aion-session=.*; Path=\/; HttpOnly; SameSite=Strict; Max-Age=86400; Secure$/);
+  assert.equal(data.token,undefined);assert.equal(data.password,undefined);assert.ok(data.csrf);assert.match(response.headers.get("Set-Cookie"),/^__Host-aion-session=.*; Path=\/; HttpOnly; SameSite=Strict; Max-Age=31536000; Secure$/);
   const session=await f.request("/session",{cookie});assert.equal(session.status,200);assert.equal((await session.json()).token,undefined);
   assert.equal((await f.request("/config",{cookie})).status,200);
   const legacy=await makeToken(f.env,f.email,Date.now(),1);assert.equal(await readToken(f.env,"Bearer "+legacy.token),null);
@@ -36,6 +36,18 @@ test("mutations require both same origin and session-bound CSRF token",async()=>
   for(const options of [{cookie},{cookie,csrf:"wrong"},{cookie,csrf:data.csrf,origin:"https://attacker.invalid"},{cookie,csrf:data.csrf,origin:null}])assert.equal((await f.request("/logout",{method:"POST",...options})).status,403);
   assert.equal((await f.request("/login",{method:"POST",origin:"https://attacker.invalid",body:{email:f.email,password:f.password}})).status,403);
   assert.equal((await f.request("/session",{cookie})).status,200);
+});
+
+test("saved sessions outlive 24 hours and keep matching token, cookie and database lifetimes",async()=>{
+  const f=await fixture();const original=f.env.STORE.set;let sessionTTL;
+  f.env.STORE.set=async(key,value,ttl)=>{if(key.startsWith('sess:'))sessionTTL=ttl;return original(key,value,ttl);};
+  const started=Date.now(),login=await f.login(),token=login.cookie.slice(login.cookie.indexOf('=')+1);
+  assert.equal(sessionTTL,31536000);
+  assert.ok(login.data.expiresAt>=started+31536000000);
+  assert.ok(await readToken(f.env,'Bearer '+token,started+2*86400000));
+  assert.equal(await readToken(f.env,'Bearer '+token,started+366*86400000),null);
+  const user=await getUser(f.env.STORE,f.email);await saveUser(f.env.STORE,{...user,v:user.v+1});
+  assert.equal(await readToken(f.env,'Bearer '+token,started+2*86400000),null);
 });
 
 test("logout revokes copied cookies and old CSRF values cannot authorize a new session",async()=>{

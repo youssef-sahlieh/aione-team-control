@@ -1,3 +1,4 @@
+import { SESSION_SECONDS } from "./session-policy.js";
 const json=(body,status=200)=>Response.json(body,{status,headers:{"Cache-Control":"no-store"}});
 const random=()=>[...crypto.getRandomValues(new Uint8Array(32))].map(n=>n.toString(16).padStart(2,"0")).join("");
 const claims=token=>{try{return JSON.parse(atob(token.split(".")[0].replace(/-/g,"+").replace(/_/g,"/")));}catch{return {};}};
@@ -35,9 +36,9 @@ export async function cookieSessionRequest(request,env,run,{readToken,makeToken}
     const login=await response.json(),verified=claims(login.token);
     // Login verification itself needs the legacy token format only for this internal operation.
     const sid=random(),csrf=random();const session=await makeToken(env,login.email,Date.now(),verified.v,sid);
-    await env.STORE.set("sess:"+sid,JSON.stringify({csrf}),86400);
+    await env.STORE.set("sess:"+sid,JSON.stringify({csrf}),SESSION_SECONDS);
     if(c.sid)await env.STORE.del("sess:"+c.sid);
-    const result=json(info(login,session.expiresAt,csrf));result.headers.set("Set-Cookie",cookie(session.token,86400));return result;
+    const result=json(info(login,session.expiresAt,csrf));result.headers.set("Set-Cookie",cookie(session.token,SESSION_SECONDS));return result;
   }
   return run(forwarded);
 }
