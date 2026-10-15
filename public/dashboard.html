@@ -20,6 +20,7 @@
 <link rel="stylesheet" href="assets/styles/ticket-briefs.css">
 <link rel="stylesheet" href="assets/styles/email-column.css">
 <link rel="stylesheet" href="assets/styles/date-requests.css">
+<link rel="stylesheet" href="assets/styles/ticket-business.css">
 </head>
 <body>
 <a class="skip-link" href="#main-content">Skip to content</a>
@@ -93,6 +94,7 @@
   <button type="button" id="b-due">Due date</button>
   <button type="button" id="b-status">Status</button>
   <button type="button" class="admin-only" id="b-asg">Assignee</button>
+  <button type="button" class="admin-only" id="b-client">Client / Sub-client</button>
   <button type="button" class="x" id="b-clear">Clear ✕</button>
 </div>
 <div class="pop" id="pop" hidden role="dialog"></div>
@@ -112,6 +114,7 @@
   <div class="dbody" id="d-body">
     <div class="blk"><h3>Move status</h3><div class="trans" id="d-trans"></div></div>
     <dl class="facts" id="d-facts"></dl>
+    <section class="blk" id="business-fields" aria-label="Ticket work and client"></section>
     <div class="blk admin-only"><h3>Developers</h3><div class="chips" id="d-devs"></div>
       <div class="inline"><input class="inp" id="d-newdev" placeholder="Other developer name" aria-label="Add another developer"><button class="btn" id="d-adddev" type="button">Add</button><button class="btn primary" id="d-savedevs" type="button">Save developers</button><span class="msg" id="d-devmsg"></span></div></div>
     <div class="blk"><h3>Due date</h3>

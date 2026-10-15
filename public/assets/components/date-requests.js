@@ -13,6 +13,12 @@ export function createDateRequests({api,context,openIssue,onChange,renderHistory
  async function commit(action,body,msg,save){save.disabled=true;msg.textContent='Saving…';try{await api('/date-requests/'+action,{method:'POST',body});dialog.close();await load();await onChange();}catch(e){msg.textContent=e.message+(e.status===409?' Close this form and reopen the latest request.':'');msg.className='msg err';await load();await onChange();}finally{save.disabled=false;}}
  function formRequest(key,{direct=context().admin,revision=null}={}){
   const ticket=context().ticket(key)||(()=>{const r=requests.find(r=>r.key===key);return r?{key,summary:r.ticket?.title,due:r.ticket?.due}:null;})();if(!ticket)return;const current=activeFor(key);
+  if(!context().admin&&!(typeof ticket.estimatedHours==='number'&&ticket.estimatedHours>0)){
+    const {form,msg}=show('Estimated hours required');form.prepend(node('p','date-context','Add an estimate before choosing a due date for '+key+'. This helps keep deadlines aligned with the work.'));
+    const estimate=fields(form,'Estimated hours','number');estimate.min='0.01';estimate.max='1000000';estimate.step='0.01';estimate.required=true;
+    const actions=node('div','date-actions'),save=button('Save estimate and continue',()=>{},'btn primary');save.type='submit';actions.append(button('Cancel',()=>dialog.close()),save);form.append(actions);
+    form.addEventListener('submit',async e=>{e.preventDefault();if(!form.reportValidity())return;save.disabled=true;try{const current=await api('/ticket-metadata?key='+encodeURIComponent(key));await api('/ticket-metadata',{method:'PUT',body:{key,fields:{revision:current.metadata.revision,estimatedHours:Number(estimate.value)}}});dialog.close();await onChange();formRequest(key,{direct,revision});}catch(err){msg.className='msg err';msg.textContent=err.message;}finally{save.disabled=false;}});return;
+  }
   if(current&&!revision){showTicket(key);return;}
   const initial=!revision&&!ticket.due&&!requests.some(r=>r.key===key&&(r.appliedDate||r.original?.due));
   const {form,msg}=show(initial?'Set initial due date':revision?'Revise date request':direct?'Change approved date':'Request date change');

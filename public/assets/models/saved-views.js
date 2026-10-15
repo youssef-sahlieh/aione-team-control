@@ -1,3 +1,4 @@
+import { validSort } from "./ticket-business.js";
 import { createFilters } from "./filters.js";
 import { defaultAssigneeKeys, assigneeOptions } from "./assignees.js";
 const fields = ["reporter", "assignee", "dev", "status", "type", "priority"];
@@ -6,12 +7,14 @@ const focuses = ["open", "nodev", "reply", "overdue", "today", "approval", "nodu
 export const savedViewKey = email => "aion.savedViews.v1." + encodeURIComponent(email.toLowerCase());
 export function serializeView(state, name) {
   const f = state.f;
-  return { version: 1, name: name.trim().slice(0, 60), focus: state.focus, mode: state.view, group: state.group, query: state.q,
+  return { version: 1, name: name.trim().slice(0, 60), focus: state.focus, mode: state.view, group: state.group, query: state.q, sort:state.sort||null, businessFilter:{...(state.businessFilter||{})},
     filters: { ...Object.fromEntries(fields.map(key => [key, [...f[key]]])), epic: f.epic, due: f.due, activity: f.activity, source: f.source || "all" } };
 }
 export function validateView(v) {
   if (!v || v.version !== 1 || typeof v.name !== "string" || !v.name.trim() || v.name.length > 60 || !focuses.includes(v.focus) || !modes.includes(v.mode) || !["", "reporter", "epic", "assignee", "dev", "status"].includes(v.group)) return false;
   if (typeof v.query !== "string" || v.query.length > 500 || !v.filters) return false;
+  if(v.sort!=null&&!validSort(v.sort,true))return false;
+  if(v.businessFilter&&(typeof v.businessFilter!=="object"||Object.entries(v.businessFilter).some(([k,value])=>!["clientId","subClientId","missing","billing"].includes(k)||typeof value!=="string"||value.length>100)))return false;
   const f = v.filters;
   return fields.every(key => Array.isArray(f[key]) && f[key].length <= 100 && f[key].every(x => typeof x === "string" && x.length <= 255)) &&
     typeof f.epic === "string" && f.epic.length <= 255 && ["any", "overdue", "today", "week", "later", "none"].includes(f.due) && ["any", "reply", "new3", "upd1"].includes(f.activity) && (f.source===undefined||["all","internal","jira","odoo"].includes(f.source));
@@ -28,5 +31,6 @@ export function restoreView(v, admin, people) {
   f.assignee=new Set([...f.assignee].filter(key=>key==="other"||available.includes(key)));
   if(!f.assignee.size) team.forEach(key=>f.assignee.add(key));
   if (!admin) f.dev.clear();
-  return { f, q: v.query, focus: !admin && ["nodev", "duechg"].includes(v.focus) ? "open" : v.focus, view: !admin && ["dev", "assignee", "history"].includes(v.mode) ? "list" : v.mode, group: v.group };
+  const businessFilter={...(v.businessFilter||{})};if(!admin)delete businessFilter.billing;
+  return { sort:validSort(v.sort,admin)?v.sort:null,businessFilter, f, q: v.query, focus: !admin && ["nodev", "duechg"].includes(v.focus) ? "open" : v.focus, view: !admin && ["dev", "assignee", "history"].includes(v.mode) ? "list" : v.mode, group: v.group };
 }

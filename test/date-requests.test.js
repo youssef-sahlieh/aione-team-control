@@ -4,6 +4,7 @@ import {dateRequestRoutes,validDate} from '../proxy/src/date-requests.js';
 import {memoryStore,saveUser} from '../proxy/src/users.js';
 function fixture(){
  const store=memoryStore(),env={STORE:store,JIRA_PROJECT:'AION',MAIL_DOMAIN:'aione.biz',APP_URL:'https://example.test'};
+ for(const key of ["AION-1","INT-1","AION-2"])store.set("business:AION:ticket:"+key,JSON.stringify({revision:1,estimatedHours:2}));
  const user={email:'dev@aione.biz',name:'Developer',role:'user',dev:'builder'},admin={email:'admin@aione.biz',name:'Admin',role:'admin'};
  const tickets=new Map([['AION-1',{title:'Task',due:'2026-10-20',devs:['builder'],closed:false}],['INT-1',{title:'Internal',due:null,devs:['builder'],closed:false}],['AION-2',{title:'Private',due:null,devs:['other'],closed:false}]]);
  let writes=0,failWrite=false,failMail=false;
@@ -39,7 +40,7 @@ test('simultaneous initial settings cannot overwrite one another; scope is still
 });
 
 test('Jira initial setting checks existing history before allowing a first date',async t=>{
- const {default:handler,makeToken}=await import('../proxy/src/handler.js');const store=memoryStore();const user={email:'builder@aione.biz',name:'Builder',role:'user',dev:'builder',v:1};await saveUser(store,user);
+ const {default:handler,makeToken}=await import('../proxy/src/handler.js');const store=memoryStore();const user={email:'builder@aione.biz',name:'Builder',role:'user',dev:'builder',v:1};await saveUser(store,user);await store.set('business:AION:ticket:AION-1',JSON.stringify({revision:1,estimatedHours:2}));
  const env={STORE:store,SESSION_SECRET:'test-session',JIRA_PROJECT:'AION',JIRA_SITE:'https://jira.test',JIRA_EMAIL:'test@aione.biz',JIRA_API_TOKEN:'test',MAIL_DOMAIN:'aione.biz'};
  const original=globalThis.fetch;t.after(()=>{globalThis.fetch=original;});let writes=0;
  globalThis.fetch=async(url,options={})=>{if(options.method==='PUT'){writes++;return new Response(null,{status:204});}if(String(url).includes('/changelog'))return Response.json({values:[{items:[{field:'duedate',from:'2026-10-20',to:null}]}],isLast:true});return Response.json({key:'AION-1',fields:{project:{key:'AION'},summary:'Task',duedate:null,labels:['ai1_builder'],status:{statusCategory:{key:'new'}}}});};

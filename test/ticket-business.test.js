@@ -1,0 +1,153 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import worker,{makeToken} from '../proxy/src/handler.js';
+import {memoryStore,saveUser} from '../proxy/src/users.js';
+import {readMetadata,readCatalog,prepareImport,catalogKey,metadataKey,publicHistory,publicMetadata,saveMetadata,withTicketLock,guardedTransition,closureErrors,INTERNAL_ASSIGNEE} from '../proxy/src/ticket-metadata.js';
+import {buildReport,reportPeriod} from '../proxy/src/reports.js';
+import {createReadTools} from '../proxy/src/ai.js';
+const admin={email:'admin@example.invalid',name:'Manager',role:'admin',dev:'builder',v:1};
+const user={email:'user@example.invalid',name:'Developer',role:'user',dev:'builder',v:1};
+async function setup(){
+ const env={SESSION_SECRET:'synthetic-secret',JIRA_PROJECT:'AION',JIRA_SITE:'https://jira.invalid',JIRA_EMAIL:'bot',JIRA_API_TOKEN:'secret',STORE:memoryStore(),TEAM_CONFIG:JSON.stringify({people:{lead:{id:'lead',name:'Lead'}}})};
+ for(const me of [admin,user])await saveUser(env.STORE,me);
+ const tokens=Object.fromEntries(await Promise.all([admin,user].map(async me=>[me.role,(await makeToken(env,me.email,Date.now(),1)).token])));
+ const imported=await prepareImport({revision:0,entries:[]},[{customer:'Acme',displayName:'Branch A',sourceRow:2},{customer:'',displayName:'Standalone',sourceRow:3}]);
+ await env.STORE.set(catalogKey(env),JSON.stringify({...imported.next,revision:1}));
+ const cat=await readCatalog(env),client=cat.entries.find(e=>e.name==='Standalone'),parent=cat.entries.find(e=>e.name==='Acme'),sub=cat.entries.find(e=>e.name==='Branch A');
+ const calls=[],state={closed:false,jiraFailure:false};
+ globalThis.fetch=async(url,init={})=>{
+  calls.push({url:String(url),method:init.method||'GET',body:init.body?JSON.parse(init.body):null});
+  if((init.method||'GET')==='POST'){
+   if(String(url).includes('/search/'))return Response.json({issues:[],isLast:true});
+   if(state.jiraFailure)return Response.json({errorMessages:['Synthetic Jira failure']},{status:503});
+   state.closed=true;return new Response(null,{status:204});
+  }
+  if(String(url).endsWith('/transitions'))return Response.json({transitions:[{id:'31',to:{name:'Resolved',statusCategory:{key:'done'}}},{id:'11',to:{name:'Open',statusCategory:{key:'new'}}}]});
+  const key=new URL(url).pathname.split('/')[5];
+  return Response.json({key,fields:{project:{key:'AION'},summary:'Synthetic task',labels:['ai1_builder'],status:{name:state.closed?'Closed':'Open',statusCategory:{key:state.closed?'done':'new'}},created:'2026-10-01T22:30:00Z',updated:'2026-10-15T10:00:00Z'}});
+ };
+ const call=(path,method='GET',body,me=user)=>worker.fetch(new Request('https://proxy.invalid'+path,{method,headers:{Authorization:'Bearer '+tokens[me.role],'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})}),env);
+ const create=async(me=user,extra={})=>{const r=await call('/internal','POST',{summary:'Task',devs:['builder'],metadata:{clientId:client.id,subClientId:null,...(me.role==='admin'?{billing:'billable'}:{})},...extra},me);assert.equal(r.status,201,JSON.stringify(await r.clone().json()));return (await r.json()).ticket;};
+ const fields={revision:0,estimatedHours:1.25,actualHours:2.5,workDone:'Implemented and verified',clientId:client.id,subClientId:null};
+ return {env,call,create,client,parent,sub,calls,state,fields};
+}
+test('catalog mapping preserves names, standalone clients, source rows and repeat imports',async()=>{
+ const s=await setup(),cat=await readCatalog(s.env);assert.equal(cat.entries.length,3);assert.equal(s.sub.parentId,s.parent.id);assert.equal(s.client.parentId,null);
+ const rows=[{customer:'Acme',displayName:'Branch A',sourceRow:2},{customer:'',displayName:'Standalone',sourceRow:3}];assert.equal((await prepareImport(cat,rows)).preview.added,0);
+ await s.call('/clients','PUT',{revision:1,id:s.client.id,name:'Renamed'},admin);assert.equal((await prepareImport(await readCatalog(s.env),rows)).preview.added,0);
+ const r=await s.call('/clients/import/preview','POST',{rows},admin);assert.equal(r.status,200);assert.equal((await readCatalog(s.env)).revision,2);
+ assert.equal((await s.call('/clients','POST',{revision:2,name:'Forbidden'},user)).status,403);
+});
+test('invalid catalog import is all-or-nothing and revisions protect administrator changes',async()=>{
+ const s=await setup();assert.equal((await s.call('/clients/import','POST',{revision:1,rows:[{displayName:'Okay'},{displayName:''}]},admin)).status,400);assert.equal((await readCatalog(s.env)).entries.length,3);
+ assert.equal((await s.call('/clients','POST',{revision:0,name:'Stale'},admin)).status,409);
+ await s.call('/clients','PUT',{revision:1,id:s.sub.id,archived:true},admin);assert.equal((await readCatalog(s.env)).entries.find(e=>e.id===s.sub.id).archived,true);
+});
+test('internal creation defaults to shared assignee, stores fields separately and scopes visibility',async()=>{
+ const s=await setup(),ticket=await s.create();assert.equal(ticket.assignee,INTERNAL_ASSIGNEE);assert.deepEqual(ticket.devs,['builder']);assert.equal(ticket.clientId,undefined);
+ const record=await readMetadata(s.env,ticket.key);assert.equal(record.clientId,s.client.id);
+ await s.env.STORE.set('it:INT-99',JSON.stringify({...ticket,key:'INT-99',devs:['other']}));
+ const list=await (await s.call('/internal')).json();assert.deepEqual(list.tickets.map(t=>t.key),[ticket.key]);assert.equal((await s.call('/ticket-metadata?key=INT-99')).status,404);
+ assert.equal((await s.call('/internal','POST',{summary:'Missing client'},user)).status,400);
+});
+test('client selection requires matching active sub-client and locks administrator-only changes',async()=>{
+ const s=await setup();assert.equal((await s.call('/internal','POST',{summary:'Task',metadata:{clientId:s.parent.id}},user)).status,400);
+ const t=await s.create(user,{metadata:{clientId:s.parent.id,subClientId:s.sub.id}});
+ assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,clientId:s.client.id,subClientId:null}},user)).status,403);
+ assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,clientId:s.client.id,subClientId:s.sub.id}},admin)).status,400);
+});
+test('billing never reaches user metadata, history or batch reads and forged writes fail',async()=>{
+ const s=await setup(),t=await s.create(admin,{metadata:{clientId:s.client.id,billing:'billable'}});
+ const r=await (await s.call('/ticket-metadata?key='+t.key)).json();assert.equal('billing'in r.metadata,false);assert.doesNotMatch(JSON.stringify(r.history),/billable|billing/);
+ const batch=await (await s.call('/ticket-metadata/batch','POST',{keys:[t.key]})).json();assert.equal('billing'in batch.records[t.key],false);
+ assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,billing:'not_billable'}})).status,403);
+ assert.equal((await s.call('/reports/run','POST',{workflow:'management'})).status,403);
+});
+test('positive decimal hours, text bounds and unknown fields are validated server-side',async()=>{
+ const s=await setup(),t=await s.create();for(const invalid of [0,-1,1.001,1.0000000001,'2',Infinity]){const r=await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,actualHours:invalid}});if(invalid===Infinity)assert.equal(r.status,200);else assert.equal(r.status,400);}
+ // JSON represents Infinity as null; direct service calls reject non-finite numeric values.
+ await assert.rejects(saveMetadata(s.env,t.key,{revision:2,actualHours:Infinity},user),/positive number/);
+ for(const patch of [{workDone:'x'.repeat(5001)},{created:'2020-01-01'},{completedAt:'forged'}])assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:2,...patch}})).status,400);
+ assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:2,actualHours:0.01,estimatedHours:1.25,workDone:'Done'}})).status,200);
+});
+test('users cannot close incomplete internal tickets; valid fields allow closing and lock both roles',async()=>{
+ const s=await setup(),t=await s.create();assert.equal((await s.call('/internal/'+t.key,'PUT',{status:'Closed'})).status,400);
+ assert.equal(JSON.parse(await s.env.STORE.get('it:'+t.key)).status,'Open');
+ assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,estimatedHours:1,actualHours:2,workDone:'Done'}})).status,200);
+ assert.equal((await s.call('/internal/'+t.key,'PUT',{status:'Closed'})).status,200);
+ const m=await readMetadata(s.env,t.key);assert.ok(m.completedAt);
+ for(const me of [admin,user])assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:m.revision,workDone:'Changed'}},me)).status,409);
+ assert.equal((await s.call('/internal/'+t.key,'PUT',{status:'Open'},admin)).status,200);
+ const fresh=await readMetadata(s.env,t.key);assert.equal(fresh.completedAt,null);assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:fresh.revision,workDone:'Corrected'}})).status,200);
+});
+test('administrator override requires a reason and records successful closure requirements',async()=>{
+ const s=await setup(),t=await s.create();assert.equal((await s.call('/internal/'+t.key,'PUT',{status:'Closed'},admin)).status,400);
+ assert.equal((await s.call('/internal/'+t.key,'PUT',{status:'Closed',overrideReason:'Approved exception'},admin)).status,200);
+ const m=await readMetadata(s.env,t.key),h=m.history.find(h=>h.type==='override');assert.equal(h.reason,'Approved exception');assert.equal(h.by.email,admin.email);assert.ok(h.missing.some(s=>s.includes('actual hours')));
+ assert.equal(publicHistory(m,user).some(h=>h.type==='override'),false);
+});
+test('stale and concurrent metadata saves cannot overwrite successful edits',async()=>{
+ const s=await setup(),t=await s.create(),body={key:t.key,fields:{revision:1,workDone:'One'}};
+ const results=await Promise.all([s.call('/ticket-metadata','PUT',body),s.call('/ticket-metadata','PUT',body)]);assert.deepEqual(results.map(r=>r.status).sort(),[200,409]);
+ assert.equal((await s.call('/ticket-metadata','PUT',body)).status,409);
+});
+test('Jira closures inspect destination and never send business fields to Jira',async()=>{
+ const s=await setup();assert.equal((await s.call('/jira/issue/AION-1/transitions','POST',{id:31})).status,400);assert.equal(s.calls.filter(c=>c.method==='POST').length,0);
+ assert.equal((await s.call('/ticket-metadata','PUT',{key:'AION-1',fields:s.fields},admin)).status,200);
+ assert.equal((await s.call('/jira/issue/AION-1/transitions','POST',{id:31})).status,200);
+ const mutation=s.calls.find(c=>c.method==='POST');assert.deepEqual(mutation.body,{transition:{id:'31'}});
+ assert.equal((await s.call('/ticket-metadata','PUT',{key:'AION-1',fields:{revision:2,workDone:'Changed'}},admin)).status,409);
+ assert.equal((await s.call('/jira/issue/AION-1','PUT',{fields:{assignee:{accountId:INTERNAL_ASSIGNEE}}},admin)).status,400);
+});
+test('failed Jira transitions never record completion or successful overrides',async()=>{
+ const s=await setup();s.state.jiraFailure=true;
+ assert.equal((await s.call('/jira/issue/AION-1/transitions','POST',{id:31,overrideReason:'Exception'},admin)).status,502);
+ const m=await readMetadata(s.env,'AION-1');assert.equal(m.completedAt,null);assert.equal(m.history.length,0);
+});
+test('externally closed Jira tickets lock fields and unavailable stores fail clearly',async()=>{
+ const s=await setup();s.state.closed=true;assert.equal((await s.call('/ticket-metadata','PUT',{key:'AION-1',fields:s.fields},admin)).status,409);
+ await assert.rejects(readMetadata({JIRA_PROJECT:'AION'},'AION-1'),/persistent database/);
+ assert.equal((await s.call('/ticket-metadata?key=OTHER-1')).status,400);
+});
+test('reports reconcile ticket-total hours, partial coverage, missing dates and administrator access',async()=>{
+ const s=await setup(),t=await s.create();await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,estimatedHours:1,actualHours:2,workDone:'Done'}});
+ const base=JSON.parse(await s.env.STORE.get('it:'+t.key)),deps={readSearch:async()=>({issues:[{key:'AION-1',fields:{summary:'Closed without date',status:{name:'Done',statusCategory:{key:'done'}},created:'2026-10-14T10:00:00Z',updated:'2026-10-15T10:00:00Z'}}],isLast:false}),readInternal:async()=>[{...base,title:base.summary,closed:false,cat:'new',created:'2026-10-14T10:00:00Z'}]};
+ const r=await buildReport(s.env,admin,deps,{workflow:'management'},new Date('2026-10-15T10:00:00Z'));assert.equal(r.totals.open,1);assert.equal(r.totals.created,2);assert.equal(r.totals.completed,0);assert.equal(r.coverage.jiraComplete,false);assert.match(r.warnings.join(' '),/no verified completion date/);assert.equal(r.groups.reduce((n,g)=>n+(g.actualHours||0),0),2);assert.match(r.hoursLabel,/not hours worked/);
+ assert.equal(r.tickets.find(x=>x.key===t.key).overEstimate.percent,100);await assert.rejects(buildReport(s.env,user,deps),/Only administrators/);
+ assert.throws(()=>reportPeriod({start:'2026-02-30',end:'2026-10-15'}),/valid report period/);
+});
+test('AI internal reads filter unauthorized developers and omit user billing even from an unsafe adapter',async()=>{
+ const internal=[{key:'INT-1',title:'Own',devs:['builder'],status:'Open'},{key:'INT-2',title:'Other',devs:['other'],status:'Open'}];
+ const tools=createReadTools({me:user,project:'AION',readSearch:async()=>({issues:[],isLast:true}),readDashboard:async()=>internal,readBusiness:async key=>({...internal.find(t=>t.key===key),billing:'billable',workDone:'Done',actualHours:1})});
+ const r=await tools.execute('search_internal_tickets',{text:'',status:'all'});assert.deepEqual(r.tickets.map(t=>t.key),['INT-1']);assert.doesNotMatch(JSON.stringify(r),/billable|billing|Other/);
+ assert.equal((await tools.execute('read_issue',{key:'INT-2'})).error,'Ticket unavailable in your authorized scope.');await assert.rejects(tools.execute('run_dashboard_report',{workflow:'management',days:7}),/Only managers/);
+ assert.ok(tools.references().some(r=>r.key==='INT-1'));
+});
+
+test('administrator AI reports retain computed totals, bounds, warnings and verified citations',async()=>{
+ const tools=createReadTools({me:admin,project:'AION',readSearch:async()=>({issues:[],isLast:true}),runReport:async()=>({workflow:'hours',period:{start:'2026-10-09',end:'2026-10-15'},coverage:{jiraComplete:false},warnings:['Partial Jira coverage'],totals:{open:3},hoursLabel:'Current ticket totals',groups:[],tickets:[{key:'INT-1',title:'Task',actualHours:2,estimatedHours:1,billing:'billable',missing:[],risks:[],overEstimate:{hours:1,percent:100}}]})});
+ const report=await tools.execute('run_dashboard_report',{workflow:'hours',days:7});assert.equal(report.totals.open,3);assert.equal(report.tickets[0].billing,'billable');assert.deepEqual(report.warnings,['Partial Jira coverage']);assert.equal(tools.references()[0].key,'INT-1');
+});
+
+test('administrator assignment requires explicit billing for Jira assignees, developer labels and internal tickets',async()=>{
+ const s=await setup(),t=await s.create();
+ for(const patch of [{assignee:'lead'},{devs:['builder','other']}]){const r=await s.call('/internal/'+t.key,'PUT',patch,admin);assert.equal(r.status,400);assert.equal((await r.json()).code,'billing_required');}
+ for(const fields of [{assignee:{accountId:'lead'}},{labels:['ai1_builder','ai1_other']}]){const r=await s.call('/jira/issue/AION-1','PUT',{fields},admin);assert.equal(r.status,400);assert.equal((await r.json()).code,'billing_required');}
+ assert.equal(s.calls.filter(c=>c.method==='PUT').length,0);
+ assert.equal((await s.call('/internal','POST',{summary:'Missing billing',devs:['builder'],metadata:{clientId:s.client.id}},admin)).status,400);
+ await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,billing:'not_billable'}},admin);
+ assert.equal((await s.call('/internal/'+t.key,'PUT',{assignee:'lead'},admin)).status,200);
+ await s.call('/ticket-metadata','PUT',{key:'AION-1',fields:{revision:0,billing:'billable'}},admin);
+ assert.equal((await s.call('/jira/issue/AION-1','PUT',{fields:{assignee:{accountId:'lead'}}},admin)).status,200);
+});
+test('user initial dates, submissions and revisions require a saved positive estimate',async()=>{
+ const s=await setup(),t=await s.create(),body={key:t.key,proposedDate:'2026-11-01',reason:'Schedule the work'};
+ const blocked=await s.call('/date-requests/initial','POST',body);assert.equal(blocked.status,400);assert.equal((await blocked.json()).code,'estimate_required');assert.equal(JSON.parse(await s.env.STORE.get('it:'+t.key)).due,null);
+ await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,estimatedHours:2}});
+ assert.equal((await s.call('/date-requests/initial','POST',body)).status,200);
+ const submitted=await s.call('/date-requests/submit','POST',{...body,proposedDate:'2026-11-02'});assert.equal(submitted.status,201);const request=(await submitted.json()).request;
+ await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:2,estimatedHours:null}});
+ assert.equal((await s.call('/date-requests/revise','POST',{...body,id:request.id,version:request.version,proposedDate:'2026-11-03'})).status,400);
+ assert.equal((await s.call('/date-requests/withdraw','POST',{key:t.key,id:request.id,version:request.version})).status,200);
+ assert.equal((await s.call('/date-requests/submit','POST',{...body,proposedDate:'2026-11-04'})).status,400);
+});

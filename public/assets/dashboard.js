@@ -1,6 +1,8 @@
 // AION Team Control dashboard. Jira data comes through the AION proxy (worker/), which checks the
 // sign-in and holds the Jira token. Team details (people, developers, emails) come from the proxy too,
 // so they aren't in this public code.
+import { createTicketBusiness } from "./components/ticket-business.js";
+import { INTERNAL_ASSIGNEE, sortTickets, validSort, createdDate } from "./models/ticket-business.js";
 import { api, apiFile, getSession, signOut } from "./session.js";
 import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normalizeInternalIssue, normalizeOdooIssue } from "./models/issue.js";
 import { createFilters, matchesFilters } from "./models/filters.js";
@@ -29,6 +31,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const FIELDS=["summary","status","assignee","labels","duedate","created","updated","priority","issuetype","comment","parent","reporter"];
   function applyConfig(cfg){
     SITE=cfg.site; PROJECT=cfg.project; MAIL=!!cfg.mail; PEOPLE=cfg.people||{}; DEVS=cfg.devs||[]; DEV_EMAIL=cfg.devEmails||{}; DEV_COLOR=cfg.devColors||{};
+    PEOPLE={...PEOPLE,[INTERNAL_ASSIGNEE]:{name:"Internal Tickets",ini:"IT",id:INTERNAL_ASSIGNEE}};
     BYID={}; for(const k in PEOPLE) BYID[PEOPLE[k].id]=k;
     IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||""; MY_EMAIL=cfg.email||""; INTERNAL=!!cfg.accounts; ODOO=!!cfg.odoo; $("monitor-link").hidden=!ODOO; $("new-int").hidden=!INTERNAL;
     document.body.classList.toggle("role-user",!IS_ADMIN);
@@ -46,6 +49,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(state.view==="history")state.view="list";
     if(state.focus==="duechg")state.focus="open";
     state.f=defaultFilters();
+    try{state.columnsMode=localStorage.getItem("aion.columns."+encodeURIComponent(MY_EMAIL))==="all"?"all":"work";}catch{state.columnsMode="work";}
+    try{const sort=JSON.parse(localStorage.getItem("aion.sort."+encodeURIComponent(MY_EMAIL))||"null");state.sort=validSort(sort,IS_ADMIN)?sort:null;}catch{}
     aiAssistant.configure(cfg);
     ticketBriefs.configure(cfg);
   }
@@ -81,8 +86,14 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const dashUrl=key=>location.origin+location.pathname+"#"+key;
   const ticketUrl=key=>isInt(key)?dashUrl(key):isOdoo(key)?((issueByKey(key)||{}).odooUrl||dashUrl(key)):SITE+"/browse/"+key;
   const sourceName=key=>isOdoo(key)?"Odoo":"Jira";
-  function setDevs(key,want){ const i=issueByKey(key); if(isOdoo(key)) return odooApi.update(key,{devs:[...want]}); return isInt(key)?internalApi.update(key,{devs:[...want]}):jira.edit(key,{labels:labelsWith(i?i.labels:[],want)}); }
-  const doTransition=(key,id)=>isOdoo(key)?odooApi.update(key,{stage:id}).then(r=>{delete ODOO_DETAIL[key];return r;}):isInt(key)?internalApi.update(key,{status:id}):jira.transition(key,id);
+  async function setDevs(key,want){ const i=issueByKey(key); if(isOdoo(key)) return odooApi.update(key,{devs:[...want]});if(IS_ADMIN)await business.ensureBilling(key); return isInt(key)?internalApi.update(key,{devs:[...want]}):jira.edit(key,{labels:labelsWith(i?i.labels:[],want)}); }
+  const doTransition=async(key,id)=>{
+    if(isOdoo(key))return odooApi.update(key,{stage:id}).then(r=>{delete ODOO_DETAIL[key];return r;});
+    if(!business.enabled())throw new Error("Deploy the updated backend before changing ticket status.");
+    if(business.dirty(key))throw new Error("Save the ticket work fields before changing status.");
+    const move=reason=>isInt(key)?internalApi.update(key,{status:id,...(reason?{overrideReason:reason}:{})}):api("/jira/issue/"+key+"/transitions",{method:"POST",body:{id,...(reason?{overrideReason:reason}:{})}});
+    try{return await move();}catch(err){const reason=await business.overrideReason(err,key);if(reason)return move(reason);throw err;}
+  };
   const doComment=(key,text)=>isOdoo(key)?odooApi.note(key,text).then(r=>{delete ODOO_DETAIL[key];return r;}):isInt(key)?internalApi.comment(key,text):jira.comment(key,text);
   // Same shape as a Jira ticket after norm(), so tiles, filters, boards and history all work unchanged.
   const normInternal=t=>normalizeInternalIssue(t,PEOPLE);
@@ -177,11 +188,11 @@ import { createCommentMentions } from "./components/comment-mentions.js";
 
   function passFilters(i,t,skip){
     const filters=IS_ADMIN&&workspace.route().page==="internal"?{...state.f,source:"internal"}:state.f;
-    return matchesFilters(i,t,{filters,query:state.q,needsReply,assigneeKey:i=>assigneeFilterKey(i,PEOPLE)},skip);
+    return business.matches(i,state.businessFilter)&&matchesFilters(i,t,{filters,query:state.q,needsReply,assigneeKey:i=>assigneeFilterKey(i,PEOPLE)},skip);
   }
   const focusDef=()=>FOCUS.find(x=>x.id===state.focus)||FOCUS[0];
   function visible(skip){ const t=todayStr(), fd=focusDef(); return (state.issues||[]).filter(i=>fd.f(i,t)&&passFilters(i,t,skip)); }
-  function filterCount(){ const f=state.f; return f.reporter.size+f.assignee.size+f.dev.size+f.status.size+f.type.size+f.priority.size+(f.epic?1:0)+(f.due!=="any"?1:0)+(f.activity!=="any"?1:0)+(f.source!=="all"&&workspace.route().page!=="internal"?1:0)+(state.q?1:0); }
+  function filterCount(){ const f=state.f; return Object.values(state.businessFilter||{}).filter(Boolean).length+ f.reporter.size+f.assignee.size+f.dev.size+f.status.size+f.type.size+f.priority.size+(f.epic?1:0)+(f.due!=="any"?1:0)+(f.activity!=="any"?1:0)+(f.source!=="all"&&workspace.route().page!=="internal"?1:0)+(state.q?1:0); }
   const showTicketBriefs=()=>ticketBriefs.enabled()&&workspace.route().page!=="internal";
 
   function renderQuickFilters(){
@@ -195,6 +206,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     pick("Status",[["","All statuses"],...[...new Set([...(state.issues||[]).map(i=>i.status),...state.f.status])].sort((a,b)=>stIdx(a)-stIdx(b)).map(x=>[x,x])],val(state.f.status),v=>state.f.status=new Set(v?[v]:[]));
     if(IS_ADMIN)pick("Priority",[["","All priorities"],...[...new Set([...(state.issues||[]).map(i=>i.priority||"None"),...state.f.priority])].sort((a,b)=>a.localeCompare(b)).map(x=>[x,x])],val(state.f.priority),v=>state.f.priority=new Set(v?[v]:[]));
     pick("Due date",DUE_OPTS,state.f.due,v=>state.f.due=v);
+    business.filters(box,state.businessFilter,()=>{state.pageIndex=0;render();});
     const moreField=el("div","quick-field more-filter-field");moreField.append(el("span",null,"Additional filters"),more);box.appendChild(moreField);
     moreField.hidden=!IS_ADMIN;more.hidden=!IS_ADMIN;
     if(!IS_ADMIN)return;
@@ -339,6 +351,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   }
 
   function sortItems(items){
+    if(state.sort)return sortTickets(items,state.sort,IS_ADMIN);
     const fd=state.focus;
     return items.slice().sort((a,b)=>{
       if(fd==="recent"||fd==="reply"||fd==="closed") return a.updated<b.updated?1:-1;
@@ -347,13 +360,27 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     });
   }
 
+  function columnSortMenu(anchor,field){
+    const p=$('pop');p.replaceChildren(el('h4',null,'Sort column'));p.setAttribute('role','menu');
+    for(const [direction,label]of [['asc','Sort ascending'],['desc','Sort descending'],['','Clear sorting']]){const b=el('button','opt',label);b.type='button';b.setAttribute('role','menuitem');b.addEventListener('click',()=>{state.sort=direction?{field,direction}:null;state.pageIndex=0;try{localStorage.setItem('aion.sort.'+encodeURIComponent(MY_EMAIL),JSON.stringify(state.sort));}catch{}closePop();p.setAttribute('role','dialog');render();});p.append(b);}placePop(anchor);p.querySelector('button').focus();
+  }
   function listView(items,t){
-    const w=el("div","listwrap"+(showTicketBriefs()?" with-ai-briefs":"")+" with-email");
+    const w=el("div","listwrap business-list"+(showTicketBriefs()?" with-ai-briefs":"")+" with-email");
+    const tools=el('div','list-toolbar'),presets=el('div','seg');presets.setAttribute('aria-label','Ticket columns');
+    for(const [mode,label]of [['work','Work view'],['all','All columns']]){const b=el('button','',label);b.type='button';b.setAttribute('aria-pressed',String(state.columnsMode===mode));b.addEventListener('click',()=>{state.columnsMode=mode;try{localStorage.setItem('aion.columns.'+encodeURIComponent(MY_EMAIL),mode);}catch{}render();});presets.append(b);}
+    tools.append(presets,el('span','list-toolbar-hint','Right-click a header to sort · Scroll for more columns'));w.append(tools);
     const h=el("div","gr head"); const all=el("input","ck"); all.type="checkbox"; all.setAttribute("aria-label","Select all");
     all.checked=items.every(i=>state.sel.has(i.key)); all.addEventListener("change",()=>{ items.forEach(i=>all.checked?state.sel.add(i.key):state.sel.delete(i.key)); render(); });
     const hc=el("span","c-ck"); hc.appendChild(all); h.appendChild(hc);
-    [["c-key","Ticket ID"],["c-ttl","Title / Priority"],["c-who","Assignee"],["c-rep","Reporter"],["c-dev","Developers"],["c-st","Status"],["c-due","Due date"],["c-cre","Created"],["c-upd","Updated"],["c-note","Internal note"],["c-actions",""]].forEach(([c,x])=>h.appendChild(el("span",c,x)));
+    [["c-key","Ticket ID"],["c-ttl","Title / Priority"],["c-who","Assignee"],["c-rep","Reporter"],["c-dev","Developers"],["c-st","Status"],["c-due","Due date"],["c-cre","Created date"],["c-upd","Updated"],["c-note","Internal note"],["c-actions",""]].forEach(([c,x])=>h.appendChild(el("span",c,x)));
     if(showTicketBriefs()){const label=el("span","c-brief","AI brief");label.title="Generate a short AI explanation of each Jira ticket.";h.insertBefore(label,h.querySelector(".c-who"));}
+    const businessColumns=[['clientName','Client',150],['subClientName','Sub-client',150],['estimatedHours','Estimated hours',100],['actualHours','Actual hours',100],['workDone','Work done',220],...(IS_ADMIN?[['billing','Billing',130]]:[])];
+    businessColumns.forEach(([key,label])=>h.appendChild(el('span','c-'+key,label)));
+    const sortMap={'c-key':'key','c-ttl':'summary','c-who':'assigneeName','c-rep':'reporter','c-dev':'developers','c-st':'status','c-due':'due','c-cre':'created','c-upd':'updated'};
+    for(const header of h.children){const key=sortMap[header.className]||businessColumns.find(c=>header.classList.contains('c-'+c[0]))?.[0];if(!key)continue;const label=header.textContent;header.replaceChildren();const b=el('button','column-sort',label+(state.sort?.field===key?(state.sort.direction==='asc'?' ↑':' ↓'):' ▾'));b.type='button';b.setAttribute('aria-label','Sort '+label);b.setAttribute('aria-haspopup','menu');b.addEventListener('click',()=>columnSortMenu(b,key));header.addEventListener('contextmenu',e=>{e.preventDefault();columnSortMenu(b,key);});header.append(b);}
+    let widths=[28,92,300,...(showTicketBriefs()?[220]:[]),130,150,170,140,120,120,90,120,48,...businessColumns.map(c=>c[2])];
+    if(state.columnsMode!=='all'){applyWorkColumns(h);widths=[28,96,280,120,126,106,180,94,94,220,...(IS_ADMIN?[114]:[]),120,48];w.classList.add('work-columns');}
+    w.style.setProperty('--business-columns',widths.map(n=>n+'px').join(' '));w.style.setProperty('--business-width',(widths.reduce((a,b)=>a+b,0)+10*(widths.length-1)+28)+'px');
     w.appendChild(h);
     const allSorted=sortItems(items), pages=Math.max(1,Math.ceil(allSorted.length/state.pageSize));
     state.pageIndex=Math.min(state.pageIndex,pages-1);
@@ -391,7 +418,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(i.internal) tags.appendChild(el("span","flag int","Internal"));
     if(i.odoo){ tags.appendChild(el("span","flag odoo","Odoo")); if(i.team) tags.appendChild(el("span","epic",i.team.replace(/^ai1 \| /,""))); }
     if(needsReply(i)) tags.appendChild(el("span","flag k6","needs reply"));
-    const age=Math.round(dnum(t)-dnum(i.created)); if(age<=2&&i.cat!=="done") tags.appendChild(el("span","flag k7",age===0?"new today":"new "+age+"d"));
+    const age=Math.round(dnum(t)-dnum(new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Jerusalem",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(i.created)))); if(age<=2&&i.cat!=="done") tags.appendChild(el("span","flag k7",age===0?"new today":"new "+age+"d"));
     if(/high|highest|critical|blocker/i.test(i.priority)) tags.appendChild(el("span","flag k2",i.priority));
     if(i.type==="Bug") tags.appendChild(el("span","flag k2","Bug"));
     if(dateRequests.activeFor(i.key)) tags.appendChild(el("span","date-pending-badge","Date request pending"));
@@ -415,10 +442,15 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   function selBox(i,onChange){ const ck=el("input","ck"); ck.type="checkbox"; ck.checked=state.sel.has(i.key); ck.setAttribute("aria-label","Select "+i.key);
     ck.addEventListener("click",e=>e.stopPropagation()); ck.addEventListener("change",()=>{ ck.checked?state.sel.add(i.key):state.sel.delete(i.key); onChange(ck.checked); updateBulk(); }); return ck; }
 
+  function applyWorkColumns(row){
+    const order=['c-ck','c-key','c-ttl','c-who','c-st','c-due','c-clientName','c-estimatedHours','c-actualHours','c-workDone',...(IS_ADMIN?['c-billing']:[]),'c-note','c-actions'];
+    for(const child of [...row.children])child.hidden=!order.some(c=>child.classList.contains(c));
+    for(const c of order){const child=[...row.children].find(n=>n.classList.contains(c));if(child)row.append(child);}
+  }
   function gridRow(i,t){
     const r=el("div","gr item "+stK(i)+(state.sel.has(i.key)?" sel":""));
     const ckw=el("span","c-ck"); ckw.appendChild(selBox(i,on=>r.classList.toggle("sel",on))); r.appendChild(ckw);
-    const kw=el("span","c-key"); kw.appendChild(keyLink(i)); r.appendChild(kw);
+    const kw=el("span","c-key"); kw.appendChild(keyLink(i));kw.appendChild(el("small","business-key-date",createdDate(i.created))); r.appendChild(kw);
     const tt=el("button","ttl c-ttl"); tt.type="button"; tt.title="Open details";
     const s=el("span","s",i.summary); s.dir="auto"; tt.appendChild(s);
     const tags=tagsFor(i,t,state.group!=="epic"); if(tags.childNodes.length) tt.appendChild(tags);
@@ -431,11 +463,13 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     r.appendChild(devButton(i));
     const sw=el("span","c-st"); sw.appendChild(statusButton(i)); r.appendChild(sw);
     const dw=el("span","c-due"); dw.appendChild(dueButton(i,t)); r.appendChild(dw);
-    { const cr=el("span","upd c-cre",fmtDate(i.created)); cr.title="Created "+i.created; cr.style.fontFamily="var(--mono)"; r.appendChild(cr); }
+    { const cr=el("span","upd c-cre",createdDate(i.created)); cr.title="Created "+fmtWhen(i.created).d+" "+fmtWhen(i.created).t+" (Asia/Jerusalem)"; cr.style.fontFamily="var(--mono)"; r.appendChild(cr); }
     r.appendChild(el("span","upd c-upd",ago(i.updated)));
     { const nb=el("button","notebtn c-note email-button","Internal note"); nb.type="button"; nb.setAttribute("aria-label","Internal note for "+i.key);nb.title=IS_ADMIN?"Email the developer directly (not posted in Jira)":"Send a private note to admins"; nb.addEventListener("click",e=>{ e.stopPropagation(); notePopover(nb,i.key); }); r.appendChild(nb); }
 
     const actions=el("span","c-actions"), menu=el("button","icon-btn row-menu","⋯");menu.type="button";menu.setAttribute("aria-label","Actions for "+i.key);menu.setAttribute("aria-haspopup","dialog");menu.addEventListener("click",()=>rowActions(menu,i));actions.appendChild(menu);r.appendChild(actions);
+    for(const key of ['clientName','subClientName','estimatedHours','actualHours','workDone',...(IS_ADMIN?['billing']:[])]){const value=i[key],text=key==='billing'?(value==='not_billable'?'Not billable':value==='billable'?'Billable':'Not set'):value??'Not set';const c=el('span','business-cell c-'+key,String(text||'Not set'));if(key==='workDone'){c.textContent=value?value.slice(0,100)+(value.length>100?'…':''):'Not set';c.title=value||'';}r.append(c);}
+    if(state.columnsMode!=='all'){applyWorkColumns(r);const client=r.querySelector('.c-clientName');if(i.subClientName)client.append(el('small','client-secondary',i.subClientName));}
     return r;
   }
 
@@ -589,7 +623,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     dateRequests.formRequest(keys[0]);
   }
   const initialsOf=n=>String(n||"?").split(/\s+/).filter(Boolean).map(x=>x[0]).join("").slice(0,2).toUpperCase()||"?";
-  function assignOps(keys,id){ return keys.map(k=>{ const i=issueByKey(k); if(i&&i.assigneeId===id) return null; if(isOdoo(k)) return null; if(isInt(k)) return BYID[id]?{key:k,run:()=>internalApi.update(k,{assignee:BYID[id]})}:null; return {key:k,run:()=>jira.edit(k,{assignee:id?{accountId:id}:null})}; }).filter(Boolean); }
+  function assignOps(keys,id){ return keys.map(k=>{ const i=issueByKey(k); if(i&&i.assigneeId===id) return null; if(isOdoo(k)) return null; if(isInt(k)) return BYID[id]?{key:k,run:async()=>{await business.ensureBilling(k);return internalApi.update(k,{assignee:BYID[id]});}}:null; if(id===INTERNAL_ASSIGNEE)return null; return {key:k,run:async()=>{await business.ensureBilling(k);return jira.edit(k,{assignee:id?{accountId:id}:null});}}; }).filter(Boolean); }
   async function doAssign(keys,id,name){
     const ops=assignOps(keys,id); if(!ops.length){ toast("Already assigned to "+name+"."); return {ok:0,fail:0}; }
     const r=await runBatch(ops,"Assigned to "+name);
@@ -603,7 +637,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const opt=(id,name,note,k)=>{ const b=el("button","opt"); b.type="button"; b.appendChild(el("span","av "+(k||"k8"),initialsOf(name))); b.appendChild(el("span",null,name));
       b.appendChild(el("span","cnt",one&&one.assigneeId===id?"current":note||""));
       b.addEventListener("click",async()=>{ closePop(); await doAssign(keys,id,name); }); body.appendChild(b); };
-    Object.keys(PEOPLE).forEach(k=>opt(PEOPLE[k].id,PEOPLE[k].name,"team","kp-"+k));
+    Object.keys(PEOPLE).filter(k=>k!==INTERNAL_ASSIGNEE||keys.every(isInt)).forEach(k=>opt(PEOPLE[k].id,PEOPLE[k].name,"team","kp-"+k));
     const extra=new Map(); keys.forEach(k=>{ const i=issueByKey(k); if(i&&i.reporterId&&!BYID[i.reporterId]) extra.set(i.reporterId,i.reporter); });
     extra.forEach((n,id)=>opt(id,n,"reporter","k6"));
     const foot=el("div","foot"); const inp=el("input","inp"); inp.placeholder="Search anyone in Jira…"; inp.style.flex="1"; inp.setAttribute("aria-label","Search Jira users");
@@ -721,7 +755,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(batchBusy){ toast("Another update is still running."); return {ok:0,fail:0}; }
     batchBusy=true; let ok=0; const fails=[]; const done=[];
     for(let n=0;n<ops.length;n++){ if(ops.length>1) toast("Updating "+(n+1)+" of "+ops.length+"…");
-      try{ await ops[n].run(); ok++; done.push(ops[n]); }catch(err){ const amb=err&&err.code==="network"; fails.push(ops[n].key+": "+(amb?"Jira didn't confirm, check the ticket":errorText(err))); if(err&&err.code==="session") break; } }
+      try{try{await ops[n].run();}catch(error){if(error.code!=="billing_required"||!IS_ADMIN||isOdoo(ops[n].key))throw error;await business.ensureBilling(ops[n].key);await ops[n].run();} ok++; done.push(ops[n]); }catch(err){ const amb=err&&err.code==="network"; fails.push(ops[n].key+": "+(amb?"Jira didn't confirm, check the ticket":errorText(err))); if(err&&err.code==="session") break; } }
     batchBusy=false;
     if(fails.length) toast(okText+" on "+ok+" of "+ops.length+". These need a look:",fails,true); else toast(okText+(ops.length>1?" on "+ok+" tickets":"")+".");
     const toNotify=done.filter(o=>o.added&&o.added.length);
@@ -772,13 +806,13 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(c==="rate_limited") return "Jira is busy. Wait a moment and try again.";
     if(c==="jira") return "Jira refused: "+(err.message||"unknown error");
     return "Couldn't reach Jira"+(err&&err.message?": "+err.message:"."); }
-  function mergeIssues(){ const m=new Map(); state.mainIssues.forEach(i=>m.set(i.key,i)); state.closedIssues.forEach(i=>{ if(!m.has(i.key)) m.set(i.key,i); }); state.internalIssues.forEach(i=>m.set(i.key,i)); state.odooIssues.forEach(i=>m.set(i.key,i)); state.issues=[...m.values()].map(i=>({...i,pendingDateRequest:!!dateRequests.activeFor(i.key)})); }
+  function mergeIssues(){ const m=new Map(); state.mainIssues.forEach(i=>m.set(i.key,i)); state.closedIssues.forEach(i=>{ if(!m.has(i.key)) m.set(i.key,i); }); state.internalIssues.forEach(i=>m.set(i.key,i)); state.odooIssues.forEach(i=>m.set(i.key,i)); state.issues=[...m.values()].map(i=>({...business.decorate(i),pendingDateRequest:!!dateRequests.activeFor(i.key)})); }
   let closedBusy=false;
   async function loadClosed(){
     if(closedBusy) return; const days=state.closedDays; closedBusy=true;
     try{
       const list=await searchAll('project = '+PROJECT+' AND issuetype != Epic AND statusCategory = Done AND updated >= -'+days+'d ORDER BY updated DESC',FIELDS);
-      state.closedIssues=list.map(norm); mergeIssues(); if($("pop").hidden&&!drag) render();
+      state.closedIssues=list.map(norm); await business.load(list.map(i=>i.key));mergeIssues(); if($("pop").hidden&&!drag) render();
     }catch(err){ if(state.focus==="closed") toast("Couldn't load closed tickets",[errorText(err)],true); }
     finally{ closedBusy=false; if(state.closedDays!==days) loadClosed(); }
   }
@@ -786,7 +820,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   async function reload(){
     if(loading) return; loading=true;
     try{ const [issues]=await Promise.all([searchAll(JQL,FIELDS),loadInternal(),loadOdoo(),dateRequests.load()]);
-      state.mainIssues=issues.map(norm); mergeIssues(); showState(""); setTimeout(()=>loadClosed(),0);
+      state.mainIssues=issues.map(norm);await business.load([...issues.map(i=>i.key),...state.internalIssues.map(i=>i.key)]);mergeIssues(); showState(""); setTimeout(()=>loadClosed(),0);
       lastLoad=Date.now(); $("updated").textContent="updated "+new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
       if($("pop").hidden&&!drag) render();
       if(dz.key)dateRequests.renderDrawer(dz.key);
@@ -798,11 +832,11 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   $("notify").checked=notifyOn; $("notify").addEventListener("change",e=>{ notifyOn=e.target.checked; try{localStorage.setItem("aion.notify",notifyOn?"1":"0");}catch(x){} toast(notifyOn?(MAIL?"Developers will be emailed when assigned.":"You'll be offered an email to developers when you assign them."):"Assignment emails are off."); });
   $("grp").addEventListener("change",e=>{ state.group=e.target.value; try{localStorage.setItem("aion.group",state.group);}catch(x){} render(); });
   $("ftoggle").addEventListener("click",()=>{ state.fopen=!state.fopen; try{localStorage.setItem("aion.fopen",state.fopen?"1":"0");}catch(e){} renderFilters(); });
-  $("fclear").addEventListener("click",()=>{ state.f=defaultFilters(); state.q=""; $("q").value=""; state.sel.clear(); render(); });
+  $("fclear").addEventListener("click",()=>{ state.f=defaultFilters();state.businessFilter={}; state.q=""; $("q").value=""; state.sel.clear(); render(); });
   let qt=null; $("q").addEventListener("input",e=>{ clearTimeout(qt); qt=setTimeout(()=>{ state.q=e.target.value.trim(); render(); },150); });
 
   const dz={key:null,labels:[],devs:new Set()};
-  function closeDrawer(force){ if(dz.key&&force!==true&&!drawerUI.allowClose())return false;ticketNotes.reset(dz.key);$("drawer").hidden=true;$("scrim").hidden=true;dz.key=null;drawerUI.close();return true; }
+  function closeDrawer(force){ if(dz.key&&force!==true&&!drawerUI.allowClose())return false;ticketNotes.reset(dz.key);business.reset();$("drawer").hidden=true;$("scrim").hidden=true;dz.key=null;drawerUI.close();return true; }
   $("d-close").addEventListener("click",closeDrawer); $("scrim").addEventListener("click",closeDrawer);
   function setMsg(id,text,ok){ const m=$(id); m.textContent=text||""; m.className="msg"+(text?(ok?" ok":" err"):""); }
   function renderDevChips(){ const box=$("d-devs"); box.replaceChildren(); const names=new Set(allDevs()); dz.devs.forEach(d=>names.add(d));
@@ -831,6 +865,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     }catch(err){ if(dz.key===key) $("d-trans").replaceChildren(el("span","msg err",errorText(err))); }
   }
   async function loadDetail(key){
+    business.renderEditor(key);
     loadTransitions(key);
     if(isInt(key)){ renderInternal(key); return; }
     $("d-reply").placeholder="Write a comment or answer…";
@@ -840,7 +875,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       if(dz.key!==key) return; const raw=list[0]; if(!raw){ $("d-desc").replaceChildren(el("span",null,"Ticket not found.")); return; }
       const f=raw.fields||{}, ni=norm(raw);
       $("d-title").textContent=f.summary||key; $("d-status").textContent=ni.status; $("d-status").className="stbtn "+stK(ni);
-      $("d-facts").replaceChildren(fact("Assignee",(f.assignee&&f.assignee.displayName)||"Unassigned"),fact("Reporter",(f.reporter&&f.reporter.displayName)||""),fact("Epic",ni.parent?ni.parent.name:""),fact("Type",ni.type),fact("Priority",ni.priority),fact("Created",ago(f.created)),fact("Updated",ago(f.updated)),fact("Due",f.duedate?fmtDate(f.duedate):"not set"));
+      $("d-facts").replaceChildren(fact("Assignee",(f.assignee&&f.assignee.displayName)||"Unassigned"),fact("Reporter",(f.reporter&&f.reporter.displayName)||""),fact("Epic",ni.parent?ni.parent.name:""),fact("Type",ni.type),fact("Priority",ni.priority),fact("Created date",createdDate(f.created)),fact("Updated",ago(f.updated)),fact("Due",f.duedate?fmtDate(f.duedate):"not set"));
       dz.labels=(f.labels||[]).slice(); dz.devs=new Set(ni.devs); renderDevChips(); $("d-due").value=f.duedate||"";
       $("d-desc").replaceChildren(richNode(f.description));
       renderAttachments(f.attachment||[]);
@@ -878,7 +913,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const t=INT[key]; if(!t){ $("d-desc").replaceChildren(el("span",null,"Ticket not found.")); return; }
     const ni=normInternal(t);
     $("d-title").textContent=t.summary; $("d-status").textContent=t.status; $("d-status").className="stbtn "+stK(ni);
-    $("d-facts").replaceChildren(fact("Type","Internal (not in Jira)"),fact("Assignee",ni.assigneeName),fact("Priority",t.priority),fact("Developers",(t.devs||[]).map(d=>"ai1_"+d).join(", ")),fact("Opened by",t.createdBy&&t.createdBy.name),fact("Created",ago(t.created)),fact("Updated",ago(t.updated)),fact("Due",t.due?fmtDate(t.due):"not set"),fact("Closed",t.closedAt?ago(t.closedAt):""));
+    $("d-facts").replaceChildren(fact("Type","Internal (not in Jira)"),fact("Assignee",ni.assigneeName),fact("Priority",t.priority),fact("Developers",(t.devs||[]).map(d=>"ai1_"+d).join(", ")),fact("Opened by",t.createdBy&&t.createdBy.name),fact("Created date",createdDate(t.created)),fact("Updated",ago(t.updated)),fact("Due",t.due?fmtDate(t.due):"not set"),fact("Closed",t.closedAt?ago(t.closedAt):""));
     dz.labels=ni.labels.slice(); dz.devs=new Set(ni.devs); renderDevChips(); $("d-due").value=t.due||"";
     HIST[key]={updated:t.updated,changes:(t.dueHistory||[]).map(h=>({when:h.when,by:h.by,from:h.from,to:h.to}))}; renderDrawerHist(key);
     { const box=$("d-asgname"); box.replaceChildren(el("span","av "+(ni.assignee?"kp-"+ni.assignee:"k8"),initialsOf(ni.assigneeName)),el("span",null,ni.assigneeName)); }
@@ -947,7 +982,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       // Assignee: Karim, Youssef or Rami, like the Jira tickets. Youssef is pre-selected.
       asg=fld("Assignee",el("select","fsel")); asg.appendChild(new Option("Choose…",""));
       Object.keys(PEOPLE).forEach(k=>asg.appendChild(new Option(PEOPLE[k].name,k)));
-      asg.value=PEOPLE.youssef?"youssef":(Object.keys(PEOPLE)[0]||"");
+      asg.value=INTERNAL_ASSIGNEE;
+      if(!IS_ADMIN)asg.disabled=true;
       if(IS_ADMIN){
         devs=new Set(); const rc=el("div","rcpts");
         allDevs().forEach(d=>{ const c=el("button","fc "+devK(d)); c.type="button"; c.appendChild(el("span","sw")); c.appendChild(el("span",null,"ai1_"+d)); c.setAttribute("aria-pressed","false");
@@ -956,6 +992,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       } else fld("Developer",el("span","dev "+devK(MY_DEV),"ai1_"+MY_DEV+" (you)"));
       body.appendChild(el("p","date-context","Create the ticket first, then request or approve its due date."));
     }
+    const newFields=!t?business.createFields(body,{creating:true}):null;
     const foot=el("div","foot"); const msg=el("span","msg"); const save=el("button","btn primary sp",t?"Save":"Create ticket"); save.type="button";
     save.addEventListener("click",async()=>{
       if(!title.value.trim()){ msg.textContent="Write a title."; msg.className="msg err"; title.focus(); return; }
@@ -964,7 +1001,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       save.disabled=true; msg.textContent="";
       try{
         if(t){ await internalApi.update(key,{summary:title.value,description:desc.value,priority:prio.value}); closePop(); toast("Saved."); await reload(); if(dz.key===key) loadDetail(key); return; }
-        const r=await internalApi.create({summary:title.value,description:desc.value,priority:prio.value,devs:devs?[...devs]:[MY_DEV],...(asg&&asg.value?{assignee:asg.value}:{})});
+        if(!business.enabled())throw new Error("Deploy the updated backend before creating tickets.");
+        const r=await internalApi.create({metadata:newFields.read(),summary:title.value,description:desc.value,priority:prio.value,devs:devs?[...devs]:[MY_DEV],...(asg&&asg.value?{assignee:asg.value}:{})});
         closePop(); toast(r.ticket.key+" created.");
         await reload(); openDrawer(r.ticket.key);
         if(IS_ADMIN&&notifyOn&&r.ticket.devs.length) setTimeout(()=>notifyDevs([{key:r.ticket.key,added:r.ticket.devs}]),1500);
@@ -1005,11 +1043,14 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(Date.now()-lastLoad>120000&&document.visibilityState==="visible"&&!batchBusy&&$("pop").hidden&&!drag){ lastLoad=Date.now(); reload(); } },1000);
   $("signout").addEventListener("click",()=>signOut());
   const ticketHistory=createTicketHistory({api,getIssue:()=>issueByKey(dz.key),allowed:()=>IS_ADMIN&&!!dz.key&&!isInt(dz.key)&&!isOdoo(dz.key)&&!$("drawer").hidden,formatTime:value=>{const time=fmtWhen(value);return time.d+" "+time.t;}});
-  const drawerUI=createIssueDrawer({canViewHistory:()=>IS_ADMIN,canViewFullHistory:()=>IS_ADMIN&&!!dz.key&&!isInt(dz.key)&&!isOdoo(dz.key),onSelect:id=>{if(id==="history")ticketHistory.load(dz.key);if(id==="notes")ticketNotes.load(dz.key);},isDirty:()=>{if(ticketNotes.dirty(dz.key))return true;const issue=issueByKey(dz.key);if(!issue)return !!$("d-reply").value.trim();return !!$("d-reply").value.trim()||!!$("d-newdev").value.trim()||dz.devs.size!==issue.devs.length||issue.devs.some(d=>!dz.devs.has(d));}});
+  const drawerUI=createIssueDrawer({canViewHistory:()=>IS_ADMIN,canViewFullHistory:()=>IS_ADMIN&&!!dz.key&&!isInt(dz.key)&&!isOdoo(dz.key),onSelect:id=>{if(id==="history")ticketHistory.load(dz.key);if(id==="notes")ticketNotes.load(dz.key);},isDirty:()=>{if(business.dirty(dz.key)||ticketNotes.dirty(dz.key))return true;const issue=issueByKey(dz.key);if(!issue)return !!$("d-reply").value.trim();return !!$("d-reply").value.trim()||!!$("d-newdev").value.trim()||dz.devs.size!==issue.devs.length||issue.devs.some(d=>!dz.devs.has(d));}});
   const ticketNotes=createTicketNotes({api,isAdmin:IS_ADMIN});
   const dueDateHistory=createDueDateHistory({api,tickets:()=>state.issues||[],internal:key=>INT[key],openIssue:openDrawer});
   const dateRequests=createDateRequests({api,renderHistory:target=>dueDateHistory.render(target),context:()=>({admin:IS_ADMIN,email:MY_EMAIL,ticket:issueByKey}),openIssue:openDrawer,onChange:async()=>{await reload();if(dz.key){dateRequests.renderDrawer(dz.key);loadDetail(dz.key);}}});
-  const workspace=createWorkspace({state,context:()=>({admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount(),dateRequests:dateRequests.all(),pendingDates:dateRequests.pendingCount(),renderRequests:(target,options)=>dateRequests.render(target,options)}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>!dz.key||closeDrawer()});
+  state.businessFilter={};
+  const business=createTicketBusiness({api,context:()=>({admin:IS_ADMIN,email:MY_EMAIL,key:dz.key}),onChange:reload,openIssue:openDrawer});
+  $('b-client').addEventListener('click',()=>business.bulk(selected()).catch(err=>toast('Client assignment failed',[errorText(err)],true)));
+  const workspace=createWorkspace({state,context:()=>({admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount(),dateRequests:dateRequests.all(),pendingDates:dateRequests.pendingCount(),renderReports:target=>business.renderReports(target),renderCatalog:target=>business.renderCatalog(target),renderRequests:(target,options)=>dateRequests.render(target,options)}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>!dz.key||closeDrawer()});
   const aiAssistant=createAIAssistant({openIssue:openDrawer,beforeOpen:()=>{if(dz.key&&!closeDrawer())return false;closePop();return true;}});
   const ticketBriefs=createTicketBriefs({api});
   const assigneeFilter=createAssigneeFilter({getSelection:()=>state.f.assignee,getOptions:()=>assigneeOptions(PEOPLE),getDefaults:()=>defaultAssigneeKeys(PEOPLE),getCounts:()=>countBy("assignee",i=>assigneeFilterKey(i,PEOPLE)),onApply:selected=>{state.f.assignee=selected;state.sel.clear();state.pageIndex=0;render();}});
@@ -1020,7 +1061,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const s=getSession(); if(!s){ signOut(true); return; }
     $("me").textContent=s.email; ME=s.email.split("@")[0].replace(/^./,c=>c.toUpperCase());
     $("today").textContent=fmtDate(todayStr())+" "+todayStr().slice(0,4);
-    try{ applyConfig(await api("/config")); }
+    try{ const cfg=await api("/config");applyConfig(cfg);await business.configure(cfg);if(!business.enabled())toast("Backend update required",["Deploy the updated proxy to enable ticket fields and validated status changes."],true); }
     catch(err){ showState(errorText(err),true); $("updated").textContent="not connected"; return; }
     workspace.configure();
     await reload();

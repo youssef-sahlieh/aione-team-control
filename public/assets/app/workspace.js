@@ -12,6 +12,8 @@ const icons = {
   boards: "M3 4h5v16H3z M10 4h5v11h-5z M17 4h5v14h-5z",
   workload: "M4 20V10 M10 20V4 M16 20v-7 M22 20H2",
   calendar: "M4 5h16v16H4z M8 2v6 M16 2v6 M4 10h16 M8 14h2 M14 14h2",
+  reports: "M4 3h16v18H4z M8 8h8 M8 12h8 M8 16h5",
+  clients: "M3 6h18v15H3z M7 6V3h10v3 M7 11h10",
   requests: "M3 5v6h6 M3 11a9 9 0 1 1 2 7 M12 7v5l3 2",
   audit: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z M9 12l2 2 4-4"
 };
@@ -22,7 +24,9 @@ const pages = [
   ["boards", "Boards", "Keep work moving with a shared view of every stage."],
   ["workload", "Workload", "Understand assignments, deadlines, and where support is needed."],
   ["calendar", "Calendar", "Make space for what's next. Plan around your ticket due dates."],
-  ["requests", "Date requests", "Review and decide proposed date changes."]
+  ["requests", "Date requests", "Review and decide proposed date changes."],
+  ["reports", "Checks & Reports", "Run ticket checks and review management reports."],
+  ["clients", "Clients", "Manage clients, sub-clients, and catalog imports."]
 ];
 function icon(name) {
   const box = node("span", "nav-icon");
@@ -100,12 +104,14 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
   const audit = node("a", "nav-link"); audit.id = "monitor-link"; audit.href = "audit-deploy.html"; audit.dataset.link = "audit"; audit.title = "Audit & Deploy"; audit.hidden = true;
   audit.append(icon("audit"), node("span", "", "Audit & Deploy"));
   nav.insertBefore(audit, nav.querySelector('[data-page="tickets"]').nextSibling);
-  const navOrder = ["overview", "tickets", "audit", "requests", "internal", "workload", "boards", "calendar"];
+  const navOrder = ["overview", "tickets", "audit", "requests", "internal", "workload", "boards", "calendar", "reports", "clients"];
   const navItem = id => nav.querySelector(id === "audit" ? "#monitor-link" : `[data-page="${id}"]`);
   function configure() {
     route = readRoute(new URL(location.href), context().admin);
     document.body.dataset.workspaceRole=context().admin?"manager":"user";
     for (const id of navOrder) nav.appendChild(navItem(id));
+    nav.querySelector('[data-page="reports"]').hidden=!context().admin;
+    nav.querySelector('[data-page="clients"]').hidden=!context().admin;
     nav.querySelector('[data-page="requests"]').hidden = false;
     nav.querySelector('[data-page="workload"]').hidden = !context().admin;
     nav.querySelector('[data-page="internal"]').hidden = !context().admin;
@@ -225,13 +231,15 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     $("nav-date-count").textContent=String(context().pendingDates||0);
     $("nav-ticket-count").textContent = String(state.issues?.length || 0);
     $("nav-internal-count").textContent = String((state.issues||[]).filter(isInternalTicket).length);
-    const custom = ["overview", "requests", "workload", "calendar"].includes(route.page);
+    const custom = ["overview", "requests", "workload", "calendar", "reports", "clients"].includes(route.page);
     $("tickets-area").hidden = custom; $("workspace-content").hidden = !custom;
     if (!custom) return false;
     const target = $("workspace-content"); target.replaceChildren();
-    if(context().filterCount&&route.page!=="requests"){const info=node("div","summary-filter-info");info.append(node("span","","Using your current ticket filters"),button("Adjust filters →","linkbtn",()=>navigate("tickets")));target.appendChild(info);}
+    if(context().filterCount&&!["requests","reports","clients"].includes(route.page)){const info=node("div","summary-filter-info");info.append(node("span","","Using your current ticket filters"),button("Adjust filters →","linkbtn",()=>navigate("tickets")));target.appendChild(info);}
     // Respect all active filters but include closed tickets for summary metrics.
     const data = allowedItems();
+    if(route.page==="reports"&&context().admin)context().renderReports(target);
+    if(route.page==="clients"&&context().admin)context().renderCatalog(target);
     if (route.page === "requests") context().renderRequests(target);
     if (route.page === "overview") {overview(data, target);const p=panel(context().admin?"Date requests awaiting review":"My date requests and decisions");p.classList.add("date-summary");const list=node("div");context().renderRequests(list,{summary:true});p.append(list,button("View all date requests →","linkbtn",()=>navigate("requests")));target.append(p);}
     if (route.page === "workload" && context().admin) workload(data, target);

@@ -58,16 +58,13 @@ const tests = [
     assert.deepEqual(d.issues.map((i) => i.key), ["AION-1"]);
   }],
   ["other projects' tickets can't be changed", async () => { jiraCalls = []; const r = await call("/jira/issue/SECRET-1", { method: "PUT", token: await login(), body: { fields: { duedate: null } } }); assert.equal(r.status, 404); assert.equal(jiraCalls.length, 0); }],
-  ["edit: labels and assignee pass through; dates require approval", async () => {
-    jiraCalls = []; jiraReply = () => new Response(null, { status: 204 });
-    const r = await call("/jira/issue/AION-7", { method: "PUT", token: await login(), body: { fields: { labels: ["ai1_ellen"], assignee: { accountId: "acc-1" } } } });
-    assert.equal(r.status, 200);
-    assert.equal(jiraCalls[0].url, "https://example.atlassian.net/rest/api/3/issue/AION-7"); assert.equal(jiraCalls[0].method, "PUT");
-    assert.deepEqual(jiraCalls[0].body, { fields: { labels: ["ai1_ellen"], assignee: { accountId: "acc-1" } } });
+  ["assignment requires persistent billing storage", async () => {
+    jiraCalls=[];const r=await call('/jira/issue/AION-7',{method:'PUT',token:await login(),body:{fields:{labels:['ai1_ellen'],assignee:{accountId:'acc-1'}}}});
+    assert.equal(r.status,503);assert.equal(jiraCalls.length,0);
   }],
   ["edit: other fields refused", async () => { jiraCalls = []; const r = await call("/jira/issue/AION-7", { method: "PUT", token: await login(), body: { fields: { summary: "hacked" } } }); assert.equal(r.status, 400); assert.equal(jiraCalls.length, 0); }],
   ["edit: bad due date refused", async () => assert.equal((await call("/jira/issue/AION-7", { method: "PUT", token: await login(), body: { fields: { duedate: "soon" } } })).status, 400)],
-  ["status move", async () => { jiraCalls = []; jiraReply = () => new Response(null, { status: 204 }); await call("/jira/issue/AION-7/transitions", { method: "POST", token: await login(), body: { id: 31 } }); assert.deepEqual(jiraCalls[0].body, { transition: { id: "31" } }); }],
+  ["status moves fail clearly without persistent storage", async () => { jiraCalls=[]; const r=await call("/jira/issue/AION-7/transitions",{method:"POST",token:await login(),body:{id:31}});assert.equal(r.status,503);assert.equal(jiraCalls.length,0); }],
   ["comment uses plain text", async () => { jiraCalls = []; jiraReply = () => Response.json({ id: "1" }, { status: 201 }); await call("/jira/issue/AION-7/comment", { method: "POST", token: await login(), body: { text: " hello " } }); assert.equal(jiraCalls[0].url, "https://example.atlassian.net/rest/api/2/issue/AION-7/comment"); assert.deepEqual(jiraCalls[0].body, { body: "hello" }); }],
   ["changelog", async () => { jiraCalls = []; jiraReply = () => Response.json({ changelog: { histories: [] } }); await call("/jira/issue/AION-7/changelog", { token: await login() }); assert.equal(jiraCalls[0].url, "https://example.atlassian.net/rest/api/3/issue/AION-7?fields=duedate&expand=changelog"); }],
   ["full history uses bounded changelog pages and does not forward Jira pagination URLs", async () => {
@@ -82,7 +79,7 @@ const tests = [
   ["user search", async () => { jiraCalls = []; jiraReply = () => Response.json([]); await call("/jira/users?q=ka%20ri", { token: await login() }); assert.equal(jiraCalls[0].url, "https://example.atlassian.net/rest/api/3/user/search?maxResults=8&query=ka%20ri"); }],
   ["Jira errors come back readable, without signing the user out", async () => {
     jiraReply = () => Response.json({ errorMessages: ["You can't do that."] }, { status: 403 });
-    const r = await call("/jira/issue/AION-7/transitions", { method: "POST", token: await login(), body: { id: 1 } });
+    const r = await call("/jira/issue/AION-7/changelog", { token: await login() });
     assert.equal(r.status, 403); assert.deepEqual(await r.json(), { code: "jira", error: "You can't do that." });
   }],
   ["bad Jira token reported as a proxy problem, not a sign-in problem", async () => { jiraReply = () => new Response("", { status: 401 }); const r = await call("/jira/issue/AION-7/changelog", { token: await login() }); assert.equal(r.status, 502); assert.equal((await r.json()).code, "jira"); }],
