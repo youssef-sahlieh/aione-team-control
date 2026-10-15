@@ -630,7 +630,7 @@ test('billing offers only Billable or Not billable, and client pickers can be se
  expect(await panel.getByLabel('Client',{exact:true}).locator('option:not([hidden])').allTextContents()).toEqual(['Choose client…','Acme Retail']);
  await panel.getByLabel('Search sub-clients').fill('haifa');await expect(panel.getByLabel('Sub-client',{exact:true})).toHaveValue('acme-hfa');await panel.locator('.business-client-section').screenshot({path:'test-results/client-search.png'});
  const row=page.locator('#view .item').filter({hasText:'AION-101'});page.once('dialog',d=>d.accept());await page.locator('#d-close').click();await expect(page.locator('#drawer')).toBeHidden();
- await row.getByRole('button',{name:'Edit Billing for AION-101'}).click();
+ await row.getByRole('button',{name:'Edit Billing for AION-101'}).click();await expect(page.locator('#pop').getByLabel('Billing')).toBeVisible();
  expect(await page.locator('#pop').getByLabel('Billing').locator('option:not([hidden])').allTextContents()).toEqual(['Billable','Not billable']);
  await page.locator('#pop').getByRole('button',{name:'Save',exact:true}).click();await expect(page.locator('#pop')).toContainText('Choose Billable or Not billable');
  expect(mock.calls.some(c=>c.path==='/ticket-metadata'&&c.method==='PUT')).toBe(false);expect(mock.errors).toEqual([]);
