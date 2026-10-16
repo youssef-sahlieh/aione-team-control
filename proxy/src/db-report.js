@@ -166,7 +166,11 @@ async function readInsideDatabase(slot, dbHint) {
       if (id) { db = d; uid = id; password = c.password; break outer; }
     }
   }
-  if (!uid) return { loginOk: false, loginFound: true, error: lastErr || "credentials rejected", diag: { ...diag, tried: attempts } };
+  if (!uid) {
+    // No error thrown + a login tried = the server returned "no uid": wrong password, or 2FA/ API-only.
+    const reason = lastErr || "password rejected (wrong password, or the account has two-factor enabled so it needs an API key)";
+    return { loginOk: false, loginFound: true, error: reason, diag: { ...diag, tried: attempts } };
+  }
   const kw = (model, method, args, k = {}) => customerRpc(base, "object", "execute_kw", [db, uid, password, model, method, args, k], signal());
   const one = async (p, dflt) => { try { return await p; } catch { return dflt; } };
   const [users, pos, companies, branchModel, webLogin, posSession, lastOrder, expiry] = await Promise.all([

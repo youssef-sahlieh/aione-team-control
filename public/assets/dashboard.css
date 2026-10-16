@@ -423,3 +423,6 @@ button.key.odoo:hover{text-decoration:underline}
 .db-pill{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--sunk,#eef1f4);color:var(--muted)}
 .db-pill.ok{background:#e6f4ea;color:#1a7f37}
 .db-pill.bad{background:#fdecec;color:#cf222e}
+
+.db-reason{display:inline-block;max-width:320px}
+.db-why{color:#b45309;white-space:normal;display:block;margin-top:2px}
