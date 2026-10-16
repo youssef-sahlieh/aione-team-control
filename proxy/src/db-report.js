@@ -60,41 +60,51 @@ export function parseCreds(html) {
   // A labeled value is trusted even if short/odd; only unlabeled guesses get the strict checks.
   const trusted = (t) => t && t.length <= 64 && !/^[-=_*.]+$/.test(t);
   const NON_PW_WORD = /^(the|and|for|with|this|that|user|email|login|password|pass|portal|site|link|domain|name|odoo|admin|server|database|https?|www)$/i;
+  // The exact pairs the stated layout produces (url-in-title / email / password), tried FIRST so the cap
+  // never drops them. Pair any username-or-email line with the password on the line right below it.
+  const priority = [];
+  const addUser = (u) => { if (trusted(u)) { users.add(u); if (/@/.test(u)) users.add(u.split("@")[0]); } }; // Odoo login is often the email's local part
   // Every email anywhere is a possible username (the article always has an email + password).
-  for (const e of mailtoEmails) users.add(e);
-  for (const m of text.matchAll(/[^\s:：,<>()"']+@[^\s:：,<>()"']+\.[A-Za-z]{2,}/g)) users.add(m[0]);
+  for (const e of mailtoEmails) addUser(e);
+  for (const m of text.matchAll(/[^\s:：,<>()"']+@[^\s:：,<>()"']+\.[A-Za-z]{2,}/g)) addUser(m[0]);
+  const isUserLine = (l) => /@/.test(l) || firstTok(labeled(LABEL.user, l)) || labelOnly(LABEL.user, l);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i], next = lines[i + 1] || "", next2 = lines[i + 2] || "";
-    const u = firstTok(labeled(LABEL.user, line)); if (trusted(u)) users.add(u);
+    const u = firstTok(labeled(LABEL.user, line)); if (trusted(u)) addUser(u);
     const p = firstTok(labeled(LABEL.pass, line)); if (trusted(p)) passwords.add(p);
     // Label alone on a line/cell -> the value is the next non-empty line/cell.
-    if (labelOnly(LABEL.user, line) && trusted(firstTok(next))) users.add(firstTok(next));
+    if (labelOnly(LABEL.user, line) && trusted(firstTok(next))) addUser(firstTok(next));
     if (labelOnly(LABEL.pass, line) && trusted(firstTok(next))) passwords.add(firstTok(next));
-    // Articles are usually url / email / password on three lines, and the password itself can contain
-    // an "@" (e.g. "Name@2024"). So the line right after an email is a password candidate even with an @;
-    // only another URL is excluded. Also take tokens after an email on the same line.
-    if (/\S+@\S+\.\S+/.test(line)) {
-      const after = line.replace(/^.*?\S+@\S+\.\S+/, "").trim();
+    // The username/email line's password is the NEXT line (whole line - it may contain spaces or an "@").
+    const emailOnLine = (line.match(/[^\s:：]+@[^\s:：]+\.[A-Za-z]{2,}/) || [])[0];
+    const lineUser = emailOnLine || firstTok(labeled(LABEL.user, line)) || (labelOnly(LABEL.user, line) ? firstTok(next) : "");
+    if (lineUser && next && !/^https?:/i.test(next) && !isUserLine(next)) {
+      const pwLabeled = firstTok(labeled(LABEL.pass, next));
+      const pw = pwLabeled || next.trim();
+      if (trusted(pw.slice(0, 64))) { passwords.add(pw.slice(0, 64)); priority.push({ user: lineUser, password: pw.slice(0, 64) }); if (/@/.test(lineUser)) priority.push({ user: lineUser.split("@")[0], password: pw.slice(0, 64) }); }
+    }
+    // Also tokens after an email on the SAME line, and the second line down.
+    if (emailOnLine) {
+      const after = line.slice(line.indexOf(emailOnLine) + emailOnLine.length).trim();
       for (const t of after.split(/\s|[|,;]+/)) if (trusted(t)) passwords.add(t);
-      if (trusted(firstTok(next)) && !/^https?:/i.test(next)) passwords.add(firstTok(next));
       if (trusted(firstTok(next2)) && !/^https?:/i.test(next2)) passwords.add(firstTok(next2));
     }
-    if (/^https?:\/\//i.test(line) && next && !/^https?:/i.test(next)) { const t = firstTok(next); if (looksLikePassword(t)) passwords.add(t); if (looksLikeUser(t)) users.add(t); }
+    // url line -> next line is the username, the one after is the password (url-in-body layout).
+    if (/^https?:\/\//i.test(line)) { if (next && !/^https?:/i.test(next)) addUser(firstTok(next)); if (next2 && !/^https?:/i.test(next2) && trusted(firstTok(next2))) passwords.add(firstTok(next2)); }
   }
   // High recall: any password-like token anywhere (printable, 4-40 chars, not a plain word/email/url).
   for (const line of lines) for (const tok of line.split(/\s|[|,;]+/)) {
-    // A password guess must have a digit, or be a length>=6 mixed-case token - this skips prose words.
     if (/^[\x21-\x7e]{4,40}$/.test(tok) && !/@/.test(tok) && !/^https?:/i.test(tok) && !NON_PW_WORD.test(tok) && (/\d/.test(tok) || (/[a-z]/.test(tok) && /[A-Z]/.test(tok) && tok.length >= 6))) passwords.add(tok);
   }
   users.add("admin"); // the common Odoo admin login, worth trying
 
-  // Build candidate (user, password) pairs, emails first, capped to bound login attempts.
+  // Candidates: the adjacent (user, next-line password) pairs first, then the cross product. Capped.
   const uList = [...users].sort((a, b) => (/@/.test(b) ? 1 : 0) - (/@/.test(a) ? 1 : 0));
   const pList = [...passwords];
-  const candidates = [];
+  const candidates = [...priority];
   for (const u of uList) for (const p of pList) if (u && p) candidates.push({ user: u, password: p });
   const seen = new Set(), unique = [];
-  for (const c of candidates) { const k = c.user + "\u0000" + c.password; if (!seen.has(k)) { seen.add(k); unique.push(c); } if (unique.length >= 20) break; }
+  for (const c of candidates) { const k = c.user + "\u0000" + c.password; if (!seen.has(k)) { seen.add(k); unique.push(c); } if (unique.length >= 24) break; }
   return { url, host, num, nums: nums.length ? nums : (num ? [num] : []), candidates: unique, complete: !!(url && unique.length) };
 }
 

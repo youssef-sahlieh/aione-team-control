@@ -19,6 +19,11 @@ test("parseCreds gathers candidate logins, labeled or not", () => {
   // url / email / password on three lines, where the password itself contains an "@".
   const e = parseCreds("<div>https://522.ai1.host<br>boss@olivia.co<br>Olivia@2024</div>");
   assert.ok(e.candidates.some((x) => x.user === "boss@olivia.co" && x.password === "Olivia@2024"), "password with @ after email line");
+  assert.ok(e.candidates.some((x) => x.user === "boss" && x.password === "Olivia@2024"), "also tries the email local part as the Odoo login");
+  assert.deepEqual(e.candidates[0], { user: "boss@olivia.co", password: "Olivia@2024" }, "the adjacent pair is tried first");
+  // URL in the title, body is username then password; the next line after the username is the password.
+  const f = parseCreds("<p>https://111.ai1.host</p>\n<div>reefadmin<br>1234567890</div>");
+  assert.ok(f.candidates.some((x) => x.user === "reefadmin" && x.password === "1234567890"), "username/password from url-in-title layout");
   // Table / label-on-its-own-line layout.
   const d = parseCreds("<table><tr><td>Email</td><td>boss@olivia.co</td></tr><tr><td>Password</td><td>olivia99</td></tr></table><p>https://522.ai1.host</p>");
   assert.equal(d.num, "522");
