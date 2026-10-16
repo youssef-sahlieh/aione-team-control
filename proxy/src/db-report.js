@@ -39,6 +39,8 @@ const looksLikeUser = (s) => s && (/^\S+@\S+\.\S+$/.test(s) || (/^[A-Za-z0-9_.@-
 export function parseCreds(html) {
   const raw = String(html || "");
   const hrefs = [...raw.matchAll(/href=["']?(https?:\/\/[^\s"'<>]+)/gi)].map((m) => m[1]);
+  // Emails hidden in mailto: links are stripped with the tag, so pull them out of the raw HTML first.
+  const mailtoEmails = [...raw.matchAll(/mailto:([^\s"'<>?]+@[^\s"'<>?]+)/gi)].map((m) => m[1]);
   const text = raw
     .replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|tr|td|th|h[1-6])>/gi, "\n")
     .replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#39;|&apos;/g, "'");
@@ -58,19 +60,24 @@ export function parseCreds(html) {
   // A labeled value is trusted even if short/odd; only unlabeled guesses get the strict checks.
   const trusted = (t) => t && t.length <= 64 && !/^[-=_*.]+$/.test(t);
   const NON_PW_WORD = /^(the|and|for|with|this|that|user|email|login|password|pass|portal|site|link|domain|name|odoo|admin|server|database|https?|www)$/i;
-  // Every email anywhere is a possible username. (The user confirms each article has an email + password.)
+  // Every email anywhere is a possible username (the article always has an email + password).
+  for (const e of mailtoEmails) users.add(e);
   for (const m of text.matchAll(/[^\s:：,<>()"']+@[^\s:：,<>()"']+\.[A-Za-z]{2,}/g)) users.add(m[0]);
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i], next = lines[i + 1] || "";
+    const line = lines[i], next = lines[i + 1] || "", next2 = lines[i + 2] || "";
     const u = firstTok(labeled(LABEL.user, line)); if (trusted(u)) users.add(u);
     const p = firstTok(labeled(LABEL.pass, line)); if (trusted(p)) passwords.add(p);
     // Label alone on a line/cell -> the value is the next non-empty line/cell.
     if (labelOnly(LABEL.user, line) && trusted(firstTok(next))) users.add(firstTok(next));
     if (labelOnly(LABEL.pass, line) && trusted(firstTok(next))) passwords.add(firstTok(next));
-    // The token right after an email on the SAME line is often its password ("a@b.com  secret").
-    const inlineEmail = line.match(/\S+@\S+\.\S+\s+(\S+)/); if (inlineEmail && looksLikePassword(inlineEmail[1])) passwords.add(inlineEmail[1]);
-    // The non-empty line right after an email line, or right after the URL line, is often the password.
-    if (/^\S+@\S+\.\S+$/.test(line) && looksLikePassword(firstTok(next))) passwords.add(firstTok(next));
+    // The password sits right next to the email. Take tokens after the email on its line, and the first
+    // token of the next one or two lines, as password candidates (trusted - no digit requirement here).
+    if (/\S+@\S+\.\S+/.test(line)) {
+      const after = line.replace(/^.*?\S+@\S+\.\S+/, "").trim();
+      for (const t of after.split(/\s|[|,;]+/)) if (trusted(t) && !/@/.test(t)) passwords.add(t);
+      if (trusted(firstTok(next)) && !/@/.test(next) && !/^https?:/i.test(next)) passwords.add(firstTok(next));
+      if (trusted(firstTok(next2)) && !/@/.test(next2) && !/^https?:/i.test(next2)) passwords.add(firstTok(next2));
+    }
     if (/^https?:\/\//i.test(line) && next && !/^https?:/i.test(next)) { const t = firstTok(next); if (looksLikePassword(t)) passwords.add(t); if (looksLikeUser(t)) users.add(t); }
   }
   // High recall: any password-like token anywhere (printable, 4-40 chars, not a plain word/email/url).
@@ -98,11 +105,13 @@ async function readCredentialIndex(env) {
     // in standalone articles. Wrong guesses simply fail to authenticate, so a broad net is safe.
     const arts = await odoo(env, "knowledge.article", "search_read", [[]], { fields: ["name", "body"], limit: 2000 });
     for (const a of arts) {
-      const c = parseCreds(a.body);
+      // The title is sometimes the URL (or carries the number), so parse title + body together.
+      const title = typeof a.name === "string" ? a.name : "";
+      const c = parseCreds("<p>" + title + "</p>\n" + (a.body || ""));
       if (!c.candidates.length) continue;
-      // Match by the ai1.host numbers in the body, and also by a 2-4 digit number in the article's title.
-      const nameNum = typeof a.name === "string" ? (a.name.match(/\b(\d{2,4})\b/) || [])[1] : "";
-      const numbers = [...new Set([...c.nums, c.num, nameNum].filter(Boolean))];
+      // Match by every ai1.host number found, plus a 2-4 digit number in the title.
+      const titleNums = [...title.matchAll(/(\d{2,4})/g)].map((m) => m[1]);
+      const numbers = [...new Set([...c.nums, c.num, ...titleNums].filter(Boolean))];
       for (const n of numbers) {
         const slot = index[n] || (index[n] = { url: "", candidates: [], seen: new Set() });
         if (!slot.url && (c.url.includes(n + ".ai1.host") || !slot.url)) slot.url = c.url.includes(n + ".ai1.host") ? c.url : (slot.url || "https://" + n + ".ai1.host");
