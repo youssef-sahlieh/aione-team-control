@@ -5,11 +5,21 @@ import worker, { makeToken } from "../proxy/src/handler.js";
 import { memoryStore, saveUser } from "../proxy/src/users.js";
 import { parseCreds, isProductionName } from "../proxy/src/db-report.js";
 
-test("parseCreds pulls url, user, password and the ai1.host number without needing a fixed layout", () => {
-  const a = parseCreds('<p><strong>URL:</strong> <a href="https://540.ai1.host/web">link</a></p><p>User: admin@acme.co</p><p>Password: s3cr3t!</p>');
-  assert.equal(a.num, "540"); assert.equal(a.user, "admin@acme.co"); assert.equal(a.password, "s3cr3t!"); assert.equal(a.complete, true);
-  const b = parseCreds("https://222.ai1.host only, no login here");
-  assert.equal(b.num, "222"); assert.equal(b.complete, false);
+test("parseCreds gathers candidate logins, labeled or not", () => {
+  const a = parseCreds('<p><strong>URL:</strong> <a href="https://540.ai1.host/web">link</a></p><p>User: admin@acme.co</p><p>Password: s3cr3t1</p>');
+  assert.equal(a.num, "540");
+  assert.ok(a.candidates.some((c) => c.user === "admin@acme.co" && c.password === "s3cr3t1"));
+  // Unlabeled layout (like 503): url, then email line, then password line.
+  const b = parseCreds("<p>https://503.ai1.host/web/login</p><p>owner@ronit.co.il</p><p>kadis2024</p>");
+  assert.equal(b.num, "503");
+  assert.ok(b.candidates.some((c) => c.user === "owner@ronit.co.il" && c.password === "kadis2024"), "pairs email with next line");
+  assert.equal(b.complete, true);
+  const c = parseCreds("https://222.ai1.host only, no login here");
+  assert.equal(c.num, "222"); assert.equal(c.complete, false);
+  // Table / label-on-its-own-line layout.
+  const d = parseCreds("<table><tr><td>Email</td><td>boss@olivia.co</td></tr><tr><td>Password</td><td>olivia99</td></tr></table><p>https://522.ai1.host</p>");
+  assert.equal(d.num, "522");
+  assert.ok(d.candidates.some((x) => x.user === "boss@olivia.co" && x.password === "olivia99"), "table layout");
 });
 
 test("isProductionName excludes test, dev, demo and similar", () => {
@@ -43,7 +53,7 @@ function setup() {
     { id: 12, name: "HCC", body: "https://100.ai1.host (no login stored)" }
   ];
   // Fake customer DB at 503.ai1.host.
-  const customer = { users: 7, pos: 3, companies: 2, lastLogin: "2026-10-14 08:12:00", lastOrder: "2026-10-15 10:49:22", expires: "2027-01-01 00:00:00" };
+  const customer = { users: 7, pos: 3, companies: 2, lastLogin: "2026-10-14 08:12:00", lastSession: "2026-10-15 09:00:00", lastOrder: "2026-10-15 10:49:22", expires: "2027-01-01 00:00:00" };
 
   globalThis.fetch = async (url, init = {}) => {
     const u = String(url);
@@ -73,6 +83,7 @@ function setup() {
       if (model === "res.company") return Response.json({ result: customer.companies });
       if (model === "res.branch") return Response.json({ error: { message: "no such model" } });
       if (model === "res.users" && method === "search_read") return Response.json({ result: [{ login_date: customer.lastLogin }] });
+      if (model === "pos.session") return Response.json({ result: [{ start_at: customer.lastSession }] });
       if (model === "pos.order") return Response.json({ result: [{ date_order: customer.lastOrder }] });
       if (model === "ir.config_parameter") return Response.json({ result: [{ value: customer.expires }] });
       return Response.json({ result: [] });
@@ -106,7 +117,8 @@ test("report covers production databases only, with inside numbers where a login
   assert.equal(ronit.loginFound, true); assert.equal(ronit.loginOk, true);
   assert.equal(ronit.users, customer.users); assert.equal(ronit.pos, customer.pos);
   assert.equal(ronit.branches, 1); // companies 2 -> 1 extra branch (no res.branch model)
-  assert.equal(ronit.lastLogin, customer.lastLogin); assert.equal(ronit.lastOrder, customer.lastOrder);
+  assert.equal(ronit.lastLogin, customer.lastSession, "last login is the most recent of web login and POS session");
+  assert.equal(ronit.lastOrder, customer.lastOrder);
   assert.equal(ronit.expired, false); assert.equal(ronit.expires, customer.expires);
   const hcc = rows.find((x) => x.database === "100_hcc");
   assert.equal(hcc.loginFound, false); assert.equal(hcc.flutter, false); assert.equal(hcc.users, undefined);
