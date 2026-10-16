@@ -35,7 +35,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     SITE=cfg.site; PROJECT=cfg.project; MAIL=!!cfg.mail; PEOPLE=cfg.people||{}; DEVS=cfg.devs||[]; DEV_EMAIL=cfg.devEmails||{}; DEV_COLOR=cfg.devColors||{};
     PEOPLE={...PEOPLE,[INTERNAL_ASSIGNEE]:{name:"Internal Tickets",ini:"IT",id:INTERNAL_ASSIGNEE}};
     BYID={}; for(const k in PEOPLE) BYID[PEOPLE[k].id]=k;
-    IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||""; MY_EMAIL=cfg.email||""; INTERNAL=!!cfg.accounts; ODOO=!!cfg.odoo; $("monitor-link").hidden=!ODOO; $("new-int").hidden=!INTERNAL;
+    IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||""; MY_EMAIL=cfg.email||""; INTERNAL=!!cfg.accounts; ODOO=!!cfg.odoo; $("monitor-link").hidden=!ODOO; { const dl=$("dbreport-link"); if(dl) dl.hidden=!cfg.dbReport; } $("new-int").hidden=!INTERNAL;
     document.body.classList.toggle("role-user",!IS_ADMIN);
     $("users-link").hidden=!(IS_ADMIN&&cfg.accounts);
     if(IS_ADMIN){

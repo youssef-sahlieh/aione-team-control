@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://aione-team-proxy.vercel.app; form-action 'none'; base-uri 'self'">
+<meta name="referrer" content="same-origin">
+<meta name="robots" content="noindex">
+<title>Databases · AION Team Control</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="assets/dashboard.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand">
+      <h1>Databases</h1>
+      <div class="sub">Production databases from Audit &amp; Deploy, with per-database details. Refreshes daily.</div>
+    </div>
+    <a class="btn" href="dashboard.html">← Dashboard</a>
+    <span class="me">Signed in as <b id="me">…</b> <button class="btn" id="signout" type="button">Sign out</button></span>
+  </div>
+
+  <div id="pagestate" class="state">Loading…</div>
+
+  <div class="db-toolbar" id="toolbar" hidden>
+    <input type="search" id="search" class="inp" placeholder="Search by name, URL or add-on…" aria-label="Search databases">
+    <span class="db-meta" id="meta"></span>
+    <span class="db-actions">
+      <button class="btn" id="csv" type="button">Download CSV</button>
+      <button class="btn primary" id="refresh" type="button">Refresh now</button>
+    </span>
+  </div>
+
+  <div class="db-scroll" id="tablewrap" hidden>
+    <table class="db-table" id="table">
+      <thead><tr id="head"></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</div>
+<div class="toast" id="toast" hidden role="status"></div>
+
+<script src="assets/config.js"></script>
+<script type="module" src="assets/databases.js"></script>
+</body>
+</html>

@@ -104,8 +104,12 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
   const audit = node("a", "nav-link"); audit.id = "monitor-link"; audit.href = "audit-deploy.html"; audit.dataset.link = "audit"; audit.title = "Audit & Deploy"; audit.hidden = true;
   audit.append(icon("audit"), node("span", "", "Audit & Deploy"));
   nav.insertBefore(audit, nav.querySelector('[data-page="tickets"]').nextSibling);
-  const navOrder = ["overview", "tickets", "audit", "requests", "internal", "workload", "boards", "calendar", "reports", "clients"];
-  const navItem = id => nav.querySelector(id === "audit" ? "#monitor-link" : `[data-page="${id}"]`);
+  // Databases report is its own admin-only page; shown when Odoo is connected (set in applyConfig).
+  const dbReport = node("a", "nav-link"); dbReport.id = "dbreport-link"; dbReport.href = "databases.html"; dbReport.dataset.link = "databases"; dbReport.title = "Databases"; dbReport.hidden = true;
+  dbReport.append(icon("audit"), node("span", "", "Databases"));
+  nav.insertBefore(dbReport, audit.nextSibling);
+  const navOrder = ["overview", "tickets", "audit", "databases", "requests", "internal", "workload", "boards", "calendar", "reports", "clients"];
+  const navItem = id => nav.querySelector(id === "audit" ? "#monitor-link" : id === "databases" ? "#dbreport-link" : `[data-page="${id}"]`);
   function configure() {
     route = readRoute(new URL(location.href), context().admin);
     document.body.dataset.workspaceRole=context().admin?"manager":"user";

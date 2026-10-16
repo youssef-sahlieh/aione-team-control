@@ -1,4 +1,5 @@
 {
   "rewrites": [{ "source": "/(.*)", "destination": "/api/proxy?__path=$1" }],
-  "functions": { "api/proxy.js": { "maxDuration": 60 } }
+  "functions": { "api/proxy.js": { "maxDuration": 60 } },
+  "crons": [{ "path": "/cron/db-report", "schedule": "0 3 * * *" }]
 }
