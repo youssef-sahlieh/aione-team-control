@@ -145,16 +145,18 @@ async function readInsideDatabase(slot, dbHint) {
   const list = await customerRpc(base, "db", "list", [], signal()).catch(() => null);
   if (Array.isArray(list)) for (const d of list) if (!dbNames.includes(d)) dbNames.push(d);
   if (num && !dbNames.includes(num)) dbNames.push(num);
+  // Diagnostics for the admin page (no secrets): what host/db/how many logins were tried, and the last error.
+  const diag = { host: base.replace(/^https?:\/\//, ""), dbs: dbNames.slice(0, 4).join(", ") || "(none)", cands: slot.candidates.length, users: new Set(slot.candidates.map((c) => c.user)).size, pws: new Set(slot.candidates.map((c) => c.password)).size, dbListed: Array.isArray(list) };
   // Try each (database, login) until one authenticates. "Try any of them."
-  let db = "", uid = 0, password = "", attempts = 0;
+  let db = "", uid = 0, password = "", attempts = 0, lastErr = "";
   outer: for (const d of dbNames.slice(0, 4)) {
     for (const c of slot.candidates) {
       if (++attempts > 48) break outer;
-      const id = await customerRpc(base, "common", "authenticate", [d, c.user, c.password, {}], signal()).catch(() => 0);
+      const id = await customerRpc(base, "common", "authenticate", [d, c.user, c.password, {}], signal()).catch((e) => { lastErr = String(e.message || e).slice(0, 80); return 0; });
       if (id) { db = d; uid = id; password = c.password; break outer; }
     }
   }
-  if (!uid) return { loginOk: false, loginFound: true, error: "no login accepted", tried: attempts };
+  if (!uid) return { loginOk: false, loginFound: true, error: lastErr || "credentials rejected", diag: { ...diag, tried: attempts } };
   const kw = (model, method, args, k = {}) => customerRpc(base, "object", "execute_kw", [db, uid, password, model, method, args, k], signal());
   const one = async (p, dflt) => { try { return await p; } catch { return dflt; } };
   const [users, pos, companies, branchModel, webLogin, posSession, lastOrder, expiry] = await Promise.all([

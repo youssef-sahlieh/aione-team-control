@@ -34,7 +34,12 @@ const COLUMNS = [
 ];
 
 function linkCell(url) { const a = el("a", "db-link", url.replace(/^https?:\/\//, "")); a.href = url; a.target = "_blank"; a.rel = "noopener"; return a; }
-function numCell(r, key) { if (!r.loginFound) return el("span", "db-muted", "login not found"); if (!r.loginOk) return el("span", "db-muted", "no access"); return el("span", "", num(r[key])); }
+function noAccessCell(r) {
+  const s = el("span", "db-muted", "no access"); const d = r.diag;
+  s.title = d ? ("host " + d.host + "\ndatabases tried: " + d.dbs + "\nlogins tried: " + (d.tried || 0) + " (" + d.users + " user×" + d.pws + " password)" + "\ndb list available: " + (d.dbListed ? "yes" : "no") + (r.error ? "\nserver said: " + r.error : "")) : (r.error || "");
+  return s;
+}
+function numCell(r, key) { if (!r.loginFound) return el("span", "db-muted", "login not found"); if (!r.loginOk) return noAccessCell(r); return el("span", "", num(r[key])); }
 function branchCell(r) { if (!r.loginFound) return el("span", "db-muted", "—"); if (!r.loginOk) return el("span", "db-muted", "—"); if (!r.branches) return el("span", "db-muted", "none"); return el("span", "db-strong", String(r.branches)); }
 function timeCell(r, key) { if (!r.loginFound) return el("span", "db-muted", "—"); if (!r.loginOk) return el("span", "db-muted", "—"); if (!r[key]) return el("span", "db-muted", "never"); const s = el("span", "", fmtDateTime(r[key])); const a = ago(r[key]); if (a) s.append(el("small", "db-ago", " · " + a)); return s; }
 function expiryCell(r) { if (!r.loginFound || !r.loginOk) return el("span", "db-muted", "—"); if (r.expired === null) return el("span", "db-muted", "none"); return el("span", "db-pill " + (r.expired ? "bad" : "ok"), (r.expired ? "Expired " : "Valid ") + fmtDate(r.expires)); }
