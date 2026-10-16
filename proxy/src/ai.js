@@ -1,10 +1,13 @@
+import Anthropic from "@anthropic-ai/sdk";
 // Conversation service: the model has a capability registry, never Jira credentials
 // or a generic HTTP client. Write capabilities are reserved, disabled and rejected.
 export const WRITE_TOOLS = Object.freeze(["change_status", "assign_developer", "remove_developer", "add_comment", "create_ticket"]);
 const json = (data, status = 200) => Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
 class AIError extends Error { constructor(code, message, status = 400) { super(message); this.code = code; this.status = status; } }
 const modelVendor = env => env.AI_VENDOR || (env.ANTHROPIC_API_KEY && !env.OPENAI_API_KEY ? "anthropic" : "openai");
-export const aiConfigured = env => typeof env.AI_PROVIDER === "function" || !!(env.AI_MODEL && (modelVendor(env)==="anthropic" ? env.ANTHROPIC_API_KEY : modelVendor(env)==="openai" && env.OPENAI_API_KEY));
+const DEFAULT_CLAUDE_MODEL = "claude-opus-5-5";
+// Claude needs only ANTHROPIC_API_KEY (the model defaults to Claude Opus 5.5); OpenAI needs AI_MODEL too.
+export const aiConfigured = env => typeof env.AI_PROVIDER === "function" || (modelVendor(env)==="anthropic" ? !!env.ANTHROPIC_API_KEY : !!(env.AI_MODEL && env.OPENAI_API_KEY));
 const limits = new Map();
 async function rateLimit(env, me) {
   if(env.STORE){if(await env.STORE.incr("rl:ai:"+me.email,60)>10)throw new AIError("rate_limited","Please wait a minute before asking more questions.",429);}
@@ -131,30 +134,60 @@ export function createReadTools({ me, project, readSearch, readDashboard, readBu
     }
   };
 }
+// Claude through Anthropic's SDK. Claude Opus 5.5 always thinks; AI_EFFORT (default "low", for quick
+// chat answers) sets how much. Declined requests are re-run on Anthropic's recommended fallback model.
+let claudeClient = null, claudeKey = "";
+function claudeFor(env) {
+  if (!claudeClient || claudeKey !== env.ANTHROPIC_API_KEY) { claudeClient = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, timeout: 40000, maxRetries: 1, fetch: (...args) => globalThis.fetch(...args) }); claudeKey = env.ANTHROPIC_API_KEY; }
+  return claudeClient;
+}
+// After a fallback, model-internal blocks from before the switch are not sent back (Anthropic's echo rule).
+function claudeBlocksToKeep(content) {
+  const boundary = content.map((b) => b.type).lastIndexOf("fallback");
+  return content.filter((b, i) => b.type !== "fallback" && !(i < boundary && ["thinking", "redacted_thinking", "tool_use"].includes(b.type)));
+}
+async function claudeResponse(env, body) {
+  const messages = [];
+  const append = (role, blocks) => { if (messages.at(-1)?.role === role) messages.at(-1).content.push(...blocks); else messages.push({ role, content: blocks }); };
+  for (const item of body.input) {
+    if (item.type === "function_call_output") append("user", [{ type: "tool_result", tool_use_id: item.call_id, content: item.output }]);
+    else if (item.type === "function_call") append("assistant", [{ type: "tool_use", id: item.call_id, name: item.name, input: JSON.parse(item.arguments) }]);
+    else if (item.type === "claude_block") append("assistant", [item.block]);
+    else if (item.type === "message") append("assistant", item.content.map((part) => ({ type: "text", text: part.text })));
+    else append(item.role, [{ type: "text", text: item.content }]);
+  }
+  const params = {
+    model: env.AI_MODEL || DEFAULT_CLAUDE_MODEL, system: body.instructions, messages,
+    // Thinking shares this limit with the answer, so it is well above the answer length the prompt asks for.
+    max_tokens: Math.max(16000, body.max_output_tokens || 0),
+    output_config: { effort: env.AI_EFFORT || "low" },
+    betas: ["server-side-fallback-2026-07-01"], fallbacks: "default"
+  };
+  if (body.tools.length) {
+    params.tools = body.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
+    params.tool_choice = body.tool_choice === "none" ? { type: "none" } : { type: "auto", disable_parallel_tool_use: true };
+  }
+  let result;
+  try { result = await claudeFor(env).beta.messages.create(params); }
+  catch (error) {
+    if (error instanceof Anthropic.RateLimitError) throw new AIError("ai_unavailable", "The AI service is busy. Please try again shortly.", 429);
+    if (error instanceof Anthropic.AuthenticationError || error instanceof Anthropic.PermissionDeniedError) throw new AIError("ai_unavailable", "The AI service is unavailable. Ask a manager to check its configuration.", 502);
+    if (error instanceof Anthropic.APIConnectionError) throw new AIError("ai_unavailable", "The AI service could not be reached. Please try again.", 502);
+    if (error instanceof Anthropic.APIError) { console.warn("claude_error", error.status); throw new AIError("ai_unavailable", "The AI service is unavailable. Please try again.", 502); }
+    throw error;
+  }
+  if (!result || !Array.isArray(result.content)) throw new AIError("ai_unavailable", "The AI service returned an invalid answer.", 502);
+  if (result.stop_reason === "refusal") return { output: [{ type: "message", content: [{ type: "output_text", text: "I can't help with that request. Try asking about your tickets in a different way." }] }] };
+  return { output: claudeBlocksToKeep(result.content).map((block) => block.type === "tool_use" ? { type: "function_call", call_id: block.id, name: block.name, arguments: JSON.stringify(block.input) } : block.type === "text" ? { type: "message", content: [{ type: "output_text", text: block.text }] } : { type: "claude_block", block }) };
+}
 async function modelResponse(env, body) {
   if(typeof env.AI_PROVIDER==="function")return env.AI_PROVIDER(body);
-  const claude=modelVendor(env)==="anthropic";
-  let payload={...body,model:env.AI_MODEL};
-  if(claude){
-    const messages=[];
-    const append=(role,blocks)=>{if(messages.at(-1)?.role===role)messages.at(-1).content.push(...blocks);else messages.push({role,content:blocks});};
-    for(const item of body.input){
-      if(item.type==="function_call_output")append("user",[{type:"tool_result",tool_use_id:item.call_id,content:item.output}]);
-      else if(item.type==="function_call")append("assistant",[{type:"tool_use",id:item.call_id,name:item.name,input:JSON.parse(item.arguments)}]);
-      else if(item.type==="claude_block")append("assistant",[item.block]);
-      else if(item.type==="message")append("assistant",item.content.map(part=>({type:"text",text:part.text})));
-      else append(item.role,[{type:"text",text:item.content}]);
-    }
-    payload={model:env.AI_MODEL,system:body.instructions,messages,max_tokens:body.max_output_tokens,tools:body.tools.map(t=>({name:t.name,description:t.description,input_schema:t.parameters})),tool_choice:body.tool_choice==="none"?{type:"none"}:{type:"auto",disable_parallel_tool_use:true}};
-    if(!body.tools.length){delete payload.tools;delete payload.tool_choice;}
-  }
+  if(modelVendor(env)==="anthropic")return claudeResponse(env, body);
+  const payload={...body,model:env.AI_MODEL};
   let res;
-  try{res=await fetch(claude?"https://api.anthropic.com/v1/messages":"https://api.openai.com/v1/responses",{method:"POST",headers:claude?{"x-api-key":env.ANTHROPIC_API_KEY,"anthropic-version":"2023-06-01","Content-Type":"application/json"}:{Authorization:"Bearer "+env.OPENAI_API_KEY,"Content-Type":"application/json"},body:JSON.stringify(payload),signal:AbortSignal.timeout(25000)});}catch{throw new AIError("ai_unavailable","The AI service could not be reached. Please try again.",502);}
+  try{res=await fetch("https://api.openai.com/v1/responses",{method:"POST",headers:{Authorization:"Bearer "+env.OPENAI_API_KEY,"Content-Type":"application/json"},body:JSON.stringify(payload),signal:AbortSignal.timeout(25000)});}catch{throw new AIError("ai_unavailable","The AI service could not be reached. Please try again.",502);}
   if(!res.ok)throw new AIError("ai_unavailable",res.status===429?"The AI service is busy. Please try again shortly.":"The AI service is unavailable. Ask a manager to check its configuration.",res.status===429?429:502);
-  const result=await res.json();
-  if(!claude)return result;
-  if(!Array.isArray(result.content))throw new AIError("ai_unavailable","The AI service returned an invalid answer.",502);
-  return {output:result.content.map(block=>block.type==="tool_use"?{type:"function_call",call_id:block.id,name:block.name,arguments:JSON.stringify(block.input)}:block.type==="text"?{type:"message",content:[{type:"output_text",text:block.text}]}:{type:"claude_block",block})};
+  return res.json();
 }
 export async function aiChat(request, env, { me, project, readSearch, readDashboard, readBusiness, runReport }) {
   try{

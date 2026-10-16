@@ -4,6 +4,7 @@
   "type": "module",
   "description": "AION Team Control Jira proxy, deployed to Vercel from this folder.",
   "dependencies": {
+    "@anthropic-ai/sdk": "0.131.0",
     "nodemailer": "10.0.10"
   }
 }

@@ -49,7 +49,7 @@ test("Claude briefs use one bounded request without tools, credentials or commen
   const {env,chat}=await setup("user");Object.assign(env,{AI_VENDOR:"anthropic",ANTHROPIC_API_KEY:"synthetic-claude-key",AI_MODEL:"test-claude"});
   let calls=0;globalThis.fetch=async(url,init)=>{
     if(String(url).includes("jira.test"))return Response.json({issues:[issue("AION-1")],isLast:true});
-    calls++;assert.equal(url,"https://api.anthropic.com/v1/messages");const body=JSON.parse(init.body);assert.equal(body.max_tokens,200);assert.equal(body.tools,undefined);assert.equal(body.tool_choice,undefined);assert.match(body.system,/UNTRUSTED JIRA DATA/);assert.equal(JSON.parse(body.messages[0].content[0].text).source,"UNTRUSTED JIRA DATA");assert.doesNotMatch(JSON.stringify(body.messages),/synthetic-jira-token|Ignore rules/);
+    calls++;assert.ok(String(url).startsWith("https://api.anthropic.com/v1/messages"));const body=JSON.parse(init.body);assert.equal(body.max_tokens,16000);assert.equal(body.tools,undefined);assert.equal(body.tool_choice,undefined);assert.match(body.system,/UNTRUSTED JIRA DATA/);assert.equal(JSON.parse(body.messages[0].content[0].text).source,"UNTRUSTED JIRA DATA");assert.doesNotMatch(JSON.stringify(body.messages),/synthetic-jira-token|Ignore rules/);
     return Response.json({content:[{type:"text",text:"Improve the workflow described in the ticket."}]});
   };
   assert.equal((await chat({key:"AION-1"},"/ai/brief")).status,200);assert.equal(calls,1);
@@ -121,12 +121,12 @@ test("Claude adapter round-trips tool calls, text and signed thinking through au
   const bodies=[];const thinking={type:"thinking",thinking:"synthetic reasoning",signature:"synthetic-signature"};
   globalThis.fetch=async(url,init)=>{
     if(String(url).includes("jira.test"))return Response.json({issues:[issue("AION-1"),issue("AION-2","other")],isLast:true});
-    assert.equal(url,"https://api.anthropic.com/v1/messages");assert.equal(init.headers["x-api-key"],"synthetic-claude-key");assert.equal(init.headers["anthropic-version"],"2023-06-01");
+    assert.ok(String(url).startsWith("https://api.anthropic.com/v1/messages"));const h=new Headers(init.headers);assert.equal(h.get("x-api-key"),"synthetic-claude-key");assert.equal(h.get("anthropic-version"),"2023-06-01");assert.match(h.get("anthropic-beta")||"",/server-side-fallback-2026-07-01/);
     bodies.push(JSON.parse(init.body));
     return Response.json({content:bodies.length===1?[thinking,{type:"text",text:"Checking your tasks."},{type:"tool_use",id:"toolu_test",name:"search_tickets",input:{text:"",status:"open",updatedDays:0}}]:[{type:"text",text:"Prioritize AION-1."}]});
   };
   const res=await chat();assert.equal(res.status,200);assert.deepEqual((await res.json()).references.map(r=>r.key),["AION-1"]);
-  assert.equal(bodies[0].model,"test-claude");assert.equal(bodies[0].max_tokens,1800);assert.match(bodies[0].system,/read-only/);assert.ok(!("store" in bodies[0]));
+  assert.equal(bodies[0].model,"test-claude");assert.equal(bodies[0].max_tokens,16000);assert.equal(bodies[0].fallbacks,"default");assert.deepEqual(bodies[0].output_config,{effort:"low"});assert.match(bodies[0].system,/read-only/);assert.ok(!("store" in bodies[0]));
   assert.ok(bodies[0].tools.every(t=>t.input_schema&&!WRITE_TOOLS.includes(t.name)));assert.ok(!bodies[0].tools.some(t=>t.name==="analyze_workload"));
   assert.equal(bodies[0].tool_choice.disable_parallel_tool_use,true);
   assert.deepEqual(bodies[1].messages.at(-2).content[0],thinking);
@@ -144,7 +144,7 @@ test("Claude configuration selects only server credentials and sanitizes provide
 });
 test("Claude-initiated writes are rejected without accessing Jira",async()=>{
   const {env,chat}=await setup("admin");Object.assign(env,{AI_VENDOR:"anthropic",ANTHROPIC_API_KEY:"synthetic-key",AI_MODEL:"test-model"});
-  let requests=0;globalThis.fetch=async(url)=>{requests++;assert.equal(url,"https://api.anthropic.com/v1/messages");return Response.json({content:[{type:"tool_use",id:"toolu_write",name:"add_comment",input:{key:"AION-1",text:"No"}}]});};
+  let requests=0;globalThis.fetch=async(url)=>{requests++;assert.ok(String(url).startsWith("https://api.anthropic.com/v1/messages"));return Response.json({content:[{type:"tool_use",id:"toolu_write",name:"add_comment",input:{key:"AION-1",text:"No"}}]});};
   const res=await chat();assert.equal(res.status,403);assert.equal((await res.json()).code,"ai_read_only");assert.equal(requests,1);
 });
 test("developer-only ticket scope is server-selected and forged project analysis is denied",async()=>{
@@ -156,4 +156,21 @@ test("manager project progress reports scoped counts without treating updates as
   const recent={...issue("AION-1"),fields:{...issue("AION-1").fields,updated:"2026-10-10T09:00:00Z"}},done={...issue("AION-2"),fields:{...issue("AION-2").fields,status:{name:"Closed",statusCategory:{key:"done"}},updated:"2026-09-01T09:00:00Z"}};
   const tools=createReadTools({me:{role:"admin"},project:"AION",now:new Date("2026-10-11T09:00:00Z"),readSearch:async()=>({issues:[recent,done,issue("OTHER-3")],isLast:true})});
   assert.ok(tools.definitions.some(t=>t.name==="analyze_project_progress"));const result=await tools.execute("analyze_project_progress",{updatedDays:7});assert.deepEqual(result.totals,{open:1,done:1,overdue:1,updated:1});assert.equal(result.coverage.examined,2);assert.match(result.note,/not necessarily completed/);await assert.rejects(()=>tools.execute("analyze_project_progress",{updatedDays:0}));
+});
+
+test("Claude defaults to Opus 5.5 with only an API key, handles refusals, and drops pre-fallback blocks",async()=>{
+  assert.equal(aiConfigured({ANTHROPIC_API_KEY:"key"}),true);
+  const {env,chat}=await setup();Object.assign(env,{ANTHROPIC_API_KEY:"synthetic-key"});delete env.AI_MODEL;delete env.AI_VENDOR;delete env.OPENAI_API_KEY;
+  const bodies=[];
+  globalThis.fetch=async(url,init)=>{
+    if(String(url).includes("jira.test"))return Response.json({issues:[issue("AION-1")],isLast:true});
+    bodies.push(JSON.parse(init.body));
+    if(bodies.length===1)return Response.json({stop_reason:"tool_use",content:[{type:"thinking",thinking:"",signature:"declined-model"},{type:"tool_use",id:"toolu_old",name:"search_tickets",input:{text:"",status:"open",updatedDays:0}},{type:"fallback",from:{model:"claude-opus-5-5"},to:{model:"claude-opus-4-8"}},{type:"tool_use",id:"toolu_new",name:"search_tickets",input:{text:"",status:"open",updatedDays:0}}]});
+    return Response.json({stop_reason:"end_turn",content:[{type:"text",text:"Prioritize AION-1."}]});
+  };
+  assert.equal((await chat()).status,200);
+  assert.equal(bodies[0].model,"claude-opus-5-5");
+  const sent=JSON.stringify(bodies[1].messages);assert.match(sent,/toolu_new/);assert.doesNotMatch(sent,/toolu_old|declined-model|"fallback"/);
+  globalThis.fetch=async(url)=>String(url).includes("jira.test")?Response.json({issues:[],isLast:true}):Response.json({stop_reason:"refusal",stop_details:{type:"refusal",category:null},content:[]});
+  const res=await chat();assert.equal(res.status,200);assert.match(JSON.stringify(await res.json()),/can't help with that/);
 });
