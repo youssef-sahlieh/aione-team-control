@@ -16,6 +16,9 @@ test("parseCreds gathers candidate logins, labeled or not", () => {
   assert.equal(b.complete, true);
   const c = parseCreds("https://222.ai1.host only, no login here");
   assert.equal(c.num, "222"); assert.equal(c.complete, false);
+  // url / email / password on three lines, where the password itself contains an "@".
+  const e = parseCreds("<div>https://522.ai1.host<br>boss@olivia.co<br>Olivia@2024</div>");
+  assert.ok(e.candidates.some((x) => x.user === "boss@olivia.co" && x.password === "Olivia@2024"), "password with @ after email line");
   // Table / label-on-its-own-line layout.
   const d = parseCreds("<table><tr><td>Email</td><td>boss@olivia.co</td></tr><tr><td>Password</td><td>olivia99</td></tr></table><p>https://522.ai1.host</p>");
   assert.equal(d.num, "522");

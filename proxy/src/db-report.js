@@ -70,13 +70,14 @@ export function parseCreds(html) {
     // Label alone on a line/cell -> the value is the next non-empty line/cell.
     if (labelOnly(LABEL.user, line) && trusted(firstTok(next))) users.add(firstTok(next));
     if (labelOnly(LABEL.pass, line) && trusted(firstTok(next))) passwords.add(firstTok(next));
-    // The password sits right next to the email. Take tokens after the email on its line, and the first
-    // token of the next one or two lines, as password candidates (trusted - no digit requirement here).
+    // Articles are usually url / email / password on three lines, and the password itself can contain
+    // an "@" (e.g. "Name@2024"). So the line right after an email is a password candidate even with an @;
+    // only another URL is excluded. Also take tokens after an email on the same line.
     if (/\S+@\S+\.\S+/.test(line)) {
       const after = line.replace(/^.*?\S+@\S+\.\S+/, "").trim();
-      for (const t of after.split(/\s|[|,;]+/)) if (trusted(t) && !/@/.test(t)) passwords.add(t);
-      if (trusted(firstTok(next)) && !/@/.test(next) && !/^https?:/i.test(next)) passwords.add(firstTok(next));
-      if (trusted(firstTok(next2)) && !/@/.test(next2) && !/^https?:/i.test(next2)) passwords.add(firstTok(next2));
+      for (const t of after.split(/\s|[|,;]+/)) if (trusted(t)) passwords.add(t);
+      if (trusted(firstTok(next)) && !/^https?:/i.test(next)) passwords.add(firstTok(next));
+      if (trusted(firstTok(next2)) && !/^https?:/i.test(next2)) passwords.add(firstTok(next2));
     }
     if (/^https?:\/\//i.test(line) && next && !/^https?:/i.test(next)) { const t = firstTok(next); if (looksLikePassword(t)) passwords.add(t); if (looksLikeUser(t)) users.add(t); }
   }
