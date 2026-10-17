@@ -411,20 +411,24 @@ button.key.odoo:hover{text-decoration:underline}
 .db-pill.ok{background:#e6f4ea;color:#1a7f37}
 .db-pill.bad{background:#fdecec;color:#cf222e}
 
-.db-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:14px;margin-top:4px}
-.db-card{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-width:0}
-.db-card-off{background:var(--sunk,#fafbfc);opacity:.85}
-.db-card-head{display:flex;align-items:center;gap:8px;justify-content:space-between}
-.db-card-name{font-weight:700;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.db-card-badges{display:flex;gap:6px;flex-shrink:0}
-.db-card-url{color:var(--accent);text-decoration:none;font-family:var(--mono,monospace);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.db-card-url:hover{text-decoration:underline}
-.db-card-noaccess{color:var(--muted);font-size:13px;font-style:italic}
-.db-card-stats{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px}
-.db-stat{display:flex;flex-direction:column;gap:1px;min-width:0}
-.db-stat-wide{grid-column:1/-1}
-.db-stat-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
-.db-stat-val{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.db-card-addons{border-top:1px solid var(--line);padding-top:8px;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px}
-.db-addon-count{font-weight:700;font-size:13px}
-.db-addon-names{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;min-width:0}
+/* Compact table that fits the width; the add-ons column wraps so most screens need no scroll. */
+.db-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.db-table{border-collapse:collapse;width:100%;font-size:12.5px;table-layout:fixed}
+.db-table th,.db-table td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);vertical-align:top;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.db-table th{position:sticky;top:0;background:var(--sunk,#f6f7f9);font-weight:600;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.02em;z-index:1}
+.db-table tr:last-child td{border-bottom:0}
+.db-table tbody tr:hover{background:var(--hover,rgb(0 0 0 / .02))}
+.db-table tr.db-off{background:var(--sunk,#fafbfc);color:var(--muted)}
+/* Column widths (percent so it scales to the viewport). */
+.db-col-url{width:9%}.db-col-database{width:12%}.db-col-version{width:4%}.db-col-users{width:5%}.db-col-pos{width:4%}
+.db-col-created{width:8%}.db-col-branches{width:6%}.db-col-lastLogin{width:11%}.db-col-lastOrder{width:11%}
+.db-col-expired{width:8%}.db-col-flutter{width:6%}.db-col-addons{width:16%;white-space:normal}
+.db-ver{font-weight:600;font-family:var(--mono,monospace)}
+.db-link{color:var(--accent);text-decoration:none;font-family:var(--mono,monospace)}
+.db-link:hover{text-decoration:underline}
+.db-strong{font-weight:600}.db-ago{color:var(--muted)}
+.db-count{color:var(--muted);font-family:var(--mono,monospace)}
+.db-addon-names{white-space:normal}
+.db-pill{font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:999px;background:var(--sunk,#eef1f4);color:var(--muted);white-space:nowrap}
+.db-pill.ok{background:#e6f4ea;color:#1a7f37}
+.db-pill.bad{background:#fdecec;color:#cf222e}

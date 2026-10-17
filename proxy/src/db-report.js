@@ -16,7 +16,7 @@ const REPORT_KEY = "dbreport:v1";          // the finished/most-recent report
 const PROGRESS_KEY = "dbreport:progress";  // an in-flight incremental build
 const LOCK_KEY = "dbreport:lock";
 const DAY_MS = 24 * 60 * 60 * 1000;
-const STALE_MS = 20 * 60 * 60 * 1000;      // refresh on view when older than this
+const STALE_MS = 60 * 60 * 1000;           // rebuild on view when the cached report is older than an hour
 const BUILD_BUDGET_MS = 45000;             // leave headroom under the 60s function limit
 const POOL = 8;
 
@@ -55,6 +55,8 @@ export function parseCreds(html) {
   const url = urls.find((u) => /\.ai1\.host/i.test(u)) || urls[0] || "";
   // Every ai1.host number mentioned anywhere (name/url/body) - an article can serve more than one.
   const nums = [...new Set([...raw.matchAll(/(\d{2,4})\.ai1\.host/gi)].map((m) => m[1]))];
+  // Site labels (the subdomain before .ai1.host) - works for numeric (521) and named (paytag) hosts.
+  const labels = [...new Set([...raw.matchAll(/([a-z0-9][\w-]*)\.ai1\.host/gi)].map((m) => m[1].toLowerCase()))];
   const host = (url.match(/^https?:\/\/([^/]+)/i) || [])[1] || "";
   const num = (host.match(/(\d{2,4})\.ai1\.host/i) || [])[1] || nums[0] || (host.match(/(\d{2,4})/) || [])[1] || "";
   // Database names written in the article: a "db/database:" labelled value, or a bare <num>_<name> token.
@@ -116,7 +118,7 @@ export function parseCreds(html) {
   for (const u of uList) for (const p of pList) if (u && p) candidates.push({ user: u, password: p });
   const seen = new Set(), unique = [];
   for (const c of candidates) { const k = c.user + "\u0000" + c.password; if (!seen.has(k)) { seen.add(k); unique.push(c); } if (unique.length >= 24) break; }
-  return { url, host, num, nums: nums.length ? nums : (num ? [num] : []), dbs: [...new Set(dbs)], candidates: unique, complete: !!(url && unique.length) };
+  return { url, host, num, nums: nums.length ? nums : (num ? [num] : []), labels, dbs: [...new Set(dbs)], candidates: unique, complete: !!(url && unique.length) };
 }
 
 // Map each ai1.host instance number -> { url, candidates[] }, merged across all customer articles.
@@ -131,9 +133,9 @@ async function readCredentialIndex(env) {
       const title = typeof a.name === "string" ? a.name : "";
       const c = parseCreds("<p>" + title + "</p>\n" + (a.body || ""));
       if (!c.candidates.length) continue;
-      // Match by every ai1.host number found, plus a 2-4 digit number in the title.
+      // Match by every ai1.host site label (numeric or named, e.g. 521 or paytag), plus a number in the title.
       const titleNums = [...title.matchAll(/(\d{2,4})/g)].map((m) => m[1]);
-      const numbers = [...new Set([...c.nums, c.num, ...titleNums].filter(Boolean))];
+      const numbers = [...new Set([...(c.labels || []), ...c.nums, c.num, ...titleNums].filter(Boolean))];
       for (const n of numbers) {
         const slot = index[n] || (index[n] = { url: "", candidates: [], seen: new Set(), titles: [], dbs: [] });
         if (!slot.url && (c.url.includes(n + ".ai1.host") || !slot.url)) slot.url = c.url.includes(n + ".ai1.host") ? c.url : (slot.url || "https://" + n + ".ai1.host");
@@ -165,6 +167,7 @@ async function readInsideDatabase(slot, dbHint) {
   // Short per-request timeout so one slow/unreachable server can't stall the whole build.
   const signal = () => AbortSignal.timeout(7000);
   const num = (base.match(/(\d{2,4})\.ai1\.host/i) || [])[1] || "";
+  const label = (base.match(/([a-z0-9][\w-]*)\.ai1\.host/i) || [])[1]?.toLowerCase() || num;
   // Database names to try, best first: the one(s) Audit & Deploy reported, then what the server lists.
   const dbNames = [];
   const push = (d) => { if (d && /^[\w-]+$/.test(d) && !dbNames.includes(d)) dbNames.push(d); };
@@ -182,9 +185,11 @@ async function readInsideDatabase(slot, dbHint) {
     forms.add(slug); forms.add(slug.toLowerCase());
     forms.add(words.join("_").replace(/[^\w-]/g, "")); forms.add(words.join("_").replace(/[^\w-]/g, "").toLowerCase());
     if (words[0]) { forms.add(words[0].replace(/[^\w-]/g, "")); forms.add(words[0].replace(/[^\w-]/g, "").toLowerCase()); }
-    for (const f of forms) if (f) push(num + "_" + f);
+    for (const f of forms) if (f) { if (num) push(num + "_" + f); push(label + "_" + f); }
   }
-  if (num) push(num);
+  // Named hosts (e.g. paytag): the database is often <label> or <label>_prod.
+  if (label) { push(label); push(label + "_prod"); push(label + "_odoo"); }
+  if (num) { push(num); push(num + "_prod"); }
   const tryDbs = dbNames.slice(0, 8);
   // Try the best credential against each database first (finds the right database fast), then the next.
   let db = "", uid = 0, password = "", attempts = 0;
@@ -256,13 +261,19 @@ async function instanceFacts(env, inst) {
   if (!/^[\w-]+$/.test(dbFromFilter)) dbFromFilter = ""; // ignore wildcard filters like "119_.*"
   const databases = [...new Set([...(cfg.databases || []), cfg.selected_database, f.db_name, dbFromFilter].filter(Boolean))].filter((d) => /^[\w-]+$/.test(d) && isProductionName(d));
   const addons = (add.addons || []).map((a) => a.name).filter(Boolean).sort();
+  // Odoo major version from the server's public version endpoint (works without a login).
+  const base = inst.domain ? "https://" + inst.domain : "";
+  let odooVersion = "";
+  if (base) { const v = await customerRpc(base, "common", "version", [], AbortSignal.timeout(7000)).catch(() => null); const s = v && (v.server_serie || v.server_version); if (s) odooVersion = String(s).split(/[-.]/)[0]; }
   return {
     instance: name,
-    url: inst.domain ? "https://" + inst.domain : "",
+    url: base,
     num: (String(inst.domain || name).match(/(\d{2,4})/) || [])[1] || "",
+    label: (String(inst.domain || "").match(/([a-z0-9][\w-]*)\.ai1\.host/i) || [])[1]?.toLowerCase() || "",
     databases,
     database: databases[0] || "",
     created: inst.created || null,
+    odooVersion,
     addons,
     addonCount: addons.length,
     flutter: addons.some((a) => /flutter/i.test(a)),
@@ -291,7 +302,7 @@ export async function buildReport(env, { force = false } = {}) {
       const batch = progress.instances.slice(progress.done, progress.done + POOL);
       const rows = await pool(batch, POOL, async (inst) => {
         const facts = await instanceFacts(env, inst);
-        const slot = creds[facts.num];
+        const slot = creds[facts.label] || creds[facts.num];
         let inside = { loginOk: false, loginFound: !!(slot && slot.candidates.length) };
         if (inside.loginFound) { try { inside = await readInsideDatabase({ url: slot.url || facts.url, candidates: slot.candidates, titles: slot.titles, dbs: slot.dbs }, facts.databases); } catch (e) { inside = { loginFound: true, loginOk: false, error: String(e.message || e).slice(0, 80) }; } }
         return { ...facts, ...inside };
@@ -343,7 +354,9 @@ export async function dbReportCron(request, env, url) {
   const ok = token && (auth === "Bearer " + token || url.searchParams.get("token") === token);
   if (!ok) return fail("forbidden", "Invalid cron token.", 403);
   if (!odooConfigured(env) || !env.STORE) return json({ skipped: "not configured" });
-  // One slice per invocation; Vercel calls daily, and a stale build auto-continues on the next view.
-  const r = await buildReport(env, { force: true });
-  return json({ ok: true, ...r, report: undefined });
+  // Run slices to completion within this invocation (force a fresh build on the first slice, then continue).
+  const deadline = Date.now() + 55000;
+  let r = await buildReport(env, { force: true });
+  while (!r.done && !r.busy && Date.now() < deadline) r = await buildReport(env, { force: false });
+  return json({ ok: true, done: !!r.done, busy: !!r.busy });
 }

@@ -22,6 +22,7 @@ const num = (n) => (n === null || n === undefined ? "—" : String(n));
 const COLUMNS = [
   { key: "url", label: "URL", value: (r) => r.url ? linkCell(r.url) : el("span", "db-muted", "—"), csv: (r) => r.url || "" },
   { key: "database", label: "Database", value: (r) => el("span", "db-strong", r.database || r.instance || "—"), csv: (r) => r.database || r.instance || "" },
+  { key: "version", label: "Odoo", value: (r) => r.odooVersion ? el("span", "db-ver", r.odooVersion) : el("span", "db-muted", "—"), csv: (r) => r.odooVersion || "" },
   { key: "users", label: "Users", value: (r) => numCell(r, "users"), csv: (r) => num(r.users) },
   { key: "pos", label: "POS", value: (r) => numCell(r, "pos"), csv: (r) => num(r.pos) },
   { key: "created", label: "Created", value: (r) => el("span", "", fmtDate(r.created)), csv: (r) => fmtDate(r.created) },
@@ -50,55 +51,18 @@ function addonCell(r) {
 
 let REPORT = null, pollTimer = null;
 
-// One compact stat (label + value) inside a card.
-function stat(label, valueNode) { const s = el("div", "db-stat"); s.append(el("span", "db-stat-label", label), valueNode instanceof Node ? valueNode : el("span", "db-stat-val", valueNode == null ? "—" : String(valueNode))); return s; }
-function statText(label, text, cls) { return stat(label, el("span", "db-stat-val" + (cls ? " " + cls : ""), text)); }
-
-function card(r) {
-  const c = el("div", "db-card" + (r.loginOk ? "" : " db-card-off"));
-  // Header: name + badges
-  const head = el("div", "db-card-head");
-  head.append(el("span", "db-card-name", r.database || r.instance || "—"));
-  const badges = el("span", "db-card-badges");
-  if (r.flutter) badges.append(el("span", "db-pill ok", "Flutter POS"));
-  if (r.loginOk && r.expired !== null) badges.append(el("span", "db-pill " + (r.expired ? "bad" : "ok"), r.expired ? "Expired" : "Active"));
-  head.append(badges);
-  c.append(head);
-  // URL
-  if (r.url) { const a = el("a", "db-card-url", r.url.replace(/^https?:\/\//, "")); a.href = r.url; a.target = "_blank"; a.rel = "noopener"; c.append(a); }
-  if (!r.loginOk) { c.append(el("div", "db-card-noaccess", "no access")); addedStats(c, r, true); return c; }
-  addedStats(c, r, false);
-  return c;
-}
-
-function addedStats(c, r, off) {
-  const grid = el("div", "db-card-stats");
-  grid.append(
-    statText("Users", off ? "—" : num(r.users)),
-    statText("POS", off ? "—" : num(r.pos)),
-    statText("Branches", off ? "—" : (r.branches ? String(r.branches) : "none")),
-    statText("Created", fmtDate(r.created)),
-    statText("Last login", off ? "—" : fmtDateTime(r.lastLogin), "db-stat-wide"),
-    statText("Last order", off ? "—" : fmtDateTime(r.lastOrder), "db-stat-wide"),
-    statText("Expiry", off || r.expired === null ? "—" : fmtDate(r.expires))
-  );
-  c.append(grid);
-  // Add-ons: count + names, wraps naturally
-  const list = r.addons || [];
-  const ad = el("div", "db-card-addons");
-  ad.append(el("span", "db-stat-label", "Add-ons"));
-  if (list.length) { ad.append(el("span", "db-addon-count", String(list.length))); ad.append(el("span", "db-addon-names", list.join(", "))); }
-  else ad.append(el("span", "db-muted", "—"));
-  c.append(ad);
-}
-
 function render() {
   if (!REPORT) return;
   const q = $("search").value.trim().toLowerCase();
   const rows = (REPORT.rows || []).filter((r) => !q || [r.url, r.database, r.instance, (r.addons || []).join(" ")].join(" ").toLowerCase().includes(q));
   rows.sort((a, b) => (a.loginOk === b.loginOk ? 0 : a.loginOk ? -1 : 1) || (a.database || a.instance || "").localeCompare(b.database || b.instance || ""));
-  const box = $("cards"); box.replaceChildren();
-  for (const r of rows) box.append(card(r));
+  const head = $("head"); head.replaceChildren(); for (const c of COLUMNS) head.append(el("th", "db-col-" + c.key, c.label));
+  const body = $("rows"); body.replaceChildren();
+  for (const r of rows) {
+    const tr = el("tr"); if (!r.loginOk) tr.className = "db-off";
+    for (const c of COLUMNS) { const td = el("td", "db-col-" + c.key); td.append(c.value(r)); tr.append(td); }
+    body.append(tr);
+  }
   const working = (REPORT.rows || []).filter((r) => r.loginOk).length;
   $("meta").textContent = rows.length + " of " + (REPORT.rows || []).length + " databases · " + working + " with data · built " + fmtDateTime(new Date(REPORT.builtAt).toISOString());
 }
@@ -106,7 +70,7 @@ function render() {
 async function load() {
   try {
     const data = await api("/db-report");
-    if (data.report) { REPORT = data.report; $("toolbar").hidden = false; $("cards").hidden = false; showState(""); render(); }
+    if (data.report) { REPORT = data.report; $("toolbar").hidden = false; $("tablewrap").hidden = false; showState(""); render(); }
     else showState(data.building ? "Building the report for the first time… this can take a minute." : "No report yet.", false);
     if (data.building) { showState("", false); scheduleContinue(); }
   } catch (err) {
@@ -121,7 +85,7 @@ function scheduleContinue() { clearTimeout(pollTimer); pollTimer = setTimeout(()
 async function continueBuild(force) {
   try {
     const r = await api("/db-report/refresh" + (force ? "" : "?continue=1"), { method: "POST" });
-    if (r.report) { REPORT = r.report; $("toolbar").hidden = false; $("cards").hidden = false; showState(""); render(); }
+    if (r.report) { REPORT = r.report; $("toolbar").hidden = false; $("tablewrap").hidden = false; showState(""); render(); }
     if (r.busy) { scheduleContinue(); return; }
     if (!r.done) { if (r.progress) $("meta").textContent = "Building… " + r.progress.done + " of " + r.progress.total + " databases"; scheduleContinue(); }
     else { toast("Report refreshed."); load(); }
