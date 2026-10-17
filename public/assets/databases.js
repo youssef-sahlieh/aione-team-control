@@ -41,8 +41,8 @@ const COLUMNS = [
   { key: "addons", label: "Add-ons", value: (r) => addonCell(r), sort: (r) => (r.addons || []).length, csv: (r) => (r.addons || []).join("; ") }
 ];
 const WEIGHT = { company: 2.2, database: 1.6, url: 1.5, version: 0.6, users: 0.75, pos: 0.6, branches: 0.85, created: 1, lastLogin: 1.3, lastOrder: 1.3, expired: 1.2, flutter: 0.95, addons: 2 };
-// Phones start with fewer columns (the rest are one tap away in Columns).
-const PHONE_COLUMNS = ["company", "database", "users", "lastOrder", "expired"];
+// Every column shows by default; phones swipe the table sideways to see them all.
+
 
 // Only a company name read from inside the database is shown (reports built earlier may carry Knowledge names).
 const companyOf = (r) => (r.companySource === "database" ? r.company || "" : "");
@@ -83,8 +83,7 @@ const PREFS_KEY = "aion.dbreport.view";
 const view = { sort: { key: "company", dir: 1 }, filters: {}, columns: null };
 try { Object.assign(view, JSON.parse(localStorage.getItem(PREFS_KEY) || "{}")); } catch {}
 const saveView = () => { try { localStorage.setItem(PREFS_KEY, JSON.stringify(view)); } catch {} };
-const phone = () => window.matchMedia("(max-width: 760px)").matches;
-const shownColumns = () => { const keys = view.columns || (phone() ? PHONE_COLUMNS : COLUMNS.map((c) => c.key)); return COLUMNS.filter((c) => keys.includes(c.key)); };
+const shownColumns = () => { const keys = view.columns || COLUMNS.map((c) => c.key); return COLUMNS.filter((c) => keys.includes(c.key)); };
 
 let REPORT = null, pollTimer = null;
 let filtersOpen = false;

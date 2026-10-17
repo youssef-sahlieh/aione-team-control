@@ -505,3 +505,17 @@ button.key.odoo:hover{text-decoration:underline}
 .db-page .db-pill{border-radius:8px}
 @media (max-width:760px){.db-page th[aria-sort=none] .db-arrow{display:none}}
 .db-page .db-table th.db-col-company{position:sticky;top:0;left:auto;z-index:3}
+/* Phones: the Databases table keeps natural column widths and scrolls sideways inside its box (swipe), with
+   the company pinned on the left and the header pinned on top. The page itself still doesn't move. */
+@media (max-width:760px){
+  .db-page .db-scroll{overflow-x:auto;touch-action:pan-x pan-y}
+  .db-page .db-table{table-layout:auto;width:max-content;min-width:100%}
+  .db-page .db-table col{width:auto!important}
+  .db-page .db-table th,.db-page .db-table td{white-space:nowrap;overflow-wrap:normal}
+  .db-page .db-table .db-col-addons{white-space:normal;min-width:200px;max-width:260px}
+  .db-page .db-table .db-col-company{position:sticky;left:0;z-index:1;background:var(--surface,#fff);white-space:normal;min-width:120px;max-width:44vw;box-shadow:1px 0 0 var(--line)}
+  .db-page .db-table tr.db-off .db-col-company{background:var(--sunk,#fafbfc)}
+  .db-page .db-table th.db-col-company{top:0;left:0;z-index:4;background:var(--sunk,#f6f7f9)}
+  .db-page .db-sort{white-space:nowrap}
+  .db-page th[aria-sort=none] .db-arrow{display:inline}
+}
