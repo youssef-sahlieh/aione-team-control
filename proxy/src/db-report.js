@@ -286,6 +286,23 @@ async function instanceFacts(env, inst) {
   };
 }
 
+// Customer names exactly as Audit & Deploy shows them (its Knowledge customer page, else the custom name typed
+// into Audit & Deploy), by instance name. No database login needed. Empty when the add-on can't answer.
+async function auditCustomerNames(env, instances) {
+  const names = {};
+  const domains = Object.fromEntries(instances.filter((i) => i.domain).map((i) => [i.instance_name, i.domain]));
+  const [knowledge, custom] = await Promise.all([
+    odoo(env, "monitor.instance.custom", "get_knowledge_data_for_instances", [domains]).then(unwrap).catch(() => ({})),
+    odoo(env, "monitor.instance.custom", "get_all_instances_data", []).then(unwrap).catch(() => ({}))
+  ]);
+  for (const i of instances) {
+    const k = (knowledge || {})[i.instance_name], c = (custom || {})[i.instance_name];
+    const name = String((k && k.article_name) || (c && c.custom_name) || "").trim();
+    if (name && name !== i.instance_name && !/^https?:/i.test(name)) names[i.instance_name] = name;
+  }
+  return names;
+}
+
 const pool = async (items, n, fn) => { const q = items.map((x, i) => [x, i]); const out = []; await Promise.all(Array.from({ length: Math.min(n, q.length) }, async () => { while (q.length) { const [x, i] = q.shift(); out[i] = await fn(x); } })); return out; };
 
 // Build (or continue building) the report. Resumable: saves progress and returns within the budget.
@@ -302,7 +319,7 @@ export async function buildReport(env, { force = false } = {}) {
       const instances = await productionInstances(env);
       progress = { startedAt: Date.now(), rows: [], done: 0, total: instances.length, instances: instances.map((i) => ({ instance_name: i.instance_name, domain: i.domain, created: i.created })) };
     }
-    const creds = await readCredentialIndex(env);
+    const [creds, customers] = await Promise.all([readCredentialIndex(env), auditCustomerNames(env, progress.instances)]);
     while (progress.done < progress.instances.length && Date.now() - started < BUILD_BUDGET_MS) {
       const batch = progress.instances.slice(progress.done, progress.done + POOL);
       const rows = await pool(batch, POOL, async (inst) => {
@@ -310,8 +327,9 @@ export async function buildReport(env, { force = false } = {}) {
         const slot = creds[facts.label] || creds[facts.num];
         let inside = { loginOk: false, loginFound: !!(slot && slot.candidates.length) };
         if (inside.loginFound) { try { inside = await readInsideDatabase({ url: slot.url || facts.url, candidates: slot.candidates, titles: slot.titles, dbs: slot.dbs }, facts.databases); } catch (e) { inside = { loginFound: true, loginOk: false, error: String(e.message || e).slice(0, 80) }; } }
-        // The company name from inside the database; without a login, the customer's Knowledge article title.
-        const customer = (slot && slot.titles && slot.titles[0]) || "";
+        // The company name from inside the database; else the customer name Audit & Deploy shows; else the
+        // title of a Knowledge article that mentions the site.
+        const customer = customers[inst.instance_name] || (slot && slot.titles && slot.titles.find((t) => !/^https?:/i.test(t))) || "";
         return { ...facts, ...inside, customer, company: inside.company || customer, companySource: inside.company ? "database" : customer ? "knowledge" : "" };
       });
       progress.rows.push(...rows);

@@ -326,7 +326,7 @@ async function route(request, env, url) {
   // Public compatibility check for Pages publishing; exposes no runtime credentials or ticket data.
   if (path.startsWith("/monitor/odoo/translations") && method === "GET") return odooTranslations(env, url);
   if (path === "/cron/db-report") return dbReportCron(request, env, url);
-  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1", "db-report-v1"]});
+  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1", "db-report-v1", "db-report-company-v1"], build: String(env.BUILD || "").slice(0, 7)});
 
   // Jira Automation uses its own secret, never a team password or a user's browser session.
   if (path === "/notifications/jira-created") {
@@ -501,7 +501,7 @@ async function route(request, env, url) {
   if (path === "/config" && method === "GET") {
     let team = {};
     try { team = JSON.parse(env.TEAM_CONFIG || "{}"); } catch {}
-    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE, capabilities:["ticket-business-v1","db-report-v1"] });
+    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE, capabilities:["ticket-business-v1","db-report-v1","db-report-company-v1"] });
   }
 
   if (!isAdmin && (path === "/mail" || path === "/jira/users")) return fail("forbidden", "Only administrators can do that.", 403);

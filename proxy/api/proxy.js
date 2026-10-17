@@ -59,6 +59,8 @@ async function answer(request) {
   const env = { ...settings, MAILER: gmailMailer(), STORE: store() };
   for (const name of SECRETS) env[name] = process.env[name] || "";
   env.NO_DEVELOPER_NOTIFY_TO = process.env.NO_DEVELOPER_NOTIFY_TO ?? settings.NO_DEVELOPER_NOTIFY_TO;
+  // The commit this deployment runs (Vercel sets it), shown on /health so a deploy can be checked.
+  env.BUILD = process.env.VERCEL_GIT_COMMIT_SHA || "";
   const hasBody = !["GET", "HEAD"].includes(request.method);
   return handler.fetch(new Request(url, { method: request.method, headers: request.headers, body: hasBody ? await request.arrayBuffer() : undefined }), env);
 }

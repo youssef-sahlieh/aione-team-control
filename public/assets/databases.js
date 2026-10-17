@@ -40,6 +40,7 @@ const COLUMNS = [
   { key: "flutter", label: "Flutter POS", value: (r) => r.flutter ? el("span", "db-pill ok", "Installed") : el("span", "db-pill", "No"), sort: (r) => (r.flutter ? 1 : 0), csv: (r) => r.flutter ? "yes" : "no" },
   { key: "addons", label: "Add-ons", value: (r) => addonCell(r), sort: (r) => (r.addons || []).length, csv: (r) => (r.addons || []).join("; ") }
 ];
+const WEIGHT = { company: 2.2, database: 1.6, url: 1.5, version: 0.6, users: 0.75, pos: 0.6, branches: 0.85, created: 1, lastLogin: 1.3, lastOrder: 1.3, expired: 1.2, flutter: 0.95, addons: 2 };
 // Phones start with fewer columns (the rest are one tap away in Columns).
 const PHONE_COLUMNS = ["company", "database", "users", "lastOrder", "expired"];
 
@@ -107,12 +108,12 @@ function visibleRows() {
 }
 
 function renderFilters() {
-  const box = $("filters"); box.replaceChildren();
-  // Filters, Columns and Reset fold behind one button, hidden until pressed; it shows how many filters are on.
-  const count = Object.keys(view.filters).length, toggle = el("button", "btn db-filter-toggle" + (count ? " on" : ""), (filtersOpen ? "Hide filters" : "Show filters") + (count ? " · " + count + " on" : ""));
-  toggle.type = "button"; toggle.setAttribute("aria-expanded", String(filtersOpen)); box.classList.toggle("open", filtersOpen);
+  const box = $("filters"); box.replaceChildren(); box.hidden = !filtersOpen;
+  // Filters, Columns and Reset fold behind one toolbar button, hidden until pressed; it shows how many filters are on.
+  const count = Object.keys(view.filters).length, toggle = el("button", "btn db-filter-toggle" + (count ? " on" : ""), (filtersOpen ? "Hide filters" : "Filters") + (count ? " · " + count : ""));
+  toggle.type = "button"; toggle.setAttribute("aria-expanded", String(filtersOpen)); toggle.setAttribute("aria-controls", "filters");
   toggle.addEventListener("click", () => { filtersOpen = !filtersOpen; renderFilters(); });
-  box.append(toggle);
+  $("filter-toggle").replaceChildren(toggle);
   for (const [id, label] of FILTERS) {
     const field = el("label", "db-filter"), select = el("select", "fsel");
     field.append(el("span", "", label)); select.setAttribute("aria-label", label);
@@ -143,6 +144,9 @@ function renderFilters() {
 function render() {
   if (!REPORT) return;
   const rows = visibleRows(), cols = shownColumns();
+  // The table fits the page width: each shown column gets its share (weight) of it.
+  const total = cols.reduce((n, c) => n + (WEIGHT[c.key] || 1), 0), colgroup = $("cols"); colgroup.replaceChildren();
+  for (const c of cols) { const col = el("col"); col.style.width = ((WEIGHT[c.key] || 1) / total * 100).toFixed(2) + "%"; colgroup.append(col); }
   const head = $("head"); head.replaceChildren();
   for (const c of cols) {
     const th = el("th", "db-col-" + c.key + (c.num ? " db-num" : "")), b = el("button", "db-sort", c.label);
@@ -164,10 +168,21 @@ function render() {
   $("meta").textContent = rows.length + " of " + (REPORT.rows || []).length + " databases · " + working + " with data · built " + fmtDateTime(new Date(REPORT.builtAt).toISOString());
 }
 
-function showReport(report) { REPORT = report; $("toolbar").hidden = false; $("filters").hidden = false; $("tablewrap").hidden = false; showState(""); renderFilters(); render(); }
+function showReport(report) { REPORT = report; $("toolbar").hidden = false; $("tablewrap").hidden = false; showState(""); renderFilters(); render(); explainCompanies(); }
+
+// Says why company names are missing, instead of only showing empty cells.
+let serverHasCompanies = null;
+function explainCompanies() {
+  const box = $("notice"), rows = (REPORT && REPORT.rows) || [];
+  let text = "";
+  if (serverHasCompanies === false) text = "Company names need the updated server: redeploy aione-team-proxy in Vercel (its /health page should list db-report-company-v1), then press Refresh now.";
+  else if (rows.length && !rows.some((r) => "companySource" in r)) text = "This report was built before company names were added. Press Refresh now to rebuild it with company names.";
+  box.hidden = !text; box.textContent = text;
+}
 
 async function load() {
   try {
+    api("/config").then((cfg) => { serverHasCompanies = (cfg.capabilities || []).includes("db-report-company-v1"); explainCompanies(); }).catch(() => {});
     const data = await api("/db-report");
     if (data.report) showReport(data.report);
     else showState(data.building ? "Building the report for the first time… this can take a minute." : "No report yet.", false);

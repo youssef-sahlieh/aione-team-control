@@ -87,20 +87,3 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
   .mon-table td.mon-acts .btn{margin:0;flex:1 1 auto}
 }
 
-/* Databases report on phones: still a table. It scrolls sideways inside its box with the company pinned on
-   the left; Columns (databases.js) starts with fewer columns here. */
-@media (max-width:760px){
-  .db-scroll{max-height:none}
-  .db-table th,.db-table td{padding:9px 10px;font-size:13px}
-  .db-table .db-col-company{max-width:46vw;min-width:0}
-  .db-filters{gap:8px}
-  .db-filter{flex:1 1 calc(50% - 8px);min-width:0}
-  .db-filter select{width:100%}
-  .db-columns,.db-filters>.btn{flex:1 1 calc(50% - 8px)}
-  .db-columns>summary{width:100%}
-  .db-columns-list{left:auto;right:0}
-}
-@media (max-width:760px){
-  .db-filters.open .db-filter-toggle{flex-basis:100%}
-  .db-filters>.btn,.db-columns{flex:1 1 0}
-}

@@ -454,7 +454,53 @@ button.key.odoo:hover{text-decoration:underline}
 .db-col-opt{display:flex;align-items:center;gap:8px;padding:7px 6px;border-radius:6px;font-size:13px;cursor:pointer}
 .db-col-opt:hover{background:var(--sunk,#f3f4f6)}
 .db-columns-list .btn{margin-top:4px}
-/* Filters, Columns and Reset stay folded behind one button until it is pressed (databases.js). */
-.db-filters:not(.open)>:not(.db-filter-toggle){display:none!important}
 .db-filter-toggle.on{border-color:var(--accent);color:var(--accent)}
 .db-sort{white-space:nowrap}
+/* Databases page fits the screen: no page scroll up/down or sideways. The header, toolbar and filters keep
+   their height; the table takes the rest and scrolls inside itself, its columns sharing the width. */
+.db-page{height:100vh;height:100dvh;overflow:hidden}
+.db-page .wrap{height:100%;max-width:none;box-sizing:border-box;gap:8px;padding-block:max(10px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-bottom))}
+.db-page .top{flex:none;flex-wrap:nowrap;gap:10px}
+.db-page .brand h1{font-size:20px;margin:0;line-height:1.2}
+.db-page .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.db-top-actions{display:flex;align-items:center;gap:8px;flex:none}
+.db-page .db-toolbar{flex:none;margin:0;flex-wrap:nowrap}
+.db-page .db-toolbar #search{flex:1;min-width:0;max-width:none}
+.db-page .db-actions{flex:none;margin-left:0}
+.db-page .db-filters{flex:none;margin:0}
+.db-page .db-meta{flex:none;margin:-2px 0 0}
+.db-notice{flex:none;padding:8px 12px;border-radius:10px;background:#fff7e6;border:1px solid #f5d38b;color:#7a4d00;font-size:13px}
+.db-page .db-scroll{flex:1;min-height:0;max-height:none;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+.db-page .db-table{table-layout:fixed;width:100%}
+.db-page .db-table th,.db-page .db-table td{white-space:normal;overflow-wrap:anywhere;word-break:normal}
+.db-page .db-sort{white-space:normal;padding:8px 8px}
+.db-page .db-table td{padding:8px}
+.db-page .db-table .db-col-company{position:static;min-width:0;max-width:none;box-shadow:none}
+.db-page .db-table .db-col-addons{min-width:0}
+.db-page .db-ago{display:block}
+.db-page .db-pill{white-space:normal;display:inline-block}
+@media (max-width:760px){
+  .db-page .wrap{padding-inline:max(10px,env(safe-area-inset-left)) max(10px,env(safe-area-inset-right));gap:6px}
+  .db-page .sub,.db-me-text{display:none}
+  .db-page .brand h1{font-size:18px}
+  .db-page .top .btn{min-height:36px;padding:6px 10px;font-size:13px}
+  .db-page .db-toolbar{flex-wrap:wrap;gap:6px}
+  .db-page .db-toolbar #search{flex-basis:100%}
+  .db-page .db-actions{width:100%;display:flex;gap:6px}
+  .db-page .db-actions>*,.db-page .db-actions .btn{flex:1 1 0}
+  .db-page #filter-toggle .btn{width:100%}
+  .db-page .db-filters{gap:6px;max-height:42vh;overflow-y:auto}
+  .db-page .db-filter{flex:1 1 calc(50% - 6px);min-width:0}
+  .db-page .db-filter select{width:100%}
+  .db-page .db-columns,.db-page .db-filters>.btn{flex:1 1 calc(50% - 6px)}
+  .db-page .db-columns>summary{width:100%}
+  .db-page .db-columns-list{left:auto;right:0}
+  .db-page .db-table th,.db-page .db-table td{font-size:12.5px}
+  .db-page .db-sort{padding:8px 6px;font-size:10.5px}
+  .db-page .db-table td{padding:8px 6px}
+}
+.db-page .db-table th{overflow:hidden}
+.db-page .db-sort{overflow-wrap:normal;word-break:keep-all;hyphens:none;overflow:hidden;text-overflow:ellipsis}
+.db-page .db-table td{overflow-wrap:break-word}
+.db-page .db-pill{border-radius:8px}
+@media (max-width:760px){.db-page th[aria-sort=none] .db-arrow{display:none}}

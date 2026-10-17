@@ -13,32 +13,37 @@
 <link rel="stylesheet" href="assets/dashboard.css">
 <link rel="stylesheet" href="assets/styles/mobile.css">
 </head>
-<body>
+<body class="db-page">
 <div class="wrap">
   <div class="top">
     <div class="brand">
       <h1>Databases</h1>
-      <div class="sub">Production databases from Audit &amp; Deploy, with per-database details. Refreshes daily.</div>
+      <div class="sub">Production databases from Audit &amp; Deploy. Refreshes daily.</div>
     </div>
-    <a class="btn" href="dashboard.html">← Dashboard</a>
-    <span class="me">Signed in as <b id="me">…</b> <button class="btn" id="signout" type="button">Sign out</button></span>
+    <span class="db-top-actions">
+      <a class="btn" href="dashboard.html">← Dashboard</a>
+      <span class="me"><span class="db-me-text">Signed in as <b id="me">…</b></span> <button class="btn" id="signout" type="button">Sign out</button></span>
+    </span>
   </div>
 
   <div id="pagestate" class="state">Loading…</div>
+  <div id="notice" class="db-notice" role="status" hidden></div>
 
   <div class="db-toolbar" id="toolbar" hidden>
     <input type="search" id="search" class="inp" placeholder="Search company, database, URL or add-on…" aria-label="Search databases">
-    <span class="db-meta" id="meta"></span>
     <span class="db-actions">
-      <button class="btn" id="csv" type="button">Download CSV</button>
+      <span id="filter-toggle"></span>
+      <button class="btn" id="csv" type="button">CSV</button>
       <button class="btn primary" id="refresh" type="button">Refresh now</button>
     </span>
   </div>
 
   <div class="db-filters" id="filters" hidden></div>
+  <div class="db-meta" id="meta"></div>
 
   <div class="db-scroll" id="tablewrap" hidden>
     <table class="db-table" id="table">
+      <colgroup id="cols"></colgroup>
       <thead><tr id="head"></tr></thead>
       <tbody id="rows"></tbody>
     </table>
