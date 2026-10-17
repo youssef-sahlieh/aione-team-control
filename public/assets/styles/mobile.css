@@ -101,8 +101,6 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
   .db-columns-list{left:auto;right:0}
 }
 @media (max-width:760px){
-  .db-filter-toggle{display:block!important}
-  .db-filters:not(.open) .db-filter{display:none}
   .db-filters.open .db-filter-toggle{flex-basis:100%}
   .db-filters>.btn,.db-columns{flex:1 1 0}
 }

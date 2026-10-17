@@ -454,5 +454,7 @@ button.key.odoo:hover{text-decoration:underline}
 .db-col-opt{display:flex;align-items:center;gap:8px;padding:7px 6px;border-radius:6px;font-size:13px;cursor:pointer}
 .db-col-opt:hover{background:var(--sunk,#f3f4f6)}
 .db-columns-list .btn{margin-top:4px}
-.db-filter-toggle{display:none!important}
+/* Filters, Columns and Reset stay folded behind one button until it is pressed (databases.js). */
+.db-filters:not(.open)>:not(.db-filter-toggle){display:none!important}
+.db-filter-toggle.on{border-color:var(--accent);color:var(--accent)}
 .db-sort{white-space:nowrap}

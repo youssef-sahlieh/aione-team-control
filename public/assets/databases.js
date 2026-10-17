@@ -108,8 +108,8 @@ function visibleRows() {
 
 function renderFilters() {
   const box = $("filters"); box.replaceChildren();
-  // Phones: the filters fold behind one button (CSS shows it only there).
-  const count = Object.keys(view.filters).length, toggle = el("button", "btn db-filter-toggle", "Filters" + (count ? " · " + count : ""));
+  // Filters, Columns and Reset fold behind one button, hidden until pressed; it shows how many filters are on.
+  const count = Object.keys(view.filters).length, toggle = el("button", "btn db-filter-toggle" + (count ? " on" : ""), (filtersOpen ? "Hide filters" : "Show filters") + (count ? " · " + count + " on" : ""));
   toggle.type = "button"; toggle.setAttribute("aria-expanded", String(filtersOpen)); box.classList.toggle("open", filtersOpen);
   toggle.addEventListener("click", () => { filtersOpen = !filtersOpen; renderFilters(); });
   box.append(toggle);
