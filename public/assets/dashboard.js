@@ -91,7 +91,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   async function setDevs(key,want){ const i=issueByKey(key); if(isOdoo(key)) return odooApi.update(key,{devs:[...want]});if(IS_ADMIN)await business.ensureBilling(key); return isInt(key)?internalApi.update(key,{devs:[...want]}):jira.edit(key,{labels:labelsWith(i?i.labels:[],want)}); }
   const doTransition=async(key,id)=>{
     if(isOdoo(key))return odooApi.update(key,{stage:id}).then(r=>{delete ODOO_DETAIL[key];return r;});
-    if(!business.enabled())throw new Error("Deploy the updated backend before changing ticket status.");
+    await businessReady; if(!business.enabled())throw new Error("Deploy the updated backend before changing ticket status.");
     if(business.dirty(key))throw new Error("Save the ticket work fields before changing status.");
     const move=reason=>isInt(key)?internalApi.update(key,{status:id,...(reason?{overrideReason:reason}:{})}):api("/jira/issue/"+key+"/transitions",{method:"POST",body:{id,...(reason?{overrideReason:reason}:{})}});
     try{return await move();}catch(err){const reason=await business.overrideReason(err,key);if(reason)return move(reason);throw err;}
@@ -627,17 +627,17 @@ import { createCommentMentions } from "./components/comment-mentions.js";
         if(d.from!=="__none") want.delete(d.from);
         if(target!=="__none") want.add(target);
         const same=want.size===i.devs.length&&[...want].every(x=>i.devs.includes(x)); if(same) return null;
-        return {key:k,added:[...want].filter(x=>!i.devs.includes(x)),run:()=>setDevs(k,want)};
+        return {key:k,added:[...want].filter(x=>!i.devs.includes(x)),run:()=>setDevs(k,want),patch:devsPatch(want)};
       }).filter(Boolean);
       if(!ops.length){ toast("Nothing to change."); return; }
       await runBatch(startingOps(ops),target==="__none"?"Developer removed":"Assigned to ai1_"+target);
     } else if(mode==="status"){
       toast("Checking allowed moves…");
       const ops=[], skipped=[];
-      for(const k of d.keys){ const i=issueByKey(k); if(i&&i.status===target) continue;
+      await Promise.all(d.keys.map(async k=>{ const i=issueByKey(k); if(i&&i.status===target) return;
         try{ const trs=await getTransitions(k); const tr=trs.find(x=>x.to&&x.to.name&&x.to.name.toLowerCase()===target.toLowerCase());
-          if(tr) ops.push({key:k,run:()=>doTransition(k,tr.id)}); else skipped.push(k+": can't go from "+(i?i.status:"its status")+" straight to "+target);
-        }catch(err){ skipped.push(k+": "+errorText(err)); } }
+          if(tr) ops.push({key:k,run:()=>doTransition(k,tr.id),patch:statusPatch(tr.to.name,tr.to.statusCategory&&tr.to.statusCategory.key)}); else skipped.push(k+": can't go from "+(i?i.status:"its status")+" straight to "+target);
+        }catch(err){ skipped.push(k+": "+errorText(err)); } }));
       if(ops.length) await runBatch(ops,"Moved to "+target);
       if(skipped.length) setTimeout(()=>toast("Not moved",skipped,true),ops.length?3300:0);
     }
@@ -679,7 +679,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       const ops=keys.map(k=>{ const i=issueByKey(k); const cur=new Set(i?i.devs:[]); let want;
         if(mode==="set") want=new Set(chosen); else if(mode==="add"){ want=new Set(cur); chosen.forEach(d=>want.add(d)); } else want=new Set([...cur].filter(d=>!chosen.has(d)));
         const same=want.size===cur.size&&[...want].every(d=>cur.has(d));
-        return same?null:{key:k,added:[...want].filter(d=>!cur.has(d)),run:()=>setDevs(k,want)}; }).filter(Boolean);
+        return same?null:{key:k,added:[...want].filter(d=>!cur.has(d)),run:()=>setDevs(k,want),patch:devsPatch(want)}; }).filter(Boolean);
       if(!ops.length){ toast("Nothing to change."); return; }
       await runBatch(startingOps(ops),mode==="remove"?"Developers removed":"Developers saved"); });
     foot.appendChild(save); p.appendChild(foot); placePop(anchor);
@@ -694,18 +694,21 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // When an administrator assigns a ticket that hasn't started yet, it moves forward: Jira tickets to
   // "Dev Approved"; internal and Odoo tickets (which have no such status) to "In Development".
   // Tickets already in progress or done keep their status.
+  // Returns false when the status was meant to move but didn't. Reads the ticket as loaded (the page may already show the move).
   async function startAssigned(key){
-    const i=issueByKey(key); if(!IS_ADMIN||!i||i.cat!=="new") return;
+    const i=loadedIssue(key); if(!IS_ADMIN||!i||i.cat!=="new") return true;
     const want=isInt(key)||isOdoo(key)?"in development":"dev approved";
-    if(String(i.status||"").trim().toLowerCase()===want) return;
+    if(String(i.status||"").trim().toLowerCase()===want) return true;
     const t=(await getTransitions(key)).find(x=>String((x.to&&x.to.name)||"").trim().toLowerCase()===want);
-    if(!t){ setTimeout(()=>toast(key+" was assigned, but its workflow can't move to “"+(want==="dev approved"?"Dev Approved":"In Development")+"” from "+i.status+"."),3500); return; }
-    try{ await doTransition(key,t.id); }
-    catch(err){ setTimeout(()=>toast(key+" was assigned, but the status didn't change",[errorText(err)],true),3500); }
+    if(!t){ setTimeout(()=>toast(key+" was assigned, but its workflow can't move to “"+(want==="dev approved"?"Dev Approved":"In Development")+"” from "+i.status+"."),3500); return false; }
+    try{ await doTransition(key,t.id); return true; }
+    catch(err){ setTimeout(()=>toast(key+" was assigned, but the status didn't change",[errorText(err)],true),3500); return false; }
   }
-  const startingOps=ops=>IS_ADMIN?ops.map(o=>o.added&&!o.added.length?o:{...o,run:async()=>{ const r=await o.run(); await startAssigned(o.key); return r; }}):ops;
+  // The status move shows at once (startPatch) and is taken back if it doesn't happen.
+  const startingOps=ops=>IS_ADMIN?ops.map(o=>{ if(o.added&&!o.added.length) return o; const n={...o,startPatch:startPatch(o.key)};
+    n.run=async()=>{ const r=await o.run(); if(!await startAssigned(o.key)&&n._start) unpatch(o.key,n._start); return r; }; return n; }):ops;
   async function doAssign(keys,id,name){
-    const ops=id?startingOps(assignOps(keys,id)):assignOps(keys,id); if(!ops.length){ toast("Already assigned to "+name+"."); return {ok:0,fail:0}; }
+    const base=assignOps(keys,id).map(o=>({...o,patch:assigneePatch(id,name)})), ops=id?startingOps(base):base; if(!ops.length){ toast("Already assigned to "+name+"."); return {ok:0,fail:0}; }
     const r=await runBatch(ops,"Assigned to "+name);
     if(r.ok&&id&&!BYID[id]) setTimeout(()=>toast(name+" isn't "+teamNames()+", so "+(r.ok===1?"this ticket":"these tickets")+" will leave the dashboard."),3300);
     return r;
@@ -801,7 +804,11 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   async function getTransitions(key){
     if(isOdoo(key)){ const d=await odooDetail(key); return (d.stages||[]).filter(s=>s.name!==d.ticket.status).map(s=>({id:s.id,name:"Move to "+s.name,to:{name:s.name,statusCategory:{key:s.cat}}})); }
     if(isInt(key)){ const t=INT[key]; return INT_STATUSES.filter(s=>!t||s.name!==t.status).map(s=>({id:s.name,name:s.name==="Closed"?"Close":"Move to "+s.name,to:{name:s.name,statusCategory:{key:s.cat}}})); }
-  const d=(await jira.transitions(key))||{}; return (d.transitions||[]).filter(x=>x.isAvailable!==false); }
+    // Jira's allowed moves depend on the current status: kept for 5 minutes per ticket and status.
+    const i=loadedIssue(key), id=key+"|"+(i?i.status:""), hit=TRANS[id];
+    if(hit&&Date.now()-hit.at<300000) return hit.list;
+    const d=(await jira.transitions(key))||{}, list=(d.transitions||[]).filter(x=>x.isAvailable!==false); TRANS[id]={at:Date.now(),list}; return list; }
+  const TRANS={};
   async function statusPopover(anchor,keys){
     const p=$("pop"); p.replaceChildren(); p.appendChild(el("h4",null,keys.length===1?"Move "+keys[0]+" to":"Move "+keys.length+" tickets to"));
     const body=el("div","body"); body.appendChild(el("div","note","Loading allowed statuses…")); p.appendChild(body); placePop(anchor); const my=anchor;
@@ -814,7 +821,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       if(!groups.length){ body.appendChild(el("div","note","No status moves are available.")); return; }
       groups.forEach(g=>{ const b=el("button","opt"); b.type="button"; b.appendChild(el("span",null,"→")); b.appendChild(el("span","stbtn "+stK({status:g.name,cat:g.cat}),g.name));
         b.appendChild(el("span","cnt",keys.length>1?g.items.length+" of "+keys.length:g.label));
-        b.addEventListener("click",async()=>{ closePop(); await runBatch(g.items.map(it=>({key:it.key,run:()=>doTransition(it.key,it.id)})),"Moved to "+g.name);
+        b.addEventListener("click",async()=>{ closePop(); await runBatch(g.items.map(it=>({key:it.key,run:()=>doTransition(it.key,it.id),patch:statusPatch(g.name,g.cat)})),"Moved to "+g.name);
           const sk=keys.length-g.items.length; if(sk>0) setTimeout(()=>toast(sk+" ticket"+(sk===1?"":"s")+" can't move to "+g.name+" from their current status."),3300); });
         body.appendChild(b); });
       placePop(my);
@@ -836,17 +843,30 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(links&&links.length){ const box=el("div","links"); links.forEach(l=>{ const a=el("a","btn primary",l.label); a.href=l.href; if(l.title) a.title=l.title; box.appendChild(a); }); t.appendChild(box);
       const x=el("button","x","✕"); x.type="button"; x.setAttribute("aria-label","Close"); x.addEventListener("click",()=>{ t.hidden=true; }); t.appendChild(x); }
     t.hidden=false; clearTimeout(toastTimer); if(!(links&&links.length)) toastTimer=setTimeout(()=>t.hidden=true,isErr?9000:3000); }
-  let batchBusy=false;
+  // Changes running right now (the auto-refresh waits for them).
+  let batchBusy=0;
+  // Runs ops ({key, run, patch?, added?}). Each op's patch shows on the page at once; up to 4 tickets are
+  // changed at the same time; then only those tickets are re-read.
   async function runBatch(ops,okText){
-    if(batchBusy){ toast("Another update is still running."); return {ok:0,fail:0}; }
-    batchBusy=true; let ok=0; const fails=[]; const done=[];
-    for(let n=0;n<ops.length;n++){ if(ops.length>1) toast("Updating "+(n+1)+" of "+ops.length+"…");
-      try{try{await ops[n].run();}catch(error){if(error.code!=="billing_required"||!IS_ADMIN||isOdoo(ops[n].key))throw error;await business.ensureBilling(ops[n].key);await ops[n].run();} ok++; done.push(ops[n]); }catch(err){ const amb=err&&err.code==="network"; fails.push(ops[n].key+": "+(amb?"Jira didn't confirm, check the ticket":errorText(err))); if(err&&err.code==="session") break; } }
-    batchBusy=false;
+    batchBusy++; let ok=0, started=0; const fails=[], done=[], queue=ops.slice();
+    ops.forEach(o=>{ if(o.patch) o._p=patchIssue(o.key,o.patch); if(o.startPatch) o._start=patchIssue(o.key,o.startPatch); });
+    const showDrawerStatus=()=>{ const i=dz.key&&issueByKey(dz.key); if(i&&ops.some(o=>o.key===dz.key)){ $("d-status").textContent=i.status; $("d-status").className="stbtn "+stK(i); } };
+    if(PENDING.size){ mergeIssues(); renderIfIdle(); showDrawerStatus(); }
+    // The ticket's allowed status moves change with it.
+    const runOne=async op=>{ try{ const r=await op.run(); if(r&&r.ticket&&r.ticket.internal) putInternal(r.ticket); }
+      finally{ Object.keys(TRANS).forEach(id=>{ if(id.startsWith(op.key+"|")) delete TRANS[id]; }); } };
+    let stop=false;
+    const worker=async()=>{ while(queue.length&&!stop){ const op=queue.shift(); started++; if(ops.length>1) toast("Updating "+started+" of "+ops.length+"…");
+      try{try{await runOne(op);}catch(error){if(error.code!=="billing_required"||!IS_ADMIN||isOdoo(op.key))throw error;await business.ensureBilling(op.key);await runOne(op);} ok++; done.push(op); }
+      catch(err){ if(op._p) unpatch(op.key,op._p); if(op._start) unpatch(op.key,op._start); const amb=err&&err.code==="network"; fails.push(op.key+": "+(amb?"Jira didn't confirm, check the ticket":errorText(err))); if(err&&err.code==="session") stop=true; } } };
+    await Promise.all(Array.from({length:Math.min(4,ops.length)},worker));
+    batchBusy--;
     if(fails.length) toast(okText+" on "+ok+" of "+ops.length+". These need a look:",fails,true); else toast(okText+(ops.length>1?" on "+ok+" tickets":"")+".");
     const toNotify=done.filter(o=>o.added&&o.added.length);
     if(toNotify.length&&notifyOn) setTimeout(()=>notifyDevs(toNotify),fails.length?4000:1500);
-    await reload(); if(dz.key&&!fails.some(f=>f.startsWith(dz.key+":"))) loadDetail(dz.key);
+    mergeIssues(); renderIfIdle(); showDrawerStatus();
+    const open=dz.key;
+    refreshKeys(ops.map(o=>o.key)).then(()=>{ if(open&&dz.key===open&&!fails.some(f=>f.startsWith(open+":"))) loadDetail(open); });
     return {ok,fail:fails.length};
   }
   const devFirstName=d=>d==="bashar.k"?"Bashar":d.charAt(0).toUpperCase()+d.slice(1);
@@ -892,7 +912,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(c==="rate_limited") return "Jira is busy. Wait a moment and try again.";
     if(c==="jira") return "Jira refused: "+(err.message||"unknown error");
     return "Couldn't reach Jira"+(err&&err.message?": "+err.message:"."); }
-  function mergeIssues(){ const m=new Map(); state.mainIssues.forEach(i=>m.set(i.key,i)); state.closedIssues.forEach(i=>{ if(!m.has(i.key)) m.set(i.key,i); }); state.internalIssues.forEach(i=>m.set(i.key,i)); state.odooIssues.forEach(i=>m.set(i.key,i)); state.issues=[...m.values()].map(i=>({...business.decorate(i),pendingDateRequest:!!dateRequests.activeFor(i.key)})); }
+  function mergeIssues(){ const m=new Map(); state.mainIssues.forEach(i=>m.set(i.key,i)); state.closedIssues.forEach(i=>{ if(!m.has(i.key)) m.set(i.key,i); }); state.internalIssues.forEach(i=>m.set(i.key,i)); state.odooIssues.forEach(i=>m.set(i.key,i)); state.issues=[...m.values()].map(withPending).map(i=>({...business.decorate(i),pendingDateRequest:!!dateRequests.activeFor(i.key)})); }
   let closedBusy=false;
   async function loadClosed(){
     if(closedBusy) return; const days=state.closedDays; closedBusy=true;
@@ -908,16 +928,74 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const cacheKey=()=>"aion.cache.v1."+((getSession()||{}).email||"");
   function saveCache(){ try{ localStorage.setItem(cacheKey(),JSON.stringify({at:Date.now(),cfg:LAST_CFG,main:state.mainIssues,closed:state.closedIssues,internal:state.internalIssues,odoo:state.odooIssues,INT})); }catch(_){} }
   function readCache(){ try{ const c=JSON.parse(localStorage.getItem(cacheKey())||"null"); if(c&&c.cfg&&Date.now()-c.at<7*86400000) return c; }catch(_){} return null; }
-  let loading=false;
-  async function reload(){
-    if(loading) return; loading=true;
+  // Ticket fields (client, hours) load once the proxy's /config is in; start() replaces this.
+  let businessReady=Promise.resolve();
+  // Tickets changed from this page, so a full refresh that started before the change can't bring old data back.
+  const changed=[];
+  const renderIfIdle=()=>{ if($("pop").hidden&&!drag) render(); };
+  async function doReload(){
+    const started=Date.now();
     try{ const [issues]=await Promise.all([searchAll(JQL,FIELDS),loadInternal(),loadOdoo(),dateRequests.load()]);
-      state.mainIssues=issues.map(norm);await business.load([...issues.map(i=>i.key),...state.internalIssues.map(i=>i.key)]);mergeIssues(); showState(""); saveCache(); setTimeout(()=>loadClosed(),0); loadPrs(issues.map(i=>i.key));
+      state.mainIssues=issues.map(norm); mergeIssues(); showState("");
       lastLoad=Date.now(); $("updated").textContent="updated "+new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
-      if($("pop").hidden&&!drag) render();
+      // Show the tickets straight away; their client and hours fill in a moment later (unless a client filter needs them).
+      if(!Object.values(state.businessFilter||{}).some(Boolean)) renderIfIdle();
+      setTimeout(()=>loadClosed(),0); loadPrs(issues.map(i=>i.key));
+      await businessReady; await business.load([...issues.map(i=>i.key),...state.internalIssues.map(i=>i.key)]);
+      mergeIssues(); saveCache(); renderIfIdle();
       if(dz.key)dateRequests.renderDrawer(dz.key);
-    }catch(err){ showState(errorText(err),true); } finally{ loading=false; }
+      const since=changed.filter(c=>c.at>=started).map(c=>c.key); if(since.length) await refreshKeys(since);
+    }catch(err){ showState(errorText(err),true); }
   }
+  // A refresh asked for while one is running runs right after it (so a new ticket is never missed).
+  let reloading=null, reloadQueued=null;
+  function reload(){
+    if(!reloading){ reloading=doReload().finally(()=>{ reloading=null; }); return reloading; }
+    return reloadQueued||(reloadQueued=reloading.then(()=>{ reloadQueued=null; return reload(); }));
+  }
+  // Re-reads only these tickets after a change, so the page updates in a moment instead of reloading everything.
+  async function refreshKeys(keys){
+    keys=[...new Set(keys)]; const at=Date.now(); keys.forEach(key=>changed.push({key,at})); changed.splice(0,Math.max(0,changed.length-200));
+    const jk=keys.filter(k=>!isInt(k)&&!isOdoo(k));
+    try{
+      await Promise.all([
+        (async()=>{ for(let n=0;n<jk.length;n+=100){ const part=jk.slice(n,n+100), list=(await searchAll("key in ("+part.join(",")+")",FIELDS)).map(norm);
+          // A ticket that was just changed counts as recently updated, so it belongs with the main list.
+          state.mainIssues=state.mainIssues.filter(i=>!part.includes(i.key)).concat(list); state.closedIssues=state.closedIssues.filter(i=>!part.includes(i.key)); } })(),
+        keys.some(isInt)?loadInternal():null,
+        keys.some(isOdoo)?loadOdoo():null,
+        businessReady.then(()=>business.load(keys.filter(k=>!isOdoo(k))))
+      ]);
+      mergeIssues(); saveCache(); renderIfIdle(); loadPrs(jk);
+    }catch(_){ await reload(); }
+  }
+  // Changes shown on the page before the loaded data has them. Jira's search can lag a few seconds behind an
+  // edit, so a change stays on top of the loaded ticket until the data matches it (at most 2 minutes), or
+  // until it fails.
+  const PENDING=new Map();
+  function patchIssue(key,fn){ const p={fn,until:Date.now()+120000}; PENDING.set(key,[...(PENDING.get(key)||[]),p]); return p; }
+  function unpatch(key,p){ const list=(PENDING.get(key)||[]).filter(x=>x!==p); if(list.length) PENDING.set(key,list); else PENDING.delete(key); }
+  function withPending(i){
+    const list=PENDING.get(i.key); if(!list) return i;
+    const same=(a,b)=>JSON.stringify(Array.isArray(a)?[...a].sort():a??null)===JSON.stringify(Array.isArray(b)?[...b].sort():b??null);
+    // A change is done once its main field (fn.match) is in the loaded data.
+    const live=list.filter(p=>{ if(p.until<Date.now()) return false; const want=p.fn(i); return (p.fn.match||Object.keys(want)).some(k=>!same(want[k],i[k])); });
+    if(live.length) PENDING.set(i.key,live); else PENDING.delete(i.key);
+    return live.reduce((x,p)=>({...x,...p.fn(x)}),i);
+  }
+  // The ticket as last loaded, without changes still on their way.
+  const loadedIssue=key=>[state.mainIssues,state.internalIssues,state.odooIssues,state.closedIssues].map(list=>list.find(i=>i.key===key)).find(Boolean);
+  // An internal ticket as the proxy just returned it (after creating or changing it).
+  function putInternal(t){
+    if(!t||!isInt(t.key)) return; INT[t.key]=t; HIST[t.key]={updated:t.updated,changes:(t.dueHistory||[]).map(h=>({when:h.when,by:h.by,from:h.from,to:h.to}))};
+    state.internalIssues=state.internalIssues.filter(i=>i.key!==t.key).concat(normInternal(t));
+  }
+  const matching=(fn,...keys)=>Object.assign(fn,{match:keys});
+  const statusPatch=(name,cat)=>matching(i=>({status:name,cat:cat||i.cat}),"status");
+  const devsPatch=want=>matching(i=>({devs:[...want],labels:labelsWith(i.labels||[],new Set(want))}),"devs");
+  const assigneePatch=(id,name)=>matching(()=>({assignee:BYID[id]||null,assigneeId:id||null,assigneeName:id?name:"Unassigned"}),"assigneeId");
+  // Assigning a ticket that hasn't started moves it forward (see startAssigned); shown at once too.
+  const startPatch=key=>{ const i=loadedIssue(key); if(!IS_ADMIN||!i||i.cat!=="new") return null; const want=isInt(key)||isOdoo(key)?"In Development":"Dev Approved"; return String(i.status).trim().toLowerCase()===want.toLowerCase()?null:statusPatch(want,"indeterminate"); };
   $("refresh").addEventListener("click",async()=>{ const b=$("refresh"); b.disabled=true; b.textContent="Refreshing…"; await reload(); b.disabled=false; b.textContent="Refresh"; });
 
   document.querySelectorAll(".seg [data-v]").forEach(b=>b.addEventListener("click",()=>{ state.view=b.dataset.v; try{localStorage.setItem("aion.view",state.view);}catch(e){} render(); }));
@@ -957,7 +1035,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     try{ const trs=await getTransitions(key); if(dz.key!==key) return; const box=$("d-trans"); box.replaceChildren();
       if(!trs.length){ box.appendChild(el("span","msg","No moves available from this status.")); return; }
       trs.forEach(tr=>{ const name=(tr.to&&tr.to.name)||tr.name; const b=el("button","stbtn "+stK({status:name,cat:(tr.to&&tr.to.statusCategory&&tr.to.statusCategory.key)||""}),"→ "+name); b.type="button"; b.title=tr.name;
-        b.addEventListener("click",()=>runBatch([{key,run:()=>doTransition(key,tr.id)}],"Moved to "+name)); box.appendChild(b); });
+        b.addEventListener("click",()=>runBatch([{key,run:()=>doTransition(key,tr.id),patch:statusPatch(name,tr.to&&tr.to.statusCategory&&tr.to.statusCategory.key)}],"Moved to "+name)); box.appendChild(b); });
     }catch(err){ if(dz.key===key) $("d-trans").replaceChildren(el("span","msg err",errorText(err))); }
   }
   async function loadDetail(key){
@@ -1097,11 +1175,12 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       if(asg&&!asg.value&&Object.keys(PEOPLE).length){ msg.textContent="Choose the assignee."; msg.className="msg err"; asg.focus(); return; }
       save.disabled=true; msg.textContent="";
       try{
-        if(t){ await internalApi.update(key,{summary:title.value,description:desc.value,priority:prio.value}); closePop(); toast("Saved."); await reload(); if(dz.key===key) loadDetail(key); return; }
-        if(!business.enabled())throw new Error("Deploy the updated backend before creating tickets.");
+        if(t){ const r=await internalApi.update(key,{summary:title.value,description:desc.value,priority:prio.value}); closePop(); toast("Saved."); putInternal(r.ticket); mergeIssues(); saveCache(); render(); if(dz.key===key) loadDetail(key); return; }
+        await businessReady; if(!business.enabled())throw new Error("Deploy the updated backend before creating tickets.");
         const r=await internalApi.create({metadata:newFields.read(),summary:title.value,description:desc.value,priority:prio.value,devs:devs?[...devs]:[MY_DEV],...(asg&&asg.value?{assignee:asg.value}:{})});
         closePop(); toast(r.ticket.key+" created.");
-        await reload(); openDrawer(r.ticket.key);
+        // On the page at once; its client and hours follow from refreshKeys.
+        putInternal(r.ticket); mergeIssues(); saveCache(); render(); openDrawer(r.ticket.key); refreshKeys([r.ticket.key]);
         if(IS_ADMIN&&notifyOn&&r.ticket.devs.length) setTimeout(()=>notifyDevs([{key:r.ticket.key,added:r.ticket.devs}]),1500);
       }catch(err){ save.disabled=false; msg.textContent=errorText(err); msg.className="msg err"; }
     });
@@ -1111,7 +1190,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   $("d-edit").addEventListener("click",e=>{ if(dz.key&&isInt(dz.key)) internalPopover(e.currentTarget,dz.key); });
   $("d-del").addEventListener("click",async()=>{ const key=dz.key; if(!key||!isInt(key)) return;
     if(!confirm("Delete "+key+"? This can't be undone. To finish a ticket, close it instead.")) return;
-    try{ await internalApi.remove(key); closeDrawer(true); toast(key+" deleted."); await reload(); }catch(err){ toast("Not deleted",[errorText(err)],true); } });
+    try{ await internalApi.remove(key); closeDrawer(true); toast(key+" deleted."); delete INT[key]; state.internalIssues=state.internalIssues.filter(i=>i.key!==key); state.sel.delete(key); mergeIssues(); saveCache(); render(); }catch(err){ toast("Not deleted",[errorText(err)],true); } });
   function fmtSize(b){ if(b==null) return ""; if(b<1024) return b+" B"; if(b<1048576) return Math.round(b/1024)+" KB"; return (b/1048576).toFixed(1)+" MB"; }
   // Preview (shown inside the dashboard) and Download buttons for one attachment.
   function fileActions(key,name,type,load){
@@ -1141,21 +1220,21 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   $("d-asg").addEventListener("click",e=>{ if(dz.key) assigneePopover(e.currentTarget,[dz.key]); });
   $("d-adddev").addEventListener("click",()=>{ const v=$("d-newdev").value.trim().replace(/^ai1_/i,"").replace(/\s+/g,"").toLowerCase(); if(!v){ setMsg("d-devmsg","Type a name first.",false); return; } dz.devs.add(v); $("d-newdev").value=""; renderDevChips(); setMsg("d-devmsg","Added ai1_"+v+". Press Save developers.",true); });
   $("d-newdev").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("d-adddev").click(); } });
-  $("d-savedevs").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const labels=labelsWith(dz.labels,new Set(dz.devs)); const prev=new Set(dz.labels.filter(isDevLabel).map(devOf)); const r=await runBatch([{key,added:[...dz.devs].filter(d=>!prev.has(d)),run:()=>(isOdoo(key)?odooApi.update(key,{devs:[...dz.devs]}):isInt(key)?internalApi.update(key,{devs:[...dz.devs]}):jira.edit(key,{labels}))}],"Developers saved"); setMsg("d-devmsg",r.fail?"Not saved.":"Saved.",!r.fail); });
+  $("d-savedevs").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const labels=labelsWith(dz.labels,new Set(dz.devs)); const prev=new Set(dz.labels.filter(isDevLabel).map(devOf)); const want=new Set(dz.devs); const r=await runBatch([{key,added:[...dz.devs].filter(d=>!prev.has(d)),run:()=>(isOdoo(key)?odooApi.update(key,{devs:[...want]}):isInt(key)?internalApi.update(key,{devs:[...want]}):jira.edit(key,{labels})),patch:devsPatch(want)}],"Developers saved"); setMsg("d-devmsg",r.fail?"Not saved.":"Saved.",!r.fail); });
   const commentMentions=createCommentMentions({textarea:$("d-reply"),search:q=>jira.users(q),enabled:()=>!!dz.key&&!isInt(dz.key)&&!isOdoo(dz.key)});
   $("d-send").addEventListener("click",async()=>{ const key=dz.key, text=(isInt(key)||isOdoo(key))?$("d-reply").value.trim():commentMentions.text(); if(!key) return; if(!text){ setMsg("d-cmsg","Write something first.",false); return; } const after=$("d-after").value; const r=await runBatch([{key,run:()=>doComment(key,text)}],"Comment added"); if(!r.fail){$("d-reply").value="";commentMentions.reset();} setMsg("d-cmsg",r.fail?"Not sent.":"Sent.",!r.fail);
     if(!r.fail&&after){ const ix=after.indexOf("|"); const aid=after.slice(0,ix), aname=after.slice(ix+1); const r2=await doAssign([key],aid,aname); setMsg("d-cmsg",r2.fail?"Comment sent, but the assignee didn't change.":"Sent and assigned to "+aname+".",!r2.fail); } });
 
   setInterval(()=>{ const a=$("auto"); if(!a||!lastLoad) return; const left=Math.max(0,120-Math.round((Date.now()-lastLoad)/1000)); a.textContent="next refresh in "+(left>=60?Math.floor(left/60)+"m "+(left%60)+"s":left+"s");
-    if(Date.now()-lastLoad>120000&&document.visibilityState==="visible"&&!batchBusy&&$("pop").hidden&&!drag){ lastLoad=Date.now(); reload(); } },1000);
+    if(Date.now()-lastLoad>120000&&document.visibilityState==="visible"&&!batchBusy&&!reloading&&$("pop").hidden&&!drag){ lastLoad=Date.now(); reload(); } },1000);
   $("signout").addEventListener("click",()=>signOut());
   const ticketHistory=createTicketHistory({api,getIssue:()=>issueByKey(dz.key),allowed:()=>IS_ADMIN&&!!dz.key&&!isInt(dz.key)&&!isOdoo(dz.key)&&!$("drawer").hidden,formatTime:value=>{const time=fmtWhen(value);return time.d+" "+time.t;}});
   const drawerUI=createIssueDrawer({canViewHistory:()=>IS_ADMIN,canViewFullHistory:()=>IS_ADMIN&&!!dz.key&&!isInt(dz.key)&&!isOdoo(dz.key),onSelect:id=>{if(id==="history")ticketHistory.load(dz.key);if(id==="notes")ticketNotes.load(dz.key);},isDirty:()=>{if(business.dirty(dz.key)||ticketNotes.dirty(dz.key))return true;const issue=issueByKey(dz.key);if(!issue)return !!$("d-reply").value.trim();return !!$("d-reply").value.trim()||!!$("d-newdev").value.trim()||dz.devs.size!==issue.devs.length||issue.devs.some(d=>!dz.devs.has(d));}});
   const ticketNotes=createTicketNotes({api,isAdmin:IS_ADMIN});
   const dueDateHistory=createDueDateHistory({api,tickets:()=>state.issues||[],internal:key=>INT[key],openIssue:openDrawer});
-  const dateRequests=createDateRequests({api,renderHistory:target=>dueDateHistory.render(target),context:()=>({admin:IS_ADMIN,email:MY_EMAIL,ticket:issueByKey}),openIssue:openDrawer,onChange:async()=>{await reload();if(dz.key){dateRequests.renderDrawer(dz.key);loadDetail(dz.key);}}});
+  const dateRequests=createDateRequests({api,renderHistory:target=>dueDateHistory.render(target),context:()=>({admin:IS_ADMIN,email:MY_EMAIL,ticket:issueByKey}),openIssue:openDrawer,onApplied:(key,due)=>{patchIssue(key,matching(()=>({due:due||null}),"due"));mergeIssues();renderIfIdle();if(dz.key===key)$("d-due").value=due||"";},onChange:key=>{if(dz.key)dateRequests.renderDrawer(dz.key);return (key?refreshKeys([key]):reload()).then(()=>{if(dz.key){dateRequests.renderDrawer(dz.key);loadDetail(dz.key);}});}});
   state.businessFilter={};
-  const business=createTicketBusiness({api,context:()=>({admin:IS_ADMIN,email:MY_EMAIL,key:dz.key}),onChange:reload,openIssue:openDrawer});
+  const business=createTicketBusiness({api,context:()=>({admin:IS_ADMIN,email:MY_EMAIL,key:dz.key}),onChange:keys=>{if(keys)return refreshKeys(keys);mergeIssues();saveCache();render();},openIssue:openDrawer});
   $('b-client').addEventListener('click',()=>business.bulk(selected()).catch(err=>toast('Client assignment failed',[errorText(err)],true)));
   const workspace=createWorkspace({state,context:()=>({admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount(),dateRequests:dateRequests.all(),pendingDates:dateRequests.pendingCount(),renderReports:target=>business.renderReports(target),renderCatalog:target=>business.renderCatalog(target),renderRequests:(target,options)=>dateRequests.render(target,options)}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>!dz.key||closeDrawer()});
   const aiAssistant=createAIAssistant({openIssue:openDrawer,beforeOpen:()=>{if(dz.key&&!closeDrawer())return false;closePop();return true;}});
@@ -1176,7 +1255,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       mergeIssues(); showState(""); $("updated").textContent="saved "+new Date(cached.at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})+" · refreshing…"; render();
     }
     try{ const cfg=await api("/config"); if(!cached||JSON.stringify(cfg)!==JSON.stringify(cached.cfg)){ applyConfig(cfg); workspace.configure(); }
-      await business.configure(cfg);if(!business.enabled())toast("Backend update required",["Deploy the updated proxy to enable ticket fields and validated status changes."],true); }
+      // The client list loads while the tickets do; ticket fields wait for it (see doReload).
+      businessReady=business.configure(cfg).then(()=>{if(!business.enabled())toast("Backend update required",["Deploy the updated proxy to enable ticket fields and validated status changes."],true);}).catch(err=>toast("Couldn't load clients",[errorText(err)],true)); }
     catch(err){ if(!cached){ showState(errorText(err),true); $("updated").textContent="not connected"; return; } }
     // A linked ticket opens once its fields are set up: from the saved copy if it has it, otherwise after loading.
     const openFromHash=()=>{ try{const h=decodeURIComponent(location.hash.slice(1));if(/^[A-Z][A-Z0-9_]*-\d+$/.test(h)&&issueByKey(h)&&dz.key!==h)openDrawer(h);}catch(_){} };

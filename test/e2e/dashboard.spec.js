@@ -608,6 +608,23 @@ test('an administrator assigning a not-started ticket moves it: Jira to Dev Appr
  await expect.poll(()=>internalPuts.map(b=>b.status||null)).toEqual([null,'In Development']);
  expect(mock.errors).toEqual([]);
 });
+test('status changes from the list show at once and stay while Jira search catches up',async({page})=>{
+ const mock=await mockDashboard(page);let release;const held=new Promise(r=>{release=r;});
+ await page.route('**/internal/INT-101',async r=>{if(r.request().method()!=='PUT')return r.fallback();await held;return r.fulfill({json:{ticket:{...internalTicket,status:'In Development',statusCat:'indeterminate'}}});});
+ await page.route('**/jira/issue/AION-101/transitions',r=>r.request().method()==='GET'?r.fulfill({json:{transitions:[{id:'7',name:'Start',to:{name:'In Development',statusCategory:{key:'indeterminate'}}}]}}):r.fulfill({json:{ok:true}}));
+ await page.goto('/dashboard.html');
+ const status=key=>page.locator('#view .item').filter({hasText:key}).locator('.c-st button');
+ // The internal ticket's server answer is held back: the list shows the move anyway.
+ await status('INT-101').click();await page.locator('#pop').getByRole('button',{name:/In Development/}).click();
+ await expect(status('INT-101')).toHaveText('In Development',{timeout:1000});
+ release();
+ // Jira's search keeps returning the old status (it lags behind edits): the move stays on the page.
+ await status('AION-101').click();await page.locator('#pop').getByRole('button',{name:/In Development/}).click();
+ await expect(status('AION-101')).toHaveText('In Development',{timeout:1000});
+ await expect.poll(()=>mock.calls.filter(c=>c.path==='/jira/search').length).toBeGreaterThan(1);
+ await expect(status('AION-101')).toHaveText('In Development');
+ expect(mock.errors).toEqual([]);
+});
 test('assigning a ticket that is already in progress keeps its status',async({page})=>{
  const mock=await mockDashboard(page);const moves=[];
  await page.route('**/jira/issue/AION-101',r=>r.fulfill({json:{ok:true}}));

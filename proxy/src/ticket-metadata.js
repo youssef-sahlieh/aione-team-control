@@ -68,11 +68,13 @@ export async function saveMetadata(env,key,patch,me,{closed=false,creating=false
   if(me.role!=='admin'&&'estimatedHours' in patch&&old.estimatedHours!=null&&Number(patch.estimatedHours)!==Number(old.estimatedHours))problem('The estimate is already set. Ask an administrator to change it.',403,'estimate_locked');
   for(const k of ['clientId','subClientId'])if(k in patch){if(patch[k]!==null&&(typeof patch[k]!=='string'||patch[k].length>80))problem('Invalid client selection.');m[k]=patch[k];}
   if('clientId' in patch && patch.clientId!==old.clientId && !('subClientId' in patch))m.subClientId=null;
-  if('clientId' in patch||'subClientId' in patch){const errors=selectionErrors(catalog,m,{active:m.clientId!==old.clientId||m.subClientId!==old.subClientId});if(errors.length)problem(errors.join('. '));}
+  // A new internal ticket may be opened without a client (it's needed later, to close it).
+  const noClient=creating&&!m.clientId&&!m.subClientId;
+  if(('clientId' in patch||'subClientId' in patch)&&!noClient){const errors=selectionErrors(catalog,m,{active:m.clientId!==old.clientId||m.subClientId!==old.subClientId});if(errors.length)problem(errors.join('. '));}
   if('billing' in patch){if(![null,'billable','not_billable'].includes(patch.billing))problem('Choose Billable or Not billable.');m.billing=patch.billing;}
   for(const k of ['estimatedHours','actualHours'])if(k in patch){if(patch[k]!==null&&!validHours(patch[k]))problem(k+': enter a positive number with up to two decimal places (maximum 1,000,000).');m[k]=patch[k];}
   if('workDone' in patch){if(typeof patch.workDone!=='string'||patch.workDone.length>5000)problem('Work done must be text up to 5,000 characters.');m.workDone=patch.workDone.trim();}
-  if(creating){const errors=selectionErrors(catalog,m,{active:true});if(errors.length)problem(errors.join('. '));}
+  if(creating&&!noClient){const errors=selectionErrors(catalog,m,{active:true});if(errors.length)problem(errors.join('. '));}
   const changes={};for(const k of allowed.filter(k=>k!=='revision'))if(m[k]!==old[k])changes[k]={from:old[k],to:m[k]};
   m.revision++;m.updatedAt=new Date().toISOString();m.history.push({type:'edit',at:m.updatedAt,by:{email:me.email,name:me.name},changes});
   await persist(env,key,m,raw);return publicMetadata(m,me,catalog);
@@ -170,7 +172,8 @@ export async function catalogRoutes(request,env,url,me) {
   if(!(previous===null?await store.setIfAbsent(key,JSON.stringify(next),315360000):await store.compareAndSet(key,previous,JSON.stringify(next))))problem('Catalog changed. Refresh.',409,'conflict');
   return Response.json(next,{headers:{'Cache-Control':'no-store'}});
 }
-export async function metadataRoutes(request,env,url,me,readTicket) {
+// readTickets(keys) (optional) checks many tickets at once and returns {key:true} for the ones this person may see.
+export async function metadataRoutes(request,env,url,me,readTicket,readTickets) {
   requireStore(env);
   const raw=request.method==='GET'?'':await request.text();
   if(raw.length>64000)problem('Ticket fields request too large.',413);
@@ -179,8 +182,14 @@ export async function metadataRoutes(request,env,url,me,readTicket) {
   const key=url.searchParams.get('key')||b?.key;
   if(url.pathname==='/ticket-metadata/batch'&&request.method==='POST'){
     if(!Array.isArray(b?.keys)||b.keys.length>100||b.keys.some(k=>!validKey(k)))problem('Supply up to 100 valid ticket keys.');
-    const catalog=await readCatalog(env),records={},keys=[...new Set(b.keys)];
-    for(let offset=0;offset<keys.length;offset+=8)await Promise.all(keys.slice(offset,offset+8).map(async k=>{const t=await readTicket(k);if(t)records[k]=publicMetadata(await readMetadata(env,k),me,catalog);}));
+    const store=env.STORE,keys=[...new Set(b.keys)],records={};
+    // The whole list in a few round trips: visibility in bulk, then every ticket's fields in one read.
+    const [catalog,visible]=await Promise.all([readCatalog(env),readTickets?readTickets(keys):null]);
+    let shown=keys;
+    if(visible)shown=keys.filter(k=>visible[k]);
+    else{const seen=[];for(let offset=0;offset<keys.length;offset+=8)await Promise.all(keys.slice(offset,offset+8).map(async k=>{if(await readTicket(k))seen.push(k);}));shown=seen;}
+    const raws=!shown.length?[]:store.mget?await store.mget(shown.map(k=>metadataKey(env,k))):await Promise.all(shown.map(k=>store.get(metadataKey(env,k))));
+    shown.forEach((k,n)=>{records[k]=publicMetadata({...empty(),...JSON.parse(raws[n]||'{}')},me,catalog);});
     return Response.json({records},{headers:{'Cache-Control':'no-store'}});
   }
   if(!validKey(key))problem('Choose a valid ticket.');

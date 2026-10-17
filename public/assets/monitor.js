@@ -79,6 +79,8 @@ async function loadInstances(refresh) {
   sel.replaceChildren(new Option("All zones", "")); zones.forEach((z) => sel.appendChild(new Option(z, z))); sel.value = keep;
   renderInstances();
 }
+// Each cell gets its column name, shown as a label when rows become cards on phones.
+const labelCells = (table) => { const names = [...table.querySelectorAll("thead th")].map((th) => th.textContent); table.querySelectorAll("tbody tr").forEach((tr) => [...tr.cells].forEach((td, i) => { if (td.colSpan === 1 && names[i]) td.dataset.label = names[i]; })); };
 const row1 = (cols, text) => { const tr = el("tr"); const td = el("td", "msg", text); td.colSpan = cols; tr.appendChild(td); return tr; };
 function renderInstances() {
   const q = $("in-q").value.trim().toLowerCase(), z = $("in-zone").value, h = $("in-health").value;
@@ -96,6 +98,7 @@ function renderInstances() {
     tr.appendChild(el("td", null, i.server_zone || "")); tr.appendChild(el("td", "mono", i.db_host || "")); tr.appendChild(el("td", "upd", when(i.created)));
     tb.appendChild(tr);
   }
+  labelCells($("in-table"));
 }
 ["in-q", "in-zone", "in-health"].forEach((id) => $(id).addEventListener("input", renderInstances));
 $("in-refresh").addEventListener("click", () => loadInstances(true));
@@ -139,7 +142,7 @@ function renderValue(v, depth) {
       const wrap = el("div", "mon-table-wrap"), t = el("table", "mon-table"), hr = el("tr"); cols.forEach((c) => hr.appendChild(el("th", null, c.replace(/_/g, " "))));
       const head = el("thead"); head.appendChild(hr); t.appendChild(head); const tb = el("tbody");
       v.slice(0, 300).forEach((x) => { const tr = el("tr"); cols.forEach((c) => tr.appendChild(el("td", null, x[c] == null ? "" : typeof x[c] === "boolean" ? (x[c] ? "yes" : "no") : String(x[c])))); tb.appendChild(tr); });
-      t.appendChild(tb); wrap.appendChild(t); if (v.length > 300) wrap.appendChild(el("div", "msg", "Showing 300 of " + v.length)); return wrap;
+      t.appendChild(tb); labelCells(t); wrap.appendChild(t); if (v.length > 300) wrap.appendChild(el("div", "msg", "Showing 300 of " + v.length)); return wrap;
     }
     return el("div", "mono mon-text", v.map((x) => typeof x === "object" ? JSON.stringify(x) : String(x)).join("\n"));
   }
@@ -183,6 +186,7 @@ async function loadTestEnvs() {
     }
     tr.appendChild(acts); tb.appendChild(tr);
   }
+  labelCells($("te-table"));
 }
 $("te-reload").addEventListener("click", loadTestEnvs);
 

@@ -42,9 +42,9 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   const children=id=>catalog.entries.filter(e=>e.parentId===id&&!e.archived);
   async function loadCatalog(){catalog=await api('/clients');return catalog;}
   function names(m){return {...m,clientName:catalog.entries.find(e=>e.id===m.clientId)?.name||'',subClientName:catalog.entries.find(e=>e.id===m.subClientId)?.name||''};}
-  function selections(parent,values={},disabled=false){
+  function selections(parent,values={},disabled=false,optional=false){
     const client=field(parent,'Client',el('select','fsel')),sub=field(parent,'Sub-client',el('select','fsel'));
-    option(client,'Choose client…','');for(const c of clients().sort((a,b)=>a.name.localeCompare(b.name)))option(client,c.name,c.id);
+    option(client,optional?'No client (optional)':'Choose client…','');for(const c of clients().sort((a,b)=>a.name.localeCompare(b.name)))option(client,c.name,c.id);
     if(values.clientId&&!clients().some(e=>e.id===values.clientId)){const old=catalog.entries.find(e=>e.id===values.clientId);if(old)option(client,old.name+' (archived)',old.id);}
     client.value=values.clientId||'';client.disabled=disabled;sub.disabled=disabled;
     const fill=()=>{sub.replaceChildren();option(sub,children(client.value).length?'Choose sub-client…':'No sub-client','');for(const c of children(client.value).sort((a,b)=>a.name.localeCompare(b.name)))option(sub,c.name,c.id);};fill();
@@ -56,7 +56,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   function createFields(parent,{values={},creating=false,closed=false}={}){
     const box=el('div','business-form');parent.append(box);
     const clientGroup=el('fieldset','business-section business-client-section');clientGroup.append(el('legend','','Client & billing'));box.append(clientGroup);
-    const selects=selections(clientGroup,values,closed||(!admin()&&!creating));
+    const selects=selections(clientGroup,values,closed||(!admin()&&!creating),creating);
     let billing;if(admin()){billing=field(clientGroup,'Billing (administrators only)',el('select','fsel'));billingOptions(billing,values.billing);billing.disabled=closed;if(creating&&billingNeeded)billing.setAttribute('aria-required','true');}
     const workGroup=el('fieldset','business-section business-work-section');workGroup.append(el('legend','','Work summary'));box.append(workGroup);
     const estimated=field(workGroup,'Estimated hours',input('number',values.estimatedHours)),actual=field(workGroup,'Actual hours',input('number',values.actualHours));
@@ -69,7 +69,8 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   }
   async function load(keys){
     if(!enabled)return;const unique=[...new Set(keys)];
-    for(let i=0;i<unique.length;i+=100){const r=await api('/ticket-metadata/batch',{method:'POST',body:{keys:unique.slice(i,i+100)}});Object.assign(records,r.records);}
+    const parts=[];for(let i=0;i<unique.length;i+=100)parts.push(unique.slice(i,i+100));
+    await Promise.all(parts.map(async part=>{const r=await api('/ticket-metadata/batch',{method:'POST',body:{keys:part}});Object.assign(records,r.records);}));
   }
   function decorate(i){return {...i,...(records[i.key]?names(records[i.key]):{})};}
   // One field (or the client pair) edited straight from the ticket list, with the same rules as the ticket panel
@@ -122,7 +123,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   function dialog(title){const d=el('dialog','business-dialog'),head=el('div','business-dialog-head'),body=el('div'),msg=el('p','msg');head.append(el('h2','',title),button('Close',()=>d.close()));d.append(head,body,msg);document.body.append(d);d.addEventListener('close',()=>d.remove());d.showModal();return {d,body,msg};}
   async function bulk(keys){
     if(!enabled)throw new Error('Updated backend required.');const {d,body,msg}=dialog('Assign client to selected tickets');const selects=selections(body);
-    body.append(button('Apply to '+keys.length+' tickets',async e=>{const action=e.currentTarget;action.disabled=true;const failures=[];for(const key of keys){try{const r=await api('/ticket-metadata?key='+encodeURIComponent(key));await api('/ticket-metadata',{method:'PUT',body:{key,fields:{revision:r.metadata.revision,...selects.read()}}});}catch(err){failures.push(key+': '+err.message);}}await onChange();if(failures.length){msg.textContent=failures.join('\n');action.disabled=false;}else d.close();},'btn primary'));
+    body.append(button('Apply to '+keys.length+' tickets',async e=>{const action=e.currentTarget;action.disabled=true;const failures=[];for(const key of keys){try{const r=await api('/ticket-metadata?key='+encodeURIComponent(key));await api('/ticket-metadata',{method:'PUT',body:{key,fields:{revision:r.metadata.revision,...selects.read()}}});}catch(err){failures.push(key+': '+err.message);}}await onChange(keys);if(failures.length){msg.textContent=failures.join('\n');action.disabled=false;}else d.close();},'btn primary'));
   }
   async function ensureBilling(key){
     if(!admin()||!billingNeeded)return;

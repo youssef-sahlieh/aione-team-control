@@ -48,7 +48,9 @@ test('internal creation defaults to shared assignee, stores fields separately an
  const record=await readMetadata(s.env,ticket.key);assert.equal(record.clientId,s.client.id);
  await s.env.STORE.set('it:INT-99',JSON.stringify({...ticket,key:'INT-99',devs:['other']}));
  const list=await (await s.call('/internal')).json();assert.deepEqual(list.tickets.map(t=>t.key),[ticket.key]);assert.equal((await s.call('/ticket-metadata?key=INT-99')).status,404);
- assert.equal((await s.call('/internal','POST',{summary:'Missing client'},user)).status,400);
+ const batch=await (await s.call('/ticket-metadata/batch','POST',{keys:[ticket.key,'INT-99']})).json();assert.deepEqual(Object.keys(batch.records),[ticket.key]);
+ const noClient=await s.call('/internal','POST',{summary:'No client yet'},user);assert.equal(noClient.status,201);
+ assert.equal((await readMetadata(s.env,(await noClient.json()).ticket.key)).clientId,null);
 });
 test('client selection requires matching active sub-client and locks administrator-only changes',async()=>{
  const s=await setup();assert.equal((await s.call('/internal','POST',{summary:'Task',metadata:{clientId:s.parent.id}},user)).status,400);

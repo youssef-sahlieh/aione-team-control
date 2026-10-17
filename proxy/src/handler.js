@@ -406,7 +406,23 @@ async function route(request, env, url) {
     return {key,title:f.summary,description:f.description,devs,closed:f.status.statusCategory.key==="done",status:f.status.name,cat:f.status.statusCategory.key,created:f.created,updated:f.updated,due:f.duedate,completedAt:f.resolutiondate||null,assignee:f.assignee?.displayName,internal:false};
   };
   if(path==="/clients"||path.startsWith("/clients/"))return catalogRoutes(request,env,url,me);
-  if(path==="/ticket-metadata"||path.startsWith("/ticket-metadata/"))return metadataRoutes(request,env,url,me,readBusinessTicket);
+  // Many tickets at once (the dashboard's list): one database read for internal tickets and, for users, one
+  // Jira search for their own tickets, instead of one Jira read per ticket. Administrators see every project ticket.
+  const readBusinessTickets = async keys => {
+    const out={}, ints=keys.filter(k=>/^INT-\d+$/.test(k)), ours=keys.filter(k=>new RegExp("^"+env.JIRA_PROJECT+"-\\d+$").test(k));
+    if(ints.length&&env.STORE){
+      const raws=env.STORE.mget?await env.STORE.mget(ints.map(k=>"it:"+k)):await Promise.all(ints.map(k=>env.STORE.get("it:"+k)));
+      ints.forEach((k,n)=>{try{const t=raws[n]&&JSON.parse(raws[n]);if(t&&(me.role==="admin"||(me.dev&&t.devs?.includes(me.dev))))out[k]=true;}catch{}});
+    }
+    if(!ours.length)return out;
+    if(me.role==="admin"){ours.forEach(k=>{out[k]=true;});return out;}
+    if(!me.dev)return out;
+    const label="ai1_"+me.dev, r=await jira(env,"/rest/api/3/search/jql",{method:"POST",body:{jql:'labels = "'+label+'" AND key in ('+ours.join(",")+")",fields:["labels"],maxResults:100},signal:AbortSignal.timeout(15000)});
+    if(r.ok){for(const i of r.data.issues||[])if(ours.includes(i.key)&&(i.fields?.labels||[]).some(l=>String(l).toLowerCase()===label))out[i.key]=true;}
+    else for(const k of ours)if(await readBusinessTicket(k))out[k]=true;
+    return out;
+  };
+  if(path==="/ticket-metadata"||path.startsWith("/ticket-metadata/"))return metadataRoutes(request,env,url,me,readBusinessTicket,readBusinessTickets);
   const readBusinessSearch=async body=>{const searchUrl=new URL("/jira/search",url);const r=await route(new Request(searchUrl,{method:"POST",headers:{Authorization:request.headers.get("Authorization"),"Content-Type":"application/json","X-AION-Read-Only":"1"},body:JSON.stringify(body)}),env,searchUrl);if(!r.ok)throw new Error("Authorized search failed");return r.json();};
   const dashboardRead=async()=>{const keys=await env.STORE?.smembers("itickets")||[];const rows=[];for(const key of keys){const t=await readBusinessTicket(key);if(t)rows.push(t);}return rows;};
   const reportDeps={readSearch:readBusinessSearch,readInternal:dashboardRead,readHistory:async(key,status)=>{

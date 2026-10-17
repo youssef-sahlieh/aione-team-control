@@ -60,7 +60,7 @@ function render() {
   const body = $("rows"); body.replaceChildren();
   for (const r of rows) {
     const tr = el("tr"); if (!r.loginOk) tr.className = "db-off";
-    for (const c of COLUMNS) { const td = el("td", "db-col-" + c.key); td.append(c.value(r)); tr.append(td); }
+    for (const c of COLUMNS) { const td = el("td", "db-col-" + c.key); td.dataset.label = c.label; td.append(c.value(r)); tr.append(td); }
     body.append(tr);
   }
   const working = (REPORT.rows || []).filter((r) => r.loginOk).length;

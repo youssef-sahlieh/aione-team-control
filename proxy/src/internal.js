@@ -125,7 +125,10 @@ export async function internalRoutes(request, env, url, me) {
 
   if (path === "/internal" && method === "GET") {
     const keys = (await store.smembers("itickets")) || [];
-    const all = (await Promise.all(keys.map((k) => getTicket(store, k)))).filter(Boolean);
+    // Every ticket in one database read when the store supports it.
+    const raws = !keys.length ? [] : store.mget ? await store.mget(keys.map((k) => "it:" + k)) : null;
+    const parse = (raw) => { try { return raw ? JSON.parse(raw) : null; } catch { return null; } };
+    const all = (raws ? raws.map(parse) : await Promise.all(keys.map((k) => getTicket(store, k)))).filter(Boolean);
     return json({ tickets: all.filter((t) => canSee(me, t)).map(view), statuses: STATUSES, priorities: PRIORITIES });
   }
 
@@ -136,7 +139,8 @@ export async function internalRoutes(request, env, url, me) {
     const people = teamPeople(env);
     if(me.role==="admin")requireBilling(b.metadata,env);
     if(b.assignee===undefined)b.assignee=INTERNAL_ASSIGNEE;
-    const selection=selectionErrors(await readCatalog(env),b.metadata||{},{active:true});if(selection.length)throw new BusinessError(selection.join(". "));
+    // The client is optional when opening an internal ticket; one that is chosen must be valid.
+    const chosen=b.metadata||{};if(chosen.clientId||chosen.subClientId){const selection=selectionErrors(await readCatalog(env),chosen,{active:true});if(selection.length)throw new BusinessError(selection.join(". "));}
     if (people.length && b.assignee === undefined) return fail("bad_request", "Choose the assignee: " + people.join(", ") + ".", 400);
     const err = applyFields(t, { ...b, status: undefined, devs: me.role === "admin" ? b.devs || [] : [me.dev] }, me, true, people);
     if (err) return fail("bad_request", err, 400);

@@ -1,0 +1,105 @@
+/* Phones and tablets, for every page built on dashboard.css. Loaded last; desktop is unchanged. */
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+.mon-two{grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr))}
+.uform{grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr))}
+.board,.tiles,.db-scroll,.mon-table-wrap,.drawer-tabs,.dbody,.pop .body{-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}
+
+@media (max-width:820px){
+  /* Page frame: side gutters clear the notch; room at the bottom for the bulk bar. */
+  .wrap{padding-left:max(16px,env(safe-area-inset-left));padding-right:max(16px,env(safe-area-inset-right))}
+  body:has(#bulk:not([hidden])) .wrap{padding-bottom:calc(env(safe-area-inset-bottom,0px) + 170px)}
+  /* Touch targets and no iOS zoom on focus. */
+  .btn,.fsel,.seg button,.icon-btn,.quick button,.pop .foot button{min-height:40px;box-sizing:border-box}
+  a.btn,label.btn{display:inline-flex;align-items:center;justify-content:center}
+  .inp,.search,.fsel,select,textarea,input:not([type=checkbox]):not([type=radio]):not([type=file]){font-size:16px!important}
+  .ck{width:20px;height:20px}
+  .opt{min-height:44px}
+  .stepb{width:40px;height:40px;min-width:40px;min-height:40px}
+  /* Standalone pages (Databases, Audit & Deploy, Users): header wraps cleanly. */
+  .top{padding-top:env(safe-area-inset-top,0px)}
+  .top .brand{flex-basis:100%}
+  .me{flex-wrap:wrap;margin-left:auto;min-width:0}
+  .me b{overflow-wrap:anywhere}
+  /* Sidebar off-canvas: slides in, scrolls when taller than the screen, clears the notch. */
+  .app-sidebar{overflow-y:auto;overscroll-behavior:contain;transition:transform .2s ease,visibility .2s;padding-top:max(20px,env(safe-area-inset-top));padding-bottom:max(20px,env(safe-area-inset-bottom));padding-left:max(18px,env(safe-area-inset-left))}
+  .app-topbar{height:auto;min-height:68px;padding-top:env(safe-area-inset-top,0px);padding-left:max(16px,env(safe-area-inset-left));padding-right:max(16px,env(safe-area-inset-right));box-sizing:border-box}
+  .account-panel{max-width:calc(100vw - 32px)}
+  /* Page heading, toolbar and tiles. */
+  .page-actions{width:100%}
+  .toolbar .seg{display:flex;width:100%;box-sizing:border-box}
+  .toolbar .seg button{flex:1 1 auto}
+  .tiles{scroll-snap-type:x proximity}
+  .tile{scroll-snap-align:start}
+  .board{scroll-snap-type:x proximity}
+  .col{flex-basis:min(272px,82vw);max-height:none;scroll-snap-align:start}
+  /* Ticket drawer: full screen on phones, so the size switch is not needed; tabs scroll sideways. */
+  .drawer{padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
+  .dtop #d-size{display:none}
+  .drawer-tabs{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;justify-content:flex-start}
+  .drawer-tabs::-webkit-scrollbar{display:none}
+  .drawer-tab{flex:none;padding-inline:12px}
+  .dbody{overscroll-behavior:contain}
+  .facts{grid-template-columns:repeat(auto-fit,minmax(min(130px,100%),1fr))}
+  .rich pre,.rich table{max-width:100%;overflow-x:auto;display:block}
+  .rich img{max-width:100%;height:auto}
+  /* Toast spans the bottom edge. */
+  .toast{left:max(12px,env(safe-area-inset-left));right:max(12px,env(safe-area-inset-right));max-width:none}
+  /* Databases report toolbar. */
+  .db-toolbar #search{flex-basis:100%;max-width:none;min-width:0}
+  .db-actions{margin-left:0;width:100%}
+  .db-actions .btn{flex:1}
+  /* Audit & Deploy (monitor) bars and forms. */
+  .mon-bar .inp{flex-basis:100%;min-width:0}
+  .mon-bar .fsel{flex:1 1 140px}
+  .mon-acts .btn{min-height:40px;padding:8px 12px}
+  .mon-table td .key,.mon-table td.nowrap{white-space:normal;overflow-wrap:anywhere}
+  .uactions .btn{flex:1 1 auto}
+}
+
+/* Phones: popovers become bottom sheets; the bulk bar spans the width. */
+@media (max-width:600px){
+  .pop,.pop.wide{left:0!important;right:0;top:auto!important;bottom:0;width:auto;max-width:none;max-height:min(80dvh,620px);border-radius:16px 16px 0 0;border-bottom:0;padding-bottom:env(safe-area-inset-bottom,0px);padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
+  .pop::before{content:"";flex:none;width:36px;height:4px;border-radius:2px;background:var(--line-strong);margin:8px auto 2px}
+  .pop .body{min-height:0;overscroll-behavior:contain}
+  .pop h4{padding-inline:16px}
+  .pop .foot{padding:10px 12px}
+  .pop .foot .btn,.pop .foot button{flex:1 1 auto}
+  .assignee-picker{left:0;right:0;top:auto;bottom:0;width:100%;max-width:none;max-height:85dvh;border-radius:16px 16px 0 0;padding-bottom:env(safe-area-inset-bottom,0px)}
+  .bulk{left:max(8px,env(safe-area-inset-left));right:max(8px,env(safe-area-inset-right));transform:none;width:auto;max-width:none;bottom:calc(env(safe-area-inset-bottom,0px) + 8px);gap:6px;padding:8px}
+  .bulk .cnt{flex-basis:100%;padding:2px 4px}
+  .bulk button{flex:1 1 auto;min-height:40px}
+  .date-dialog{padding:18px;max-height:calc(100dvh - 24px)}
+  .page-actions .btn{flex:1 1 auto}
+}
+
+/* Databases report: each database is a card below 760px. Labels come from data-label (databases.js). */
+@media (max-width:760px){
+  .db-scroll{overflow:visible;border:0;border-radius:0;background:none}
+  .db-table,.db-table tbody{display:block;width:100%;table-layout:auto}
+  .db-table thead{display:none}
+  .db-table tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px}
+  .db-table tbody tr:hover{background:var(--surface)}
+  .db-table tr.db-off{background:var(--sunk)}
+  .db-table td{display:block;width:auto;padding:0;border:0;white-space:normal;overflow:visible;overflow-wrap:anywhere;min-width:0;font-size:13.5px}
+  .db-table td::before{content:attr(data-label);display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:2px}
+  .db-table td.db-col-database{grid-column:1/-1;order:-2;font-size:16px}
+  .db-table td.db-col-url{grid-column:1/-1;order:-1}
+  .db-table td.db-col-database::before,.db-table td.db-col-url::before{display:none}
+  .db-table td.db-col-addons{grid-column:1/-1}
+  .db-table .db-ago{display:block}
+}
+
+/* Audit & Deploy (monitor) tables: rows become cards on phones. Labels come from data-label (monitor.js). */
+@media (max-width:640px){
+  .mon-table-wrap{overflow:visible;border:0;border-radius:0}
+  .mon-table,.mon-table tbody{display:block;width:100%}
+  .mon-table thead{display:none}
+  .mon-table tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--surface)}
+  .mon-table td,.mon-table td.mon-acts{display:block;padding:0;border:0;min-width:0;white-space:normal}
+  .mon-table td[data-label]::before{content:attr(data-label);display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:2px}
+  .mon-table td:first-child,.mon-table td.mon-acts,.mon-table td[colspan]{grid-column:1/-1}
+  .mon-table td:first-child::before{display:none}
+  .mon-table td.mon-acts{display:flex;flex-wrap:wrap;gap:6px}
+  .mon-table td.mon-acts::before{flex-basis:100%}
+  .mon-table td.mon-acts .btn{margin:0;flex:1 1 auto}
+}
