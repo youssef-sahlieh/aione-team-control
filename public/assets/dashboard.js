@@ -439,12 +439,12 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     for(const header of h.children){const key=sortMap[header.className]||businessColumns.find(c=>header.classList.contains('c-'+c[0]))?.[0];if(!key)continue;const label=header.textContent;header.replaceChildren();const b=el('button','column-sort',label+(state.sort?.field===key?(state.sort.direction==='asc'?' ↑':' ↓'):' ▾'));b.type='button';b.setAttribute('aria-label','Sort '+label);b.setAttribute('aria-haspopup','menu');b.addEventListener('click',()=>columnSortMenu(b,key));header.addEventListener('contextmenu',e=>{e.preventDefault();columnSortMenu(b,key);});header.append(b);}
     let widths=[28,92,300,...(showTicketBriefs()?[220]:[]),130,150,170,140,120,120,90,120,48,...businessColumns.map(c=>c[2]),...(GITHUB?[240]:[])];
     if(state.columnsMode!=='all'){
-      // Work view fits the page: each column has a minimum width and shares the rest of the space
-      // (the list scrolls sideways only on screens narrower than the minimums).
+      // Work view fits the page width: each column has a minimum and shares the rest of the space.
+      const {defs,hidden}=fitWorkColumns();workColumns=defs.map(d=>d[0]);
       applyWorkColumns(h);w.classList.add('work-columns');
-      const cols=[[28],[92],[180,2.2],[96,1],[100,1],[112,1],[84,.8],...(GITHUB?[[170,1.4]]:[]),[110,1.3],[84,.7],[78,.7],[140,1.8],...(IS_ADMIN?[[80,.7]]:[]),[100,.9],[40]];
-      const min=cols.reduce((a,[n])=>a+n,0)+10*(cols.length-1)+28;
-      w.style.setProperty('--business-columns',cols.map(([n,fr])=>fr?'minmax('+n+'px,'+fr+'fr)':n+'px').join(' '));w.style.setProperty('--business-width','max(100%, '+min+'px)');
+      const min=defs.reduce((a,[,n])=>a+n,0)+10*(defs.length-1)+28;
+      w.style.setProperty('--business-columns',defs.map(([,n,fr])=>fr?'minmax('+n+'px,'+fr+'fr)':n+'px').join(' '));w.style.setProperty('--business-width','max(100%, '+min+'px)');
+      if(hidden.length){const names={'c-workDone':'Work done','c-actualHours':'Actual hours','c-billing':'Billing','c-prs':'Pull requests','c-estimatedHours':'Estimated hours','c-dev':'Developers','c-who':'Assignee'};tools.querySelector('.list-toolbar-hint').textContent='Hidden to fit: '+hidden.map(c=>names[c]).join(', ')+' · All columns shows them';}
     }else{
     w.style.setProperty('--business-columns',widths.map(n=>n+'px').join(' '));w.style.setProperty('--business-width',(widths.reduce((a,b)=>a+b,0)+10*(widths.length-1)+28)+'px');}
     w.appendChild(h);
@@ -508,8 +508,20 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   function selBox(i,onChange){ const ck=el("input","ck"); ck.type="checkbox"; ck.checked=state.sel.has(i.key); ck.setAttribute("aria-label","Select "+i.key);
     ck.addEventListener("click",e=>e.stopPropagation()); ck.addEventListener("change",()=>{ ck.checked?state.sel.add(i.key):state.sel.delete(i.key); onChange(ck.checked); updateBulk(); }); return ck; }
 
+  // Work view columns: [class, minimum px, share of the spare width]. When the list is narrower than the
+  // minimums, the least needed columns are left out (in WORK_DROP order) so it never scrolls sideways;
+  // All columns still shows everything.
+  const workColumnDefs=()=>[['c-ck',28],['c-key',84],['c-ttl',170,2.6],['c-who',84,.8],['c-dev',88,.9],['c-st',104,.9],['c-due',72,.6],...(GITHUB?[['c-prs',104,1]]:[]),['c-clientName',96,1.1],['c-estimatedHours',62,.45],['c-actualHours',62,.45],['c-workDone',104,1.2],...(IS_ADMIN?[['c-billing',70,.55]]:[]),['c-note',44],['c-actions',36]];
+  const WORK_DROP=['c-workDone','c-actualHours','c-billing','c-prs','c-estimatedHours','c-dev','c-who'];
+  let workColumns=null;
+  // Phones (under 900px) keep every column and scroll the list sideways inside its own box.
+  function fitWorkColumns(){
+    const width=($("view").clientWidth||innerWidth)-16;let defs=workColumnDefs();const need=d=>d.reduce((a,[,n])=>a+n,0)+10*(d.length-1)+28,hidden=[];
+    if(width>=884)for(const c of WORK_DROP){if(need(defs)<=width)break;if(defs.some(d=>d[0]===c)){defs=defs.filter(d=>d[0]!==c);hidden.push(c);}}
+    return {defs,hidden,keys:defs.map(d=>d[0]).join()};
+  }
   function applyWorkColumns(row){
-    const order=['c-ck','c-key','c-ttl','c-who','c-dev','c-st','c-due',...(GITHUB?['c-prs']:[]),'c-clientName','c-estimatedHours','c-actualHours','c-workDone',...(IS_ADMIN?['c-billing']:[]),'c-note','c-actions'];
+    const order=workColumns||workColumnDefs().map(d=>d[0]);
     for(const child of [...row.children])child.hidden=!order.some(c=>child.classList.contains(c));
     for(const c of order){const child=[...row.children].find(n=>n.classList.contains(c));if(child)row.append(child);}
   }
@@ -1228,6 +1240,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   setInterval(()=>{ const a=$("auto"); if(!a||!lastLoad) return; const left=Math.max(0,120-Math.round((Date.now()-lastLoad)/1000)); a.textContent="next refresh in "+(left>=60?Math.floor(left/60)+"m "+(left%60)+"s":left+"s");
     if(Date.now()-lastLoad>120000&&document.visibilityState==="visible"&&!batchBusy&&!reloading&&$("pop").hidden&&!drag){ lastLoad=Date.now(); reload(); } },1000);
   $("signout").addEventListener("click",()=>signOut());
+  // The Work view re-fits its columns when the window size changes.
+  let resizeTimer=null; window.addEventListener("resize",()=>{ clearTimeout(resizeTimer); resizeTimer=setTimeout(()=>{ if(state.issues&&state.view==="list"&&state.columnsMode!=="all"&&$("pop").hidden&&!drag&&workColumns&&fitWorkColumns().keys!==workColumns.join()) render(); },150); });
   const ticketHistory=createTicketHistory({api,getIssue:()=>issueByKey(dz.key),allowed:()=>IS_ADMIN&&!!dz.key&&!isInt(dz.key)&&!isOdoo(dz.key)&&!$("drawer").hidden,formatTime:value=>{const time=fmtWhen(value);return time.d+" "+time.t;}});
   const drawerUI=createIssueDrawer({canViewHistory:()=>IS_ADMIN,canViewFullHistory:()=>IS_ADMIN&&!!dz.key&&!isInt(dz.key)&&!isOdoo(dz.key),onSelect:id=>{if(id==="history")ticketHistory.load(dz.key);if(id==="notes")ticketNotes.load(dz.key);},isDirty:()=>{if(business.dirty(dz.key)||ticketNotes.dirty(dz.key))return true;const issue=issueByKey(dz.key);if(!issue)return !!$("d-reply").value.trim();return !!$("d-reply").value.trim()||!!$("d-newdev").value.trim()||dz.devs.size!==issue.devs.length||issue.devs.some(d=>!dz.devs.has(d));}});
   const ticketNotes=createTicketNotes({api,isAdmin:IS_ADMIN});

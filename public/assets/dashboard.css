@@ -504,3 +504,4 @@ button.key.odoo:hover{text-decoration:underline}
 .db-page .db-table td{overflow-wrap:break-word}
 .db-page .db-pill{border-radius:8px}
 @media (max-width:760px){.db-page th[aria-sort=none] .db-arrow{display:none}}
+.db-page .db-table th.db-col-company{position:sticky;top:0;left:auto;z-index:3}

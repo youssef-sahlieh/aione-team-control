@@ -23,3 +23,11 @@
   .listwrap.with-email .gr,
   .listwrap.with-email.with-ai-briefs .gr { grid-template-columns:24px minmax(0,1fr) auto;grid-template-areas:'ck key actions' 'ck ttl ttl' 'ck brief brief' 'ck who who' 'ck dev st' 'ck due due' 'ck email email'; }
 }
+/* Work view: compact cells so the list fits the page width (dashboard.js fits the columns). */
+.work-columns .gr>*{min-width:0}
+.work-columns .business-cell,.work-columns .c-who>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.listwrap.with-email.work-columns .gr .c-note.email-button{font-size:0;padding:0;min-width:0;width:38px;min-height:34px;height:34px;display:inline-flex;align-items:center;justify-content:center}
+.listwrap.with-email.work-columns .gr .c-note.email-button::before{content:"✉";font-size:16px}
+.work-columns .head .c-note{font-size:0}
+.work-columns .head .c-note::before{content:"Note";font-size:11px}
+.work-columns .head>span{overflow:hidden;text-overflow:ellipsis}

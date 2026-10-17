@@ -556,7 +556,9 @@ test('with billing required, administrator assignment asks for private billing b
  await expect.poll(()=>assignments.length).toBe(1);expect(mock.calls.find(c=>c.path==='/ticket-metadata'&&c.method==='PUT').body.fields.billing).toBe('not_billable');expect(mock.errors).toEqual([]);
 });
 for(const width of [375,1440])test('work view reduces clutter and all columns remain available at '+width,async({page})=>{
- await page.setViewportSize({width,height:1000});const mock=await mockDashboard(page);await page.goto('/dashboard.html');await page.getByRole('button',{name:'Work view',exact:true}).click();await expect(page.locator('#view .head .c-rep')).toBeHidden();await expect(page.locator('#view .head .c-actualHours')).toBeVisible();await expect(page.locator('#view .head .c-clientName')).toBeVisible();await expect(page.locator('#view .head .c-cre')).toBeHidden();await expect(page.locator('#view .item .business-key-date').first()).toBeVisible();
+ await page.setViewportSize({width,height:1000});const mock=await mockDashboard(page);await page.goto('/dashboard.html');await page.getByRole('button',{name:'Work view',exact:true}).click();await expect(page.locator('#view .head .c-rep')).toBeHidden();
+ // Wide screens fit the page width (less needed columns step aside); phones keep every column and scroll inside the list.
+ if(width<900)await expect(page.locator('#view .head .c-actualHours')).toBeVisible();else expect(await page.locator('#view .listwrap').evaluate(l=>l.scrollWidth-l.clientWidth)).toBeLessThanOrEqual(0);await expect(page.locator('#view .head .c-clientName')).toBeVisible();await expect(page.locator('#view .head .c-cre')).toBeHidden();await expect(page.locator('#view .item .business-key-date').first()).toBeVisible();
  await page.screenshot({path:'test-results/work-view-'+width+'.png',fullPage:true});await page.getByRole('button',{name:'All columns',exact:true}).click();await expect(page.locator('#view .head .c-rep')).toBeVisible();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
 
@@ -569,7 +571,7 @@ test('unsaved work uses its original revision after a background refresh',async(
 });
 
 test('ticket fields are edited from the list, with client and billing for administrators only',async({page})=>{
- const mock=await mockDashboard(page);await page.goto('/dashboard.html');
+ await page.setViewportSize({width:1920,height:1000});const mock=await mockDashboard(page);await page.goto('/dashboard.html');
  const row=page.locator('#view .item').filter({hasText:'INT-101'});
  await row.getByRole('button',{name:'Edit Actual hours for INT-101'}).click();
  await page.locator('#pop').getByLabel('Actual hours').fill('3.5');await page.locator('#pop').getByRole('button',{name:'Save',exact:true}).click();
@@ -675,7 +677,7 @@ test('ticket details open full screen and attachments preview inside the dashboa
 });
 
 test('pull requests that mention a ticket show in the list and in the ticket',async({page})=>{
- const mock=await mockDashboard(page,{github:true});
+ await page.setViewportSize({width:1920,height:1000});const mock=await mockDashboard(page,{github:true});
  const prs={'AION-101':[{repo:'flutter_pos',number:553,title:'feat: forecourt opening (AION-101)',state:'merged',url:'https://github.com/KAD-org/flutter_pos/pull/553',author:'dev1',branch:'codex/x',base:'main',updated:'2026-10-12T10:00:00Z',merged:'2026-10-12T10:00:00Z'},{repo:'flutter_pos_api',number:175,title:'feat: forecourt opening cash',state:'open',url:'https://github.com/KAD-org/flutter_pos_api/pull/175',author:'dev1',updated:'2026-10-12T09:00:00Z',merged:null,status:{comments:6,unresolved:1,decision:'CHANGES_REQUESTED',requested:['rami-alt'],reviews:[{by:'ellen',state:'CHANGES_REQUESTED'}],checks:'FAILURE',failed:['build'],running:0}}]};
  await page.route('**/github/prs?*',r=>{const keys=new URL(r.request().url()).searchParams.get('keys').split(',');return r.fulfill({json:{configured:true,prs:Object.fromEntries(keys.filter(k=>prs[k]).map(k=>[k,prs[k]]))}});});
  await page.goto('/dashboard.html');
