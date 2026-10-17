@@ -125,7 +125,8 @@ test("report covers production databases only, with inside numbers where a login
   assert.equal(ronit.loginFound, true); assert.equal(ronit.loginOk, true);
   assert.equal(ronit.users, customer.users); assert.equal(ronit.pos, customer.pos);
   assert.equal(ronit.branches, 1); // companies 2 -> 1 extra branch (no res.branch model)
-  assert.equal(ronit.lastLogin, customer.lastSession, "last login is the most recent of web login and POS session");
+  // Last login is the most recent sign of a logged-in user (web login, POS session, presence, or order).
+  assert.equal(ronit.lastLogin, customer.lastOrder, "last login reflects the latest activity");
   assert.equal(ronit.lastOrder, customer.lastOrder);
   assert.equal(ronit.expired, false); assert.equal(ronit.expires, customer.expires);
   const hcc = rows.find((x) => x.database === "100_hcc");

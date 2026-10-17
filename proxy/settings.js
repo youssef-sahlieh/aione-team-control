@@ -22,6 +22,8 @@ export default {
   // Ask for Billable / Not billable before a ticket can be assigned ("true" to turn on).
   BILLING_REQUIRED: "false",
   NO_DEVELOPER_ASSIGNEES: "karim,youssef,rami,razan",
+  // Instance numbers left out of the Databases report (down servers / non-customer instances).
+  DB_REPORT_EXCLUDE: "119,129,531",
   // Product repositories whose pull requests are linked to tickets (needs the GITHUB_TOKEN secret).
   GITHUB_REPOS: "KAD-org/flutter_pos,KAD-org/flutter_pos_api,KAD-org/alam_portal,KAD-org/AlamPortal",
   // Other spellings people use for this project's ticket keys in PRs (AIONE-12 means AION-12).

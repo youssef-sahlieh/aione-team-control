@@ -34,14 +34,7 @@ const COLUMNS = [
 ];
 
 function linkCell(url) { const a = el("a", "db-link", url.replace(/^https?:\/\//, "")); a.href = url; a.target = "_blank"; a.rel = "noopener"; return a; }
-function noAccessReason(r) {
-  const s = el("span", "db-reason"); const d = r.diag;
-  s.append(el("span", "db-muted", "no access"));
-  if (r.error) s.append(el("small", "db-why", " · " + r.error));
-  s.title = d ? ("host " + d.host + "\ndatabases tried: " + d.dbs + "\nlogins tried: " + (d.tried || 0) + " (" + d.users + " user×" + d.pws + " password)" + "\ndb list available: " + (d.dbListed ? "yes" : "no") + (r.error ? "\nserver said: " + r.error : "")) : (r.error || "");
-  return s;
-}
-function numCell(r, key) { if (!r.loginFound) return el("span", "db-muted", "login not found"); if (!r.loginOk) return key === "users" ? noAccessReason(r) : el("span", "db-muted", "—"); return el("span", "", num(r[key])); }
+function numCell(r, key) { if (!r.loginOk) return key === "users" ? el("span", "db-muted", "no access") : el("span", "db-muted", "—"); return el("span", "", num(r[key])); }
 function branchCell(r) { if (!r.loginFound) return el("span", "db-muted", "—"); if (!r.loginOk) return el("span", "db-muted", "—"); if (!r.branches) return el("span", "db-muted", "none"); return el("span", "db-strong", String(r.branches)); }
 function timeCell(r, key) { if (!r.loginFound) return el("span", "db-muted", "—"); if (!r.loginOk) return el("span", "db-muted", "—"); if (!r[key]) return el("span", "db-muted", "never"); const s = el("span", "", fmtDateTime(r[key])); const a = ago(r[key]); if (a) s.append(el("small", "db-ago", " · " + a)); return s; }
 function expiryCell(r) { if (!r.loginFound || !r.loginOk) return el("span", "db-muted", "—"); if (r.expired === null) return el("span", "db-muted", "none"); return el("span", "db-pill " + (r.expired ? "bad" : "ok"), (r.expired ? "Expired " : "Valid ") + fmtDate(r.expires)); }
@@ -57,24 +50,63 @@ function addonCell(r) {
 
 let REPORT = null, pollTimer = null;
 
+// One compact stat (label + value) inside a card.
+function stat(label, valueNode) { const s = el("div", "db-stat"); s.append(el("span", "db-stat-label", label), valueNode instanceof Node ? valueNode : el("span", "db-stat-val", valueNode == null ? "—" : String(valueNode))); return s; }
+function statText(label, text, cls) { return stat(label, el("span", "db-stat-val" + (cls ? " " + cls : ""), text)); }
+
+function card(r) {
+  const c = el("div", "db-card" + (r.loginOk ? "" : " db-card-off"));
+  // Header: name + badges
+  const head = el("div", "db-card-head");
+  head.append(el("span", "db-card-name", r.database || r.instance || "—"));
+  const badges = el("span", "db-card-badges");
+  if (r.flutter) badges.append(el("span", "db-pill ok", "Flutter POS"));
+  if (r.loginOk && r.expired !== null) badges.append(el("span", "db-pill " + (r.expired ? "bad" : "ok"), r.expired ? "Expired" : "Active"));
+  head.append(badges);
+  c.append(head);
+  // URL
+  if (r.url) { const a = el("a", "db-card-url", r.url.replace(/^https?:\/\//, "")); a.href = r.url; a.target = "_blank"; a.rel = "noopener"; c.append(a); }
+  if (!r.loginOk) { c.append(el("div", "db-card-noaccess", "no access")); addedStats(c, r, true); return c; }
+  addedStats(c, r, false);
+  return c;
+}
+
+function addedStats(c, r, off) {
+  const grid = el("div", "db-card-stats");
+  grid.append(
+    statText("Users", off ? "—" : num(r.users)),
+    statText("POS", off ? "—" : num(r.pos)),
+    statText("Branches", off ? "—" : (r.branches ? String(r.branches) : "none")),
+    statText("Created", fmtDate(r.created)),
+    statText("Last login", off ? "—" : fmtDateTime(r.lastLogin), "db-stat-wide"),
+    statText("Last order", off ? "—" : fmtDateTime(r.lastOrder), "db-stat-wide"),
+    statText("Expiry", off || r.expired === null ? "—" : fmtDate(r.expires))
+  );
+  c.append(grid);
+  // Add-ons: count + names, wraps naturally
+  const list = r.addons || [];
+  const ad = el("div", "db-card-addons");
+  ad.append(el("span", "db-stat-label", "Add-ons"));
+  if (list.length) { ad.append(el("span", "db-addon-count", String(list.length))); ad.append(el("span", "db-addon-names", list.join(", "))); }
+  else ad.append(el("span", "db-muted", "—"));
+  c.append(ad);
+}
+
 function render() {
   if (!REPORT) return;
   const q = $("search").value.trim().toLowerCase();
   const rows = (REPORT.rows || []).filter((r) => !q || [r.url, r.database, r.instance, (r.addons || []).join(" ")].join(" ").toLowerCase().includes(q));
-  const head = $("head"); head.replaceChildren(); for (const c of COLUMNS) head.append(el("th", "db-col-" + c.key, c.label));
-  const body = $("rows"); body.replaceChildren();
-  for (const r of rows.sort((a, b) => (a.database || a.instance || "").localeCompare(b.database || b.instance || ""))) {
-    const tr = el("tr"); if (!r.loginFound) tr.className = "db-no-login";
-    for (const c of COLUMNS) { const td = el("td", "db-col-" + c.key); td.append(c.value(r)); tr.append(td); }
-    body.append(tr);
-  }
-  $("meta").textContent = rows.length + " of " + (REPORT.rows || []).length + " production databases · built " + fmtDateTime(new Date(REPORT.builtAt).toISOString());
+  rows.sort((a, b) => (a.loginOk === b.loginOk ? 0 : a.loginOk ? -1 : 1) || (a.database || a.instance || "").localeCompare(b.database || b.instance || ""));
+  const box = $("cards"); box.replaceChildren();
+  for (const r of rows) box.append(card(r));
+  const working = (REPORT.rows || []).filter((r) => r.loginOk).length;
+  $("meta").textContent = rows.length + " of " + (REPORT.rows || []).length + " databases · " + working + " with data · built " + fmtDateTime(new Date(REPORT.builtAt).toISOString());
 }
 
 async function load() {
   try {
     const data = await api("/db-report");
-    if (data.report) { REPORT = data.report; $("toolbar").hidden = false; $("tablewrap").hidden = false; showState(""); render(); }
+    if (data.report) { REPORT = data.report; $("toolbar").hidden = false; $("cards").hidden = false; showState(""); render(); }
     else showState(data.building ? "Building the report for the first time… this can take a minute." : "No report yet.", false);
     if (data.building) { showState("", false); scheduleContinue(); }
   } catch (err) {
@@ -89,7 +121,7 @@ function scheduleContinue() { clearTimeout(pollTimer); pollTimer = setTimeout(()
 async function continueBuild(force) {
   try {
     const r = await api("/db-report/refresh" + (force ? "" : "?continue=1"), { method: "POST" });
-    if (r.report) { REPORT = r.report; $("toolbar").hidden = false; $("tablewrap").hidden = false; showState(""); render(); }
+    if (r.report) { REPORT = r.report; $("toolbar").hidden = false; $("cards").hidden = false; showState(""); render(); }
     if (r.busy) { scheduleContinue(); return; }
     if (!r.done) { if (r.progress) $("meta").textContent = "Building… " + r.progress.done + " of " + r.progress.total + " databases"; scheduleContinue(); }
     else { toast("Report refreshed."); load(); }

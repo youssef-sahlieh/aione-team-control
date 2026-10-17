@@ -42,14 +42,25 @@ export function parseCreds(html) {
   // Emails hidden in mailto: links are stripped with the tag, so pull them out of the raw HTML first.
   const mailtoEmails = [...raw.matchAll(/mailto:([^\s"'<>?]+@[^\s"'<>?]+)/gi)].map((m) => m[1]);
   const text = raw
-    .replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|tr|td|th|h[1-6])>/gi, "\n")
-    .replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#39;|&apos;/g, "'");
+    // New lines come from <br> and block-element ends; inline tags (b, span, a, font…) are removed WITHOUT
+    // a space, so a value split by formatting - e.g. art4u<b>@</b>2025 - is rejoined to art4u@2025.
+    .replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|tr|td|th|h[1-6]|table|ul|ol)>/gi, "\n")
+    .replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#39;|&apos;/g, "'")
+    // Decode numeric HTML entities, then strip zero-width / bidi / BOM characters that Odoo's editor
+    // injects (they get stuck onto a password like "​12345" and make the server reject it).
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n))
+    .replace(/[​-‏‪-‮⁠﻿]/g, "");
   const urls = [...new Set([...hrefs, ...[...text.matchAll(/https?:\/\/[^\s)"'<>]+/gi)].map((m) => m[0])])];
   const url = urls.find((u) => /\.ai1\.host/i.test(u)) || urls[0] || "";
   // Every ai1.host number mentioned anywhere (name/url/body) - an article can serve more than one.
   const nums = [...new Set([...raw.matchAll(/(\d{2,4})\.ai1\.host/gi)].map((m) => m[1]))];
   const host = (url.match(/^https?:\/\/([^/]+)/i) || [])[1] || "";
   const num = (host.match(/(\d{2,4})\.ai1\.host/i) || [])[1] || nums[0] || (host.match(/(\d{2,4})/) || [])[1] || "";
+  // Database names written in the article: a "db/database:" labelled value, or a bare <num>_<name> token.
+  const dbs = [];
+  for (const m of text.matchAll(/(?:data\s*base|db(?:[\s_-]*name)?)\s*[:：]\s*([A-Za-z0-9][\w-]+)/gi)) dbs.push(m[1]);
+  for (const m of text.matchAll(/\b(\d{2,4}_[A-Za-z0-9][\w-]+)\b/g)) if (!/\.ai1\.host/i.test(m[0])) dbs.push(m[1]);
 
   const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
   const users = new Set(), passwords = new Set();
@@ -105,7 +116,7 @@ export function parseCreds(html) {
   for (const u of uList) for (const p of pList) if (u && p) candidates.push({ user: u, password: p });
   const seen = new Set(), unique = [];
   for (const c of candidates) { const k = c.user + "\u0000" + c.password; if (!seen.has(k)) { seen.add(k); unique.push(c); } if (unique.length >= 24) break; }
-  return { url, host, num, nums: nums.length ? nums : (num ? [num] : []), candidates: unique, complete: !!(url && unique.length) };
+  return { url, host, num, nums: nums.length ? nums : (num ? [num] : []), dbs: [...new Set(dbs)], candidates: unique, complete: !!(url && unique.length) };
 }
 
 // Map each ai1.host instance number -> { url, candidates[] }, merged across all customer articles.
@@ -124,8 +135,12 @@ async function readCredentialIndex(env) {
       const titleNums = [...title.matchAll(/(\d{2,4})/g)].map((m) => m[1]);
       const numbers = [...new Set([...c.nums, c.num, ...titleNums].filter(Boolean))];
       for (const n of numbers) {
-        const slot = index[n] || (index[n] = { url: "", candidates: [], seen: new Set() });
+        const slot = index[n] || (index[n] = { url: "", candidates: [], seen: new Set(), titles: [], dbs: [] });
         if (!slot.url && (c.url.includes(n + ".ai1.host") || !slot.url)) slot.url = c.url.includes(n + ".ai1.host") ? c.url : (slot.url || "https://" + n + ".ai1.host");
+        // Remember the client name (article title) so the database name can be derived as <num>_<client>.
+        if (title && !/^https?:/i.test(title) && !slot.titles.includes(title)) slot.titles.push(title);
+        // Database names written in the article (tried before any derived guess).
+        for (const d of (c.dbs || [])) if (!slot.dbs.includes(d)) slot.dbs.push(d);
         for (const cand of c.candidates) { const k = cand.user + "\u0000" + cand.password; if (!slot.seen.has(k) && slot.candidates.length < 40) { slot.seen.add(k); slot.candidates.push(cand); } }
       }
     }
@@ -147,48 +162,67 @@ async function customerRpc(base, service, method, args, signal) {
 async function readInsideDatabase(slot, dbHint) {
   const base = (slot.url.match(/^https?:\/\/[^/]+/) || [])[0];
   if (!base) return { loginOk: false, error: "no url" };
-  const signal = () => AbortSignal.timeout(10000);
+  // Short per-request timeout so one slow/unreachable server can't stall the whole build.
+  const signal = () => AbortSignal.timeout(7000);
   const num = (base.match(/(\d{2,4})\.ai1\.host/i) || [])[1] || "";
-  // Database names to try, best first: the one Audit & Deploy reported, then what the server lists.
+  // Database names to try, best first: the one(s) Audit & Deploy reported, then what the server lists.
   const dbNames = [];
-  if (dbHint) dbNames.push(dbHint);
+  const push = (d) => { if (d && /^[\w-]+$/.test(d) && !dbNames.includes(d)) dbNames.push(d); };
+  // Database names written in the article come first, then Audit & Deploy's, then the server list.
+  for (const d of (slot.dbs || [])) push(d);
+  for (const d of (Array.isArray(dbHint) ? dbHint : [dbHint]).filter(Boolean)) push(d);
   const list = await customerRpc(base, "db", "list", [], signal()).catch(() => null);
-  if (Array.isArray(list)) for (const d of list) if (!dbNames.includes(d)) dbNames.push(d);
-  if (num && !dbNames.includes(num)) dbNames.push(num);
-  // Diagnostics for the admin page (no secrets): what host/db/how many logins were tried, and the last error.
-  const diag = { host: base.replace(/^https?:\/\//, ""), dbs: dbNames.slice(0, 4).join(", ") || "(none)", cands: slot.candidates.length, users: new Set(slot.candidates.map((c) => c.user)).size, pws: new Set(slot.candidates.map((c) => c.password)).size, dbListed: Array.isArray(list) };
-  // Try each (database, login) until one authenticates. "Try any of them."
-  let db = "", uid = 0, password = "", attempts = 0, lastErr = "";
-  outer: for (const d of dbNames.slice(0, 4)) {
-    for (const c of slot.candidates) {
-      if (++attempts > 48) break outer;
-      const id = await customerRpc(base, "common", "authenticate", [d, c.user, c.password, {}], signal()).catch((e) => { lastErr = String(e.message || e).slice(0, 80); return 0; });
+  if (Array.isArray(list)) for (const d of list) push(d);
+  // Derive <num>_<client> from the article title(s) when config gave no usable name (db listing is off):
+  // whole name (joined, lower, underscored) AND the first word alone (e.g. "Merchandise Shop" -> 536_merchandise).
+  for (const t of (slot.titles || [])) {
+    const words = t.trim().split(/\s+/).filter(Boolean);
+    const forms = new Set();
+    const slug = t.replace(/[^A-Za-z0-9]+/g, "");
+    forms.add(slug); forms.add(slug.toLowerCase());
+    forms.add(words.join("_").replace(/[^\w-]/g, "")); forms.add(words.join("_").replace(/[^\w-]/g, "").toLowerCase());
+    if (words[0]) { forms.add(words[0].replace(/[^\w-]/g, "")); forms.add(words[0].replace(/[^\w-]/g, "").toLowerCase()); }
+    for (const f of forms) if (f) push(num + "_" + f);
+  }
+  if (num) push(num);
+  const tryDbs = dbNames.slice(0, 8);
+  // Try the best credential against each database first (finds the right database fast), then the next.
+  let db = "", uid = 0, password = "", attempts = 0;
+  outer: for (const c of slot.candidates) {
+    for (const d of tryDbs) {
+      if (++attempts > 60) break outer;
+      const id = await customerRpc(base, "common", "authenticate", [d, c.user, c.password, {}], signal()).catch(() => 0);
       if (id) { db = d; uid = id; password = c.password; break outer; }
     }
   }
-  if (!uid) {
-    // No error thrown + a login tried = the server returned "no uid": wrong password, or 2FA/ API-only.
-    const reason = lastErr || "password rejected (wrong password, or the account has two-factor enabled so it needs an API key)";
-    return { loginOk: false, loginFound: true, error: reason, diag: { ...diag, tried: attempts } };
-  }
+  if (!uid) return { loginOk: false, loginFound: true };
   const kw = (model, method, args, k = {}) => customerRpc(base, "object", "execute_kw", [db, uid, password, model, method, args, k], signal());
   const one = async (p, dflt) => { try { return await p; } catch { return dflt; } };
-  const [users, pos, companies, branchModel, webLogin, posSession, lastOrder, expiry] = await Promise.all([
+  // active_test:false so a login by a since-deactivated user still counts (last login by ANY user).
+  const allUsers = { context: { active_test: false } };
+  const [users, pos, companies, branchModel, webLogin, posSession, presence, lastOrder, expiry] = await Promise.all([
     one(kw("res.users", "search_count", [[["share", "=", false]]]), null),
     one(kw("pos.config", "search_count", [[]]), null),
     one(kw("res.company", "search_count", [[]]), null),
     one(kw("res.branch", "search_count", [[]]), null).catch(() => null),
-    one(kw("res.users", "search_read", [[["login_date", "!=", false]]], { fields: ["login_date"], order: "login_date desc", limit: 1 }), []),
+    // Latest real login by any user; if none, the latest user-record change (login updates it) as a fallback.
+    one(kw("res.users", "search_read", [[]], { fields: ["login_date", "write_date"], order: "login_date desc", limit: 1, ...allUsers }), []),
     // POS cashiers log into the POS, not the web - pos.session.start_at is their real "last login".
     one(kw("pos.session", "search_read", [[]], { fields: ["start_at"], order: "start_at desc", limit: 1 }), []),
+    // bus.presence.last_presence is the last time any user was active online - another "last seen" source.
+    one(kw("bus.presence", "search_read", [[]], { fields: ["last_presence"], order: "last_presence desc", limit: 1, ...allUsers }), []).catch(() => []),
     one(kw("pos.order", "search_read", [[]], { fields: ["date_order"], order: "date_order desc", limit: 1 }), []),
     one(kw("ir.config_parameter", "search_read", [[["key", "=", "database.expiration_date"]]], { fields: ["value"], limit: 1 }), [])
   ]);
   // Branches: prefer res.branch if that model exists; else "extra companies" beyond the first.
   const branches = Number.isInteger(branchModel) ? branchModel : (Number.isInteger(companies) ? Math.max(0, companies - 1) : null);
   const expires = (expiry[0] && expiry[0].value) || null;
-  // Last login = the most recent of a web login and a POS session start (same datetime format, so max works).
-  const logins = [webLogin[0] && webLogin[0].login_date, posSession[0] && posSession[0].start_at].filter(Boolean);
+  // Last login = the most recent sign of a logged-in user: web login, POS session start, online presence,
+  // or (as a last resort, so this is never blank when there's activity) the last order - an order means
+  // a user was logged in at that moment.
+  const order = (lastOrder[0] && lastOrder[0].date_order) || null;
+  const u0 = webLogin[0] || {};
+  const logins = [u0.login_date, posSession[0] && posSession[0].start_at, presence[0] && presence[0].last_presence, order, u0.write_date].filter(Boolean);
   return {
     loginOk: true, loginFound: true, db, users, pos, branches, companies: Number.isInteger(companies) ? companies : null,
     lastLogin: logins.length ? logins.sort().at(-1) : null,
@@ -200,10 +234,14 @@ async function readInsideDatabase(slot, dbHint) {
 // --- Audit & Deploy data (no customer login) -----------------------------------------------------
 const unwrap = (r) => (r && r.payload) ? r.payload : r;
 
+// Instance numbers to leave out of the report entirely (down servers, non-customer instances).
+const excludedNums = (env) => new Set(String(env.DB_REPORT_EXCLUDE || "").split(",").map((s) => s.trim()).filter(Boolean));
 async function productionInstances(env) {
   const snap = unwrap(await odoo(env, "monitor.data.snapshot", "get_instances", [false]));
   const services = (snap && snap.services) || [];
-  return services.filter((s) => s.server_zone === "prod" && isProductionName(s.instance_name));
+  const skip = excludedNums(env);
+  const numOf = (s) => (String(s.domain || s.instance_name).match(/(\d{2,4})/) || [])[1] || "";
+  return services.filter((s) => s.server_zone === "prod" && isProductionName(s.instance_name) && !skip.has(numOf(s)) && !skip.has(s.instance_name));
 }
 
 async function instanceFacts(env, inst) {
@@ -212,7 +250,11 @@ async function instanceFacts(env, inst) {
     odoo(env, "monitor.data.snapshot", "get_instance_config", [name, false]).then(unwrap).catch(() => ({})),
     odoo(env, "monitor.data.snapshot", "get_instance_addons", [name, null, false]).then(unwrap).catch(() => ({}))
   ]);
-  const databases = (cfg.databases || []).filter(isProductionName);
+  // Database name can come from several config fields; db listing is usually disabled on these servers.
+  const f = cfg.fields || {};
+  let dbFromFilter = typeof f.dbfilter === "string" ? f.dbfilter.replace(/[\^$]/g, "").trim() : "";
+  if (!/^[\w-]+$/.test(dbFromFilter)) dbFromFilter = ""; // ignore wildcard filters like "119_.*"
+  const databases = [...new Set([...(cfg.databases || []), cfg.selected_database, f.db_name, dbFromFilter].filter(Boolean))].filter((d) => /^[\w-]+$/.test(d) && isProductionName(d));
   const addons = (add.addons || []).map((a) => a.name).filter(Boolean).sort();
   return {
     instance: name,
@@ -251,7 +293,7 @@ export async function buildReport(env, { force = false } = {}) {
         const facts = await instanceFacts(env, inst);
         const slot = creds[facts.num];
         let inside = { loginOk: false, loginFound: !!(slot && slot.candidates.length) };
-        if (inside.loginFound) { try { inside = await readInsideDatabase({ url: slot.url || facts.url, candidates: slot.candidates }, facts.database); } catch (e) { inside = { loginFound: true, loginOk: false, error: String(e.message || e).slice(0, 80) }; } }
+        if (inside.loginFound) { try { inside = await readInsideDatabase({ url: slot.url || facts.url, candidates: slot.candidates, titles: slot.titles, dbs: slot.dbs }, facts.databases); } catch (e) { inside = { loginFound: true, loginOk: false, error: String(e.message || e).slice(0, 80) }; } }
         return { ...facts, ...inside };
       });
       progress.rows.push(...rows);
