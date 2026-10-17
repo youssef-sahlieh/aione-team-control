@@ -358,5 +358,8 @@ export async function dbReportCron(request, env, url) {
   const deadline = Date.now() + 55000;
   let r = await buildReport(env, { force: true });
   while (!r.done && !r.busy && Date.now() < deadline) r = await buildReport(env, { force: false });
-  return json({ ok: true, done: !!r.done, busy: !!r.busy });
+  const rep = await readReport(env);
+  const rows = (rep && rep.rows) || [];
+  const summary = { total: rows.length, loggedIn: rows.filter((x) => x.loginOk).length, noAccess: rows.filter((x) => x.loginFound && !x.loginOk).map((x) => x.database || x.instance) };
+  return json({ ok: true, done: !!r.done, busy: !!r.busy, summary });
 }
