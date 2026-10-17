@@ -132,7 +132,7 @@ test("report covers production databases only, with inside numbers where a login
   assert.equal(ronit.expired, false); assert.equal(ronit.expires, customer.expires);
   const hcc = rows.find((x) => x.database === "100_hcc");
   assert.equal(hcc.loginFound, false); assert.equal(hcc.flutter, false); assert.equal(hcc.users, undefined);
-  assert.equal(hcc.company, "HCC"); assert.equal(hcc.companySource, "knowledge"); // no login: the Knowledge customer name
+  assert.equal(hcc.company, ""); assert.equal(hcc.companySource, ""); // no login: no company name (Knowledge text is never used)
 });
 
 test("GET /db-report is admin only and caches; cron needs the secret", async () => {

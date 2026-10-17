@@ -26,7 +26,7 @@ const daysSince = (v) => { const t = time(v); return t == null ? null : (Date.no
 const num = (n) => (n === null || n === undefined ? "—" : String(n));
 const inside = (r, v) => (r.loginOk ? v : null);
 const COLUMNS = [
-  { key: "company", label: "Company", value: (r) => companyCell(r), sort: (r) => (r.company || "").toLowerCase() || null, csv: (r) => r.company || "" },
+  { key: "company", label: "Company", value: (r) => companyCell(r), sort: (r) => companyOf(r).toLowerCase() || null, csv: (r) => companyOf(r) },
   { key: "database", label: "Database", value: (r) => el("span", "db-strong", r.database || r.instance || "—"), sort: (r) => (r.database || r.instance || "").toLowerCase(), csv: (r) => r.database || r.instance || "" },
   { key: "url", label: "URL", value: (r) => r.url ? linkCell(r.url) : el("span", "db-muted", "—"), sort: (r) => r.url || null, csv: (r) => r.url || "" },
   { key: "version", label: "Odoo", value: (r) => r.odooVersion ? el("span", "db-ver", r.odooVersion) : el("span", "db-muted", "—"), sort: (r) => Number(r.odooVersion) || null, csv: (r) => r.odooVersion || "" },
@@ -44,11 +44,12 @@ const WEIGHT = { company: 2.2, database: 1.6, url: 1.5, version: 0.6, users: 0.7
 // Phones start with fewer columns (the rest are one tap away in Columns).
 const PHONE_COLUMNS = ["company", "database", "users", "lastOrder", "expired"];
 
+// Only a company name read from inside the database is shown (reports built earlier may carry Knowledge names).
+const companyOf = (r) => (r.companySource === "database" ? r.company || "" : "");
 function companyCell(r) {
-  if (!r.company) return el("span", "db-muted", "—");
+  if (!companyOf(r)) return el("span", "db-muted", "—");
   const box = el("span", "db-company");
-  box.append(el("span", "db-strong", r.company));
-  if (r.companySource === "knowledge") { const s = el("small", "db-src", "from Knowledge"); s.title = "No login to this database: the customer name from its Knowledge article"; box.append(s); }
+  box.append(el("span", "db-strong", companyOf(r)));
   const more = (r.companyNames || []).slice(1);
   if (more.length) { const s = el("small", "db-src", "+" + more.length + " compan" + (more.length === 1 ? "y" : "ies")); s.title = more.join("\n"); box.append(s); }
   return box;
@@ -98,7 +99,7 @@ function filterOptions(id) {
 function visibleRows() {
   const q = $("search").value.trim().toLowerCase();
   const tests = FILTERS.map(([id]) => (filterOptions(id).find((o) => o[0] === (view.filters[id] || "")) || [])[2]).filter(Boolean);
-  const rows = (REPORT.rows || []).filter((r) => (!q || [r.company, (r.companyNames || []).join(" "), r.customer, r.url, r.database, r.instance, (r.addons || []).join(" ")].join(" ").toLowerCase().includes(q)) && tests.every((t) => t(r)));
+  const rows = (REPORT.rows || []).filter((r) => (!q || [companyOf(r), (r.companyNames || []).join(" "), r.url, r.database, r.instance, (r.addons || []).join(" ")].join(" ").toLowerCase().includes(q)) && tests.every((t) => t(r)));
   const col = COLUMNS.find((c) => c.key === view.sort.key) || COLUMNS[0];
   return rows.sort((a, b) => {
     const x = col.sort(a), y = col.sort(b);
