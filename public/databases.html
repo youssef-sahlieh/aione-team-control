@@ -27,13 +27,15 @@
   <div id="pagestate" class="state">Loading…</div>
 
   <div class="db-toolbar" id="toolbar" hidden>
-    <input type="search" id="search" class="inp" placeholder="Search by name, URL or add-on…" aria-label="Search databases">
+    <input type="search" id="search" class="inp" placeholder="Search company, database, URL or add-on…" aria-label="Search databases">
     <span class="db-meta" id="meta"></span>
     <span class="db-actions">
       <button class="btn" id="csv" type="button">Download CSV</button>
       <button class="btn primary" id="refresh" type="button">Refresh now</button>
     </span>
   </div>
+
+  <div class="db-filters" id="filters" hidden></div>
 
   <div class="db-scroll" id="tablewrap" hidden>
     <table class="db-table" id="table">

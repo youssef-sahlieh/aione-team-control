@@ -72,23 +72,6 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
   .page-actions .btn{flex:1 1 auto}
 }
 
-/* Databases report: each database is a card below 760px. Labels come from data-label (databases.js). */
-@media (max-width:760px){
-  .db-scroll{overflow:visible;border:0;border-radius:0;background:none}
-  .db-table,.db-table tbody{display:block;width:100%;table-layout:auto}
-  .db-table thead{display:none}
-  .db-table tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px}
-  .db-table tbody tr:hover{background:var(--surface)}
-  .db-table tr.db-off{background:var(--sunk)}
-  .db-table td{display:block;width:auto;padding:0;border:0;white-space:normal;overflow:visible;overflow-wrap:anywhere;min-width:0;font-size:13.5px}
-  .db-table td::before{content:attr(data-label);display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:2px}
-  .db-table td.db-col-database{grid-column:1/-1;order:-2;font-size:16px}
-  .db-table td.db-col-url{grid-column:1/-1;order:-1}
-  .db-table td.db-col-database::before,.db-table td.db-col-url::before{display:none}
-  .db-table td.db-col-addons{grid-column:1/-1}
-  .db-table .db-ago{display:block}
-}
-
 /* Audit & Deploy (monitor) tables: rows become cards on phones. Labels come from data-label (monitor.js). */
 @media (max-width:640px){
   .mon-table-wrap{overflow:visible;border:0;border-radius:0}
@@ -102,4 +85,24 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
   .mon-table td.mon-acts{display:flex;flex-wrap:wrap;gap:6px}
   .mon-table td.mon-acts::before{flex-basis:100%}
   .mon-table td.mon-acts .btn{margin:0;flex:1 1 auto}
+}
+
+/* Databases report on phones: still a table. It scrolls sideways inside its box with the company pinned on
+   the left; Columns (databases.js) starts with fewer columns here. */
+@media (max-width:760px){
+  .db-scroll{max-height:none}
+  .db-table th,.db-table td{padding:9px 10px;font-size:13px}
+  .db-table .db-col-company{max-width:46vw;min-width:0}
+  .db-filters{gap:8px}
+  .db-filter{flex:1 1 calc(50% - 8px);min-width:0}
+  .db-filter select{width:100%}
+  .db-columns,.db-filters>.btn{flex:1 1 calc(50% - 8px)}
+  .db-columns>summary{width:100%}
+  .db-columns-list{left:auto;right:0}
+}
+@media (max-width:760px){
+  .db-filter-toggle{display:block!important}
+  .db-filters:not(.open) .db-filter{display:none}
+  .db-filters.open .db-filter-toggle{flex-basis:100%}
+  .db-filters>.btn,.db-columns{flex:1 1 0}
 }

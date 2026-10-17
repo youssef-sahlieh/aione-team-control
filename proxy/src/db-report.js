@@ -132,7 +132,8 @@ async function readCredentialIndex(env) {
       // The title is sometimes the URL (or carries the number), so parse title + body together.
       const title = typeof a.name === "string" ? a.name : "";
       const c = parseCreds("<p>" + title + "</p>\n" + (a.body || ""));
-      if (!c.candidates.length) continue;
+      // An article without a login still names the customer of the sites it mentions.
+      if (!c.candidates.length && !(c.labels || []).length && !c.nums.length) continue;
       // Match by every ai1.host site label (numeric or named, e.g. 521 or paytag), plus a number in the title.
       const titleNums = [...title.matchAll(/(\d{2,4})/g)].map((m) => m[1]);
       const numbers = [...new Set([...(c.labels || []), ...c.nums, c.num, ...titleNums].filter(Boolean))];
@@ -205,10 +206,11 @@ async function readInsideDatabase(slot, dbHint) {
   const one = async (p, dflt) => { try { return await p; } catch { return dflt; } };
   // active_test:false so a login by a since-deactivated user still counts (last login by ANY user).
   const allUsers = { context: { active_test: false } };
-  const [users, pos, companies, branchModel, webLogin, posSession, presence, lastOrder, expiry] = await Promise.all([
+  const [users, pos, companyRows, branchModel, webLogin, posSession, presence, lastOrder, expiry] = await Promise.all([
     one(kw("res.users", "search_count", [[["share", "=", false]]]), null),
     one(kw("pos.config", "search_count", [[]]), null),
-    one(kw("res.company", "search_count", [[]]), null),
+    // The companies' real names; the first (lowest id) is the main company.
+    one(kw("res.company", "search_read", [[]], { fields: ["name"], order: "id", limit: 50 }), null),
     one(kw("res.branch", "search_count", [[]]), null).catch(() => null),
     // Latest real login by any user; if none, the latest user-record change (login updates it) as a fallback.
     one(kw("res.users", "search_read", [[]], { fields: ["login_date", "write_date"], order: "login_date desc", limit: 1, ...allUsers }), []),
@@ -219,6 +221,8 @@ async function readInsideDatabase(slot, dbHint) {
     one(kw("pos.order", "search_read", [[]], { fields: ["date_order"], order: "date_order desc", limit: 1 }), []),
     one(kw("ir.config_parameter", "search_read", [[["key", "=", "database.expiration_date"]]], { fields: ["value"], limit: 1 }), [])
   ]);
+  const companyNames = Array.isArray(companyRows) ? companyRows.map((c) => String(c.name || "").trim()).filter(Boolean) : [];
+  const companies = Array.isArray(companyRows) ? companyRows.length : null;
   // Branches: prefer res.branch if that model exists; else "extra companies" beyond the first.
   const branches = Number.isInteger(branchModel) ? branchModel : (Number.isInteger(companies) ? Math.max(0, companies - 1) : null);
   const expires = (expiry[0] && expiry[0].value) || null;
@@ -229,7 +233,8 @@ async function readInsideDatabase(slot, dbHint) {
   const u0 = webLogin[0] || {};
   const logins = [u0.login_date, posSession[0] && posSession[0].start_at, presence[0] && presence[0].last_presence, order, u0.write_date].filter(Boolean);
   return {
-    loginOk: true, loginFound: true, db, users, pos, branches, companies: Number.isInteger(companies) ? companies : null,
+    loginOk: true, loginFound: true, db, users, pos, branches, companies,
+    company: companyNames[0] || "", companyNames,
     lastLogin: logins.length ? logins.sort().at(-1) : null,
     lastOrder: (lastOrder[0] && lastOrder[0].date_order) || null,
     expires, expired: expires ? Date.parse(expires + "Z") < Date.now() : null
@@ -305,7 +310,9 @@ export async function buildReport(env, { force = false } = {}) {
         const slot = creds[facts.label] || creds[facts.num];
         let inside = { loginOk: false, loginFound: !!(slot && slot.candidates.length) };
         if (inside.loginFound) { try { inside = await readInsideDatabase({ url: slot.url || facts.url, candidates: slot.candidates, titles: slot.titles, dbs: slot.dbs }, facts.databases); } catch (e) { inside = { loginFound: true, loginOk: false, error: String(e.message || e).slice(0, 80) }; } }
-        return { ...facts, ...inside };
+        // The company name from inside the database; without a login, the customer's Knowledge article title.
+        const customer = (slot && slot.titles && slot.titles[0]) || "";
+        return { ...facts, ...inside, customer, company: inside.company || customer, companySource: inside.company ? "database" : customer ? "knowledge" : "" };
       });
       progress.rows.push(...rows);
       progress.done += batch.length;

@@ -1,6 +1,9 @@
 // Databases report (administrators only). Reads the cached report from the proxy; the proxy builds it
 // from Audit & Deploy (production instances) plus one read-only login per database for the inside numbers.
 // No credential ever reaches this page - only the numbers do.
+//
+// The table sorts by any column (click its header), filters by search and by access, Odoo version, expiry,
+// Flutter POS and order activity, and shows the columns you pick. Choices are kept in this browser.
 import { api, getSession, signOut } from "./session.js";
 
 const $ = (id) => document.getElementById(id);
@@ -16,24 +19,39 @@ function parseDate(v) { if (!v) return null; const d = new Date(/Z$|[+-]\d\d:?\d
 function fmtDateTime(v) { const d = parseDate(v); if (!d) return v ? String(v) : "—"; return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes()); }
 function fmtDate(v) { const d = parseDate(v); if (!d) return v ? String(v) : "—"; return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
 function ago(v) { const d = parseDate(v); if (!d) return ""; const days = Math.floor((Date.now() - d.getTime()) / 86400000); return days <= 0 ? "today" : days === 1 ? "1 day ago" : days + " days ago"; }
+const time = (v) => { const d = parseDate(v); return d ? d.getTime() : null; };
+const daysSince = (v) => { const t = time(v); return t == null ? null : (Date.now() - t) / 86400000; };
 
-// The 11 report columns. value() returns display text; csv() the plain value; cls() an optional cell class.
+// The report columns. value() draws the cell; sort() the value it sorts by (null sorts last); csv() the plain value.
 const num = (n) => (n === null || n === undefined ? "—" : String(n));
+const inside = (r, v) => (r.loginOk ? v : null);
 const COLUMNS = [
-  { key: "url", label: "URL", value: (r) => r.url ? linkCell(r.url) : el("span", "db-muted", "—"), csv: (r) => r.url || "" },
-  { key: "database", label: "Database", value: (r) => el("span", "db-strong", r.database || r.instance || "—"), csv: (r) => r.database || r.instance || "" },
-  { key: "version", label: "Odoo", value: (r) => r.odooVersion ? el("span", "db-ver", r.odooVersion) : el("span", "db-muted", "—"), csv: (r) => r.odooVersion || "" },
-  { key: "users", label: "Users", value: (r) => numCell(r, "users"), csv: (r) => num(r.users) },
-  { key: "pos", label: "POS", value: (r) => numCell(r, "pos"), csv: (r) => num(r.pos) },
-  { key: "created", label: "Created", value: (r) => el("span", "", fmtDate(r.created)), csv: (r) => fmtDate(r.created) },
-  { key: "branches", label: "Branches", value: (r) => branchCell(r), csv: (r) => r.loginOk ? (r.branches ? "yes (" + r.branches + ")" : "no") : "" },
-  { key: "lastLogin", label: "Last login", value: (r) => timeCell(r, "lastLogin"), csv: (r) => fmtDateTime(r.lastLogin) },
-  { key: "lastOrder", label: "Last order", value: (r) => timeCell(r, "lastOrder"), csv: (r) => fmtDateTime(r.lastOrder) },
-  { key: "expired", label: "Expiry", value: (r) => expiryCell(r), csv: (r) => !r.loginOk ? "" : r.expired === null ? "none" : r.expired ? "EXPIRED " + fmtDate(r.expires) : "ok " + fmtDate(r.expires) },
-  { key: "flutter", label: "Flutter POS", value: (r) => r.flutter ? el("span", "db-pill ok", "Installed") : el("span", "db-pill", "No"), csv: (r) => r.flutter ? "yes" : "no" },
-  { key: "addons", label: "Add-ons", value: (r) => addonCell(r), csv: (r) => (r.addons || []).join("; ") }
+  { key: "company", label: "Company", value: (r) => companyCell(r), sort: (r) => (r.company || "").toLowerCase() || null, csv: (r) => r.company || "" },
+  { key: "database", label: "Database", value: (r) => el("span", "db-strong", r.database || r.instance || "—"), sort: (r) => (r.database || r.instance || "").toLowerCase(), csv: (r) => r.database || r.instance || "" },
+  { key: "url", label: "URL", value: (r) => r.url ? linkCell(r.url) : el("span", "db-muted", "—"), sort: (r) => r.url || null, csv: (r) => r.url || "" },
+  { key: "version", label: "Odoo", value: (r) => r.odooVersion ? el("span", "db-ver", r.odooVersion) : el("span", "db-muted", "—"), sort: (r) => Number(r.odooVersion) || null, csv: (r) => r.odooVersion || "" },
+  { key: "users", label: "Users", num: true, value: (r) => numCell(r, "users"), sort: (r) => inside(r, r.users), csv: (r) => num(r.users) },
+  { key: "pos", label: "POS", num: true, value: (r) => numCell(r, "pos"), sort: (r) => inside(r, r.pos), csv: (r) => num(r.pos) },
+  { key: "branches", label: "Branches", num: true, value: (r) => branchCell(r), sort: (r) => inside(r, r.branches), csv: (r) => r.loginOk ? (r.branches ? "yes (" + r.branches + ")" : "no") : "" },
+  { key: "created", label: "Created", value: (r) => el("span", "", fmtDate(r.created)), sort: (r) => time(r.created), csv: (r) => fmtDate(r.created) },
+  { key: "lastLogin", label: "Last login", value: (r) => timeCell(r, "lastLogin"), sort: (r) => inside(r, time(r.lastLogin)), csv: (r) => fmtDateTime(r.lastLogin) },
+  { key: "lastOrder", label: "Last order", value: (r) => timeCell(r, "lastOrder"), sort: (r) => inside(r, time(r.lastOrder)), csv: (r) => fmtDateTime(r.lastOrder) },
+  { key: "expired", label: "Expiry", value: (r) => expiryCell(r), sort: (r) => inside(r, time(r.expires)), csv: (r) => !r.loginOk ? "" : r.expired === null ? "none" : r.expired ? "EXPIRED " + fmtDate(r.expires) : "ok " + fmtDate(r.expires) },
+  { key: "flutter", label: "Flutter POS", value: (r) => r.flutter ? el("span", "db-pill ok", "Installed") : el("span", "db-pill", "No"), sort: (r) => (r.flutter ? 1 : 0), csv: (r) => r.flutter ? "yes" : "no" },
+  { key: "addons", label: "Add-ons", value: (r) => addonCell(r), sort: (r) => (r.addons || []).length, csv: (r) => (r.addons || []).join("; ") }
 ];
+// Phones start with fewer columns (the rest are one tap away in Columns).
+const PHONE_COLUMNS = ["company", "database", "users", "lastOrder", "expired"];
 
+function companyCell(r) {
+  if (!r.company) return el("span", "db-muted", "—");
+  const box = el("span", "db-company");
+  box.append(el("span", "db-strong", r.company));
+  if (r.companySource === "knowledge") { const s = el("small", "db-src", "from Knowledge"); s.title = "No login to this database: the customer name from its Knowledge article"; box.append(s); }
+  const more = (r.companyNames || []).slice(1);
+  if (more.length) { const s = el("small", "db-src", "+" + more.length + " compan" + (more.length === 1 ? "y" : "ies")); s.title = more.join("\n"); box.append(s); }
+  return box;
+}
 function linkCell(url) { const a = el("a", "db-link", url.replace(/^https?:\/\//, "")); a.href = url; a.target = "_blank"; a.rel = "noopener"; return a; }
 function numCell(r, key) { if (!r.loginOk) return key === "users" ? el("span", "db-muted", "no access") : el("span", "db-muted", "—"); return el("span", "", num(r[key])); }
 function branchCell(r) { if (!r.loginFound) return el("span", "db-muted", "—"); if (!r.loginOk) return el("span", "db-muted", "—"); if (!r.branches) return el("span", "db-muted", "none"); return el("span", "db-strong", String(r.branches)); }
@@ -49,28 +67,109 @@ function addonCell(r) {
   return box;
 }
 
+// Filters: [id, label, options [value, label, test(row)]]. The Odoo options are filled from the report.
+const FILTERS = [
+  ["access", "Access", [["", "All", null], ["ok", "With data", (r) => r.loginOk], ["none", "No access", (r) => !r.loginOk]]],
+  ["version", "Odoo", [["", "All versions", null]]],
+  ["expiry", "Expiry", [["", "Any", null], ["expired", "Expired", (r) => r.loginOk && r.expired === true], ["soon", "Expires in 30 days", (r) => r.loginOk && r.expired === false && time(r.expires) - Date.now() < 30 * 86400000], ["valid", "Valid", (r) => r.loginOk && r.expired === false], ["none", "No expiry", (r) => r.loginOk && r.expired === null]]],
+  ["flutter", "Flutter POS", [["", "Any", null], ["yes", "Installed", (r) => r.flutter], ["no", "Not installed", (r) => !r.flutter]]],
+  ["activity", "Last order", [["", "Any time", null], ["7", "Within 7 days", (r) => r.loginOk && daysSince(r.lastOrder) !== null && daysSince(r.lastOrder) <= 7], ["30", "Within 30 days", (r) => r.loginOk && daysSince(r.lastOrder) !== null && daysSince(r.lastOrder) <= 30], ["idle", "None in 30+ days", (r) => r.loginOk && (daysSince(r.lastOrder) === null || daysSince(r.lastOrder) > 30)]]]
+];
+
+// What this person last chose (sort, filters, columns), kept in this browser.
+const PREFS_KEY = "aion.dbreport.view";
+const view = { sort: { key: "company", dir: 1 }, filters: {}, columns: null };
+try { Object.assign(view, JSON.parse(localStorage.getItem(PREFS_KEY) || "{}")); } catch {}
+const saveView = () => { try { localStorage.setItem(PREFS_KEY, JSON.stringify(view)); } catch {} };
+const phone = () => window.matchMedia("(max-width: 760px)").matches;
+const shownColumns = () => { const keys = view.columns || (phone() ? PHONE_COLUMNS : COLUMNS.map((c) => c.key)); return COLUMNS.filter((c) => keys.includes(c.key)); };
+
 let REPORT = null, pollTimer = null;
+let filtersOpen = false;
+
+function filterOptions(id) {
+  const f = FILTERS.find((x) => x[0] === id);
+  if (id !== "version") return f[2];
+  const versions = [...new Set((REPORT?.rows || []).map((r) => r.odooVersion).filter(Boolean))].sort((a, b) => Number(b) - Number(a));
+  return [f[2][0], ...versions.map((v) => [v, "Odoo " + v, (r) => r.odooVersion === v]), ["unknown", "Unknown", (r) => !r.odooVersion]];
+}
+
+function visibleRows() {
+  const q = $("search").value.trim().toLowerCase();
+  const tests = FILTERS.map(([id]) => (filterOptions(id).find((o) => o[0] === (view.filters[id] || "")) || [])[2]).filter(Boolean);
+  const rows = (REPORT.rows || []).filter((r) => (!q || [r.company, (r.companyNames || []).join(" "), r.customer, r.url, r.database, r.instance, (r.addons || []).join(" ")].join(" ").toLowerCase().includes(q)) && tests.every((t) => t(r)));
+  const col = COLUMNS.find((c) => c.key === view.sort.key) || COLUMNS[0];
+  return rows.sort((a, b) => {
+    const x = col.sort(a), y = col.sort(b);
+    if (x == null || y == null) return x == null && y == null ? 0 : x == null ? 1 : -1; // empty values always last
+    return (x < y ? -1 : x > y ? 1 : 0) * view.sort.dir || (a.database || "").localeCompare(b.database || "");
+  });
+}
+
+function renderFilters() {
+  const box = $("filters"); box.replaceChildren();
+  // Phones: the filters fold behind one button (CSS shows it only there).
+  const count = Object.keys(view.filters).length, toggle = el("button", "btn db-filter-toggle", "Filters" + (count ? " · " + count : ""));
+  toggle.type = "button"; toggle.setAttribute("aria-expanded", String(filtersOpen)); box.classList.toggle("open", filtersOpen);
+  toggle.addEventListener("click", () => { filtersOpen = !filtersOpen; renderFilters(); });
+  box.append(toggle);
+  for (const [id, label] of FILTERS) {
+    const field = el("label", "db-filter"), select = el("select", "fsel");
+    field.append(el("span", "", label)); select.setAttribute("aria-label", label);
+    for (const [value, text] of filterOptions(id)) select.append(new Option(text, value));
+    select.value = view.filters[id] || ""; if (select.value !== (view.filters[id] || "")) { delete view.filters[id]; select.value = ""; }
+    field.classList.toggle("on", !!select.value);
+    select.addEventListener("change", () => { if (select.value) view.filters[id] = select.value; else delete view.filters[id]; saveView(); renderFilters(); render(); });
+    field.append(select); box.append(field);
+  }
+  // Columns: a checklist; at least one column stays on.
+  const cols = el("details", "db-columns"), sum = el("summary", "btn", "Columns"), list = el("div", "db-columns-list");
+  cols.append(sum, list);
+  const on = shownColumns().map((c) => c.key);
+  for (const c of COLUMNS) {
+    const row = el("label", "db-col-opt"), ck = el("input"); ck.type = "checkbox"; ck.checked = on.includes(c.key);
+    ck.addEventListener("change", () => { const next = COLUMNS.map((x) => x.key).filter((k) => (k === c.key ? ck.checked : on.includes(k))); if (!next.length) { ck.checked = true; return; } view.columns = next; saveView(); render(); renderFilters(); $("filters").querySelector(".db-columns").open = true; });
+    row.append(ck, " " + c.label); list.append(row);
+  }
+  const all = el("button", "btn", "Show all"); all.type = "button"; all.addEventListener("click", () => { view.columns = COLUMNS.map((c) => c.key); saveView(); render(); renderFilters(); });
+  list.append(all);
+  box.append(cols);
+  const active = Object.keys(view.filters).length + ($("search").value.trim() ? 1 : 0);
+  const reset = el("button", "btn", "Reset"); reset.type = "button"; reset.disabled = !active;
+  reset.addEventListener("click", () => { view.filters = {}; $("search").value = ""; saveView(); renderFilters(); render(); });
+  box.append(reset);
+}
 
 function render() {
   if (!REPORT) return;
-  const q = $("search").value.trim().toLowerCase();
-  const rows = (REPORT.rows || []).filter((r) => !q || [r.url, r.database, r.instance, (r.addons || []).join(" ")].join(" ").toLowerCase().includes(q));
-  rows.sort((a, b) => (a.loginOk === b.loginOk ? 0 : a.loginOk ? -1 : 1) || (a.database || a.instance || "").localeCompare(b.database || b.instance || ""));
-  const head = $("head"); head.replaceChildren(); for (const c of COLUMNS) head.append(el("th", "db-col-" + c.key, c.label));
+  const rows = visibleRows(), cols = shownColumns();
+  const head = $("head"); head.replaceChildren();
+  for (const c of cols) {
+    const th = el("th", "db-col-" + c.key + (c.num ? " db-num" : "")), b = el("button", "db-sort", c.label);
+    const active = view.sort.key === c.key;
+    b.type = "button"; b.append(el("span", "db-arrow", active ? (view.sort.dir > 0 ? " ▲" : " ▼") : " ↕"));
+    b.setAttribute("aria-label", "Sort by " + c.label);
+    th.setAttribute("aria-sort", active ? (view.sort.dir > 0 ? "ascending" : "descending") : "none");
+    b.addEventListener("click", () => { view.sort = { key: c.key, dir: active ? -view.sort.dir : 1 }; saveView(); render(); });
+    th.append(b); head.append(th);
+  }
   const body = $("rows"); body.replaceChildren();
   for (const r of rows) {
     const tr = el("tr"); if (!r.loginOk) tr.className = "db-off";
-    for (const c of COLUMNS) { const td = el("td", "db-col-" + c.key); td.dataset.label = c.label; td.append(c.value(r)); tr.append(td); }
+    for (const c of cols) { const td = el("td", "db-col-" + c.key + (c.num ? " db-num" : "")); td.append(c.value(r)); tr.append(td); }
     body.append(tr);
   }
+  if (!rows.length) { const tr = el("tr"), td = el("td", "db-empty", "No databases match. Change the search or filters."); td.colSpan = cols.length; tr.append(td); body.append(tr); }
   const working = (REPORT.rows || []).filter((r) => r.loginOk).length;
   $("meta").textContent = rows.length + " of " + (REPORT.rows || []).length + " databases · " + working + " with data · built " + fmtDateTime(new Date(REPORT.builtAt).toISOString());
 }
 
+function showReport(report) { REPORT = report; $("toolbar").hidden = false; $("filters").hidden = false; $("tablewrap").hidden = false; showState(""); renderFilters(); render(); }
+
 async function load() {
   try {
     const data = await api("/db-report");
-    if (data.report) { REPORT = data.report; $("toolbar").hidden = false; $("tablewrap").hidden = false; showState(""); render(); }
+    if (data.report) showReport(data.report);
     else showState(data.building ? "Building the report for the first time… this can take a minute." : "No report yet.", false);
     if (data.building) { showState("", false); scheduleContinue(); }
   } catch (err) {
@@ -85,18 +184,19 @@ function scheduleContinue() { clearTimeout(pollTimer); pollTimer = setTimeout(()
 async function continueBuild(force) {
   try {
     const r = await api("/db-report/refresh" + (force ? "" : "?continue=1"), { method: "POST" });
-    if (r.report) { REPORT = r.report; $("toolbar").hidden = false; $("tablewrap").hidden = false; showState(""); render(); }
+    if (r.report) showReport(r.report);
     if (r.busy) { scheduleContinue(); return; }
     if (!r.done) { if (r.progress) $("meta").textContent = "Building… " + r.progress.done + " of " + r.progress.total + " databases"; scheduleContinue(); }
     else { toast("Report refreshed."); load(); }
   } catch (err) { showState(errText(err), true); }
 }
 
+// The CSV has every column for the databases that match the search and filters, in the table's order.
 function downloadCsv() {
   if (!REPORT) return;
   const esc = (v) => '"' + String(v).replace(/"/g, '""') + '"';
   const lines = [COLUMNS.map((c) => esc(c.label)).join(",")];
-  for (const r of REPORT.rows || []) lines.push(COLUMNS.map((c) => esc(c.csv(r))).join(","));
+  for (const r of visibleRows()) lines.push(COLUMNS.map((c) => esc(c.csv(r))).join(","));
   const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
   a.download = "aion-databases-" + fmtDate(new Date().toISOString()) + ".csv";
@@ -107,7 +207,8 @@ function start() {
   const s = getSession(); if (!s) { signOut(true); return; }
   $("me").textContent = s.email;
   $("signout").addEventListener("click", () => signOut());
-  $("search").addEventListener("input", render);
+  let typing = null;
+  $("search").addEventListener("input", () => { clearTimeout(typing); typing = setTimeout(() => { render(); renderFilters(); }, 120); });
   $("csv").addEventListener("click", downloadCsv);
   $("refresh").addEventListener("click", () => { showState("Refreshing…", false); continueBuild(true); });
   load();

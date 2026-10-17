@@ -77,7 +77,7 @@ function setup() {
       if (model === "knowledge.article" && method === "search_read") {
         const dom = args[0];
         if (JSON.stringify(dom).includes("Our Customers")) return Response.json({ result: [{ id: 10 }] });
-        return Response.json({ result: articles.filter((a) => a.id !== 10).map((a) => ({ body: a.body })) });
+        return Response.json({ result: articles.filter((a) => a.id !== 10).map((a) => ({ name: a.name, body: a.body })) });
       }
       return Response.json({ result: [] });
     }
@@ -88,7 +88,7 @@ function setup() {
       const [, , , model, method, args, kw] = p.args;
       if (model === "res.users" && method === "search_count") return Response.json({ result: customer.users });
       if (model === "pos.config") return Response.json({ result: customer.pos });
-      if (model === "res.company") return Response.json({ result: customer.companies });
+      if (model === "res.company") return Response.json({ result: [{ id: 1, name: "Ronit Yam Ltd" }, { id: 2, name: "Ronit Yam Branch" }].slice(0, customer.companies) });
       if (model === "res.branch") return Response.json({ error: { message: "no such model" } });
       if (model === "res.users" && method === "search_read") return Response.json({ result: [{ login_date: customer.lastLogin }] });
       if (model === "pos.session") return Response.json({ result: [{ start_at: customer.lastSession }] });
@@ -125,12 +125,14 @@ test("report covers production databases only, with inside numbers where a login
   assert.equal(ronit.loginFound, true); assert.equal(ronit.loginOk, true);
   assert.equal(ronit.users, customer.users); assert.equal(ronit.pos, customer.pos);
   assert.equal(ronit.branches, 1); // companies 2 -> 1 extra branch (no res.branch model)
+  assert.equal(ronit.company, "Ronit Yam Ltd"); assert.equal(ronit.companySource, "database"); assert.deepEqual(ronit.companyNames, ["Ronit Yam Ltd", "Ronit Yam Branch"]);
   // Last login is the most recent sign of a logged-in user (web login, POS session, presence, or order).
   assert.equal(ronit.lastLogin, customer.lastOrder, "last login reflects the latest activity");
   assert.equal(ronit.lastOrder, customer.lastOrder);
   assert.equal(ronit.expired, false); assert.equal(ronit.expires, customer.expires);
   const hcc = rows.find((x) => x.database === "100_hcc");
   assert.equal(hcc.loginFound, false); assert.equal(hcc.flutter, false); assert.equal(hcc.users, undefined);
+  assert.equal(hcc.company, "HCC"); assert.equal(hcc.companySource, "knowledge"); // no login: the Knowledge customer name
 });
 
 test("GET /db-report is admin only and caches; cron needs the secret", async () => {

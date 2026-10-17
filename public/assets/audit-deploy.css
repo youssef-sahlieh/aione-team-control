@@ -47,3 +47,23 @@ body.o_web_client { display: flex; flex-direction: column; overflow: hidden; }
   .ad-app .instances-table td:first-child { font-weight: 600; font-size: 1rem; }
   .ad-app .instances-table td:last-child { padding-top: 8px !important; display: flex; flex-wrap: wrap; gap: 6px; }
 }
+/* An opened instance on phones and tablets: Odoo puts its Actions (restart, start, stop) in a side column that
+   drops below the long odoo.conf form here. Show the actions first, every tab (Addons, Upgrade, …) without
+   sideways scrolling, and a smaller Recent Actions strip while an instance is open. */
+@media (max-width: 1100px) {
+  .ad-app .instance-info-layout { display: flex; flex-direction: column; align-items: stretch; }
+  .ad-app .instance-info-sidepanel { order: -1; position: static; display: flex; flex-direction: column; }
+  .ad-app .instance-info-sidepanel .instance-actions-panel { order: -1; }
+}
+@media (max-width: 991px) {
+  .ad-app .o_instance_tabbar { flex-wrap: wrap; overflow-x: visible; gap: 4px; padding-top: 6px !important; padding-bottom: 6px !important; }
+  .ad-app .o_itab_btn { min-height: 38px; border: 1px solid var(--ai1-border, #e5e7eb); border-radius: 6px; padding: 4px 10px; }
+  .ad-app .o_monitor_shell:has(.o_instance_tabbar) .o_rac_panel { height: 22%; min-height: 110px; }
+  .ad-app .instance-detail-header-bar h2 { font-size: 1.15rem; overflow-wrap: anywhere; }
+  .ad-app .instance-actions-panel { padding: 12px; }
+  .ad-app .instance-info-sidepanel .instance-actions-panel .action-list, .ad-app .instance-info-main .instance-actions-panel .action-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .ad-app .instance-info-sidepanel .instance-actions-panel .action-item { flex-direction: column; justify-content: center; text-align: center; min-height: 72px; padding: 8px 4px; gap: 4px; }
+  .ad-app .instance-actions-panel .action-desc { display: none; }
+  .ad-app .drill-down, .ad-app .tab-content-area { max-width: 100%; }
+  .ad-app .o_config_grid { grid-template-columns: 1fr !important; }
+}
