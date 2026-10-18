@@ -35,6 +35,7 @@ async function dropFile(store, a) {
 }
 
 import { normDev, validDev } from "./users.js";
+import { recordTicketEvent } from "./ticket-log.js";
 
 export const STATUSES = [
   { name: "Open", cat: "new" },
@@ -152,6 +153,7 @@ export async function internalRoutes(request, env, url, me) {
     await saveMetadata(env,t.key,{...b.metadata,revision:0},me,{creating:true});
     await saveTicket(store, t);
     await store.sadd("itickets", t.key);
+    await recordTicketEvent(env, t.key, me, { action: "created", changes: { status: { from: null, to: t.status }, assignee: { from: null, to: t.assignee }, developers: { from: null, to: t.devs.join(", ") } } });
     return json({ ticket: view(t) }, 201);
   }
 
@@ -221,7 +223,7 @@ export async function internalRoutes(request, env, url, me) {
     const wasClosed=t.status==="Closed";
     const b = (await readJson(request)) || {};
     if("due" in b)return fail(me.role==="admin"?"date_request":"forbidden","Use the date request process to change the approved date.",me.role==="admin"?400:403);
-    const before = [...(t.devs || [])];
+    const before = [...(t.devs || [])], prev = { status: t.status, assignee: t.assignee, summary: t.summary, priority: t.priority, description: t.description };
     if(me.role==='admin'){
       const proposed=Array.isArray(b.devs)?cleanDevs(b.devs):null;
       if(('assignee' in b&&b.assignee!==t.assignee)||(proposed&&JSON.stringify([...proposed].sort())!==JSON.stringify([...before].sort())))requireBilling(await readMetadata(env,t.key),env);
@@ -231,7 +233,18 @@ export async function internalRoutes(request, env, url, me) {
     if (!t.devs.length) return fail("bad_request", "A ticket needs at least one developer.", 400);
     t.updated = now();
     t.updatedBy = by(me);
-    const apply=async()=>{await saveTicket(store,t);return json({ticket:view(t),added:t.devs.filter(d=>!before.includes(d))});};
+    const apply=async()=>{await saveTicket(store,t);
+      // Who changed what, for the ticket's history.
+      const changes={};
+      if(prev.status!==t.status)changes.status={from:prev.status,to:t.status};
+      if(prev.assignee!==t.assignee)changes.assignee={from:prev.assignee,to:t.assignee};
+      if(JSON.stringify([...before].sort())!==JSON.stringify([...t.devs].sort()))changes.developers={from:before.join(", ")||"None",to:t.devs.join(", ")||"None"};
+      if(prev.summary!==t.summary)changes.title={from:prev.summary,to:t.summary};
+      if(prev.priority!==t.priority)changes.priority={from:prev.priority,to:t.priority};
+      if(prev.description!==t.description)changes.description={from:"(previous text)",to:"(edited)"};
+      const action=changes.status?"status":changes.assignee?"assignee":changes.developers?"developers":"edit";
+      if(Object.keys(changes).length)await recordTicketEvent(env,t.key,me,{action,changes,...(b.overrideReason?{text:"Closed with override: "+b.overrideReason}:{})});
+      return json({ticket:view(t),added:t.devs.filter(d=>!before.includes(d))});};
     if(b.status!==undefined && (t.status==="Closed"||wasClosed))return guardedTransition(env,t.key,me,{closing:t.status==="Closed",overrideReason:b.overrideReason},apply);
     return apply();
     });

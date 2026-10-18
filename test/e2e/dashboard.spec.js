@@ -5,7 +5,7 @@ import { jiraIssue, internalTicket, people } from "../fixtures/issues.js";
 // A synthetic Odoo Helpdesk ticket as the proxy returns it (developer "builder" from the Odoo assignee).
 const odooTicket = { key: "HD-300", id: 300, ref: "300", odoo: true, summary: "Synthetic Odoo request", status: "In Progress", statusCat: "indeterminate", devs: ["builder"], developerName: "Builder", customer: { name: "Ariel Amiri", email: "ariel@example.invalid" }, team: "ai1 | Support", priority: "Medium", created: "2026-10-09T08:00:00Z", updated: "2026-10-10T08:00:00Z", closed: "", due: null, url: "https://odoo.example.invalid/web#id=300&model=helpdesk.ticket&view_type=form" };
 
-async function mockDashboard(page, { role = "admin", failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1, odoo = false, github = false, billingRequired = false, missingEstimate = false } = {}) {
+async function mockDashboard(page, { role = "admin", ticketLog = [], failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1, odoo = false, github = false, billingRequired = false, missingEstimate = false } = {}) {
   await page.clock.setFixedTime(new Date("2026-10-11T09:00:00Z"));
   const calls = [], unexpected = [], errors = [];
   const internalTickets=[structuredClone(internalTicket)];
@@ -37,6 +37,7 @@ async function mockDashboard(page, { role = "admin", failure = false, expired = 
     if(path==='/clients/odoo-sync'&&method==='POST'){if(url.searchParams.get('force')!=='1')return json({odoo:true,changed:false,syncedAt:1});catalog.entries.push({id:'odoo-client',name:'Odoo Customer',parentId:null,archived:false});catalog.revision++;return json({odoo:true,changed:true,added:1,projects:3,syncedAt:2});}
     if(path==='/clients/import/preview')return json({revision:1,rows:body.rows.length,added:1,clients:2,subClients:0,entries:[{id:'new-client',name:body.rows[0].displayName,parentId:null}]});
     if(path==='/clients/import'){catalog.entries.push({id:'new-client',name:body.rows[0].displayName,parentId:null,archived:false});catalog.revision++;return json(catalog);}
+    if(path==='/ticket-log')return json({events:ticketLog});
     if(path==='/ticket-metadata/batch')return json({records:Object.fromEntries(body.keys.map(key=>[key,record(key)]))});
     if(path==='/ticket-metadata'&&method==='GET')return json({metadata:record(url.searchParams.get('key')),history:[],closed:false});
     if(path==='/ticket-metadata'&&method==='PUT'){if(mutationFailure)return route.fulfill({status:503,json:{code:'ticket_metadata',error:'Synthetic save failure'}});metadata[body.key]={...record(body.key),...body.fields,revision:body.fields.revision+1};return json({metadata:metadata[body.key]});}
@@ -276,6 +277,16 @@ test("pagination preserves selections across pages",async({page})=>{
   await page.getByRole("button",{name:"Previous page",exact:true}).click();await expect(page.getByRole("checkbox",{name:label,exact:true})).toBeChecked();expect(mock.errors).toEqual([]);
 });
 
+test('ticket history names the real person behind dashboard changes and comments (Jira only sees the proxy account)',async({page})=>{
+  const ticketLog=[{at:'2026-10-10T10:00:30Z',by:{email:'rami@example.invalid',name:'Real Person'},action:'assignee',changes:{assignee:{from:'Unassigned',to:'Test Lead'}}},{at:'2026-10-11T07:00:00Z',by:{email:'rami@example.invalid',name:'Real Person'},action:'comment',text:'Please check',commentId:'c1'}];
+  const mock=await mockDashboard(page,{ticketLog});await page.goto('/dashboard.html#AION-101');
+  await expect(page.locator('#d-comments')).toContainText('Real Person');
+  await page.getByRole('tab',{name:'History',exact:true}).click();
+  await expect(page.locator('.ticket-history-local')).toContainText('Changes made in AION Team Control (2)');
+  await expect(page.locator('.ticket-history-local')).toContainText('Changed assignee');
+  await expect(page.locator('#d-full-history')).toContainText('Real Person (via AION Team Control)');
+  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
 for(const width of [320,1440])test(`manager History beside Comments loads every Jira page safely at ${width}px`,async({page})=>{
   await page.setViewportSize({width,height:900});const mock=await mockDashboard(page);await page.goto("/dashboard.html#AION-101");
   await expect(page.getByRole("tab",{name:"History",exact:true})).toBeVisible();expect(mock.calls.some(c=>c.path.endsWith("/history"))).toBe(false);

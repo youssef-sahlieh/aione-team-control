@@ -29,6 +29,7 @@ import { cookieSessionRequest } from "./sessions.js";
 import { SESSION_MS } from "./session-policy.js";
 import { aiChat, aiBrief, aiConfigured } from "./ai.js";
 import { githubConfigured, syncPulls, prsByKey } from "./github.js";
+import { recordTicketEvent, ticketLogRoutes } from "./ticket-log.js";
 import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
 import { ROLES, checkPassword, createLinkToken, deleteUser, getUser, hashPassword, listUsers, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, useLinkToken, validDev, validEmail } from "./users.js";
 
@@ -422,6 +423,7 @@ async function route(request, env, url) {
     else for(const k of ours)if(await readBusinessTicket(k))out[k]=true;
     return out;
   };
+  if(path==="/ticket-log")return ticketLogRoutes(request,env,url,readBusinessTicket);
   if(path==="/ticket-metadata"||path.startsWith("/ticket-metadata/"))return metadataRoutes(request,env,url,me,readBusinessTicket,readBusinessTickets);
   const readBusinessSearch=async body=>{const searchUrl=new URL("/jira/search",url);const r=await route(new Request(searchUrl,{method:"POST",headers:{Authorization:request.headers.get("Authorization"),"Content-Type":"application/json","X-AION-Read-Only":"1"},body:JSON.stringify(body)}),env,searchUrl);if(!r.ok)throw new Error("Authorized search failed");return r.json();};
   const dashboardRead=async()=>{const keys=await env.STORE?.smembers("itickets")||[];const rows=[];for(const key of keys){const t=await readBusinessTicket(key);if(t)rows.push(t);}return rows;};
@@ -484,6 +486,7 @@ async function route(request, env, url) {
     applyDate:async(key,date,t,r)=>{
       if(/^INT-\d+$/.test(key)){const ticket=JSON.parse(t.raw);ticket.due=date;ticket.updated=new Date().toISOString();ticket.dueHistory=[{when:ticket.updated,by:me.name||me.email,from:t.due,to:date,requestId:r.id,reason:r.decision.reason},...(ticket.dueHistory||[])];if(!await env.STORE.compareAndSet("it:"+key,t.raw,JSON.stringify(ticket)))throw new Error("Ticket changed");return;}
       const result=await jira(env,"/rest/api/3/issue/"+key,{method:"PUT",body:{fields:{duedate:date}},signal:AbortSignal.timeout(20000)});if(!result.ok)throw new Error("Date update failed");
+      await recordTicketEvent(env,key,me,{action:"due",changes:{duedate:{from:t.due||"Not set",to:date||"Not set"}},...(r?.decision?.reason?{text:r.decision.reason}:{})});
     },
     sendMail:(from,body)=>sendMail(env,from,body)
   });
@@ -618,7 +621,15 @@ async function route(request, env, url) {
         const ticket=await readBusinessTicket(key);if(!ticket)return fail('not_found','Ticket unavailable.',404);
         const wantedDevs=Array.isArray(b.fields.labels)?[...new Set(b.fields.labels.filter(l=>/^ai1_/i.test(l)).map(l=>l.slice(4).toLowerCase()))].sort():null;
         if('assignee' in b.fields || wantedDevs&&JSON.stringify(wantedDevs)!==JSON.stringify([...ticket.devs].sort()))requireBilling(await readMetadata(env,key),env);
-        return pass(await jira(env, '/rest/api/3/issue/'+key,{method:'PUT',body:{fields:b.fields},signal:AbortSignal.timeout(20000)}));
+        const res=pass(await jira(env, '/rest/api/3/issue/'+key,{method:'PUT',body:{fields:b.fields},signal:AbortSignal.timeout(20000)}));
+        // Jira records this under the proxy's account; the local history keeps who really did it.
+        if(res.ok){
+          const changes={};
+          if(wantedDevs&&JSON.stringify(wantedDevs)!==JSON.stringify([...ticket.devs].sort()))changes.developers={from:ticket.devs.join(", ")||"None",to:wantedDevs.join(", ")||"None"};
+          if('assignee' in b.fields)changes.assignee={from:ticket.assignee||"Unassigned",to:typeof b.assigneeName==="string"&&b.assigneeName.trim()?b.assigneeName.trim().slice(0,100):(b.fields.assignee?.accountId?"Someone else":"Unassigned")};
+          if(Object.keys(changes).length)await recordTicketEvent(env,key,me,{action:changes.assignee?"assignee":"developers",changes});
+        }
+        return res;
       });
     }
     if (sub === "/changelog" && method === "GET") return pass(await jira(env, "/rest/api/3/issue/" + key + "?fields=duedate&expand=changelog"));
@@ -631,7 +642,7 @@ async function route(request, env, url) {
         const transitions=await jira(env,"/rest/api/3/issue/"+key+"/transitions",{signal:AbortSignal.timeout(15000)});if(!transitions.ok)return transitions.res;
         const target=transitions.data.transitions?.find(t=>String(t.id)===String(b.id)&&t.isAvailable!==false);if(!target?.to?.statusCategory?.key)return fail("bad_request","This transition is unavailable or has incomplete destination details.",400);
         const closing=target.to.statusCategory.key==="done";
-        const apply=async()=>pass(await jira(env,"/rest/api/3/issue/"+key+"/transitions",{method:"POST",body:{transition:{id:String(b.id)}},signal:AbortSignal.timeout(20000)}));
+        const apply=async()=>{const res=pass(await jira(env,"/rest/api/3/issue/"+key+"/transitions",{method:"POST",body:{transition:{id:String(b.id)}},signal:AbortSignal.timeout(20000)}));if(res.ok)await recordTicketEvent(env,key,me,{action:"status",changes:{status:{from:ticket.status,to:target.to.name}},...(b.overrideReason?{text:"Closed with override: "+b.overrideReason}:{})});return res;};
         return closing||ticket.closed?guardedTransition(env,key,me,{closing,overrideReason:b.overrideReason},apply):apply();
       });
     }
@@ -639,7 +650,11 @@ async function route(request, env, url) {
       const b = await readJson(request);
       const text = b && typeof b.text === "string" ? b.text.trim() : "";
       if (!text || text.length > 30000) return fail("bad_request", "Write a comment first.", 400);
-      return pass(await jira(env, "/rest/api/2/issue/" + key + "/comment", { method: "POST", body: { body: text } }));
+      // Jira shows the proxy's account as the author, so the comment carries the real author's name.
+      const author = me.name || me.email, owner = String(env.JIRA_EMAIL || "").toLowerCase() === String(me.email || "").toLowerCase();
+      const result = await jira(env, "/rest/api/2/issue/" + key + "/comment", { method: "POST", body: { body: owner ? text : text + "\n\n— " + author + " (via AION Team Control)" } });
+      if (result.ok) await recordTicketEvent(env, key, me, { action: "comment", text, commentId: String(result.data?.id || "") });
+      return pass(result);
     }
   }
 

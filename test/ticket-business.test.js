@@ -190,3 +190,18 @@ test('billing is optional by default: administrators assign and create without i
  assert.equal((await s.call('/internal','POST',{summary:'No billing yet',devs:['builder'],metadata:{clientId:s.client.id}},admin)).status,201);
  assert.equal((await s.call('/config','GET',undefined,admin).then(r=>r.json())).billingRequired,false);
 });
+test('local ticket history keeps the real person for each change (Jira only sees the proxy account)',async()=>{
+ const s=await setup(),t=await s.create(admin);
+ assert.equal((await s.call('/internal/'+t.key,'PUT',{status:'In Development'},user)).status,200);
+ await s.call('/internal/'+t.key,'PUT',{assignee:'lead'},admin);
+ const log=(await (await s.call('/ticket-log?key='+t.key)).json()).events;
+ assert.deepEqual(log.map(e=>[e.action,e.by.name]),[['created','Manager'],['status','Developer'],['assignee','Manager']]);
+ assert.deepEqual(log[1].changes.status,{from:'Open',to:'In Development'});
+ // Jira status moves are logged with the signed-in person, not the Jira account.
+ assert.equal((await s.call('/jira/issue/AION-5/transitions','POST',{id:'11'},admin)).status,200);
+ const jiraLog=(await (await s.call('/ticket-log?key=AION-5','GET',undefined,admin)).json()).events;
+ assert.equal(jiraLog.at(-1).by.name,'Manager');assert.equal(jiraLog.at(-1).changes.status.to,'Open');
+ // Users can't read the history of tickets they're not on.
+ await s.env.STORE.set('it:INT-77',JSON.stringify({key:'INT-77',summary:'Other',devs:['other'],status:'Open'}));
+ assert.equal((await s.call('/ticket-log?key=INT-77')).status,404);
+});

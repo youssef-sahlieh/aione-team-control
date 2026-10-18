@@ -66,7 +66,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // Jira actions, all through the proxy.
   const jira={
     search:(jql,fields,nextPageToken,slim)=>api("/jira/search",{method:"POST",body:{jql,fields,maxResults:100,nextPageToken,slim:!!slim}}),
-    edit:(key,fields)=>api("/jira/issue/"+key,{method:"PUT",body:{fields}}),
+    // extra.assigneeName goes to the ticket's local history (who was assigned, by name).
+    edit:(key,fields,extra)=>api("/jira/issue/"+key,{method:"PUT",body:{fields,...extra}}),
     transitions:key=>api("/jira/issue/"+key+"/transitions"),
     transition:(key,id)=>api("/jira/issue/"+key+"/transitions",{method:"POST",body:{id}}),
     comment:(key,text)=>api("/jira/issue/"+key+"/comment",{method:"POST",body:{text}}),
@@ -702,7 +703,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     dateRequests.formRequest(keys[0]);
   }
   const initialsOf=n=>String(n||"?").split(/\s+/).filter(Boolean).map(x=>x[0]).join("").slice(0,2).toUpperCase()||"?";
-  function assignOps(keys,id){ return keys.map(k=>{ const i=issueByKey(k); if(i&&i.assigneeId===id) return null; if(isOdoo(k)) return null; if(isInt(k)) return BYID[id]?{key:k,run:async()=>{await business.ensureBilling(k);return internalApi.update(k,{assignee:BYID[id]});}}:null; if(id===INTERNAL_ASSIGNEE)return null; return {key:k,run:async()=>{await business.ensureBilling(k);return jira.edit(k,{assignee:id?{accountId:id}:null});}}; }).filter(Boolean); }
+  function assignOps(keys,id,name){ return keys.map(k=>{ const i=issueByKey(k); if(i&&i.assigneeId===id) return null; if(isOdoo(k)) return null; if(isInt(k)) return BYID[id]?{key:k,run:async()=>{await business.ensureBilling(k);return internalApi.update(k,{assignee:BYID[id]});}}:null; if(id===INTERNAL_ASSIGNEE)return null; return {key:k,run:async()=>{await business.ensureBilling(k);return jira.edit(k,{assignee:id?{accountId:id}:null},{assigneeName:id?name:"Unassigned"});}}; }).filter(Boolean); }
   // When an administrator assigns a ticket that hasn't started yet, it moves forward: Jira tickets to
   // "Dev Approved"; internal and Odoo tickets (which have no such status) to "In Development".
   // Tickets already in progress or done keep their status.
@@ -720,7 +721,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const startingOps=ops=>IS_ADMIN?ops.map(o=>{ if(o.added&&!o.added.length) return o; const n={...o,startPatch:startPatch(o.key)};
     n.run=async()=>{ const r=await o.run(); if(!await startAssigned(o.key)&&n._start) unpatch(o.key,n._start); return r; }; return n; }):ops;
   async function doAssign(keys,id,name){
-    const base=assignOps(keys,id).map(o=>({...o,patch:assigneePatch(id,name)})), ops=id?startingOps(base):base; if(!ops.length){ toast("Already assigned to "+name+"."); return {ok:0,fail:0}; }
+    const base=assignOps(keys,id,name).map(o=>({...o,patch:assigneePatch(id,name)})), ops=id?startingOps(base):base; if(!ops.length){ toast("Already assigned to "+name+"."); return {ok:0,fail:0}; }
     const r=await runBatch(ops,"Assigned to "+name);
     if(r.ok&&id&&!BYID[id]) setTimeout(()=>toast(name+" isn't "+teamNames()+", so "+(r.ok===1?"this ticket":"these tickets")+" will leave the dashboard."),3300);
     return r;
@@ -1057,6 +1058,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     $("d-reply").placeholder="Write a comment or answer…";
     if(isOdoo(key)){ renderOdoo(key); return; }
     if(IS_ADMIN) fetchHistory(key).then(ch=>{ const i=issueByKey(key); HIST[key]={updated:i?i.updated:"",changes:ch}; if(dz.key===key) renderDrawerHist(key); }).catch(()=>{ if(dz.key===key&&!HIST[key]) $("d-hist").replaceChildren(el("span","msg err","Couldn't load the history.")); });
+    // Comments posted from the dashboard are written by the proxy's Jira account; the local history knows who wrote them.
+    const logged=api("/ticket-log?key="+encodeURIComponent(key)).catch(()=>({events:[]}));
     try{ const list=await searchAll("key = "+key,["summary","description","status","assignee","reporter","labels","duedate","created","updated","priority","issuetype","comment","parent","attachment"],true);
       if(dz.key!==key) return; const raw=list[0]; if(!raw){ $("d-desc").replaceChildren(el("span",null,"Ticket not found.")); return; }
       const f=raw.fields||{}, ni=norm(raw);
@@ -1073,7 +1076,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
         for(const k in PEOPLE) add(PEOPLE[k].id,PEOPLE[k].name,""); }
       const cm=(f.comment&&f.comment.comments)||[]; $("d-ccount").textContent="("+((f.comment&&f.comment.total)||cm.length)+")";
       const box=$("d-comments"); box.replaceChildren(); if(!cm.length) box.appendChild(el("div","msg","No comments yet."));
-      cm.forEach(c=>{ const aid=c.author&&c.author.accountId, name=(c.author&&c.author.displayName)||"Someone";
+      const writers=Object.fromEntries(((await logged).events||[]).filter(e=>e.commentId).map(e=>[String(e.commentId),e.by&&e.by.name])); if(dz.key!==key) return;
+      cm.forEach(c=>{ const aid=c.author&&c.author.accountId, name=writers[String(c.id)]||(c.author&&c.author.displayName)||"Someone";
         const cd=el("div","cmt"+(BYID[aid]?" mine":" ext")); const meta=el("div","cmeta"); meta.appendChild(el("b",null,name)); meta.appendChild(el("span",null,ago(c.created)));
         const rb=el("button","linkbtn sp","Reply"); rb.type="button"; rb.addEventListener("click",()=>{ const t=$("d-reply"); if(!t.value.trim()) t.value=name.split(" ")[0]+", "; t.focus(); t.scrollIntoView({block:"center",behavior:"smooth"}); });
         meta.appendChild(rb); cd.appendChild(meta); const b=richNode(c.body); b.classList.add("rich"); b.dir="auto"; cd.appendChild(b); box.appendChild(cd); });
@@ -1242,8 +1246,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   $("signout").addEventListener("click",()=>signOut());
   // The Work view re-fits its columns when the window size changes.
   let resizeTimer=null; window.addEventListener("resize",()=>{ clearTimeout(resizeTimer); resizeTimer=setTimeout(()=>{ if(state.issues&&state.view==="list"&&state.columnsMode!=="all"&&$("pop").hidden&&!drag&&workColumns&&fitWorkColumns().keys!==workColumns.join()) render(); },150); });
-  const ticketHistory=createTicketHistory({api,getIssue:()=>issueByKey(dz.key),allowed:()=>IS_ADMIN&&!!dz.key&&!isInt(dz.key)&&!isOdoo(dz.key)&&!$("drawer").hidden,formatTime:value=>{const time=fmtWhen(value);return time.d+" "+time.t;}});
-  const drawerUI=createIssueDrawer({canViewHistory:()=>IS_ADMIN,canViewFullHistory:()=>IS_ADMIN&&!!dz.key&&!isInt(dz.key)&&!isOdoo(dz.key),onSelect:id=>{if(id==="history")ticketHistory.load(dz.key);if(id==="notes")ticketNotes.load(dz.key);},isDirty:()=>{if(business.dirty(dz.key)||ticketNotes.dirty(dz.key))return true;const issue=issueByKey(dz.key);if(!issue)return !!$("d-reply").value.trim();return !!$("d-reply").value.trim()||!!$("d-newdev").value.trim()||dz.devs.size!==issue.devs.length||issue.devs.some(d=>!dz.devs.has(d));}});
+  const ticketHistory=createTicketHistory({api,getIssue:()=>issueByKey(dz.key),allowed:()=>IS_ADMIN&&!!dz.key&&!isOdoo(dz.key)&&!$("drawer").hidden,personName:k=>(PEOPLE[k]&&PEOPLE[k].name)||k,formatTime:value=>{const time=fmtWhen(value);return time.d+" "+time.t;}});
+  const drawerUI=createIssueDrawer({canViewHistory:()=>IS_ADMIN,canViewFullHistory:()=>IS_ADMIN&&!!dz.key&&!isOdoo(dz.key),onSelect:id=>{if(id==="history")ticketHistory.load(dz.key);if(id==="notes")ticketNotes.load(dz.key);},isDirty:()=>{if(business.dirty(dz.key)||ticketNotes.dirty(dz.key))return true;const issue=issueByKey(dz.key);if(!issue)return !!$("d-reply").value.trim();return !!$("d-reply").value.trim()||!!$("d-newdev").value.trim()||dz.devs.size!==issue.devs.length||issue.devs.some(d=>!dz.devs.has(d));}});
   const ticketNotes=createTicketNotes({api,isAdmin:IS_ADMIN});
   const dueDateHistory=createDueDateHistory({api,tickets:()=>state.issues||[],internal:key=>INT[key],openIssue:openDrawer});
   const dateRequests=createDateRequests({api,renderHistory:target=>dueDateHistory.render(target),context:()=>({admin:IS_ADMIN,email:MY_EMAIL,ticket:issueByKey}),openIssue:openDrawer,onApplied:(key,due)=>{patchIssue(key,matching(()=>({due:due||null}),"due"));mergeIssues();renderIfIdle();if(dz.key===key)$("d-due").value=due||"";},onChange:key=>{if(dz.key)dateRequests.renderDrawer(dz.key);return (key?refreshKeys([key]):reload()).then(()=>{if(dz.key){dateRequests.renderDrawer(dz.key);loadDetail(dz.key);}});}});

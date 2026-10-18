@@ -37,3 +37,7 @@ body[data-workspace-role] .with-ai-briefs .gr { grid-template-columns: 24px 82px
 @media(max-width:820px) {
   body[data-workspace-role] .with-ai-briefs .gr { grid-template-columns: 24px minmax(0,1fr) auto; grid-template-areas: 'ck key actions' 'ck ttl ttl' 'ck brief brief' 'ck who who' 'ck dev st' 'ck due due'; }
 }
+/* Ticket history: changes made in the dashboard (with the real person) above Jira's own history. */
+.ticket-history-local{display:flex;flex-direction:column;gap:10px;margin-bottom:16px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--sunk,#f6f7f9)}
+.ticket-history-local h4,.ticket-history-jira{margin:0;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.ticket-history-local .ticket-history-meta span{color:var(--muted);font-size:13px}
