@@ -213,3 +213,13 @@ test('the client is optional for now: a ticket without one saves its fields and 
  // A chosen client must still be valid.
  assert.equal((await s.call('/ticket-metadata','PUT',{key:(await s.create(user)).key,fields:{revision:1,clientId:'missing-client'}},admin)).status,400);
 });
+test('administrators enter the Jira token expiry (Atlassian does not share it) and see it on the key check',async()=>{
+ const s=await setup();
+ assert.equal((await s.call('/integrations/expiry','POST',{id:'jira',date:'2099-01-31'},user)).status,403);
+ assert.equal((await s.call('/integrations/expiry','POST',{id:'jira',date:'31/01/2099'},admin)).status,400);
+ assert.equal((await s.call('/integrations/expiry','POST',{id:'jira',date:'2099-01-31'},admin)).status,200);
+ const jira=(await (await s.call('/integrations','GET',undefined,admin)).json()).keys.find(k=>k.id==='jira');
+ assert.equal(jira.status,'ok');assert.equal(jira.expiresAt.slice(0,10),'2099-01-31');assert.equal(jira.expirySource,'saved');
+ assert.equal((await s.call('/integrations/expiry','POST',{id:'jira',date:''},admin)).status,200);
+ assert.equal((await (await s.call('/integrations','GET',undefined,admin)).json()).keys.find(k=>k.id==='jira').expiresAt,null);
+});

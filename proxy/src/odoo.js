@@ -39,6 +39,8 @@ async function uid(env) {
   pending.catch(() => { if (uidCache.uid === pending) uidCache = { key: "", uid: 0 }; });
   return pending;
 }
+// The Odoo user id the proxy signs in as (to read that user's own API keys, for their expiry).
+export const odooUid = (env) => uid(env);
 export async function odoo(env, model, method, args, kwargs = {}) {
   return rpc(env, "object", "execute_kw", [env.ODOO_DB, await uid(env), env.ODOO_API_KEY, model, method, args, kwargs]);
 }

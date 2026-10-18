@@ -58,6 +58,17 @@ export function createSyncErrors({ api, onApiWrite, storageKey, isAdmin, onRetri
   }
   const keyProblems = () => (keyState?.keys || []).filter((k) => k.status !== "ok").length;
 
+  // How to replace each key before it expires (keys can't be extended, only replaced by a new one).
+  const RENEW = {
+    jira: ["Signed in to Atlassian as the proxy's Jira account, open id.atlassian.com → Security → Create and manage API tokens → Create API token (up to 1 year).", "In Vercel → aione-team-proxy → Settings → Environment Variables, replace JIRA_API_TOKEN with the new token, then redeploy.", "Enter the new token's expiry date here."],
+    github: ["On GitHub open Settings → Developer settings → Personal access tokens → Fine-grained tokens and open this token.", "Press Regenerate token and pick a new expiration (the access stays the same).", "In Vercel → aione-team-proxy → Settings → Environment Variables, replace GITHUB_TOKEN with the new token, then redeploy."],
+    odoo: ["In Odoo, signed in as the proxy's user, open My Profile → Account Security → New API Key and choose how long it lasts.", "In Vercel → aione-team-proxy → Settings → Environment Variables, replace ODOO_API_KEY with the new key, then redeploy.", "Delete the old key in Odoo once the dashboard works with the new one."]
+  };
+  const SOURCE = { github: "from GitHub", odoo: "from Odoo", saved: "entered here", setting: "from the Vercel setting" };
+  async function saveExpiry(id, date, msg) {
+    try { await api("/integrations/expiry", { method: "POST", body: { id, date } }); msg.textContent = "Saved."; await loadKeys(true); }
+    catch (e) { msg.textContent = e.message; msg.className = "msg err"; }
+  }
   function renderKeys(target) {
     const panel = el("section", "panel sync-panel"), head = el("div", "panel-heading"), text = el("div");
     text.append(el("h2", "", "API keys"), el("p", "panel-subtitle", "Whether Jira, GitHub and Odoo accept the dashboard's keys right now, and when they expire."));
@@ -67,8 +78,18 @@ export function createSyncErrors({ api, onApiWrite, storageKey, isAdmin, onRetri
     else for (const k of keyState.keys) {
       const row = el("div", "sync-key " + k.status);
       row.append(el("span", "sync-dot"), el("b", "", k.name), el("span", "sync-key-msg", k.message));
-      if (k.expiresAt) row.append(el("small", "sync-key-date", "Expires " + k.expiresAt.slice(0, 10)));
-      panel.append(row);
+      if (k.expiresAt) row.append(el("small", "sync-key-date", "Expires " + k.expiresAt.slice(0, 10) + (SOURCE[k.expirySource] ? " · " + SOURCE[k.expirySource] : "")));
+      const more = el("div", "sync-key-more");
+      if (k.hint) more.append(el("p", "msg", k.hint));
+      if (k.canSetExpiry) {
+        const form = el("div", "sync-key-form"), input = el("input", "inp"), msg = el("span", "msg");
+        input.type = "date"; input.value = k.expirySource === "saved" || k.expirySource === "setting" ? (k.expiresAt || "").slice(0, 10) : ""; input.setAttribute("aria-label", k.name + " expiry date");
+        form.append(el("label", "", "Expiry date"), input, button("Save", "btn", () => saveExpiry(k.id, input.value, msg)));
+        if (k.expirySource === "saved") form.append(button("Clear", "btn", () => saveExpiry(k.id, "", msg)));
+        form.append(msg); more.append(form);
+      }
+      if (RENEW[k.id]) { const how = el("details", "sync-renew"); how.append(el("summary", "", "How to renew")); const ol = el("ol"); RENEW[k.id].forEach((t) => ol.append(el("li", "", t))); how.append(ol); more.append(how); }
+      panel.append(row, more);
     }
     target.append(panel);
   }
