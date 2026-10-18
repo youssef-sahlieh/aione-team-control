@@ -150,3 +150,15 @@ test("GET /db-report is admin only and caches; cron needs the secret", async () 
   const view = await (await call("/db-report", { token: adminTok })).json();
   assert.ok(view.report && Array.isArray(view.report.rows));
 });
+test('one row per web address: the instance with a working login and newer activity is kept, the other is named on it', async () => {
+  const { oneRowPerSite } = await import("../proxy/src/db-report.js");
+  const rows = oneRowPerSite([
+    { instance: "odoo526", url: "https://526.ai1.host", database: "526_old", loginOk: false, lastOrder: null },
+    { instance: "odoo600", url: "https://600.ai1.host", database: "600_x", loginOk: true },
+    { instance: "odoo526b", url: "https://526.ai1.host/", database: "526_new", loginOk: true, lastOrder: "2026-10-10 10:00:00" }
+  ]);
+  assert.equal(rows.length, 2);
+  const site = rows.find((r) => r.url.includes("526"));
+  assert.equal(site.instance, "odoo526b");
+  assert.deepEqual(site.duplicates, [{ instance: "odoo526", database: "526_old" }]);
+});

@@ -285,6 +285,26 @@ async function instanceFacts(env, inst) {
   };
 }
 
+// One row per web address: Audit & Deploy can list two production instances on the same domain (an old and a
+// new one, or a second service). The row kept is the one whose login works and has the newest activity; the
+// other instances are named on it.
+export function oneRowPerSite(rows) {
+  const score = (r) => [r.loginOk ? 1 : 0, String(r.lastOrder || r.lastLogin || ""), r.database ? 1 : 0, String(r.created || "")];
+  const better = (a, b) => { const x = score(a), y = score(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false; };
+  const bySite = new Map(), out = [];
+  for (const r of rows) {
+    const site = String(r.url || "").toLowerCase().replace(/\/+$/, "");
+    if (!site) { out.push(r); continue; }
+    const kept = bySite.get(site);
+    if (!kept) { bySite.set(site, r); out.push(r); continue; }
+    const [keep, drop] = better(r, kept) ? [r, kept] : [kept, r];
+    const others = [...(kept.duplicates || []), ...(r.duplicates || []), { instance: drop.instance, database: drop.database || "" }];
+    const merged = { ...keep, duplicates: others.filter((d, n, all) => all.findIndex((x) => x.instance === d.instance) === n && d.instance !== keep.instance) };
+    bySite.set(site, merged); out[out.indexOf(kept)] = merged;
+  }
+  return out;
+}
+
 const pool = async (items, n, fn) => { const q = items.map((x, i) => [x, i]); const out = []; await Promise.all(Array.from({ length: Math.min(n, q.length) }, async () => { while (q.length) { const [x, i] = q.shift(); out[i] = await fn(x); } })); return out; };
 
 // Build (or continue building) the report. Resumable: saves progress and returns within the budget.
@@ -317,7 +337,8 @@ export async function buildReport(env, { force = false } = {}) {
       await env.STORE.set(PROGRESS_KEY, JSON.stringify(progress), 3600);
     }
     if (progress.done >= progress.instances.length) {
-      const report = { builtAt: Date.now(), count: progress.rows.length, rows: progress.rows };
+      const rows = oneRowPerSite(progress.rows);
+      const report = { builtAt: Date.now(), count: rows.length, rows };
       await env.STORE.set(REPORT_KEY, JSON.stringify(report), 30 * DAY_MS / 1000);
       await env.STORE.del(PROGRESS_KEY);
       return { done: true, report };

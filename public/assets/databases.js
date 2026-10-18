@@ -27,7 +27,7 @@ const num = (n) => (n === null || n === undefined ? "—" : String(n));
 const inside = (r, v) => (r.loginOk ? v : null);
 const COLUMNS = [
   { key: "company", label: "Company", value: (r) => companyCell(r), sort: (r) => companyOf(r).toLowerCase() || null, csv: (r) => companyOf(r) },
-  { key: "database", label: "Database", value: (r) => el("span", "db-strong", r.database || r.instance || "—"), sort: (r) => (r.database || r.instance || "").toLowerCase(), csv: (r) => r.database || r.instance || "" },
+  { key: "database", label: "Database", value: (r) => databaseCell(r), sort: (r) => (r.database || r.instance || "").toLowerCase(), csv: (r) => r.database || r.instance || "" },
   { key: "url", label: "URL", value: (r) => r.url ? linkCell(r.url) : el("span", "db-muted", "—"), sort: (r) => r.url || null, csv: (r) => r.url || "" },
   { key: "version", label: "Odoo", value: (r) => r.odooVersion ? el("span", "db-ver", r.odooVersion) : el("span", "db-muted", "—"), sort: (r) => Number(r.odooVersion) || null, csv: (r) => r.odooVersion || "" },
   { key: "users", label: "Users", num: true, value: (r) => numCell(r, "users"), sort: (r) => inside(r, r.users), csv: (r) => num(r.users) },
@@ -54,6 +54,12 @@ function companyCell(r) {
   if (more.length) { const s = el("small", "db-src", "+" + more.length + " compan" + (more.length === 1 ? "y" : "ies")); s.title = more.join("\n"); box.append(s); }
   return box;
 }
+function databaseCell(r) {
+  const box = el("span", "db-company");
+  box.append(el("span", "db-strong", r.database || r.instance || "—"));
+  if ((r.duplicates || []).length) { const n = r.duplicates.length, s = el("small", "db-src", "+" + n + " more instance" + (n === 1 ? "" : "s")); s.title = "Same web address in Audit & Deploy: " + r.duplicates.map((d) => d.instance + (d.database ? " (" + d.database + ")" : "")).join(", "); s.tabIndex = 0; box.append(s); }
+  return box;
+}
 function linkCell(url) { const a = el("a", "db-link", url.replace(/^https?:\/\//, "")); a.href = url; a.target = "_blank"; a.rel = "noopener"; return a; }
 function numCell(r, key) { if (!r.loginOk) return key === "users" ? el("span", "db-muted", "no access") : el("span", "db-muted", "—"); return el("span", "", num(r[key])); }
 function branchCell(r) { if (!r.loginFound) return el("span", "db-muted", "—"); if (!r.loginOk) return el("span", "db-muted", "—"); if (!r.branches) return el("span", "db-muted", "none"); return el("span", "db-strong", String(r.branches)); }
@@ -64,8 +70,21 @@ function addonCell(r) {
   const box = el("span", "db-addons");
   if (!list.length) { box.append(el("span", "db-muted", r.configError ? "unavailable" : "—")); return box; }
   box.append(el("span", "db-count", list.length + " · "));
-  box.append(el("span", "db-addon-names", list.slice(0, 4).join(", ") + (list.length > 4 ? " +" + (list.length - 4) : "")));
+  const names = el("span", "db-addon-names", list.slice(0, 4).join(", "));
+  box.append(names);
   box.title = list.join("\n");
+  // The rest open in the cell with a tap (a hover tooltip doesn't work on phones).
+  if (list.length > 4) {
+    const more = el("button", "db-more", "+" + (list.length - 4) + " more");
+    more.type = "button"; more.setAttribute("aria-expanded", "false");
+    more.addEventListener("click", () => {
+      const open = more.getAttribute("aria-expanded") !== "true";
+      names.textContent = open ? list.join(", ") : list.slice(0, 4).join(", ");
+      more.textContent = open ? "Show less" : "+" + (list.length - 4) + " more";
+      more.setAttribute("aria-expanded", String(open));
+    });
+    box.append(" ", more);
+  }
   return box;
 }
 
@@ -168,7 +187,27 @@ function render() {
   $("meta").textContent = rows.length + " of " + (REPORT.rows || []).length + " databases · " + working + " with data · built " + fmtDateTime(new Date(REPORT.builtAt).toISOString());
 }
 
-function showReport(report) { REPORT = report; $("toolbar").hidden = false; $("tablewrap").hidden = false; showState(""); renderFilters(); render(); explainCompanies(); }
+// One row per web address: Audit & Deploy can list two production instances on the same domain (an old and a
+// new one, or a second service). The row kept is the one whose login works and has the newest activity; the
+// other instances are named on it.
+function oneRowPerSite(rows) {
+  const score = (r) => [r.loginOk ? 1 : 0, String(r.lastOrder || r.lastLogin || ""), r.database ? 1 : 0, String(r.created || "")];
+  const better = (a, b) => { const x = score(a), y = score(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false; };
+  const bySite = new Map(), out = [];
+  for (const r of rows) {
+    const site = String(r.url || "").toLowerCase().replace(/\/+$/, "");
+    if (!site) { out.push(r); continue; }
+    const kept = bySite.get(site);
+    if (!kept) { bySite.set(site, r); out.push(r); continue; }
+    const [keep, drop] = better(r, kept) ? [r, kept] : [kept, r];
+    const others = [...(kept.duplicates || []), ...(r.duplicates || []), { instance: drop.instance, database: drop.database || "" }];
+    const merged = { ...keep, duplicates: others.filter((d, n, all) => all.findIndex((x) => x.instance === d.instance) === n && d.instance !== keep.instance) };
+    bySite.set(site, merged); out[out.indexOf(kept)] = merged;
+  }
+  return out;
+}
+
+function showReport(report) { REPORT = { ...report, rows: oneRowPerSite(report.rows || []) }; $("toolbar").hidden = false; $("tablewrap").hidden = false; showState(""); renderFilters(); render(); explainCompanies(); }
 
 // Says why company names are missing, instead of only showing empty cells.
 let serverHasCompanies = null;

@@ -519,3 +519,5 @@ button.key.odoo:hover{text-decoration:underline}
   .db-page .db-sort{white-space:nowrap}
   .db-page th[aria-sort=none] .db-arrow{display:inline}
 }
+.db-more{all:unset;cursor:pointer;color:var(--accent);font-weight:600;white-space:nowrap;padding:2px 0}
+.db-more:hover,.db-more:focus-visible{text-decoration:underline}
