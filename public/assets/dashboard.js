@@ -236,7 +236,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     {id:"reply",k:"k6",l:"Needs a reply",h:"Last comment from outside",f:i=>i.cat!=="done"&&needsReply(i)},
     {id:"overdue",k:"k2",l:"Overdue",h:"Due date passed",f:(i,t)=>i.cat!=="done"&&i.due&&i.due<t},
     {id:"today",k:"k3",l:"Due today",h:"Finish by end of day",f:(i,t)=>i.cat!=="done"&&i.due===t},
-    {id:"approval",k:"k4",l:"Waiting approval",h:"Open · Pending Approval",f:i=>i.cat!=="done"&&isNew(i)},
+    // Internal tickets never wait for approval; only Jira (and Odoo) tickets show here.
+    {id:"approval",k:"k4",l:"Waiting approval",h:"Open · Pending Approval",f:i=>i.cat!=="done"&&isNew(i)&&!i.internal},
     {id:"nodue",k:"k5",l:"No due date",h:"Open, no date set",f:i=>i.cat!=="done"&&!i.due},
     {id:"recent",k:"k7",l:"Updated",range:"updDays",max:30,h:"Recent activity",f:i=>i.cat!=="done"&&Date.parse(i.updated)>=Date.now()-state.updDays*dayMs},
     {id:"datereq",k:"k3",l:"Date request pending",h:"Awaiting an admin decision",f:i=>!!dateRequests.activeFor(i.key)},

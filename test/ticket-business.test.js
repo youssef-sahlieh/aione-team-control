@@ -205,3 +205,11 @@ test('local ticket history keeps the real person for each change (Jira only sees
  await s.env.STORE.set('it:INT-77',JSON.stringify({key:'INT-77',summary:'Other',devs:['other'],status:'Open'}));
  assert.equal((await s.call('/ticket-log?key=INT-77')).status,404);
 });
+test('the client is optional for now: a ticket without one saves its fields and closes once hours and work are done',async()=>{
+ const s=await setup(),r=await s.call('/internal','POST',{summary:'No client'},user);assert.equal(r.status,201);const key=(await r.json()).ticket.key;
+ const save=await s.call('/ticket-metadata','PUT',{key,fields:{revision:1,estimatedHours:2,actualHours:1.5,workDone:'Done'}},user);assert.equal(save.status,200,await save.clone().text());
+ assert.equal((await s.call('/internal/'+key,'PUT',{status:'Closed'},user)).status,200);
+ assert.deepEqual(closureErrors(await readCatalog(s.env),{clientId:null,subClientId:null,estimatedHours:1,actualHours:1,workDone:'x'}),[]);
+ // A chosen client must still be valid.
+ assert.equal((await s.call('/ticket-metadata','PUT',{key:(await s.create(user)).key,fields:{revision:1,clientId:'missing-client'}},admin)).status,400);
+});

@@ -33,7 +33,10 @@ export function requireBilling(record, env) {
   if(!['billable','not_billable'].includes(record?.billing))problem('Choose Billable or Not billable before assigning this ticket.',400,'billing_required');
 }
 export function validHours(n) { return typeof n==='number' && Number.isFinite(n) && n>0 && n<=1000000 && Math.round(n*100)/100===n; }
+// The client is optional for now: no client is fine anywhere (saving, moving status, closing); a client or
+// sub-client that is chosen must be valid.
 export function selectionErrors(catalog,m,{active=false}={}) {
+  if(!m.clientId&&!m.subClientId)return [];
   const client=catalog.entries.find(e=>e.id===m.clientId&&!e.parentId),errors=[];
   if(!client || (active&&client.archived))return ['Choose a client'];
   const children=catalog.entries.filter(e=>e.parentId===client.id&&!e.archived);

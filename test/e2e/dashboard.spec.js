@@ -711,3 +711,12 @@ test('with billing optional, an administrator assigns without being asked for bi
  await expect.poll(()=>sent).toBe(1);await expect(page.getByRole('dialog')).toHaveCount(0);
  expect(mock.calls.some(c=>c.path==='/ticket-metadata'&&c.method==='PUT')).toBe(false);expect(mock.errors).toEqual([]);
 });
+test('internal tickets are never listed as waiting approval',async({page})=>{
+ const mock=await mockDashboard(page);await page.goto('/dashboard.html');
+ await expect(page.locator('#view .item').filter({hasText:'INT-101'})).toHaveCount(1);
+ const tile=page.locator('#tiles .tile, #tiles details .tile').filter({hasText:'Waiting approval'});
+ if(!await tile.isVisible())await page.locator('#manager-more-focus summary').click();
+ await expect(tile.locator('.n')).toHaveText('0');await tile.click();
+ await expect(page.locator('#view .item').filter({hasText:'INT-101'})).toHaveCount(0);
+ expect(mock.errors).toEqual([]);
+});
