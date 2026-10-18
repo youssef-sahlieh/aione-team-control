@@ -4,7 +4,8 @@
 import { createTicketBusiness } from "./components/ticket-business.js";
 import { previewFile, canPreview } from "./components/file-preview.js";
 import { INTERNAL_ASSIGNEE, sortTickets, validSort, createdDate } from "./models/ticket-business.js";
-import { api, apiFile, getSession, signOut } from "./session.js";
+import { api, apiFile, getSession, signOut, onApiWrite } from "./session.js";
+import { createSyncErrors } from "./components/sync-errors.js";
 import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normalizeInternalIssue, normalizeOdooIssue } from "./models/issue.js";
 import { createFilters, matchesFilters } from "./models/filters.js";
 import { readViews, restoreView, savedViewKey, serializeView } from "./models/saved-views.js";
@@ -234,11 +235,12 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     {id:"open",k:"k1",l:"All open",h:"Everything not done",f:i=>i.cat!=="done"},
     {id:"nodev",k:"k2",l:"No developer",h:"Waiting for a developer",f:i=>i.cat!=="done"&&!i.devs.length},
     {id:"reply",k:"k6",l:"Needs a reply",h:"Last comment from outside",f:i=>i.cat!=="done"&&needsReply(i)},
-    {id:"overdue",k:"k2",l:"Overdue",h:"Due date passed",f:(i,t)=>i.cat!=="done"&&i.due&&i.due<t},
-    {id:"today",k:"k3",l:"Due today",h:"Finish by end of day",f:(i,t)=>i.cat!=="done"&&i.due===t},
+    // Odoo Helpdesk tickets don't use due dates here: never overdue, due today or missing a due date.
+    {id:"overdue",k:"k2",l:"Overdue",h:"Due date passed",f:(i,t)=>i.cat!=="done"&&!i.odoo&&i.due&&i.due<t},
+    {id:"today",k:"k3",l:"Due today",h:"Finish by end of day",f:(i,t)=>i.cat!=="done"&&!i.odoo&&i.due===t},
     // Internal tickets never wait for approval; only Jira (and Odoo) tickets show here.
     {id:"approval",k:"k4",l:"Waiting approval",h:"Open · Pending Approval",f:i=>i.cat!=="done"&&isNew(i)&&!i.internal},
-    {id:"nodue",k:"k5",l:"No due date",h:"Open, no date set",f:i=>i.cat!=="done"&&!i.due},
+    {id:"nodue",k:"k5",l:"No due date",h:"Open, no date set",f:i=>i.cat!=="done"&&!i.odoo&&!i.due},
     {id:"recent",k:"k7",l:"Updated",range:"updDays",max:30,h:"Recent activity",f:i=>i.cat!=="done"&&Date.parse(i.updated)>=Date.now()-state.updDays*dayMs},
     {id:"datereq",k:"k3",l:"Date request pending",h:"Awaiting an admin decision",f:i=>!!dateRequests.activeFor(i.key)},
     {id:"closed",k:"k8",l:"Closed",range:"closedDays",max:365,step:7,h:"All closed AION tickets",f:i=>i.cat==="done"&&Date.parse(i.updated)>=Date.now()-state.closedDays*dayMs}
@@ -502,7 +504,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   function statusButton(i){ const sb=el("button","stbtn menu "+stK(i),i.status); sb.type="button"; sb.title="Change status"; sb.addEventListener("click",e=>{ e.stopPropagation(); statusPopover(sb,[i.key]); }); return sb; }
   function dueButton(i,t){
     const late=i.due&&i.due<t&&i.cat!=="done";
-    if(i.odoo){ const sp=el("span","duebtn"+(late?" late":i.due===t?" today":!i.due?" none":""),i.due?(late?Math.round(dnum(t)-dnum(i.due))+"d late":i.due===t?"Today":fmtDate(i.due)):"no SLA"); sp.title="Odoo SLA deadline (set in Odoo)"; return sp; }
+    if(i.odoo){ const sp=el("span","duebtn none","—"); sp.title="Odoo Helpdesk tickets don't use due dates here"; return sp; }
     const db=el("button","duebtn"+(late?" late":i.due===t?" today":!i.due?" none":""), i.due?(late?Math.round(dnum(t)-dnum(i.due))+"d late":i.due===t?"Today":fmtDate(i.due)):(dateRequests.all().some(r=>r.key===i.key&&(r.appliedDate||r.original?.due))?"Request date change":"+ set date"));
     db.type="button"; db.title=(i.due?"Due "+fmtDate(i.due)+" · ":"")+(!i.due?"Set initial due date":IS_ADMIN?"Change approved date":"Request date change"); db.addEventListener("click",e=>{ e.stopPropagation(); duePopover(db,[i.key]); }); return db;
   }
@@ -1255,7 +1257,11 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   state.businessFilter={};
   const business=createTicketBusiness({api,context:()=>({admin:IS_ADMIN,email:MY_EMAIL,key:dz.key}),onChange:keys=>{if(keys)return refreshKeys(keys);mergeIssues();saveCache();render();},openIssue:openDrawer});
   $('b-client').addEventListener('click',()=>business.bulk(selected()).catch(err=>toast('Client assignment failed',[errorText(err)],true)));
-  const workspace=createWorkspace({state,context:()=>({admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount(),dateRequests:dateRequests.all(),pendingDates:dateRequests.pendingCount(),renderReports:target=>business.renderReports(target),renderCatalog:target=>business.renderCatalog(target),renderRequests:(target,options)=>dateRequests.render(target,options)}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>!dz.key||closeDrawer()});
+  // Changes that didn't go through, kept to retry, and the API keys' state (Sync errors page).
+  const syncErrors=createSyncErrors({api,onApiWrite,isAdmin:()=>IS_ADMIN,storageKey:()=>"aion.syncErrors."+encodeURIComponent((getSession()||{}).email||""),formatTime:v=>{const w=fmtWhen(v);return w.d+" "+w.t;},
+    onRetried:key=>refreshKeys([key]),
+    onChange:()=>{ const n=syncErrors?syncErrors.count():0, c=$("nav-error-count"); if(c){ c.textContent=String(n); c.hidden=!n; } if(workspace&&workspace.route().page==="errors"&&state.issues&&$("pop").hidden) render(); }});
+  const workspace=createWorkspace({state,context:()=>({renderErrors:target=>syncErrors.render(target),admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount(),dateRequests:dateRequests.all(),pendingDates:dateRequests.pendingCount(),renderReports:target=>business.renderReports(target),renderCatalog:target=>business.renderCatalog(target),renderRequests:(target,options)=>dateRequests.render(target,options)}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>!dz.key||closeDrawer()});
   const aiAssistant=createAIAssistant({openIssue:openDrawer,beforeOpen:()=>{if(dz.key&&!closeDrawer())return false;closePop();return true;}});
   const ticketBriefs=createTicketBriefs({api});
   const assigneeFilter=createAssigneeFilter({getSelection:()=>state.f.assignee,getOptions:()=>assigneeOptions(PEOPLE),getDefaults:()=>defaultAssigneeKeys(PEOPLE),getCounts:()=>countBy("assignee",i=>assigneeFilterKey(i,PEOPLE)),onApply:selected=>{state.f.assignee=selected;state.sel.clear();state.pageIndex=0;render();}});
@@ -1281,6 +1287,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const openFromHash=()=>{ try{const h=decodeURIComponent(location.hash.slice(1));if(/^[A-Z][A-Z0-9_]*-\d+$/.test(h)&&issueByKey(h)&&dz.key!==h)openDrawer(h);}catch(_){} };
     const opened=cached&&(openFromHash(),dz.key!==null);
     await reload();
+    // Show how many changes failed (and, for administrators, API key problems) next to Sync errors.
+    syncErrors.reload(); if(IS_ADMIN) syncErrors.loadKeys();
     if(!opened) openFromHash();
   }
   start();

@@ -30,6 +30,7 @@ import { SESSION_MS } from "./session-policy.js";
 import { aiChat, aiBrief, aiConfigured } from "./ai.js";
 import { githubConfigured, syncPulls, prsByKey } from "./github.js";
 import { recordTicketEvent, ticketLogRoutes } from "./ticket-log.js";
+import { integrationRoutes } from "./integrations.js";
 import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
 import { ROLES, checkPassword, createLinkToken, deleteUser, getUser, hashPassword, listUsers, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, useLinkToken, validDev, validEmail } from "./users.js";
 
@@ -424,6 +425,7 @@ async function route(request, env, url) {
     return out;
   };
   if(path==="/ticket-log")return ticketLogRoutes(request,env,url,readBusinessTicket);
+  if(path==="/integrations"&&request.method==="GET")return integrationRoutes(request,env,me);
   if(path==="/ticket-metadata"||path.startsWith("/ticket-metadata/"))return metadataRoutes(request,env,url,me,readBusinessTicket,readBusinessTickets);
   const readBusinessSearch=async body=>{const searchUrl=new URL("/jira/search",url);const r=await route(new Request(searchUrl,{method:"POST",headers:{Authorization:request.headers.get("Authorization"),"Content-Type":"application/json","X-AION-Read-Only":"1"},body:JSON.stringify(body)}),env,searchUrl);if(!r.ok)throw new Error("Authorized search failed");return r.json();};
   const dashboardRead=async()=>{const keys=await env.STORE?.smembers("itickets")||[];const rows=[];for(const key of keys){const t=await readBusinessTicket(key);if(t)rows.push(t);}return rows;};

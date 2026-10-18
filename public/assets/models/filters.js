@@ -16,6 +16,8 @@ export function matchesFilters(i, today, { filters: f, query, needsReply, now = 
   if (skip !== "priority" && f.priority.size && !f.priority.has(i.priority || "None")) return false;
   if (f.epic && !(f.epic === "none" ? !i.parent : i.parent && i.parent.key === f.epic)) return false;
   if (f.due !== "any") {
+    // Odoo Helpdesk tickets don't use due dates here, so no due filter lists them.
+    if (isOdooTicket(i)) return false;
     const d = i.due;
     if(f.due === "pending"&&!i.pendingDateRequest)return false;
     if (f.due === "none" && d) return false;

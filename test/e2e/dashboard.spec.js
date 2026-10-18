@@ -38,6 +38,7 @@ async function mockDashboard(page, { role = "admin", ticketLog = [], failure = f
     if(path==='/clients/import/preview')return json({revision:1,rows:body.rows.length,added:1,clients:2,subClients:0,entries:[{id:'new-client',name:body.rows[0].displayName,parentId:null}]});
     if(path==='/clients/import'){catalog.entries.push({id:'new-client',name:body.rows[0].displayName,parentId:null,archived:false});catalog.revision++;return json(catalog);}
     if(path==='/ticket-log')return json({events:ticketLog});
+    if(path==='/integrations')return json({checkedAt:'2026-10-11T09:00:00Z',keys:[{id:'jira',name:'Jira API token',status:'warning',message:'Expires in 5 days. Create a new key before then.',expiresAt:'2026-10-16T00:00:00.000Z',days:5}]});
     if(path==='/ticket-metadata/batch')return json({records:Object.fromEntries(body.keys.map(key=>[key,record(key)]))});
     if(path==='/ticket-metadata'&&method==='GET')return json({metadata:record(url.searchParams.get('key')),history:[],closed:false});
     if(path==='/ticket-metadata'&&method==='PUT'){if(mutationFailure)return route.fulfill({status:503,json:{code:'ticket_metadata',error:'Synthetic save failure'}});metadata[body.key]={...record(body.key),...body.fields,revision:body.fields.revision+1};return json({metadata:metadata[body.key]});}
@@ -248,7 +249,7 @@ for(const role of ["admin"])for(const width of [320,1440])test(`${role} reporter
 for(const width of [320,1024,1440])test(`manager workspace keeps secondary tools accessible at ${width}px`,async({page})=>{
   await page.setViewportSize({width,height:1000});const mock=await mockDashboard(page);await page.goto("/dashboard.html");
   if(width<=820)await page.locator("#mobile-menu").click();
-  await expect(page.locator('#main-nav > a:not([hidden])')).toHaveCount(9);await expect(page.locator('[data-page="history"]')).toHaveCount(0);
+  await expect(page.locator('#main-nav > a:not([hidden])')).toHaveCount(10);await expect(page.locator('[data-page="history"]')).toHaveCount(0);
   await expect(page.locator('[data-page="requests"]')).toBeVisible();await page.locator('[data-page="requests"]').click();await expect(page.locator("#page-heading")).toHaveText("Date requests");
   if(width<=820)await page.locator("#mobile-menu").click();await page.locator('[data-page="tickets"]').click();
   await expect(page.locator("#quick-filters select")).toHaveCount(10);await expect(page.getByRole("combobox",{name:"Saved view",exact:true})).toBeHidden();await expect(page.locator("#bulk")).toBeHidden();
@@ -719,4 +720,19 @@ test('internal tickets are never listed as waiting approval',async({page})=>{
  await expect(tile.locator('.n')).toHaveText('0');await tile.click();
  await expect(page.locator('#view .item').filter({hasText:'INT-101'})).toHaveCount(0);
  expect(mock.errors).toEqual([]);
+});
+
+test('a change that fails is kept under Sync errors and can be retried; API keys show their state',async({page})=>{
+ const mock=await mockDashboard(page);let fail=true;
+ await page.route('**/jira/issue/AION-101/transitions',r=>r.request().method()==='GET'?r.fulfill({json:{transitions:[{id:'7',name:'Start',to:{name:'In Development',statusCategory:{key:'indeterminate'}}}]}}):fail?r.fulfill({status:502,json:{code:'jira',error:'Jira is down'}}):r.fulfill({json:{ok:true}}));
+ await page.goto('/dashboard.html');
+ await page.locator('#view .item').filter({hasText:'AION-101'}).locator('.c-st button').click();await page.locator('#pop').getByRole('button',{name:/In Development/}).click();
+ await expect(page.locator('#nav-error-count')).toHaveText('2'); // the failed move + the Jira key warning
+ await page.locator('#main-nav a[data-page="errors"]').click();
+ const item=page.locator('.sync-item').filter({hasText:'Move status'});
+ await expect(item).toContainText('AION-101');await expect(item).toContainText('Jira is down');
+ await expect(page.locator('.sync-key.warning')).toContainText('Expires in 5 days');
+ fail=false;await item.getByRole('button',{name:'Retry'}).click();
+ await expect(page.locator('.sync-item')).toHaveCount(0);await expect(page.locator('.sync-panel').first()).toContainText('Nothing failed');
+ expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });

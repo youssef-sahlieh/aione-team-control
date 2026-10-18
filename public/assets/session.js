@@ -64,8 +64,20 @@ export async function apiFile(path, { method = "GET", body, type } = {}) {
   return res;
 }
 
+// Listeners told about every change sent through api() (not reads): { ok, path, method, body, error }.
+// The dashboard keeps the failed ones so they can be retried (see components/sync-errors.js).
+const writeListeners = [];
+export const onApiWrite = (fn) => { writeListeners.push(fn); };
+const tellWrite = (info) => { for (const fn of writeListeners) { try { fn(info); } catch {} } };
+
 // Calls the proxy. Throws ApiError with code "network", "session", "login", "jira", "rate_limited", ...
 export async function api(path, { method = "GET", body } = {}) {
+  if (method === "GET") return request(path, method, body);
+  try { const data = await request(path, method, body); tellWrite({ ok: true, path, method, body }); return data; }
+  catch (error) { tellWrite({ ok: false, path, method, body, error }); throw error; }
+}
+
+async function request(path, method, body) {
   const s = getSession();
   const headers = {};
   if (s) headers.Authorization = "Bearer " + s.token;

@@ -21,3 +21,11 @@ test('wait fails within its deadline and identifies Vercel Git configuration as 
  await assert.rejects(waitForProxy({timeoutMs:20,intervalMs:10,now:()=>clock,sleep:async ms=>{clock+=ms;},log:()=>{},fetchImpl:async()=>Response.json({ok:true})}),/Vercel Git deployment/);
  assert.equal(clock,20);
 });
+test('API key health: rejected, expired, expiring soon and working keys read plainly',async()=>{
+ const {keyStatus}=await import('../proxy/src/integrations.js');const now=Date.parse('2026-10-18T00:00:00Z');
+ assert.equal(keyStatus({works:false,problem:'Jira rejected the API token',now}).status,'error');
+ assert.equal(keyStatus({works:true,expires:'2026-10-01',now}).status,'error');
+ const soon=keyStatus({works:true,expires:'2026-10-25',now});assert.equal(soon.status,'warning');assert.equal(soon.days,7);
+ const github=keyStatus({works:true,expires:'2027-01-01 10:00:00 UTC',now});assert.equal(github.status,'ok');assert.equal(github.expiresAt,'2027-01-01T10:00:00.000Z');
+ assert.match(keyStatus({works:true,now,setting:'JIRA_TOKEN_EXPIRES'}).message,/JIRA_TOKEN_EXPIRES/);
+});
