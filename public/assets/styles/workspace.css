@@ -84,3 +84,6 @@ body.sidebar-collapsed .app-sidebar{width:76px;padding-inline:10px}body.sidebar-
   .drawer.full .jira-side{display:flex;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
   .drawer.full .jira-side .blk{gap:6px}
 }
+
+/* Short windows: the sidebar scrolls, so every page link stays reachable. */
+.app-sidebar{overflow-y:auto;overscroll-behavior:contain}

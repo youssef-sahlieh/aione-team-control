@@ -1,5 +1,6 @@
 // Private dashboard business data. Never include these fields in Jira mutations.
 import { odoo, odooConfigured } from './odoo.js';
+import { timeClosureErrors, ticketEntries, summarize, readSummaries } from './time-entries.js';
 export const INTERNAL_ASSIGNEE = '__internal_tickets';
 export class BusinessError extends Error {
   constructor(message, status=400, code='ticket_metadata', details={}) { super(message); Object.assign(this,{status,code,details}); }
@@ -47,6 +48,8 @@ export function selectionErrors(catalog,m,{active=false}={}) {
   else if(!m.subClientId&&children.length)errors.push('Choose a project');
   return errors;
 }
+// With a work log, actual hours are the hours entered before it (the baseline) plus the logged work.
+export function withLogged(m,summary){const minutes=summary?.loggedMinutes||0;return minutes?{...m,actualHours:Math.round(((Number(m.actualHours)||0)+minutes/60)*100)/100}:m;}
 export function closureErrors(catalog,m) {
   return [...selectionErrors(catalog,m),...(!validHours(m.estimatedHours)?['Enter estimated hours greater than zero']:[]),...(!validHours(m.actualHours)?['Enter actual hours greater than zero']:[]),...(!m.workDone?.trim()?['Describe the work done']:[])];
 }
@@ -87,7 +90,9 @@ export async function saveMetadata(env,key,patch,me,{closed=false,creating=false
 // Caller holds the same ticket lock used by metadata writes, and supplies an authoritative status read.
 export async function guardedTransition(env,key,me,{closing,overrideReason},apply) {
   const store=requireStore(env),raw=await store.get(metadataKey(env,key)),m={...empty(),...JSON.parse(raw||'{}')};
-  const missing=closing?closureErrors(await readCatalog(env),m):[];
+  // Work entries must all be in Odoo, confirmed there, before any close. An override can't skip this.
+  if(closing){const notSynced=await timeClosureErrors(env,key);if(notSynced.length)problem('Cannot close: '+notSynced.join('; ')+'.',409,'time_not_synced',{missing:notSynced,canOverride:false});}
+  const missing=closing?closureErrors(await readCatalog(env),withLogged(m,summarize(await ticketEntries(env,key)))):[];
   if(missing.length&&(me.role!=='admin'||typeof overrideReason!=='string'||!overrideReason.trim()||overrideReason.trim().length>1000))problem('Cannot close: '+missing.join('; ')+'.'+(me.role==='admin'?' Supply an override reason or complete the fields.':''),400,'closure_required',{missing,canOverride:me.role==='admin'});
   const result=await apply();
   if(result instanceof Response&&!result.ok)return result;
@@ -266,6 +271,8 @@ export async function catalogRoutes(request,env,url,me) {
   return Response.json(next,{headers:{'Cache-Control':'no-store'}});
 }
 // readTickets(keys) (optional) checks many tickets at once and returns {key:true} for the ones this person may see.
+// actualHours stays the baseline (what the editor changes); totalActualHours adds the logged work.
+const logged=(record,summary)=>summary?.loggedMinutes?{...record,loggedMinutes:summary.loggedMinutes,totalActualHours:withLogged(record,summary).actualHours}:record;
 export async function metadataRoutes(request,env,url,me,readTicket,readTickets) {
   requireStore(env);
   const raw=request.method==='GET'?'':await request.text();
@@ -282,13 +289,14 @@ export async function metadataRoutes(request,env,url,me,readTicket,readTickets) 
     if(visible)shown=keys.filter(k=>visible[k]);
     else{const seen=[];for(let offset=0;offset<keys.length;offset+=8)await Promise.all(keys.slice(offset,offset+8).map(async k=>{if(await readTicket(k))seen.push(k);}));shown=seen;}
     const raws=!shown.length?[]:store.mget?await store.mget(shown.map(k=>metadataKey(env,k))):await Promise.all(shown.map(k=>store.get(metadataKey(env,k))));
-    shown.forEach((k,n)=>{records[k]=publicMetadata({...empty(),...JSON.parse(raws[n]||'{}')},me,catalog);});
+    const sums=await readSummaries(env,shown);
+    shown.forEach((k,n)=>{records[k]=logged(publicMetadata({...empty(),...JSON.parse(raws[n]||'{}')},me,catalog),sums[k]);});
     return Response.json({records},{headers:{'Cache-Control':'no-store'}});
   }
   if(!validKey(key))problem('Choose a valid ticket.');
   return withTicketLock(env,key,async()=>{
     const t=await readTicket(key);if(!t)problem('Ticket unavailable.',404,'not_found');
-    if(request.method==='GET'){const m=await readMetadata(env,key);return Response.json({metadata:publicMetadata(m,me,await readCatalog(env)),history:publicHistory(m,me),closed:t.closed},{headers:{'Cache-Control':'no-store'}});}
+    if(request.method==='GET'){const m=await readMetadata(env,key);return Response.json({metadata:logged(publicMetadata(m,me,await readCatalog(env)),summarize(await ticketEntries(env,key))),history:publicHistory(m,me),closed:t.closed},{headers:{'Cache-Control':'no-store'}});}
     if(request.method==='PUT')return Response.json({metadata:await saveMetadata(env,key,b.fields,me,{closed:t.closed})});
     problem('Use GET or PUT.',405);
   });

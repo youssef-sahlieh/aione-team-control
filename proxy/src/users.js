@@ -110,6 +110,14 @@ export function memoryStore() {
     async smembers(k) { return [...(sets.get(k) || [])]; },
     async sadd(k, m) { if (!sets.has(k)) sets.set(k, new Set()); sets.get(k).add(m); },
     async srem(k, m) { if (sets.has(k)) sets.get(k).delete(m); },
+    // Saves a record and updates sets in one step: only when the record is still `expected` (null: absent).
+    async writeIndexed(k, expected, value, add = [], rem = []) {
+      if (expected === null ? alive(k) : !alive(k) || data.get(k) !== expected) return false;
+      data.set(k, String(value)); expires.delete(k);
+      for (const [s, m] of rem) if (sets.has(s)) sets.get(s).delete(m);
+      for (const [s, m] of add) { if (!sets.has(s)) sets.set(s, new Set()); sets.get(s).add(m); }
+      return true;
+    },
     _data: data
   };
 }
@@ -134,6 +142,12 @@ export function redisStore(url, token) {
     async incr(k, ttl) { const n = await cmd("INCR", k); if (n === 1 && ttl) await cmd("EXPIRE", k, String(ttl)); return n; },
     smembers: (k) => cmd("SMEMBERS", k),
     sadd: (k, m) => cmd("SADD", k, m),
-    srem: (k, m) => cmd("SREM", k, m)
+    srem: (k, m) => cmd("SREM", k, m),
+    // One Lua script, so the record and its sets change together or not at all (removals first, then additions).
+    writeIndexed: async (k, expected, value, add = [], rem = []) => !!(await cmd("EVAL",
+      "local cur=redis.call('GET',KEYS[1]) if ARGV[1]=='0' then if cur then return 0 end elseif cur~=ARGV[2] then return 0 end " +
+      "redis.call('SET',KEYS[1],ARGV[3]) local i=5 local r=tonumber(ARGV[4]) for j=1,r do redis.call('SREM',ARGV[i],ARGV[i+1]) i=i+2 end " +
+      "local n=tonumber(ARGV[i]) i=i+1 for j=1,n do redis.call('SADD',ARGV[i],ARGV[i+1]) i=i+2 end return 1",
+      "1", k, expected === null ? "0" : "1", expected === null ? "" : expected, String(value), String(rem.length), ...rem.flat(), String(add.length), ...add.flat()))
   };
 }

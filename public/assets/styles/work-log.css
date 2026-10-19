@@ -1,0 +1,74 @@
+/* Work log: ticket section, Log work form, Work log page (report and setup). */
+.work-log .wl-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.work-log .wl-head h3{margin:0}
+.wl-total{margin:8px 0;font-size:13px}
+.wl-pending{color:var(--warn)}
+.wl-list{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
+.wl-entry{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--surface)}
+.wl-entry-top{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;font-size:13px}
+.wl-who{color:var(--muted)}
+.wl-dur{font-family:var(--mono);font-weight:500}
+.wl-desc{margin:6px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}
+.wl-entry .msg{margin:4px 0 0}
+.wl-entry-actions{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:6px;align-items:center}
+.wl-revisions summary{cursor:pointer;font-size:12px;color:var(--muted);margin-top:6px}
+.wl-status{display:inline-block;border-radius:999px;padding:1px 9px;font-size:12px;font-weight:600;white-space:nowrap}
+.wl-ok{background:var(--ok-soft);color:var(--ok)}
+.wl-busy{background:var(--accent-soft);color:var(--accent)}
+.wl-warn{background:var(--warn-soft);color:var(--warn)}
+.wl-crit{background:var(--crit-soft);color:var(--crit)}
+
+.wl-dialog .wl-form{display:flex;flex-direction:column;gap:12px;margin-top:12px}
+.wl-facts{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;margin:0;font-size:13px}
+.wl-facts dt{color:var(--muted);font-weight:600}
+.wl-facts dd{margin:0;overflow-wrap:anywhere}
+.wl-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.wl-field{display:flex;flex-direction:column;gap:6px;font-size:13px;min-width:0}
+.wl-field>span{font-size:12px;font-weight:600;color:var(--muted)}
+.wl-field .inp{width:100%;box-sizing:border-box}
+.wl-field textarea{resize:vertical}
+.wl-duration-shown{font-size:12px;color:var(--ok);min-height:1em}
+.wl-duration-shown.err{color:var(--crit)}
+.wl-shortcuts{display:flex;gap:6px;flex-wrap:wrap;grid-column:1/-1}
+.wl-chip{padding:4px 12px}
+.wl-actions{display:flex;flex-wrap:wrap;gap:8px}
+.msg.ok{color:var(--ok)}
+
+.wl-page{display:flex;flex-direction:column;gap:14px;min-width:0}
+.wl-tabs{display:flex;gap:8px}
+.wl-report-bar,.wl-filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.wl-report{display:flex;flex-direction:column;gap:14px;min-width:0}
+.wl-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.wl-card{border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--surface);display:flex;flex-direction:column;gap:2px}
+.wl-card span{font-size:12px;color:var(--muted);font-weight:600}
+.wl-card b{font-size:22px}
+.wl-card small{color:var(--muted)}
+.wl-card.ok b{color:var(--ok)}
+.wl-card.warn b{color:var(--warn)}
+.wl-scroll{overflow-x:auto;max-width:100%}
+.wl-table{border-collapse:collapse;width:100%;font-size:13px}
+.wl-table th,.wl-table td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+.wl-table th{font-size:12px;color:var(--muted);white-space:nowrap}
+.wl-table .num{text-align:right;font-family:var(--mono);white-space:nowrap}
+.wl-desc-cell{min-width:200px;max-width:420px;overflow-wrap:anywhere}
+.wl-detail summary,.wl-baseline summary{cursor:pointer;font-weight:600;font-size:13px}
+
+.wl-setup{display:flex;flex-direction:column;gap:14px;max-width:900px}
+.wl-section{border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--surface);display:flex;flex-direction:column;gap:10px}
+.wl-section h3{margin:0}
+.wl-modes{display:flex;flex-wrap:wrap;gap:10px}
+.wl-mode{display:grid;grid-template-columns:auto 1fr;gap:2px 8px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;flex:1 1 180px}
+.wl-mode small{grid-column:2}
+.wl-pilot{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow:auto}
+.wl-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.wl-map{display:flex;flex-direction:column;gap:6px}
+.wl-map-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:10px;align-items:center;font-size:13px}
+.wl-map-row .inp{width:100%;box-sizing:border-box}
+.business-total{margin:4px 0 0}
+
+@media (max-width:640px){
+  .wl-row,.wl-grid,.wl-map-row{grid-template-columns:1fr}
+  .wl-cards{grid-template-columns:1fr}
+  .wl-report-bar .inp,.wl-filters .fsel{flex:1 1 140px}
+  .wl-dialog{width:calc(100% - 24px);padding:14px}
+}

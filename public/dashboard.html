@@ -17,6 +17,7 @@
 <link rel="stylesheet" href="assets/styles/filters.css">
 <link rel="stylesheet" href="assets/styles/manager.css">
 <link rel="stylesheet" href="assets/ai-assistant.css">
+<link rel="stylesheet" href="assets/styles/work-log.css">
 <link rel="stylesheet" href="assets/styles/ticket-briefs.css">
 <link rel="stylesheet" href="assets/styles/email-column.css">
 <link rel="stylesheet" href="assets/styles/date-requests.css">
@@ -111,7 +112,7 @@
     <div class="dtop">
       <a class="key" id="d-key" target="_blank" rel="noopener"></a>
       <span class="stbtn" id="d-status"></span>
-      <span class="sp"><button class="btn note note-action" id="d-note" type="button" title="Send an internal note">Internal note</button><button class="btn int-only" id="d-edit" type="button">Edit</button><button class="btn danger admin-only int-only" id="d-del" type="button">Delete</button><a class="btn primary odoo-only" id="d-odoo" target="_blank" rel="noopener">Open in Odoo ↗</a><a class="btn primary jira-only" id="d-open" target="_blank" rel="noopener">Open in Jira ↗</a><button class="btn" id="d-size" type="button" title="Switch between full screen and a side panel">Side panel</button><button class="btn" id="d-close" type="button">Close</button></span>
+      <span class="sp"><button class="btn" id="d-logwork" type="button" title="Log time worked on this ticket (sent to Odoo timesheets)" hidden>Log work</button><button class="btn note note-action" id="d-note" type="button" title="Send an internal note">Internal note</button><button class="btn int-only" id="d-edit" type="button">Edit</button><button class="btn danger admin-only int-only" id="d-del" type="button">Delete</button><a class="btn primary odoo-only" id="d-odoo" target="_blank" rel="noopener">Open in Odoo ↗</a><a class="btn primary jira-only" id="d-open" target="_blank" rel="noopener">Open in Jira ↗</a><button class="btn" id="d-size" type="button" title="Switch between full screen and a side panel">Side panel</button><button class="btn" id="d-close" type="button">Close</button></span>
     </div>
     <h2 class="dtitle" id="d-title" dir="auto"></h2>
   </div>
@@ -121,6 +122,7 @@
     <dl class="facts" id="d-facts"></dl>
     <section class="blk jira-only" id="d-prs-blk" hidden><h3>Pull requests <span id="d-prs-count"></span></h3><div id="d-prs" class="prs"></div></section>
     <section class="blk" id="business-fields" aria-label="Ticket work and client"></section>
+    <section class="blk work-log" id="work-log" aria-label="Work log" hidden></section>
     <div class="blk admin-only"><h3>Developers</h3><div class="chips" id="d-devs"></div>
       <div class="inline"><input class="inp" id="d-newdev" placeholder="Other developer name" aria-label="Add another developer"><button class="btn" id="d-adddev" type="button">Add</button><button class="btn primary" id="d-savedevs" type="button">Save developers</button><span class="msg" id="d-devmsg"></span></div></div>
     <div class="blk"><h3>Due date</h3>

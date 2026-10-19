@@ -22,7 +22,8 @@ import { reportRoutes, buildReport } from "./reports.js";
 import { dateRequestRoutes } from "./date-requests.js";
 import { ticketNoteRoutes } from "./ticket-notes.js";
 import { internalRoutes } from "./internal.js";
-import { odooConfigured, odooRoutes, odooTicketInfo } from "./odoo.js";
+import { odooConfigured, odooRoutes, odooTicketInfo, odooTicketForTime } from "./odoo.js";
+import { timeRoutes, timeSyncCron } from "./time-entries.js";
 import { monitorRoutes } from "./monitor.js";
 import { dbReportRoutes, dbReportCron } from "./db-report.js";
 import { odooAppRoutes, odooTranslations } from "./odoo-app.js";
@@ -329,7 +330,9 @@ async function route(request, env, url) {
   // Public compatibility check for Pages publishing; exposes no runtime credentials or ticket data.
   if (path.startsWith("/monitor/odoo/translations") && method === "GET") return odooTranslations(env, url);
   if (path === "/cron/db-report") return dbReportCron(request, env, url);
-  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1","reports-all-v1","reports-saved-v1", "db-report-v1", "db-report-company-v1"], build: String(env.BUILD || "").slice(0, 7)});
+  // The work log's background sync to Odoo (secret in the Authorization header, never a user session).
+  if (path === "/cron/time-sync") return timeSyncCron(request, env);
+  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1","reports-all-v1","reports-saved-v1", "db-report-v1", "db-report-company-v1", "time-entries-v1"], build: String(env.BUILD || "").slice(0, 7)});
 
   // Jira Automation uses its own secret, never a team password or a user's browser session.
   if (path === "/notifications/jira-created") {
@@ -430,6 +433,11 @@ async function route(request, env, url) {
     catch(e){if(e instanceof AIError||(e&&typeof e.status==="number"&&typeof e.code==="string"))return json({code:e.code,error:e.message},e.status);return fail("ai_unavailable","Could not suggest a description. Please try again.",502);}
   }
   if(path==="/clients"||path.startsWith("/clients/"))return catalogRoutes(request,env,url,me);
+  // Work log (Odoo timesheets) on Jira, internal and Odoo Helpdesk tickets the signed-in person can see.
+  if(path==="/time-entries"||path.startsWith("/time-entries/"))return timeRoutes(request,env,url,me,{readTicket:async key=>{
+    if(/^HD-\d+$/.test(key)){const t=await odooTicketForTime(env,key);return t&&(me.role==="admin"||(me.dev&&t.devs.includes(me.dev)))?t:null;}
+    return readBusinessTicket(key);
+  }});
   // Many tickets at once (the dashboard's list): one database read for internal tickets and, for users, one
   // Jira search for their own tickets, instead of one Jira read per ticket. Administrators see every project ticket.
   const readBusinessTickets = async keys => {

@@ -88,6 +88,10 @@ Tickets from the Odoo Helpdesk (kadis.odoo.com) appear in the dashboard as **HD-
 
 **Settings** (Vercel environment variables): `ODOO_URL` (https://kadis.odoo.com), `ODOO_DB` (the database name), `ODOO_LOGIN` and `ODOO_API_KEY` (an Odoo user and its API key from Odoo → Preferences → Account Security → New API Key). Replace the key there when it expires or if it leaks, then redeploy.
 
+## Work log (Odoo timesheets)
+
+**Log work** in a ticket records time worked; each entry becomes an Odoo timesheet line. It is off until an administrator switches it on in **Work log → Setup**. The Odoo custom fields to create, the `TIME_SYNC_SECRET` setting (Vercel and GitHub) and the rollout steps are in [docs/work-log.md](docs/work-log.md).
+
 ## Audit & Deploy
 
 **Audit & Deploy** in the sidebar opens **Odoo's own Audit & Deployment System screen** (the log_monitor add-on) inside the dashboard: the same screen and every function (instances, add-on upgrades and branches, restarts, logs, database, test environments, backups, packages, deployments, fleet, approvals). Nobody signs in to Odoo.

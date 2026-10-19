@@ -5,6 +5,9 @@
 // The Odoo "Assigned to" user is the ticket's developer: matched to the ai1_ developer list by email
 // (TEAM_CONFIG devEmails), otherwise the part of their email before "@" (ireen@aione.biz -> ireen).
 
+import { withTicketLock } from "./ticket-metadata.js";
+import { timeClosureErrors } from "./time-entries.js";
+
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
 const fail = (code, error, status) => json({ code, error }, status);
 async function readJson(request) { try { return await request.json(); } catch { return null; } }
@@ -14,16 +17,25 @@ const base = (env) => String(env.ODOO_URL).replace(/\/+$/, "");
 
 let uidCache = { key: "", uid: 0 };
 let rpcId = 0;
+// definite: Odoo answered with an error, so nothing was saved (its transaction was rolled back).
+// Otherwise (no answer, timeout, bad gateway) the outcome is unknown: a create may or may not have happened.
+// kind is Odoo's exception name, e.g. "odoo.exceptions.ValidationError".
+export class OdooError extends Error {
+  constructor(message, { definite = false, kind = "" } = {}) { super(message); this.definite = definite; this.kind = kind; }
+}
 async function rpc(env, service, method, args) {
-  const res = await fetch(base(env) + "/jsonrpc", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", method: "call", id: ++rpcId, params: { service, method, args } }),
-    signal: AbortSignal.timeout(20000)
-  });
+  let res;
+  try {
+    res = await fetch(base(env) + "/jsonrpc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "call", id: ++rpcId, params: { service, method, args } }),
+      signal: AbortSignal.timeout(20000)
+    });
+  } catch (e) { throw new OdooError("Odoo didn't answer: " + ((e && e.message) || "network error")); }
   const data = await res.json().catch(() => null);
-  if (!res.ok || !data) throw new Error("Odoo answered " + res.status + ".");
-  if (data.error) throw new Error((data.error.data && data.error.data.message) || data.error.message || "Odoo error.");
+  if (data && data.error) throw new OdooError((data.error.data && data.error.data.message) || data.error.message || "Odoo error.", { definite: true, kind: String((data.error.data && data.error.data.name) || "") });
+  if (!res.ok || !data) throw new OdooError("Odoo answered " + res.status + ".");
   return data.result;
 }
 async function uid(env) {
@@ -127,6 +139,20 @@ export async function odooTicketInfo(env, key) {
   return { title: t.name, devs: dev ? [dev] : [] };
 }
 
+// One Helpdesk ticket for the work log: title, developer, whether it's closed, and its Odoo project (when
+// Helpdesk timesheets are installed, the ticket has one).
+let hdFields = null;
+export async function odooTicketForTime(env, key) {
+  if (!odooConfigured(env) || !refOf(key)) return null;
+  if (!hdFields) hdFields = await odoo(env, "helpdesk.ticket", "fields_get", [], { attributes: ["type"] });
+  const [t] = await odoo(env, "helpdesk.ticket", "search_read", [byRef(key)], { fields: ["name", "user_id", "stage_id", ...(hdFields.project_id ? ["project_id"] : [])], limit: 1 });
+  if (!t) return null;
+  const [users, allStages] = await Promise.all([odooUsers(env), stages(env)]);
+  const dev = Array.isArray(t.user_id) ? devMaps(env, users).toDev.get(t.user_id[0]) : null;
+  const stage = allStages.find((s) => Array.isArray(t.stage_id) && s.id === t.stage_id[0]);
+  return { key, title: t.name || "", devs: dev ? [dev] : [], closed: !!(stage && stage.fold), projectId: Array.isArray(t.project_id) ? t.project_id[0] : null };
+}
+
 // Odoo HTML (descriptions, chatter) is shown as text by the dashboard's own sanitizer; this only trims size.
 const clip = (html, n = 50000) => String(html || "").slice(0, n);
 
@@ -197,7 +223,19 @@ export async function odooRoutes(request, env, url, me) {
         } else vals.user_id = false;
       }
       if (!Object.keys(vals).length) return fail("bad_request", "Nothing to change.", 400);
-      await odoo(env, "helpdesk.ticket", "write", [[id], vals]);
+      // Closing (a move to a folded stage): every work entry must be in Odoo first. Checked under the ticket lock,
+      // which new work entries also take, so none can slip in while it closes.
+      const wasOpen = !allStages.find((s) => Array.isArray(t.stage_id) && s.id === t.stage_id[0])?.fold;
+      const closing = vals.stage_id && wasOpen && teamStages.find((s) => s.id === vals.stage_id)?.fold;
+      if (closing && env.STORE?.writeIndexed) {
+        const blocked = await withTicketLock(env, m[1], async () => {
+          const missing = await timeClosureErrors(env, m[1]);
+          if (missing.length) return fail("time_not_synced", "Cannot close: " + missing.join("; ") + ".", 409);
+          await odoo(env, "helpdesk.ticket", "write", [[id], vals]);
+          return null;
+        });
+        if (blocked) return blocked;
+      } else await odoo(env, "helpdesk.ticket", "write", [[id], vals]);
       const [after] = await odoo(env, "helpdesk.ticket", "search_read", [[["id", "=", id]]], { fields: FIELDS, limit: 1 });
       const before = Array.isArray(t.user_id) ? maps.toDev.get(t.user_id[0]) : null;
       const now = view(env, after, maps, allStages);
@@ -214,6 +252,7 @@ export async function odooRoutes(request, env, url, me) {
       return json({ ok: true }, 201);
     }
   } catch (err) {
+    if (err && typeof err.status === "number" && typeof err.code === "string") throw err;
     console.log("odoo error:", err && err.message);
     return fail("odoo", "Odoo: " + ((err && err.message) || "unknown error"), 502);
   }

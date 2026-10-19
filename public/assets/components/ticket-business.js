@@ -64,7 +64,9 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const selects=selections(clientGroup,values,closed||(!admin()&&!creating),true);
     let billing;if(admin()){billing=field(clientGroup,'Billing (administrators only)',el('select','fsel'));billingOptions(billing,values.billing);billing.disabled=closed;if(creating&&billingNeeded)billing.setAttribute('aria-required','true');}
     const workGroup=el('fieldset','business-section business-work-section');workGroup.append(el('legend','','Work summary'));box.append(workGroup);
-    const estimated=field(workGroup,'Estimated hours',input('number',values.estimatedHours)),actual=field(workGroup,'Actual hours',input('number',values.actualHours));
+    const logged=values.loggedMinutes>0;
+    const estimated=field(workGroup,'Estimated hours',input('number',values.estimatedHours)),actual=field(workGroup,logged?'Actual hours before the work log':'Actual hours',input('number',values.actualHours));
+    if(logged){const total=el('p','msg business-total','Actual hours with the work log: '+values.totalActualHours+' h ('+(Math.round(values.loggedMinutes/60*100)/100)+' h logged).');workGroup.append(total);}
     for(const n of [estimated,actual]){n.min='0.01';n.max='1000000';n.step='0.01';n.disabled=closed;}
     // Once set, the estimate is changed by administrators only.
     if(!admin()&&!creating&&values.estimatedHours!=null){estimated.disabled=true;estimated.title='The estimate is set. Ask an administrator to change it.';}
@@ -77,7 +79,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const parts=[];for(let i=0;i<unique.length;i+=100)parts.push(unique.slice(i,i+100));
     await Promise.all(parts.map(async part=>{const r=await api('/ticket-metadata/batch',{method:'POST',body:{keys:part}});Object.assign(records,r.records);}));
   }
-  function decorate(i){return {...i,...(records[i.key]?names(records[i.key]):{})};}
+  function decorate(i){const r=records[i.key];return {...i,...(r?names(r):{}),...(r&&r.totalActualHours!=null?{actualHours:r.totalActualHours}:{})};}
   // One field (or the client pair) edited straight from the ticket list, with the same rules as the ticket panel
   // (client and billing for administrators; closed tickets locked). The server checks all of it again.
   const QUICK={client:'Client',billing:'Billing',estimatedHours:'Estimated hours',actualHours:'Actual hours',workDone:'Work done'};
@@ -111,7 +113,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       target.append(el('p','business-guidance',r.closed?'Completed work is read-only. Reopen the ticket to make corrections.':'Complete the hours and work summary before closing. The client is optional.'));
       const controls=createFields(target,{values:r.metadata,closed:r.closed}),msg=el('p','msg');let initial=JSON.stringify(controls.read()),editorRevision=r.metadata.revision;
       const readiness=el('div','work-readiness');target.insertBefore(readiness,controls.box);
-      const updateReadiness=()=>{let value;try{value={...r.metadata,...controls.read()};}catch{value={...r.metadata};}readiness.replaceChildren();for(const [label,ready]of [['Estimate',value.estimatedHours>0],['Actual hours',value.actualHours>0],['Work done',!!value.workDone?.trim()]]){const chip=el('span','readiness-chip'+(ready?' ready':''),(ready?'✓ ':'○ ')+label);readiness.append(chip);}};controls.box.addEventListener('input',updateReadiness);controls.box.addEventListener('change',updateReadiness);updateReadiness();
+      const updateReadiness=()=>{let value;try{value={...r.metadata,...controls.read()};}catch{value={...r.metadata};}readiness.replaceChildren();for(const [label,ready]of [['Estimate',value.estimatedHours>0],['Actual hours',value.actualHours>0||r.metadata.loggedMinutes>0],['Work done',!!value.workDone?.trim()]]){const chip=el('span','readiness-chip'+(ready?' ready':''),(ready?'✓ ':'○ ')+label);readiness.append(chip);}};controls.box.addEventListener('input',updateReadiness);controls.box.addEventListener('change',updateReadiness);updateReadiness();
       editor={key,dirty:()=>{try{return JSON.stringify(controls.read())!==initial;}catch{return true;}}};
       if(r.closed)target.append(el('p','msg','Closed ticket. An administrator must reopen it before these fields can be edited.'));
       else target.append(button('Save ticket fields',async e=>{

@@ -6,6 +6,7 @@ import { previewFile, canPreview } from "./components/file-preview.js";
 import { INTERNAL_ASSIGNEE, sortTickets, validSort, createdDate } from "./models/ticket-business.js";
 import { api, apiFile, getSession, signOut, onApiWrite } from "./session.js";
 import { createSyncErrors } from "./components/sync-errors.js";
+import { createWorkLog } from "./components/work-log.js";
 import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normalizeInternalIssue, normalizeOdooIssue } from "./models/issue.js";
 import { createFilters, matchesFilters } from "./models/filters.js";
 import { readViews, restoreView, savedViewKey, serializeView } from "./models/saved-views.js";
@@ -1066,7 +1067,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // An open ticket is a step in the browser's history (#KEY), so Back closes it instead of leaving the dashboard.
   // keepHistory: switching straight to another ticket (its own step replaces this one).
   let drawerPushed=false, skipPop=false;
-  function closeDrawer(force,keepHistory){ if(dz.key&&force!==true&&!drawerUI.allowClose())return false;ticketNotes.reset(dz.key);business.reset();$("drawer").hidden=true;$("scrim").hidden=true;dz.key=null;drawerUI.close();
+  function closeDrawer(force,keepHistory){ if(dz.key&&force!==true&&!drawerUI.allowClose())return false;ticketNotes.reset(dz.key);business.reset();workLog.reset();$("drawer").hidden=true;$("scrim").hidden=true;dz.key=null;drawerUI.close();
     if(!keepHistory){ if(drawerPushed){ drawerPushed=false; skipPop=true; history.back(); } else if(location.hash) history.replaceState(history.state,"",location.pathname+location.search); }
     return true; }
   window.addEventListener("popstate",()=>{
@@ -1107,6 +1108,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   }
   async function loadDetail(key){
     business.renderEditor(key);
+    workLog.render(key);
     loadTransitions(key);
     if(isInt(key)){ renderInternal(key); return; }
     $("d-reply").placeholder="Write a comment or answer…";
@@ -1386,13 +1388,16 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const dueDateHistory=createDueDateHistory({api,tickets:()=>state.issues||[],internal:key=>INT[key],openIssue:openDrawer});
   const dateRequests=createDateRequests({api,renderHistory:target=>dueDateHistory.render(target),context:()=>({admin:IS_ADMIN,email:MY_EMAIL,ticket:issueByKey}),openIssue:openDrawer,onApplied:(key,due)=>{patchIssue(key,matching(()=>({due:due||null}),"due"));mergeIssues();renderIfIdle();if(dz.key===key)$("d-due").value=due||"";},onChange:key=>{if(dz.key)dateRequests.renderDrawer(dz.key);return (key?refreshKeys([key]):reload()).then(()=>{if(dz.key){dateRequests.renderDrawer(dz.key);loadDetail(dz.key);}});}});
   state.businessFilter={};
+  // Log work → Odoo timesheets: ticket section, form, corrections, and the Work log page.
+  const workLog=createWorkLog({api,isAdmin:()=>IS_ADMIN,me:()=>({name:(getSession()||{}).name||ME,email:MY_EMAIL}),errorText,toast,openIssue:openDrawer,onLogged:key=>refreshKeys([key])});
+  $("d-logwork").addEventListener("click",()=>{ if(dz.key) workLog.openFor(dz.key,$("d-title").textContent); });
   const business=createTicketBusiness({api,context:()=>({admin:IS_ADMIN,email:MY_EMAIL,key:dz.key,tickets:()=>state.issues||[]}),onChange:keys=>{if(keys)return refreshKeys(keys);mergeIssues();saveCache();render();},openIssue:openDrawer});
   $('b-client').addEventListener('click',()=>business.bulk(selected()).catch(err=>toast('Client assignment failed',[errorText(err)],true)));
   // Changes that didn't go through, kept to retry, and the API keys' state (Sync errors page).
   const syncErrors=createSyncErrors({api,onApiWrite,isAdmin:()=>IS_ADMIN,storageKey:()=>"aion.syncErrors."+encodeURIComponent((getSession()||{}).email||""),formatTime:v=>{const w=fmtWhen(v);return w.d+" "+w.t;},
     onRetried:key=>refreshKeys([key]),
     onChange:()=>{ const n=syncErrors?syncErrors.count():0, c=$("nav-error-count"); if(c){ c.textContent=String(n); c.hidden=!n; } if(workspace&&workspace.route().page==="errors"&&state.issues&&$("pop").hidden) render(); }});
-  const workspace=createWorkspace({state,context:()=>({renderErrors:target=>syncErrors.render(target),admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount(),dateRequests:dateRequests.all(),pendingDates:dateRequests.pendingCount(),renderReports:target=>business.renderReports(target),renderCatalog:target=>business.renderCatalog(target),renderRequests:(target,options)=>dateRequests.render(target,options)}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>{ if(!dz.key) return true; if(!closeDrawer(false,true)) return false; drawerPushed=false; if(location.hash) history.replaceState(history.state,"",location.pathname+location.search); return true; }});
+  const workspace=createWorkspace({state,context:()=>({renderErrors:target=>syncErrors.render(target),admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount(),dateRequests:dateRequests.all(),pendingDates:dateRequests.pendingCount(),renderReports:target=>business.renderReports(target),renderCatalog:target=>business.renderCatalog(target),renderWorkLog:target=>workLog.renderPage(target),renderRequests:(target,options)=>dateRequests.render(target,options)}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>{ if(!dz.key) return true; if(!closeDrawer(false,true)) return false; drawerPushed=false; if(location.hash) history.replaceState(history.state,"",location.pathname+location.search); return true; }});
   const aiAssistant=createAIAssistant({openIssue:openDrawer,beforeOpen:()=>{if(dz.key&&!closeDrawer())return false;closePop();return true;}});
   const ticketBriefs=createTicketBriefs({api});
   const assigneeFilter=createAssigneeFilter({getSelection:()=>state.f.assignee,getOptions:()=>assigneeOptions(PEOPLE),getDefaults:()=>defaultAssigneeKeys(PEOPLE),getCounts:()=>countBy("assignee",i=>assigneeFilterKey(i,PEOPLE)),onApply:selected=>{state.f.assignee=selected;state.sel.clear();state.pageIndex=0;render();}});

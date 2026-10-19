@@ -1,0 +1,28 @@
+# Work log → Odoo timesheets: every 5 minutes, sends work entries that are still waiting (Odoo was down,
+# setup was missing) to Odoo. Entries are normally sent the moment they are saved; this is the safety net.
+# Needs the repository secret TIME_SYNC_SECRET (the same value as the Vercel environment variable).
+# Without it, the job does nothing. GitHub may delay scheduled runs by a few minutes.
+name: Work log sync to Odoo
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: time-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Send waiting work entries to Odoo
+        env:
+          SECRET: ${{ secrets.TIME_SYNC_SECRET }}
+        run: |
+          if [ -z "$SECRET" ]; then echo "TIME_SYNC_SECRET is not set; nothing to do."; exit 0; fi
+          curl -sS --fail-with-body --max-time 70 -X POST -H "Authorization: Bearer $SECRET" https://aione-team-proxy.vercel.app/cron/time-sync
