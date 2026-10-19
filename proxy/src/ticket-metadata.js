@@ -97,14 +97,27 @@ export async function guardedTransition(env,key,me,{closing,overrideReason},appl
 const nameKey=n=>n.trim().normalize('NFC').toLocaleLowerCase('en-US');
 async function idFor(parent,name) { const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode((parent||'root')+'\0'+nameKey(name)));return 'c_'+Array.from(new Uint8Array(bytes).slice(0,16),x=>x.toString(16).padStart(2,'0')).join(''); }
 function cleanName(n) {if(typeof n!=='string'||!n.trim()||n.trim().length>300)problem('Client names must contain 1–300 characters.');return n.trim();}
-// Clients come straight from Odoo, the same way the project workbook did: each project's customer
-// is a client and the project is its sub-client (a project without a customer is a client itself).
-// Entries are only added (ids are stable by name), so tickets keep their client when Odoo changes.
+// Clients come straight from Odoo in two levels: every customer (a top-level contact with a customer
+// rank, with or without a project) is a client, and each project is a sub-client of its customer (the
+// company, when the project's contact is a person inside one). Projects without a customer go under
+// NO_CUSTOMER. Entries are only added (ids are stable by name), so tickets keep their client when Odoo changes.
 const odooSyncKey=env=>prefix(env)+'catalog:odoo-sync';
+export const NO_CUSTOMER='No customer';
 async function odooRows(env){
-  const projects=await odoo(env,'project.project','search_read',[[]],{fields:['display_name','partner_id'],order:'id',limit:5000});
-  return projects.map(p=>({displayName:String(p.display_name||'').trim(),customer:Array.isArray(p.partner_id)?String(p.partner_id[1]||'').trim():'',sourceRow:p.id}))
-    .filter(r=>r.displayName&&r.displayName.length<=300&&r.customer.length<=300);
+  const [customers,projects]=await Promise.all([
+    odoo(env,'res.partner','search_read',[[['customer_rank','>',0],['parent_id','=',false]]],{fields:['display_name'],order:'id',limit:4000}),
+    odoo(env,'project.project','search_read',[[]],{fields:['display_name','partner_id'],order:'id',limit:1000})
+  ]);
+  // A project's contact can be a person inside a company: the project belongs to the company.
+  const ids=[...new Set(projects.map(p=>Array.isArray(p.partner_id)?p.partner_id[0]:null).filter(Boolean))];
+  const company={};
+  if(ids.length)for(const c of await odoo(env,'res.partner','read',[ids],{fields:['commercial_partner_id']}))company[c.id]=Array.isArray(c.commercial_partner_id)?{id:c.commercial_partner_id[0],name:String(c.commercial_partner_id[1]||'').trim()}:null;
+  const fits=n=>n&&n.length<=300;
+  return {
+    customers:customers.map(c=>({displayName:String(c.display_name||'').trim(),sourceRow:c.id})).filter(r=>fits(r.displayName)),
+    projects:projects.map(p=>{const owner=Array.isArray(p.partner_id)?(company[p.partner_id[0]]||{id:p.partner_id[0],name:String(p.partner_id[1]||'').trim()}):null;
+      return {displayName:String(p.display_name||'').trim(),customer:owner&&owner.name?owner.name:NO_CUSTOMER,sourceRow:p.id};}).filter(r=>fits(r.displayName)&&fits(r.customer))
+  };
 }
 export async function syncCatalogFromOdoo(env,{force=false}={}){
   if(!odooConfigured(env))return {odoo:false};
@@ -113,17 +126,20 @@ export async function syncCatalogFromOdoo(env,{force=false}={}){
   const lock=odooSyncKey(env)+':lock',owner=crypto.randomUUID();
   if(!await store.setIfAbsent(lock,owner,120))return {odoo:true,changed:false,busy:true,syncedAt:last};
   try{
-    const rows=await odooRows(env);let changed=false,added=0;
-    if(rows.length)for(let attempt=0;;attempt++){
+    const {customers,projects}=await odooRows(env);let changed=false,added=0;
+    if(customers.length||projects.length)for(let attempt=0;;attempt++){
       const key=catalogKey(env),previous=await store.get(key),catalog=previous?JSON.parse(previous):{revision:0,entries:[]};
-      const {next,preview}=await prepareImport(catalog,rows,'odoo');
+      // Customers first (their Odoo contact id is kept as "odoo-customer" source), then projects under them.
+      let next=catalog,count=0;
+      if(customers.length){const r=await prepareImport(next,customers,'odoo-customer');next=r.next;count+=r.preview.added;}
+      if(projects.length){const r=await prepareImport(next,projects,'odoo');next=r.next;count+=r.preview.added;}
       if(JSON.stringify(next.entries)===JSON.stringify(catalog.entries))break;
       next.revision=catalog.revision+1;
-      if(previous===null?await store.setIfAbsent(key,JSON.stringify(next),315360000):await store.compareAndSet(key,previous,JSON.stringify(next))){changed=true;added=preview.added;break;}
+      if(previous===null?await store.setIfAbsent(key,JSON.stringify(next),315360000):await store.compareAndSet(key,previous,JSON.stringify(next))){changed=true;added=count;break;}
       if(attempt>=2)problem('Catalog changed during the Odoo sync. Try again.',409,'conflict');
     }
     const at=Date.now();await store.set(odooSyncKey(env),String(at));
-    return {odoo:true,changed,added,projects:rows.length,syncedAt:at};
+    return {odoo:true,changed,added,customers:customers.length,projects:projects.length,syncedAt:at};
   }finally{await store.deleteIfValue(lock,owner);}
 }
 export async function prepareImport(catalog,rows,source='project-workbook') {
@@ -138,12 +154,40 @@ export async function prepareImport(catalog,rows,source='project-workbook') {
   for(const [i,r] of rows.entries()){
     if(!r||typeof r!=='object')problem('Invalid import row '+(i+2));
     const display=cleanName(r.displayName),customer=typeof r.customer==='string'?r.customer.trim():'';
-    const sourceRow=Number.isInteger(r.sourceRow)&&r.sourceRow>=2?r.sourceRow:i+2;
+    // Workbook rows start at 2 (row 1 is the header); Odoo record ids start at 1.
+    const sourceRow=Number.isInteger(r.sourceRow)&&r.sourceRow>=(String(source).startsWith('odoo')?1:2)?r.sourceRow:i+2;
     if(customer){const parent=await ensure(customer,null,sourceRow);await ensure(display,parent.id,sourceRow);}else await ensure(display,null,sourceRow);
   }
   return {next,preview:{rows:rows.length,added:added.length,existing:next.entries.length-added.length,clients:next.entries.filter(e=>!e.parentId).length,subClients:next.entries.filter(e=>e.parentId).length,entries:next.entries.filter(e=>added.includes(e.id))}};
 }
+async function createInOdoo(env,url,me,b){
+  if(me.role!=='admin')problem('Only administrators manage the client catalog.',403,'forbidden');
+  if(!odooConfigured(env))problem('Odoo is not connected.',501,'odoo_off');
+  const name=cleanName(b&&b.name),text=(v,n)=>typeof v==='string'&&v.trim()?v.trim().slice(0,n):undefined;
+  let created;
+  try{
+    if(url.pathname==='/clients/odoo/customer'){
+      const email=text(b.email,200),phone=text(b.phone,50);
+      if(email&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))problem('Enter a valid email or leave it empty.');
+      created=await odoo(env,'res.partner','create',[{name,is_company:true,customer_rank:1,...(email?{email}:{}),...(phone?{phone}:{})}]);
+    }else{
+      const catalog=await readCatalog(env),client=catalog.entries.find(e=>e.id===b.clientId&&!e.parentId);
+      if(!client||client.name===NO_CUSTOMER)problem('Choose the customer this project belongs to.');
+      // The customer's Odoo contact: kept from the sync, else found by its exact name.
+      let partner=(client.sources||[]).find(x=>x.source==='odoo-customer')?.row;
+      if(!partner){const [found]=await odoo(env,'res.partner','search_read',[[['name','=',client.name],['parent_id','=',false]]],{fields:['id'],limit:1});partner=found&&found.id;}
+      if(!partner)problem('This customer is not in Odoo. Create it as a customer first.');
+      created=await odoo(env,'project.project','create',[{name,partner_id:partner}]);
+    }
+  }catch(e){if(e instanceof BusinessError)throw e;problem("Odoo didn't create it: "+String(e.message||'unknown error').slice(0,200),502,'odoo');}
+  await syncCatalogFromOdoo(env,{force:true});
+  return Response.json({created,catalog:await readCatalog(env)},{status:201,headers:{'Cache-Control':'no-store'}});
+}
 export async function catalogRoutes(request,env,url,me) {
+  if((url.pathname==='/clients/odoo/customer'||url.pathname==='/clients/odoo/project')&&request.method==='POST'){
+    let b=null;try{b=JSON.parse(await request.text());}catch{problem('Invalid request.');}
+    return createInOdoo(env,url,me,b);
+  }
   // Odoo sync: anyone signed in may refresh a stale catalog (it only copies Odoo's projects in);
   // forcing an immediate sync is for administrators.
   if(url.pathname==='/clients/odoo-sync'){

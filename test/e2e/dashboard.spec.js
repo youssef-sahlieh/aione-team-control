@@ -894,3 +894,18 @@ test('saved report loads automatically, keeps filters local and preserves result
 for(const role of ['admin','user'])test(role+' All tickets opens directly on the table with filters collapsed',async({page})=>{
  const mock=await mockDashboard(page,{role,filtersVisible:false});await page.goto('/dashboard.html?page=tickets');await expect(page.locator('#view .item')).toHaveCount(2);await expect(page.locator('#ticket-filters')).toBeHidden();await expect(page.locator('#tiles')).toBeVisible();await expect(page.getByRole('button',{name:'Show filters',exact:true})).toHaveAttribute('aria-expanded','false');const count=await page.locator('#view .item').count();await page.getByRole('button',{name:'Show filters',exact:true}).click();await expect(page.locator('.fpanel')).toBeVisible();await expect(page.locator('#quick-filters')).toBeVisible();await expect(page.getByRole('button',{name:'Hide filters',exact:true})).toHaveAttribute('aria-expanded','true');await page.getByRole('button',{name:'Hide filters',exact:true}).click();await expect(page.locator('#view .item')).toHaveCount(count);await page.reload();await expect(page.locator('#view .item')).toHaveCount(count);await expect(page.locator('#ticket-filters')).toBeHidden();expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
+test('the Clients page creates a new customer and a new project in Odoo',async({page})=>{
+ const mock=await mockDashboard(page,{odoo:true});const sent=[];
+ const entries=[{id:'client',name:'Synthetic Client',parentId:null,archived:false,sources:[]}];
+ await page.route('**/clients/odoo/customer',r=>{sent.push(['customer',r.request().postDataJSON()]);entries.push({id:'shop',name:'New Shop',parentId:null,archived:false,sources:[]});return r.fulfill({status:201,json:{created:101,catalog:{revision:2,entries}}});});
+ await page.route('**/clients/odoo/project',r=>{sent.push(['project',r.request().postDataJSON()]);entries.push({id:'pos',name:'Shop POS',parentId:'shop',archived:false,sources:[]});return r.fulfill({status:201,json:{created:102,catalog:{revision:3,entries}}});});
+ await page.goto('/dashboard.html?page=clients');
+ await page.getByLabel('New customer name').fill('New Shop');await page.getByLabel('Email (optional)').fill('shop@example.invalid');
+ await page.getByRole('button',{name:'Create customer'}).click();await expect(page.locator('.catalog-group summary').filter({hasText:'New Shop'})).toBeVisible();
+ await page.getByLabel('New project name').fill('Shop POS');
+ await page.getByRole('combobox',{name:'Customer'}).fill('New');await page.getByRole('option',{name:'New Shop'}).click();
+ await page.getByRole('button',{name:'Create project'}).click();
+ await expect.poll(()=>sent.length).toBe(2);
+ expect(sent).toEqual([['customer',{name:'New Shop',email:'shop@example.invalid',phone:''}],['project',{name:'Shop POS',clientId:'shop'}]]);
+ expect(mock.errors).toEqual([]);
+});
