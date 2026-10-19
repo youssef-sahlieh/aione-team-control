@@ -603,7 +603,7 @@ test('users edit hours and work done from the list but not client or billing',as
  expect(mock.errors).toEqual([]);
 });
 
-test('an administrator assigning a not-started ticket moves it: Jira to Dev Approved, internal to In Development',async({page})=>{
+test('an administrator assigning a not-started ticket moves only Jira tickets to Dev Approved; internal tickets keep their status',async({page})=>{
  const mock=await mockDashboard(page);const internalPuts=[],jiraMoves=[];
  const fresh=structuredClone(jiraIssue);fresh.fields.status={name:'Pending Approval',statusCategory:{key:'new'}};fresh.fields.labels=['keep-label'];
  await page.route('**/jira/search',r=>r.fulfill({json:{issues:[fresh],isLast:true}}));
@@ -617,7 +617,7 @@ test('an administrator assigning a not-started ticket moves it: Jira to Dev Appr
   await expect(page.getByRole('dialog')).toHaveCount(0);
  }
  await expect.poll(()=>jiraMoves).toEqual([{id:'21'}]);
- await expect.poll(()=>internalPuts.map(b=>b.status||null)).toEqual([null,'In Development']);
+ await expect.poll(()=>internalPuts.length).toBe(1);await page.waitForTimeout(300);expect(internalPuts.map(b=>b.status||null)).toEqual([null]); // developers saved, no status move
  expect(mock.errors).toEqual([]);
 });
 test('status changes from the list show at once and stay while Jira search catches up',async({page})=>{
@@ -777,5 +777,16 @@ test('files added to a Jira ticket upload to Jira from the ticket view',async({p
  await page.locator('#j-file').setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('hello jira')});
  await expect(page.locator('#toast')).toContainText('Attachment added to Jira.');
  expect(uploaded).toEqual({name:'notes.txt',size:10});
+ expect(mock.errors).toEqual([]);
+});
+test('saving developers from the ticket view moves a not-started Jira ticket to Dev Approved',async({page})=>{
+ const mock=await mockDashboard(page);const jiraMoves=[];
+ const fresh=structuredClone(jiraIssue);fresh.fields.status={name:'Open',statusCategory:{key:'new'}};fresh.fields.labels=['keep-label'];
+ await page.route('**/jira/search',r=>r.fulfill({json:{issues:[fresh],isLast:true}}));
+ await page.route('**/jira/issue/AION-101',r=>r.fulfill({json:{ok:true}}));
+ await page.route('**/jira/issue/AION-101/transitions',r=>{if(r.request().method()==='GET')return r.fulfill({json:{transitions:[{id:'21',name:'Approve',to:{name:'Dev Approved',statusCategory:{key:'indeterminate'}}},{id:'22',name:'Start',to:{name:'In Progress',statusCategory:{key:'indeterminate'}}}]}});jiraMoves.push(r.request().postDataJSON());return r.fulfill({json:{ok:true}});});
+ await page.goto('/dashboard.html#AION-101');
+ await page.locator('#d-devs .fc').filter({hasText:'ai1_builder'}).click();await page.locator('#d-savedevs').click();
+ await expect.poll(()=>jiraMoves).toEqual([{id:'21'}]);
  expect(mock.errors).toEqual([]);
 });

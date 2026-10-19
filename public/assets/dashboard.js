@@ -734,13 +734,12 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   }
   const initialsOf=n=>String(n||"?").split(/\s+/).filter(Boolean).map(x=>x[0]).join("").slice(0,2).toUpperCase()||"?";
   function assignOps(keys,id,name){ return keys.map(k=>{ const i=issueByKey(k); if(i&&i.assigneeId===id) return null; if(isOdoo(k)) return null; if(isInt(k)) return BYID[id]?{key:k,run:async()=>{await business.ensureBilling(k);return internalApi.update(k,{assignee:BYID[id]});}}:null; if(id===INTERNAL_ASSIGNEE)return null; return {key:k,run:async()=>{await business.ensureBilling(k);return jira.edit(k,{assignee:id?{accountId:id}:null},{assigneeName:id?name:"Unassigned"});}}; }).filter(Boolean); }
-  // When an administrator assigns a ticket that hasn't started yet, it moves forward: Jira tickets to
-  // "Dev Approved"; internal and Odoo tickets (which have no such status) to "In Development".
-  // Tickets already in progress or done keep their status.
+  // When an administrator assigns a Jira ticket that hasn't started yet (Open / Pending Approval), it moves to
+  // "Dev Approved". Internal and Odoo tickets keep their status; so do tickets already in progress or done.
   // Returns false when the status was meant to move but didn't. Reads the ticket as loaded (the page may already show the move).
   async function startAssigned(key){
-    const i=loadedIssue(key); if(!IS_ADMIN||!i||i.cat!=="new") return true;
-    const want=isInt(key)||isOdoo(key)?"in development":"dev approved";
+    const i=loadedIssue(key); if(!IS_ADMIN||!i||i.cat!=="new"||isInt(key)||isOdoo(key)) return true;
+    const want="dev approved";
     if(String(i.status||"").trim().toLowerCase()===want) return true;
     const t=(await getTransitions(key)).find(x=>String((x.to&&x.to.name)||"").trim().toLowerCase()===want);
     if(!t){ setTimeout(()=>toast(key+" was assigned, but its workflow can't move to “"+(want==="dev approved"?"Dev Approved":"In Development")+"” from "+i.status+"."),3500); return false; }
@@ -1045,7 +1044,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const devsPatch=want=>matching(i=>({devs:[...want],labels:labelsWith(i.labels||[],new Set(want))}),"devs");
   const assigneePatch=(id,name)=>matching(()=>({assignee:BYID[id]||null,assigneeId:id||null,assigneeName:id?name:"Unassigned"}),"assigneeId");
   // Assigning a ticket that hasn't started moves it forward (see startAssigned); shown at once too.
-  const startPatch=key=>{ const i=loadedIssue(key); if(!IS_ADMIN||!i||i.cat!=="new") return null; const want=isInt(key)||isOdoo(key)?"In Development":"Dev Approved"; return String(i.status).trim().toLowerCase()===want.toLowerCase()?null:statusPatch(want,"indeterminate"); };
+  const startPatch=key=>{ const i=loadedIssue(key); if(!IS_ADMIN||!i||i.cat!=="new"||isInt(key)||isOdoo(key)) return null; const want="Dev Approved"; return String(i.status).trim().toLowerCase()===want.toLowerCase()?null:statusPatch(want,"indeterminate"); };
   $("refresh").addEventListener("click",async()=>{ const b=$("refresh"); b.disabled=true; b.textContent="Refreshing…"; await reload(); b.disabled=false; b.textContent="Refresh"; });
 
   document.querySelectorAll(".seg [data-v]").forEach(b=>b.addEventListener("click",()=>{ state.view=b.dataset.v; try{localStorage.setItem("aion.view",state.view);}catch(e){} render(); }));
@@ -1289,7 +1288,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   $("d-asg").addEventListener("click",e=>{ if(dz.key) assigneePopover(e.currentTarget,[dz.key]); });
   $("d-adddev").addEventListener("click",()=>{ const v=$("d-newdev").value.trim().replace(/^ai1_/i,"").replace(/\s+/g,"").toLowerCase(); if(!v){ setMsg("d-devmsg","Type a name first.",false); return; } dz.devs.add(v); $("d-newdev").value=""; renderDevChips(); setMsg("d-devmsg","Added ai1_"+v+". Press Save developers.",true); });
   $("d-newdev").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("d-adddev").click(); } });
-  $("d-savedevs").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const labels=labelsWith(dz.labels,new Set(dz.devs)); const prev=new Set(dz.labels.filter(isDevLabel).map(devOf)); const want=new Set(dz.devs); const r=await runBatch([{key,added:[...dz.devs].filter(d=>!prev.has(d)),run:()=>(isOdoo(key)?odooApi.update(key,{devs:[...want]}):isInt(key)?internalApi.update(key,{devs:[...want]}):jira.edit(key,{labels})),patch:devsPatch(want)}],"Developers saved"); setMsg("d-devmsg",r.fail?"Not saved.":"Saved.",!r.fail); });
+  $("d-savedevs").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const labels=labelsWith(dz.labels,new Set(dz.devs)); const prev=new Set(dz.labels.filter(isDevLabel).map(devOf)); const want=new Set(dz.devs); const r=await runBatch(startingOps([{key,added:[...dz.devs].filter(d=>!prev.has(d)),run:()=>(isOdoo(key)?odooApi.update(key,{devs:[...want]}):isInt(key)?internalApi.update(key,{devs:[...want]}):jira.edit(key,{labels})),patch:devsPatch(want)}]),"Developers saved"); setMsg("d-devmsg",r.fail?"Not saved.":"Saved.",!r.fail); });
   const commentMentions=createCommentMentions({textarea:$("d-reply"),search:q=>jira.users(q),enabled:()=>!!dz.key&&!isInt(dz.key)&&!isOdoo(dz.key)});
   $("d-send").addEventListener("click",async()=>{ const key=dz.key, text=(isInt(key)||isOdoo(key))?$("d-reply").value.trim():commentMentions.text(); if(!key) return; if(!text){ setMsg("d-cmsg","Write something first.",false); return; } const after=$("d-after").value; const r=await runBatch([{key,run:()=>doComment(key,text)}],"Comment added"); if(!r.fail){$("d-reply").value="";commentMentions.reset();} setMsg("d-cmsg",r.fail?"Not sent.":"Sent.",!r.fail);
     if(!r.fail&&after){ const ix=after.indexOf("|"); const aid=after.slice(0,ix), aname=after.slice(ix+1); const r2=await doAssign([key],aid,aname); setMsg("d-cmsg",r2.fail?"Comment sent, but the assignee didn't change.":"Sent and assigned to "+aname+".",!r2.fail); } });
