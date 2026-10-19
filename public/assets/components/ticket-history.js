@@ -2,7 +2,7 @@ const node=(tag,cls,text)=>{const n=document.createElement(tag);n.className=cls;
 
 // Jira records every dashboard change under the proxy's one account, so the proxy keeps its own history with
 // the real person (GET /ticket-log). It is shown first, and Jira entries it explains show that person.
-const ACTIONS={status:"Moved status",assignee:"Changed assignee",developers:"Changed developers",comment:"Commented",due:"Set the due date",edit:"Edited",created:"Created the ticket"};
+const ACTIONS={status:"Moved status",assignee:"Changed assignee",developers:"Changed developers",comment:"Commented",due:"Set the due date",edit:"Edited",created:"Created the ticket",attachment:"Added an attachment"};
 const FIELDS={status:"Status",assignee:"Assignee",developers:"Developers",duedate:"Due date",title:"Title",priority:"Priority",description:"Description"};
 const JIRA_FIELD={status:["status"],assignee:["assignee"],developers:["labels"],duedate:["duedate"]};
 function changeLine(label,from,to){

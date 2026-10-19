@@ -574,6 +574,28 @@ async function route(request, env, url) {
     return pass(await jira(env, "/rest/api/3/user/search?maxResults=8&query=" + encodeURIComponent(q)));
   }
 
+  // Upload a file to a Jira ticket, exactly as it is (bytes in the request body, its name in ?name=).
+  // Only for someone who can see the ticket; Jira lists the proxy's account as uploader, so the local history
+  // records who really added it.
+  const up = /^\/jira\/issue\/([A-Z][A-Z0-9_]*-\d+)\/attachments$/.exec(path);
+  if (up && isOurKey(up[1]) && method === "POST") {
+    const t = await jira(env, "/rest/api/3/issue/" + up[1] + "?fields=labels");
+    if (!t.ok) return t.res;
+    if (!isAdmin && !hasDevLabel(t.data.fields && t.data.fields.labels)) return fail("forbidden", "This ticket isn't assigned to you.", 403);
+    const bytes = new Uint8Array(await request.arrayBuffer());
+    if (!bytes.length) return fail("bad_request", "The file is empty.", 400);
+    if (bytes.length > 4 * 1024 * 1024) return fail("too_large", "Files can be up to 4 MB.", 413);
+    const name = String(url.searchParams.get("name") || "file").replace(/[\\/\r\n"<>:|?*\x00-\x1f]/g, "_").trim().slice(0, 150) || "file";
+    const type = String(request.headers.get("Content-Type") || "").split(";")[0].trim();
+    const form = new FormData();
+    form.append("file", new Blob([bytes], { type: /^[\w.+-]+\/[\w.+-]+$/.test(type) ? type : "application/octet-stream" }), name);
+    const res = await fetch(env.JIRA_SITE + "/rest/api/3/issue/" + up[1] + "/attachments", { method: "POST", headers: { Authorization: "Basic " + btoa(env.JIRA_EMAIL + ":" + env.JIRA_API_TOKEN), Accept: "application/json", "X-Atlassian-Token": "no-check" }, body: form, signal: AbortSignal.timeout(30000) });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) return fail(res.status === 413 ? "too_large" : "jira", res.status === 413 ? "Jira refused the file size." : "Jira didn't accept the file (" + res.status + ").", res.status === 413 ? 413 : 502);
+    await recordTicketEvent(env, up[1], me, { action: "attachment", text: name });
+    return json({ attachments: Array.isArray(data) ? data.map((x) => ({ id: x.id, filename: x.filename, mimeType: x.mimeType, size: x.size, created: x.created })) : [] }, 201);
+  }
+
   // A Jira attachment, fetched with the proxy's Jira login so it opens in the dashboard without Jira.
   // Only for someone who can see the ticket, and only an attachment that belongs to that ticket.
   const att = /^\/jira\/issue\/([A-Z][A-Z0-9_]*-\d+)\/attachments\/(\d{1,20})$/.exec(path);

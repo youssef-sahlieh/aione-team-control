@@ -16,7 +16,7 @@ async function setup(){
  const cat=await readCatalog(env),client=cat.entries.find(e=>e.name==='Standalone'),parent=cat.entries.find(e=>e.name==='Acme'),sub=cat.entries.find(e=>e.name==='Branch A');
  const calls=[],state={closed:false,jiraFailure:false};
  globalThis.fetch=async(url,init={})=>{
-  calls.push({url:String(url),method:init.method||'GET',body:init.body?JSON.parse(init.body):null});
+  calls.push({url:String(url),method:init.method||'GET',body:typeof init.body==='string'?JSON.parse(init.body):init.body||null,headers:init.headers||{}});
   if((init.method||'GET')==='POST'){
    if(String(url).includes('/search/'))return Response.json({issues:[],isLast:true});
    if(state.jiraFailure)return Response.json({errorMessages:['Synthetic Jira failure']},{status:503});
@@ -29,7 +29,7 @@ async function setup(){
  const call=(path,method='GET',body,me=user)=>worker.fetch(new Request('https://proxy.invalid'+path,{method,headers:{Authorization:'Bearer '+tokens[me.role],'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})}),env);
  const create=async(me=user,extra={})=>{const r=await call('/internal','POST',{summary:'Task',devs:['builder'],metadata:{clientId:client.id,subClientId:null,...(me.role==='admin'?{billing:'billable'}:{})},...extra},me);assert.equal(r.status,201,JSON.stringify(await r.clone().json()));return (await r.json()).ticket;};
  const fields={revision:0,estimatedHours:1.25,actualHours:2.5,workDone:'Implemented and verified',clientId:client.id,subClientId:null};
- return {env,call,create,client,parent,sub,calls,state,fields};
+ return {env,call,create,client,parent,sub,calls,state,fields,tokens};
 }
 test('catalog mapping preserves names, standalone clients, source rows and repeat imports',async()=>{
  const s=await setup(),cat=await readCatalog(s.env);assert.equal(cat.entries.length,3);assert.equal(s.sub.parentId,s.parent.id);assert.equal(s.client.parentId,null);
@@ -222,4 +222,16 @@ test('administrators enter the Jira token expiry (Atlassian does not share it) a
  assert.equal(jira.status,'ok');assert.equal(jira.expiresAt.slice(0,10),'2099-01-31');assert.equal(jira.expirySource,'saved');
  assert.equal((await s.call('/integrations/expiry','POST',{id:'jira',date:''},admin)).status,200);
  assert.equal((await (await s.call('/integrations','GET',undefined,admin)).json()).keys.find(k=>k.id==='jira').expiresAt,null);
+});
+test('files added to a Jira ticket go to Jira as they are and the history names who added them',async()=>{
+ const s=await setup();
+ const upload=(bytes,me=user,name='report.pdf')=>worker.fetch(new Request('https://proxy.invalid/jira/issue/AION-5/attachments?name='+encodeURIComponent(name),{method:'POST',headers:{Authorization:'Bearer '+s.tokens[me.role],'Content-Type':'application/pdf'},body:bytes}),s.env);
+ const pdf=new Uint8Array([37,80,68,70,45,49]);
+ const r=await upload(pdf);assert.equal(r.status,201,await r.clone().text());
+ const sent=s.calls.find(c=>c.method==='POST'&&c.url.endsWith('/rest/api/3/issue/AION-5/attachments'));
+ assert.ok(sent.body instanceof FormData);assert.equal(sent.headers['X-Atlassian-Token'],'no-check');
+ const file=sent.body.get('file');assert.equal(file.name,'report.pdf');assert.deepEqual(new Uint8Array(await file.arrayBuffer()),pdf); // the same bytes
+ const log=(await (await s.call('/ticket-log?key=AION-5')).json()).events;assert.equal(log.at(-1).action,'attachment');assert.equal(log.at(-1).by.name,'Developer');
+ assert.equal((await upload(new Uint8Array(0))).status,400);
+ assert.equal((await upload(new Uint8Array(4*1024*1024+1))).status,413);
 });

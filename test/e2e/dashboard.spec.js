@@ -769,3 +769,13 @@ test('pictures in a comment or description show in place and open the large prev
  await page.locator('#d-comments .cimg').click();await expect(page.locator('dialog.file-preview img.fp-img')).toBeVisible();
  expect(mock.errors).toEqual([]);
 });
+test('files added to a Jira ticket upload to Jira from the ticket view',async({page})=>{
+ const mock=await mockDashboard(page);let uploaded=null;
+ await page.route('**/jira/issue/AION-101/attachments?name=*',async r=>{uploaded={name:new URL(r.request().url()).searchParams.get('name'),size:(r.request().postDataBuffer()||Buffer.alloc(0)).length};return r.fulfill({status:201,json:{attachments:[{id:'950',filename:'notes.txt'}]}});});
+ await page.goto('/dashboard.html#AION-101');
+ await expect(page.locator('label[for="j-file"]').first()).toBeVisible();
+ await page.locator('#j-file').setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('hello jira')});
+ await expect(page.locator('#toast')).toContainText('Attachment added to Jira.');
+ expect(uploaded).toEqual({name:'notes.txt',size:10});
+ expect(mock.errors).toEqual([]);
+});

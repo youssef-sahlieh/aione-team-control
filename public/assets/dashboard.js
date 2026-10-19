@@ -1077,8 +1077,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     $("d-key").textContent=key+(isInt(key)?"":" ↗"); $("d-key").href=$("d-open").href=ticketUrl(key); if(isInt(key)) $("d-key").removeAttribute("href");
     $("d-title").textContent=i?i.summary:key; $("d-status").textContent=i?i.status:""; $("d-status").className="stbtn "+(i?stK(i):"");
     $("d-facts").replaceChildren(); $("d-desc").replaceChildren(el("span",null,"Loading…")); $("d-comments").replaceChildren(); $("d-ccount").textContent=""; $("d-trans").replaceChildren(el("span","msg","Loading…"));
-    ["d-devmsg","d-duemsg","d-cmsg"].forEach(id=>setMsg(id,"")); $("d-att").replaceChildren(el("span","msg","Loading…")); $("d-acount").textContent=""; $("d-asgname").textContent=i?i.assigneeName:""; $("d-after").replaceChildren(new Option("Keep current assignee","")); $("d-attadd").href=$("d-cattach").href=ticketUrl(key);
-    dz.labels=i?i.labels.slice():[]; dz.devs=new Set(i?i.devs:[]); renderDevChips(); $("d-due").value=i&&i.due?i.due:"";
+    ["d-devmsg","d-duemsg","d-cmsg"].forEach(id=>setMsg(id,"")); $("d-att").replaceChildren(el("span","msg","Loading…")); $("d-acount").textContent=""; $("d-asgname").textContent=i?i.assigneeName:""; $("d-after").replaceChildren(new Option("Keep current assignee",""));    dz.labels=i?i.labels.slice():[]; dz.devs=new Set(i?i.devs:[]); renderDevChips(); $("d-due").value=i&&i.due?i.due:"";
     $("d-body").scrollTop=0; $("d-close").focus(); renderDrawerHist(key); loadDetail(key);
   }
   async function loadTransitions(key){
@@ -1183,6 +1182,20 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       row.appendChild(acts); box.appendChild(row);
     });
   }
+  // Files added to a Jira ticket go to Jira as they are, through the proxy (up to 4 MB each).
+  $("j-file").addEventListener("change",async e=>{
+    const key=dz.key, files=[...e.target.files]; e.target.value=""; if(!key||isInt(key)||isOdoo(key)||!files.length) return;
+    const msg=$("j-attmsg"), idle=msg.textContent; let ok=0; const fails=[];
+    for(const [n,f] of files.entries()){
+      if(f.size>4*1024*1024){ fails.push(f.name+": bigger than 4 MB"); continue; }
+      msg.className="msg"; msg.textContent="Uploading "+(n+1)+" of "+files.length+": "+f.name+"…";
+      try{ await apiFile("/jira/issue/"+key+"/attachments?name="+encodeURIComponent(f.name),{method:"POST",body:f,type:f.type||"application/octet-stream"}); ok++; }
+      catch(err){ fails.push(f.name+": "+errorText(err)); }
+    }
+    msg.textContent=idle; msg.className="msg";
+    if(fails.length) toast((ok?ok+" added to Jira. ":"")+"Not added:",fails,true); else toast(ok===1?"Attachment added to Jira.":ok+" attachments added to Jira.");
+    if(ok&&dz.key===key){ loadDetail(key); refreshKeys([key]); }
+  });
   $("i-file").addEventListener("change",async e=>{
     const key=dz.key, files=[...e.target.files]; e.target.value=""; if(!key||!isInt(key)||!files.length) return;
     const msg=$("i-attmsg"); let ok=0; const fails=[];
