@@ -753,3 +753,19 @@ test('internal notes can go to anyone in the dashboard, not only the developer l
  await expect(page.locator('#pop').getByRole('button',{name:/Second Developer/})).toBeVisible();
  expect(mock.errors).toEqual([]);
 });
+
+test('pictures in a comment or description show in place and open the large preview',async({page})=>{
+ const mock=await mockDashboard(page);
+ const t=structuredClone(jiraIssue);t.fields.attachment=[{id:'900',filename:'screen.png',mimeType:'image/png',size:68,created:'2026-10-11T08:00:00Z',author:{displayName:'Test Reporter'}}];
+ t.renderedFields.comment.comments[0].body='<p>See this:</p><p><span class="image-wrap"><img src="/secure/attachment/900/screen.png"></span></p>';
+ t.renderedFields.description='<p>Before <img src="https://jira.example.invalid/rest/api/3/attachment/content/900"> and <img src="/secure/attachment/555/other.png"></p>';
+ await page.route('**/jira/search',r=>r.fulfill({json:{issues:[t],isLast:true}}));
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==','base64');
+ await page.route('**/jira/issue/AION-101/attachments/900',r=>r.fulfill({status:200,contentType:'image/png',body:png}));
+ await page.goto('/dashboard.html#AION-101');
+ await expect(page.locator('#d-comments .cimg img')).toHaveAttribute('src',/^blob:/);
+ await expect(page.locator('#d-desc .cimg img')).toHaveAttribute('src',/^blob:/);
+ await expect(page.locator('#d-desc')).toContainText('image'); // a picture from elsewhere keeps the label
+ await page.locator('#d-comments .cimg').click();await expect(page.locator('dialog.file-preview img.fp-img')).toBeVisible();
+ expect(mock.errors).toEqual([]);
+});

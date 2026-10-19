@@ -202,7 +202,28 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // Jira's HTML carries inline styles; drop them before parsing (they're never shown, and the page's security policy reports each one).
   const noStyles=h=>String(h||"").replace(/<style[\s\S]*?<\/style>/gi,"").replace(/\sstyle\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi,"");
   const toText=h=>(new DOMParser().parseFromString(noStyles(h),"text/html").body.textContent||"").replace(/\s+/g," ").trim();
-  function richNode(body){
+  // Pictures in a Jira description or comment are the ticket's own attachments: they load through the proxy
+  // (which checks the ticket is yours) and show in place; a click opens the large preview. ctx = {key, attachments}.
+  const IMAGES=new Map();
+  function attachmentFor(n,ctx){
+    if(!ctx||!ctx.key||!(ctx.attachments||[]).length) return null;
+    const src=n.getAttribute("src")||"", id=(/\/(?:attachment\/content|secure\/(?:attachment|thumbnail))\/(\d+)/.exec(src)||[])[1];
+    const name=n.getAttribute("data-alt")||n.getAttribute("alt")||decodeURIComponent((src.split("?")[0].split("/").pop())||"");
+    return ctx.attachments.find(a=>String(a.id)===id)||ctx.attachments.find(a=>name&&a.filename===name)||null;
+  }
+  function inlineImage(a,key){
+    const box=el("button","cimg"); box.type="button"; box.title="Open "+a.filename; box.setAttribute("aria-label","Open image "+a.filename);
+    const img=el("img"); img.alt=a.filename; img.loading="lazy"; box.appendChild(img);
+    const load=()=>apiFile("/jira/issue/"+key+"/attachments/"+a.id);
+    const id=key+"/"+a.id;
+    (IMAGES.get(id)||(IMAGES.set(id,load().then(r=>r.blob()).then(b=>URL.createObjectURL(b))),IMAGES.get(id)))
+      .then(url=>{img.src=url;}).catch(()=>{IMAGES.delete(id);box.replaceWith(el("span","att","image: "+a.filename));});
+    if(IMAGES.size>80){const first=IMAGES.keys().next().value;IMAGES.get(first).then(u=>URL.revokeObjectURL(u)).catch(()=>{});IMAGES.delete(first);}
+    box.addEventListener("click",()=>previewFile({name:a.filename,type:a.mimeType,load}));
+    return box;
+  }
+  const isImage=a=>/^image\//.test(a.mimeType||"")||/\.(png|jpe?g|gif|webp|bmp)$/i.test(a.filename||"");
+  function richNode(body,ctx){
     const box=el("div"); const s=String(body||"").trim();
     if(!s){ const e=el("span",null,"No text."); e.style.color="var(--muted)"; box.appendChild(e); return box; }
     if(!/^</.test(s)){ box.className="plain"; box.textContent=s; return box; }
@@ -210,9 +231,9 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     (function walk(src,dst){ src.childNodes.forEach(n=>{
       if(n.nodeType===3){ dst.appendChild(document.createTextNode(n.nodeValue)); return; }
       if(n.nodeType!==1) return; const t=n.tagName;
-      if(n.getAttribute("data-type")==="media"){ dst.appendChild(el("span","att","attachment"+(n.getAttribute("data-alt")?": "+n.getAttribute("data-alt"):""))); return; }
+      if(n.getAttribute("data-type")==="media"){ const a=attachmentFor(n,ctx); if(a&&isImage(a)){ dst.appendChild(inlineImage(a,ctx.key)); return; } dst.appendChild(el("span","att","attachment"+(n.getAttribute("data-alt")?": "+n.getAttribute("data-alt"):""))); return; }
       if(t==="SCRIPT"||t==="STYLE"||t==="IFRAME") return;
-      if(t==="IMG"){ dst.appendChild(el("span","att","image")); return; }
+      if(t==="IMG"){ const a=attachmentFor(n,ctx); dst.appendChild(a&&isImage(a)?inlineImage(a,ctx.key):el("span","att","image")); return; }
       if(ALLOWED.has(t)){ const c=document.createElement(t); if(t==="A"){ const h=n.getAttribute("href")||""; if(/^https?:\/\//i.test(h)){ c.href=h; c.target="_blank"; c.rel="noopener"; } } dst.appendChild(c); walk(n,c); }
       else walk(n,dst);
     }); })(doc.body,box);
@@ -1082,7 +1103,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       $("d-title").textContent=f.summary||key; $("d-status").textContent=ni.status; $("d-status").className="stbtn "+stK(ni);
       $("d-facts").replaceChildren(fact("Assignee",(f.assignee&&f.assignee.displayName)||"Unassigned"),fact("Reporter",(f.reporter&&f.reporter.displayName)||""),fact("Epic",ni.parent?ni.parent.name:""),fact("Type",ni.type),fact("Priority",ni.priority),fact("Created date",createdDate(f.created)),fact("Updated",ago(f.updated)),fact("Due",f.duedate?fmtDate(f.duedate):"not set"));
       dz.labels=(f.labels||[]).slice(); dz.devs=new Set(ni.devs); renderDevChips(); $("d-due").value=f.duedate||"";
-      $("d-desc").replaceChildren(richNode(f.description));
+      const pictures={key,attachments:f.attachment||[]};
+      $("d-desc").replaceChildren(richNode(f.description,pictures));
       renderAttachments(f.attachment||[]);
       { const an=(f.assignee&&f.assignee.displayName)||"Unassigned"; const ak=BYID[f.assignee&&f.assignee.accountId]; const box=$("d-asgname"); box.replaceChildren(el("span","av "+(ak?"kp-"+ak:"k8"),initialsOf(an)),el("span",null,an)); }
       { const sel=$("d-after"); sel.replaceChildren(new Option("Keep current assignee",""));
@@ -1096,7 +1118,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       cm.forEach(c=>{ const aid=c.author&&c.author.accountId, name=writers[String(c.id)]||(c.author&&c.author.displayName)||"Someone";
         const cd=el("div","cmt"+(BYID[aid]?" mine":" ext")); const meta=el("div","cmeta"); meta.appendChild(el("b",null,name)); meta.appendChild(el("span",null,ago(c.created)));
         const rb=el("button","linkbtn sp","Reply"); rb.type="button"; rb.addEventListener("click",()=>{ const t=$("d-reply"); if(!t.value.trim()) t.value=name.split(" ")[0]+", "; t.focus(); t.scrollIntoView({block:"center",behavior:"smooth"}); });
-        meta.appendChild(rb); cd.appendChild(meta); const b=richNode(c.body); b.classList.add("rich"); b.dir="auto"; cd.appendChild(b); box.appendChild(cd); });
+        meta.appendChild(rb); cd.appendChild(meta); const b=richNode(c.body,pictures); b.classList.add("rich"); b.dir="auto"; cd.appendChild(b); box.appendChild(cd); });
     }catch(err){ if(dz.key===key) $("d-desc").replaceChildren(el("span","msg err",errorText(err))); }
   }
   // Drawer contents for an internal ticket (all data is already loaded).
