@@ -87,3 +87,8 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
   .mon-table td.mon-acts .btn{margin:0;flex:1 1 auto}
 }
 
+/* Phones: the large form fills the screen. */
+@media (max-width:600px){
+  .pop.modal{inset:0!important;transform:none;width:100%;max-height:none;height:100dvh;border-radius:0;padding-top:env(safe-area-inset-top,0px)}
+  .pop.modal::before{display:none}
+}

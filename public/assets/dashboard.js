@@ -28,7 +28,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   let IS_ADMIN=true, MY_DEV="", MY_EMAIL="";
   let notifyOn=true; try{ notifyOn=localStorage.getItem("aion.notify")!=="0"; }catch(e){}
   const devK=d=>DEV_COLOR[d]||("k"+(1+[...d].reduce((a,c)=>a+c.charCodeAt(0),0)%8));
-  const STATUS_ORDER=["open","pending approval","dev approved","in development","reopened","pending qa","in qa","done review","resolved","closed"];
+  const STATUS_ORDER=["open","pending approval","dev approved","in development","on hold","reopened","pending qa","in qa","done review","resolved","closed"];
   const stIdx=s=>{ const i=STATUS_ORDER.indexOf(s.toLowerCase()); return i<0?99:i; };
   const FIELDS=["summary","status","assignee","labels","duedate","created","updated","priority","issuetype","comment","parent","reporter"];
   function applyConfig(cfg){
@@ -77,7 +77,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   };
   // Internal tickets (INT-…): kept by the proxy, never in Jira. They're shown with every Jira ticket and
   // every action below goes to the right place for each kind.
-  let INTERNAL=false, INT={}, INT_STATUSES=[{name:"Open",cat:"new"},{name:"In Development",cat:"indeterminate"},{name:"Closed",cat:"done"}], INT_PRIORITIES=["Highest","High","Medium","Low"];
+  let INTERNAL=false, INT={}, INT_STATUSES=[{name:"Open",cat:"new"},{name:"In Development",cat:"indeterminate"},{name:"On Hold",cat:"indeterminate"},{name:"Closed",cat:"done"}], INT_PRIORITIES=["Highest","High","Medium","Low"];
   const internalApi={
     list:()=>api("/internal"),
     create:b=>api("/internal",{method:"POST",body:b}),
@@ -221,7 +221,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
 
   const norm=raw=>normalizeJiraIssue(raw,BYID,toText);
   const isNew=i=>NEW_STATUSES.includes(i.status.toLowerCase());
-  const stK=i=>{ const s=(i.status||"").toLowerCase(); if(i.cat==="done"||s==="resolved"||s==="closed") return "k7"; if(s==="open") return "k1"; if(s==="pending approval") return "k4"; if(s==="dev approved") return "k5"; if(s==="in development") return "k3"; if(s.includes("qa")) return "k6"; if(s==="reopened") return "k2"; return "k8"; };
+  const stK=i=>{ const s=(i.status||"").toLowerCase(); if(i.cat==="done"||s==="resolved"||s==="closed") return "k7"; if(s==="open") return "k1"; if(s==="pending approval") return "k4"; if(s==="dev approved") return "k5"; if(s==="in development") return "k3"; if(s==="on hold") return "k8"; if(s.includes("qa")) return "k6"; if(s==="reopened") return "k2"; return "k8"; };
   const issueByKey=k=>(state.issues||[]).find(i=>i.key===k);
   const allDevs=()=>{ const s=new Set(DEVS); (state.issues||[]).forEach(i=>i.devs.forEach(d=>s.add(d))); return [...s].sort(); };
   const needsReply=i=>i.last&&!i.last.fromTeam&&Date.parse(i.updated)>=Date.now()-(typeof state!=="undefined"?state.updDays:3)*dayMs;
@@ -661,7 +661,13 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   function updateBulk(){ const n=state.sel.size; $("bulk").hidden=n===0; $("b-count").textContent=n+" selected"; }
 
   let popAnchor=null;
-  function closePop(){ $("pop").classList.remove("wide"); $("pop").hidden=true; $("pop").replaceChildren(); popAnchor=null; }
+  function closePop(){ $("pop").classList.remove("wide","modal"); $("pop").hidden=true; $("pop").replaceChildren(); popAnchor=null; popScrim.hidden=true; }
+  // A large form (new or edited internal ticket) opens as a centered window that stays open while scrolling;
+  // it closes with Cancel, ✕ or Esc. popAnchor stays empty, so clicks and scrolling elsewhere leave it open.
+  const popScrim=el("div","pop-scrim"); popScrim.hidden=true; document.body.appendChild(popScrim);
+  function openModal(){ const p=$("pop"); p.classList.remove("wide"); p.classList.add("modal"); p.style.left=p.style.top=""; p.hidden=false; popAnchor=null; popScrim.hidden=false; }
+  // Esc on a form with something typed asks first, so the text isn't lost by accident.
+  const modalTyped=()=>[...$("pop").querySelectorAll("input[type=text],input:not([type]),textarea")].some(n=>n.value.trim()&&!n.readOnly);
   function placePop(anchor){
     const p=$("pop"); p.hidden=false; popAnchor=anchor;
     const r=anchor.getBoundingClientRect(), w=p.offsetWidth, h=p.offsetHeight, vw=document.documentElement.clientWidth, vh=window.innerHeight;
@@ -669,8 +675,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     p.style.left=left+"px"; p.style.top=top+"px";
   }
   document.addEventListener("mousedown",e=>{ const p=$("pop"); if(!p.hidden&&!p.contains(e.target)&&popAnchor&&!popAnchor.contains(e.target)) closePop(); });
-  document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ if(!$("pop").hidden) closePop(); else if(!$("drawer").hidden) closeDrawer(); } });
-  window.addEventListener("scroll",()=>{ if($("pop").hidden)return;if(!popAnchor?.isConnected){closePop();return;}const bounds=popAnchor.getBoundingClientRect();if(bounds.bottom<0||bounds.top>innerHeight)closePop();else placePop(popAnchor); },{passive:true});
+  document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ if(!$("pop").hidden){ if($("pop").classList.contains("modal")&&modalTyped()&&!confirm("Close this form? What you typed will be lost.")) return; closePop(); } else if(!$("drawer").hidden) closeDrawer(); } });
+  window.addEventListener("scroll",()=>{ if($("pop").hidden||$("pop").classList.contains("modal"))return;if(!popAnchor?.isConnected){closePop();return;}const bounds=popAnchor.getBoundingClientRect();if(bounds.bottom<0||bounds.top>innerHeight)closePop();else placePop(popAnchor); },{passive:true});
 
   function devPopover(anchor,keys,mode){
     const p=$("pop"); p.replaceChildren(); const one=keys.length===1&&mode==="set";
@@ -1165,7 +1171,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   function internalPopover(anchor,key){
     const t=key?INT[key]:null;
     const p=$("pop"); p.replaceChildren(); p.classList.add("wide");
-    p.appendChild(el("h4",null,t?"Edit "+key:"New internal ticket · not sent to Jira"));
+    const head=el("div","modal-head"); head.appendChild(el("h4",null,t?"Edit "+key:"New internal ticket · not sent to Jira"));
+    const x=el("button","icon-btn","✕"); x.type="button"; x.setAttribute("aria-label","Close"); x.addEventListener("click",()=>{ if(!modalTyped()||confirm("Close this form? What you typed will be lost.")) closePop(); }); head.appendChild(x); p.appendChild(head);
     const body=el("div","body"); p.appendChild(body);
     const fld=(label,node)=>{ const f=el("div","fld"); f.appendChild(el("label",null,label)); f.appendChild(node); body.appendChild(f); return node; };
     const title=fld("Title",el("input","inp")); title.value=t?t.summary:""; title.dir="auto";
@@ -1203,7 +1210,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
         if(IS_ADMIN&&notifyOn&&r.ticket.devs.length) setTimeout(()=>notifyDevs([{key:r.ticket.key,added:r.ticket.devs}]),1500);
       }catch(err){ save.disabled=false; msg.textContent=errorText(err); msg.className="msg err"; }
     });
-    foot.appendChild(msg); foot.appendChild(save); p.appendChild(foot); placePop(anchor); title.focus();
+    const cancel=el("button","btn","Cancel"); cancel.type="button"; cancel.addEventListener("click",()=>{ if(!modalTyped()||confirm("Close this form? What you typed will be lost.")) closePop(); });
+    foot.appendChild(msg); foot.appendChild(cancel); foot.appendChild(save); p.appendChild(foot); openModal(); title.focus();
   }
   $("new-int").addEventListener("click",e=>internalPopover(e.currentTarget));
   $("d-edit").addEventListener("click",e=>{ if(dz.key&&isInt(dz.key)) internalPopover(e.currentTarget,dz.key); });

@@ -40,6 +40,7 @@ import { recordTicketEvent } from "./ticket-log.js";
 export const STATUSES = [
   { name: "Open", cat: "new" },
   { name: "In Development", cat: "indeterminate" },
+  { name: "On Hold", cat: "indeterminate" },
   { name: "Closed", cat: "done" }
 ];
 export const PRIORITIES = ["Highest", "High", "Medium", "Low"];

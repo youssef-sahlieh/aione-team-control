@@ -736,3 +736,16 @@ test('a change that fails is kept under Sync errors and can be retried; API keys
  await expect(page.locator('.sync-item')).toHaveCount(0);await expect(page.locator('.sync-panel').first()).toContainText('Nothing failed');
  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
+
+test('the new internal ticket form is a large window that stays open while scrolling; internal tickets can go On Hold',async({page})=>{
+ await page.setViewportSize({width:1280,height:700});const mock=await mockDashboard(page);await page.goto('/dashboard.html');
+ await page.locator('#create-ticket').click();
+ const form=page.locator('#pop.modal');await expect(form).toBeVisible();await form.locator('input').first().fill('Draft title');
+ await page.mouse.wheel(0,1500);await page.evaluate(()=>window.scrollBy(0,800));await page.waitForTimeout(300);
+ await expect(form).toBeVisible();expect((await form.boundingBox()).width).toBeGreaterThan(700);
+ page.once('dialog',d=>d.accept());await form.getByRole('button',{name:'Cancel'}).click();await expect(page.locator('#pop')).toBeHidden();
+ await page.evaluate(()=>window.scrollTo(0,0));
+ await page.locator('#view .item').filter({hasText:'INT-101'}).locator('.c-st button').click();
+ await expect(page.locator('#pop').getByRole('button',{name:/On Hold/})).toBeVisible();
+ expect(mock.errors).toEqual([]);
+});

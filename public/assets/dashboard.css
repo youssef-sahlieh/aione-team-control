@@ -521,3 +521,12 @@ button.key.odoo:hover{text-decoration:underline}
 }
 .db-more{all:unset;cursor:pointer;color:var(--accent);font-weight:600;white-space:nowrap;padding:2px 0}
 .db-more:hover,.db-more:focus-visible{text-decoration:underline}
+/* Large forms (new / edited internal ticket): a centered window that scrolls inside itself. */
+.pop-scrim{position:fixed;inset:0;background:rgb(15 23 42 / .45);z-index:60}
+.pop.modal{left:50%!important;top:50%!important;right:auto;bottom:auto;transform:translate(-50%,-50%);width:min(880px,calc(100vw - 32px));max-width:none;max-height:calc(100dvh - 48px);z-index:61;border-radius:14px}
+.pop.modal .modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px 8px;border-bottom:1px solid var(--line)}
+.pop.modal .modal-head h4{padding:0;font-size:13px}
+.pop.modal .body{padding:12px 10px;gap:6px}
+.pop.modal .fld{padding:6px 12px}
+.pop.modal textarea.inp{min-height:180px}
+.pop.modal .foot{border-top:1px solid var(--line);padding:12px 16px}
