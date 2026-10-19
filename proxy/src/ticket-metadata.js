@@ -37,13 +37,13 @@ export function requireBilling(record, env) {
 }
 export function validHours(n) { return typeof n==='number' && Number.isFinite(n) && n>0 && n<=1000000 && Math.round(n*100)/100===n; }
 // The client is optional for now: no client is fine anywhere (saving, moving status, closing); a client or
-// sub-client that is chosen must be valid.
+// project that is chosen must be valid. Any project can go with any client (not only the client's own ones).
 export function selectionErrors(catalog,m,{active=false}={}) {
   if(!m.clientId&&!m.subClientId)return [];
   const client=catalog.entries.find(e=>e.id===m.clientId&&!e.parentId),errors=[];
   if(!client || (active&&client.archived))return ['Choose a client'];
   const children=catalog.entries.filter(e=>e.parentId===client.id&&!e.archived);
-  const sub=catalog.entries.find(e=>e.id===m.subClientId&&e.parentId===client.id);
+  const sub=catalog.entries.find(e=>e.id===m.subClientId&&e.parentId);
   if(m.subClientId&&(!sub||(active&&sub.archived)))errors.push('Choose a valid project');
   else if(!m.subClientId&&children.length)errors.push('Choose a project');
   return errors;

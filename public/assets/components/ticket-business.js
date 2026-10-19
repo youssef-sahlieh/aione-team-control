@@ -52,7 +52,12 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     option(client,optional?'No client (optional)':'Choose client…','');for(const c of clients().sort((a,b)=>label(a).localeCompare(label(b))))option(client,label(c),c.id);
     if(values.clientId&&!clients().some(e=>e.id===values.clientId)){const old=catalog.entries.find(e=>e.id===values.clientId);if(old)option(client,old.name+' (archived)',old.id);}
     client.value=values.clientId||'';client.disabled=disabled;sub.disabled=disabled;
-    const fill=()=>{sub.replaceChildren();option(sub,children(client.value).length?'Choose project…':'No project','');for(const c of children(client.value).sort((a,b)=>label(a).localeCompare(label(b))))option(sub,label(c),c.id);};fill();
+    // Every project can be chosen: the client's own projects first, then all the others (with their client).
+    const fill=()=>{sub.replaceChildren();const own=children(client.value).sort((a,b)=>label(a).localeCompare(label(b)));
+      option(sub,own.length?'Choose project…':'No project (optional)','');for(const c of own)option(sub,label(c),c.id);
+      const parentName=id=>{const p=catalog.entries.find(e=>e.id===id);return p&&p.name!=='No contact'?' · '+label(p):'';};
+      const others=catalog.entries.filter(e=>e.parentId&&!e.archived&&e.parentId!==client.value).sort((a,b)=>label(a).localeCompare(label(b)));
+      if(others.length){const group=document.createElement('optgroup');group.label=own.length?'Other projects':'All projects';for(const c of others)group.append(new Option(label(c)+parentName(c.parentId),c.id));sub.append(group);}};fill();
     if(values.subClientId&&![...sub.options].some(o=>o.value===values.subClientId)){const old=catalog.entries.find(e=>e.id===values.subClientId);if(old)option(sub,old.name+' (archived)',old.id);}
     sub.value=values.subClientId||'';client.addEventListener('change',fill);
     combobox(client);const subBox=combobox(sub);client.addEventListener('change',subBox.refresh);

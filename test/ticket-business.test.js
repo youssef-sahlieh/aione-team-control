@@ -52,11 +52,11 @@ test('internal creation defaults to shared assignee, stores fields separately an
  const noClient=await s.call('/internal','POST',{summary:'No client yet'},user);assert.equal(noClient.status,201);
  assert.equal((await readMetadata(s.env,(await noClient.json()).ticket.key)).clientId,null);
 });
-test('client selection requires matching active sub-client and locks administrator-only changes',async()=>{
+test('client selection requires an active client and locks administrator-only changes; any project can go with it',async()=>{
  const s=await setup();assert.equal((await s.call('/internal','POST',{summary:'Task',metadata:{clientId:s.parent.id}},user)).status,400);
  const t=await s.create(user,{metadata:{clientId:s.parent.id,subClientId:s.sub.id}});
  assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,clientId:s.client.id,subClientId:null}},user)).status,403);
- assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,clientId:s.client.id,subClientId:s.sub.id}},admin)).status,400);
+ assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,clientId:s.client.id,subClientId:s.sub.id}},admin)).status,200);
 });
 test('billing never reaches user metadata, history or batch reads and forged writes fail',async()=>{
  const s=await setup(),t=await s.create(admin,{metadata:{clientId:s.client.id,billing:'billable'}});
@@ -310,4 +310,13 @@ test('AI suggests a ticket description from the ticket itself; replacing a Jira 
  const put=await s.call('/jira/issue/AION-5/description','PUT',{text:'Goal:\n- Fix the labels',source:'ai'});assert.equal(put.status,200);
  const sent=s.calls.find(c=>c.method==='PUT'&&c.url.endsWith('/rest/api/2/issue/AION-5'));assert.deepEqual(sent.body,{fields:{description:'Goal:\n- Fix the labels'}});
  const log=(await (await s.call('/ticket-log?key=AION-5')).json()).events;assert.equal(log.at(-1).by.name,'Developer');assert.equal(log.at(-1).text,'Description suggested by AI');
+});
+test('any project can be chosen for a ticket, also one listed under another client',async()=>{
+ const s=await setup(),t=await s.create();
+ const m=await (await s.call('/ticket-metadata?key='+t.key,'GET',undefined,{email:'admin@example.invalid',role:'admin'})).json();
+ const r=await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:m.metadata.revision,clientId:s.client.id,subClientId:s.sub.id}},{email:'admin@example.invalid',role:'admin'});
+ assert.equal(r.status,200,JSON.stringify(await r.clone().json()));const saved=(await r.json()).metadata;
+ assert.equal(saved.clientId,s.client.id);assert.equal(saved.subClientId,s.sub.id);assert.equal(saved.subClientName,'Branch A');
+ const bad=await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:saved.revision,subClientId:s.parent.id}},{email:'admin@example.invalid',role:'admin'});
+ assert.equal(bad.status,400);
 });

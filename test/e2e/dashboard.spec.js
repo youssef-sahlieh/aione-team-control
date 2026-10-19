@@ -1027,3 +1027,19 @@ test('Work log setup loads once and stays steady while the dashboard refreshes',
  expect(mock.calls.filter(c=>c.path==='/time-entries/setup').length).toBe(1);
  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
+
+test('the Project list offers every project: the client\'s own first, then all the others',async({page})=>{
+ const mock=await mockDashboard(page);
+ const catalog={revision:1,entries:[{id:'client',name:'Synthetic Client',parentId:null,archived:false,sources:[]},{id:'other',name:'Other Client',parentId:null,archived:false,sources:[]},{id:'none',name:'No contact',parentId:null,archived:false,sources:[]},
+  {id:'p1',name:'Website',parentId:'other',archived:false,sources:[]},{id:'p2',name:'Gardening app',parentId:'none',archived:false,sources:[]},{id:'p3',name:'Old one',parentId:'other',archived:true,sources:[]}]};
+ await page.route('**/clients',r=>r.request().method()==='GET'?r.fulfill({json:catalog}):r.fallback());
+ await page.goto('/dashboard.html#INT-101');const panel=page.locator('#business-fields');
+ const project=panel.locator('.business-client-section .combo-input').nth(1);await expect(project).toHaveAttribute('placeholder','No project (optional)');
+ await project.click();const list=panel.locator('.combo-list').nth(1);
+ await expect(list.locator('.combo-opt')).toHaveText(['Gardening app','Website · Other Client']);
+ await list.getByText('Gardening app',{exact:true}).click();await expect(project).toHaveValue('Gardening app');
+ await panel.getByRole('button',{name:'Save ticket fields',exact:true}).click();
+ await expect.poll(()=>mock.calls.find(c=>c.path==='/ticket-metadata'&&c.method==='PUT')?.body?.fields?.subClientId).toBe('p2');
+ expect(mock.calls.find(c=>c.path==='/ticket-metadata'&&c.method==='PUT').body.fields.clientId).toBe('client');
+ expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
