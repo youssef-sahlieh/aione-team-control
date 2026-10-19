@@ -16,7 +16,7 @@
 //   (admin: everything; user: only the tickets labelled with their developer name). Without it, the
 //   emails in TEAM_EMAILS sign in with TEAM_PASSWORD as admins. The first sign-in with TEAM_PASSWORD
 //   after the database is added creates admin accounts for everyone in TEAM_EMAILS.
-import { BusinessError, businessResponse, catalogRoutes, metadataRoutes, readMetadata, readCatalog, publicMetadata, requireBilling, billingRequired, withTicketLock, guardedTransition } from "./ticket-metadata.js";
+import { BusinessError, businessResponse, catalogRoutes, clientDetails, metadataRoutes, readMetadata, readCatalog, publicMetadata, requireBilling, billingRequired, withTicketLock, guardedTransition } from "./ticket-metadata.js";
 import {savedReportRoutes} from "./saved-reports.js";
 import { reportRoutes, buildReport } from "./reports.js";
 import { dateRequestRoutes } from "./date-requests.js";
@@ -28,7 +28,7 @@ import { dbReportRoutes, dbReportCron } from "./db-report.js";
 import { odooAppRoutes, odooTranslations } from "./odoo-app.js";
 import { cookieSessionRequest } from "./sessions.js";
 import { SESSION_MS } from "./session-policy.js";
-import { aiChat, aiBrief, aiConfigured } from "./ai.js";
+import { aiChat, aiBrief, aiConfigured, aiClientName, AIError } from "./ai.js";
 import { githubConfigured, syncPulls, prsByKey } from "./github.js";
 import { recordTicketEvent, ticketLogRoutes } from "./ticket-log.js";
 import { integrationRoutes } from "./integrations.js";
@@ -408,6 +408,14 @@ async function route(request, env, url) {
     const devs=f.labels.filter(l=>/^ai1_/i.test(l)).map(l=>l.slice(4).toLowerCase());if(me.role!=="admin"&&(!me.dev||!devs.includes(me.dev)))return null;
     return {key,title:f.summary,description:f.description,devs,closed:f.status.statusCategory.key==="done",status:f.status.name,cat:f.status.statusCategory.key,created:f.created,updated:f.updated,due:f.duedate,completedAt:f.resolutiondate||null,assignee:f.assignee?.displayName,internal:false};
   };
+  // A suggested display name for a client, from its Odoo details (administrators; nothing is saved here).
+  if(path==="/clients/ai-name"&&method==="POST"){
+    if(me.role!=="admin")return fail("forbidden","Only administrators manage the client catalog.",403);
+    const b=await readJson(request);if(!b||typeof b.id!=="string")return fail("bad_request","Choose a client.",400);
+    try{return json({suggestion:await aiClientName(env,me,await clientDetails(env,b.id))});}
+    // AI service errors (including the hosted service's daily limit) come back with their own message.
+    catch(e){if(e instanceof BusinessError)throw e;if(e instanceof AIError||(e&&typeof e.status==="number"&&typeof e.code==="string"))return json({code:e.code,error:e.message},e.status);return fail("ai_unavailable","Could not suggest a name. Please try again.",502);}
+  }
   if(path==="/clients"||path.startsWith("/clients/"))return catalogRoutes(request,env,url,me);
   // Many tickets at once (the dashboard's list): one database read for internal tickets and, for users, one
   // Jira search for their own tickets, instead of one Jira read per ticket. Administrators see every project ticket.

@@ -16,11 +16,13 @@ export const catalogKey=env=>prefix(env)+'catalog';
 export const metadataKey=(env,key)=>prefix(env)+'ticket:'+key;
 export async function readCatalog(env) { return JSON.parse(await requireStore(env).get(catalogKey(env)) || '{"revision":0,"entries":[]}'); }
 export async function readMetadata(env,key) { return {...empty(),...JSON.parse(await requireStore(env).get(metadataKey(env,key)) || '{}')}; }
+// The name shown for a client or project: the AI name an administrator chose, else its Odoo name.
+export const shownName=e=>e?(e.aiName||e.name):'';
 export function publicMetadata(record,me,catalog) {
   const {history,...m}=record;
   const visible=me.role==='admin'?m:Object.fromEntries(Object.entries(m).filter(([k])=>k!=='billing'));
   const client=catalog?.entries.find(e=>e.id===m.clientId),sub=catalog?.entries.find(e=>e.id===m.subClientId);
-  return {...visible,clientName:client?.name||'',subClientName:sub?.name||''};
+  return {...visible,clientName:shownName(client),subClientName:shownName(sub)};
 }
 export function publicHistory(m,me) {
   return m.history.map(h=>me.role==='admin'?h:{...h,changes:Object.fromEntries(Object.entries(h.changes||{}).filter(([k])=>k!=='billing'))})
@@ -163,6 +165,42 @@ export async function prepareImport(catalog,rows,source='project-workbook') {
   }
   return {next,preview:{rows:rows.length,added:added.length,existing:next.entries.length-added.length,clients:next.entries.filter(e=>!e.parentId).length,subClients:next.entries.filter(e=>e.parentId).length,entries:next.entries.filter(e=>added.includes(e.id))}};
 }
+// Reads only the fields this Odoo has (versions differ, e.g. "mobile"), so a missing one can't fail the read.
+async function readFields(env,model,ids,wanted){
+  const known=await odoo(env,model,'fields_get',[],{attributes:['type']}).catch(()=>({}));
+  const fields=wanted.filter(f=>known[f]);
+  return fields.length&&ids.length?odoo(env,model,'read',[ids],{fields}):[];
+}
+const many2one=v=>Array.isArray(v)?String(v[1]||''):'';
+export async function clientDetails(env,clientId){
+  const catalog=await readCatalog(env),client=catalog.entries.find(e=>e.id===clientId&&!e.parentId);
+  if(!client)problem('Client not found.',404,'not_found');
+  const projects=catalog.entries.filter(e=>e.parentId===client.id);
+  const out={client:{id:client.id,name:client.name,aiName:client.aiName||'',archived:!!client.archived},contact:null,projects:projects.map(e=>({id:e.id,name:e.name,aiName:e.aiName||'',archived:!!e.archived,odoo:null}))};
+  if(!odooConfigured(env)||client.name===NO_CUSTOMER)return out;
+  let partner=(client.sources||[]).find(x=>x.source==='odoo-customer')?.row;
+  if(!partner){const [found]=await odoo(env,'res.partner','search_read',[[['name','=',client.name],['parent_id','=',false]]],{fields:['id'],limit:1});partner=found&&found.id;}
+  if(partner){
+    const [c]=await readFields(env,'res.partner',[partner],['name','email','phone','mobile','website','street','street2','city','zip','country_id','vat','company_registry','category_id','child_ids','create_date','ref','industry_id','is_company']);
+    if(c){
+      const tags=Array.isArray(c.category_id)&&c.category_id.length?(await odoo(env,'res.partner.category','read',[c.category_id],{fields:['name']}).catch(()=>[])).map(t=>t.name):[];
+      out.contact={id:c.id,name:c.name||'',email:c.email||'',phone:c.phone||'',mobile:c.mobile||'',website:c.website||'',
+        address:[c.street,c.street2,[c.zip,c.city].filter(Boolean).join(' '),many2one(c.country_id)].filter(Boolean).join(', '),
+        vat:c.vat||'',companyRegistry:c.company_registry||'',reference:c.ref||'',industry:many2one(c.industry_id),tags,
+        people:Array.isArray(c.child_ids)?c.child_ids.length:0,created:c.create_date||'',isCompany:!!c.is_company,
+        url:String(env.ODOO_URL||'').replace(/\/+$/,'')+'/web#id='+c.id+'&model=res.partner&view_type=form'};
+    }
+  }
+  // Each project's Odoo details (manager, last update), matched by the Odoo id kept from the sync.
+  const ids=projects.map(e=>(e.sources||[]).find(x=>x.source==='odoo')?.row).filter(Boolean);
+  if(ids.length){
+    const rows=await readFields(env,'project.project',ids,['name','user_id','write_date','create_date','last_update_status','date_start','date','task_count','active']).catch(()=>[]);
+    for(const r of rows){const e=projects.find(p=>(p.sources||[]).some(x=>x.source==='odoo'&&x.row===r.id));const item=e&&out.projects.find(p=>p.id===e.id);
+      if(item)item.odoo={id:r.id,manager:many2one(r.user_id),updated:r.write_date||'',created:r.create_date||'',status:typeof r.last_update_status==='string'?r.last_update_status:'',start:r.date_start||'',end:r.date||'',tasks:Number.isInteger(r.task_count)?r.task_count:null,
+        url:String(env.ODOO_URL||'').replace(/\/+$/,'')+'/web#id='+r.id+'&model=project.project&view_type=form'};}
+  }
+  return out;
+}
 async function createInOdoo(env,url,me,b){
   if(me.role!=='admin')problem('Only administrators manage the client catalog.',403,'forbidden');
   if(!odooConfigured(env))problem('Odoo is not connected.',501,'odoo_off');
@@ -187,6 +225,11 @@ async function createInOdoo(env,url,me,b){
   return Response.json({created,catalog:await readCatalog(env)},{status:201,headers:{'Cache-Control':'no-store'}});
 }
 export async function catalogRoutes(request,env,url,me) {
+  if(url.pathname==='/clients/details'&&request.method==='GET'){
+    if(me.role!=='admin')problem('Only administrators manage the client catalog.',403,'forbidden');
+    let details;try{details=await clientDetails(env,url.searchParams.get('id')||'');}catch(e){if(e instanceof BusinessError)throw e;problem("Couldn't read the client from Odoo: "+String(e.message||'unknown error').slice(0,200),502,'odoo');}
+    return Response.json(details,{headers:{'Cache-Control':'no-store'}});
+  }
   if((url.pathname==='/clients/odoo/customer'||url.pathname==='/clients/odoo/project')&&request.method==='POST'){
     let b=null;try{b=JSON.parse(await request.text());}catch{problem('Invalid request.');}
     return createInOdoo(env,url,me,b);
@@ -200,7 +243,7 @@ export async function catalogRoutes(request,env,url,me) {
     return Response.json({...result,...(result.changed?{catalog:await catalogRoutes(new Request(url,{method:'GET'}),env,new URL('/clients',url),me).then(r=>r.json())}:{})},{headers:{'Cache-Control':'no-store'}});
   }
   const store=requireStore(env),catalog=await readCatalog(env),admin=me.role==='admin';
-  if(request.method==='GET')return Response.json({revision:catalog.revision,entries:catalog.entries.map(e=>admin?e:({id:e.id,name:e.name,parentId:e.parentId,archived:e.archived}))},{headers:{'Cache-Control':'no-store'}});
+  if(request.method==='GET')return Response.json({revision:catalog.revision,entries:catalog.entries.map(e=>admin?e:({id:e.id,name:e.name,...(e.aiName?{aiName:e.aiName}:{}),parentId:e.parentId,archived:e.archived}))},{headers:{'Cache-Control':'no-store'}});
   if(!admin)problem('Only administrators manage the client catalog.',403,'forbidden');
   const raw=await request.text();if(raw.length>2000000)problem('Catalog request too large.',413);
   let b;try{b=JSON.parse(raw);}catch{problem('Invalid catalog request.');}
@@ -212,7 +255,7 @@ export async function catalogRoutes(request,env,url,me) {
   if(url.pathname==='/clients/import')next=(await prepareImport(catalog,b.rows)).next;
   else if(url.pathname==='/clients'){
     next=structuredClone(catalog);
-    if(b.id){const e=next.entries.find(e=>e.id===b.id);if(!e)problem('Client not found.',404);if('name'in b)e.name=cleanName(b.name);if('archived'in b){if(typeof b.archived!=='boolean')problem('Invalid archive value.');e.archived=b.archived;}}
+    if(b.id){const e=next.entries.find(e=>e.id===b.id);if(!e)problem('Client not found.',404);if('name'in b)e.name=cleanName(b.name);if('archived'in b){if(typeof b.archived!=='boolean')problem('Invalid archive value.');e.archived=b.archived;}if('aiName'in b){if(b.aiName===''||b.aiName===null)delete e.aiName;else e.aiName=cleanName(b.aiName).slice(0,80);}}
     else {const parentId=b.parentId||null;if(parentId&&!next.entries.some(e=>e.id===parentId&&!e.parentId&&!e.archived))problem('Choose an active parent client.');const name=cleanName(b.name);next.entries.push({id:await idFor(parentId,name),name,parentId,archived:false,sources:[]});}
     const seen=new Set();for(const e of next.entries){const k=(e.parentId||'')+'|'+nameKey(e.name);if(seen.has(k))problem('This client or project already exists.');seen.add(k);}
   }else problem('Not found.',404);

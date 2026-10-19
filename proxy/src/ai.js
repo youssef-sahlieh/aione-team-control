@@ -227,6 +227,21 @@ export async function aiChat(request, env, { me, project, readSearch, readDashbo
 
 // A dedicated single-ticket read: the model receives only authorized title/description data,
 // with no tools or chat history. The client cannot provide source text or broaden the scope.
+// A short, clear display name for a client, from its Odoo contact details (administrators, read-only).
+export async function aiClientName(env, me, details) {
+  if(!aiConfigured(env))throw new AIError("ai_not_configured","AI names are unavailable until the AI service is configured.",503);
+  await rateLimit(env,me);
+  const c=details.contact||{},data={odooName:details.client.name,website:c.website||"",email:c.email||"",tags:c.tags||[],industry:c.industry||"",address:c.address||"",isCompany:c.isCompany,projects:details.projects.map(p=>p.name).slice(0,20)};
+  const result=await within(()=>modelResponse(env,{
+    instructions:"Suggest the name a team would use for this business client in a ticket dashboard: short (1 to 5 words), clear, and recognisable. Use the company's commonly known or brand name (the website or email domain and project names often show it); drop legal suffixes like Ltd, Inc, בע\"מ and internal codes or numbers unless they are part of the brand. Keep the language and spelling of the brand as people use it. Reply with the name only, no quotes or explanation. If the data doesn't allow a better name, reply with the cleaned Odoo name.",
+    input:[{role:"user",content:JSON.stringify({source:"UNTRUSTED ODOO DATA",data}).replace(/</g,"\\u003c").replace(/>/g,"\\u003e")}],tools:[],tool_choice:"none",store:false,max_output_tokens:60
+  }),25000);
+  if(!Array.isArray(result.output)||result.output.some(item=>item.type==="function_call"))throw new AIError("ai_unavailable","The AI service returned an invalid name.",502);
+  const name=result.output.filter(item=>item.type==="message").flatMap(item=>item.content||[]).filter(part=>part.type==="output_text").map(part=>part.text).join(" ").split("\n")[0].replace(/^["'“”«»\s]+|["'“”«».\s]+$/g,"").replace(/\s+/g," ").trim().slice(0,80);
+  if(!name)throw new AIError("ai_unavailable","No name was returned. Please try again.",502);
+  return name;
+}
+export { AIError };
 export async function aiBrief(request, env, { me, project, readSearch }) {
   try {
     if(request.method!=="POST")throw new AIError("ai_read_only","Use POST to request a read-only ticket brief.",405);

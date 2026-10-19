@@ -271,3 +271,30 @@ test('all report snapshot includes old closed tickets with one source scan and s
 });
 
 test('saved report endpoints are authenticated and refuse ordinary users',async()=>{const s=await setup();assert.equal((await s.call('/reports/latest')).status,403);assert.equal((await s.call('/reports/refresh','POST',{},user)).status,403);const first=await s.call('/reports/latest','GET',undefined,admin);assert.equal(first.status,200);assert.equal((await first.json()).report.workflow,'all');const second=await s.call('/reports/latest','GET',undefined,admin);assert.equal((await second.json()).cached,true);assert.equal((await s.call('/reports/refresh','POST',{},admin)).status,200);});
+test('client details come from Odoo (only fields it has) and an AI name, once chosen, is the name shown on tickets',async()=>{
+ const s=await setup();const realFetch=globalThis.fetch;
+ Object.assign(s.env,{ODOO_URL:'https://odoo.invalid',ODOO_DB:'db',ODOO_LOGIN:'bot@example.invalid',ODOO_API_KEY:'k',AI_PROVIDER:async()=>({output:[{type:'message',content:[{type:'output_text',text:'"Acme Retail."'}]}]})});
+ const cat=await readCatalog(s.env),acme=cat.entries.find(e=>e.name==='Acme'&&!e.parentId),branch=cat.entries.find(e=>e.name==='Branch A');
+ acme.sources=[{source:'odoo-customer',row:1}];branch.sources=[{source:'odoo',row:10}];await s.env.STORE.set(catalogKey(s.env),JSON.stringify(cat));
+ globalThis.fetch=async(u,init)=>{const p=JSON.parse(init.body).params;if(p.service==='common')return Response.json({result:7});const [model,method,args]=[p.args[3],p.args[4],p.args[5]];
+  if(method==='fields_get')return Response.json({result:model==='res.partner'?{name:{},email:{},phone:{},website:{},city:{},country_id:{},vat:{},category_id:{},child_ids:{},create_date:{}}:{name:{},user_id:{},write_date:{},task_count:{}}});
+  if(model==='res.partner'&&method==='read'){assert.ok(!p.args[6].fields.includes('mobile'));return Response.json({result:[{id:1,name:'Acme Ltd',email:'info@acme.example',phone:'03-1',website:'acme.example',city:'Haifa',country_id:[1,'Israel'],vat:'51',category_id:[4],child_ids:[2,3],create_date:'2026-01-02 10:00:00'}]});}
+  if(model==='res.partner.category')return Response.json({result:[{id:4,name:'VIP'}]});
+  if(model==='project.project')return Response.json({result:[{id:10,name:'Branch A',user_id:[9,'Rami'],write_date:'2026-10-01 09:00:00',task_count:7}]});
+  return Response.json({result:[]});};
+ try{
+  assert.equal((await s.call('/clients/details?id='+acme.id)).status,403); // users don't see the catalog details
+  const d=await (await s.call('/clients/details?id='+acme.id,'GET',undefined,admin)).json();
+  assert.equal(d.contact.email,'info@acme.example');assert.deepEqual(d.contact.tags,['VIP']);assert.equal(d.contact.people,2);assert.equal(d.contact.address,'Haifa, Israel');
+  const p=d.projects.find(x=>x.name==='Branch A');assert.equal(p.odoo.manager,'Rami');assert.equal(p.odoo.tasks,7);
+  assert.equal((await s.call('/clients/ai-name','POST',{id:acme.id})).status,403);
+  const ai=await (await s.call('/clients/ai-name','POST',{id:acme.id},admin)).json();assert.equal(ai.suggestion,'Acme Retail');
+  // Chosen AI name: stored on the client and shown on tickets; clearing it shows the Odoo name again.
+  const rev=(await readCatalog(s.env)).revision;
+  assert.equal((await s.call('/clients','PUT',{revision:rev,id:acme.id,aiName:'Acme Retail'},admin)).status,200);
+  const t=await s.create(admin,{metadata:{clientId:acme.id,subClientId:branch.id,billing:'billable'}});
+  const meta=(await (await s.call('/ticket-metadata/batch','POST',{keys:[t.key]},admin)).json()).records[t.key];assert.equal(meta.clientName,'Acme Retail');
+  assert.equal((await s.call('/clients','PUT',{revision:rev+1,id:acme.id,aiName:''},admin)).status,200);
+  assert.equal((await readCatalog(s.env)).entries.find(e=>e.id===acme.id).aiName,undefined);
+ }finally{globalThis.fetch=realFetch;}
+});
