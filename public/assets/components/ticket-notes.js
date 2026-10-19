@@ -26,7 +26,7 @@ export function createTicketNotes({api, isAdmin}) {
       const choices = [];
       for (const recipient of result.recipients || []) {
         const row = element('label'), checkbox = element('input'); checkbox.type = 'checkbox'; checkbox.value = recipient.email;
-        checkbox.checked = drafts.get(key)?.recipients ? drafts.get(key).recipients.includes(recipient.email) : true;
+        checkbox.checked = drafts.get(key)?.recipients ? drafts.get(key).recipients.includes(recipient.email) : recipient.role !== 'user';
         row.append(checkbox,document.createTextNode(' '+recipient.name)); row.style.display = 'block'; recipientField.append(row); choices.push(checkbox);
       }
       const remember = () => drafts.set(key,{text:input.value,recipients:choices.filter(c => c.checked).map(c => c.value),id:crypto.randomUUID()});

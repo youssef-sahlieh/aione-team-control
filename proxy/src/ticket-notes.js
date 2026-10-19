@@ -21,7 +21,7 @@ export async function ticketNoteRoutes(request, env, url, me, {readTicket, sendM
   if (!ticket || (me.role !== 'admin' && (!me.dev || !ticket.devs.includes(me.dev)))) return fail('This ticket is unavailable.', 404);
   const storageKey = 'notes:' + env.JIRA_PROJECT + ':' + key;
   // Notes go between everyone in the dashboard (administrators and developers, not yourself), plus any
-  // configured contacts. Administrators are listed first and are the default choice.
+  // configured contacts. Administrators and contacts are the default choice; other people are opt-in.
   const people = (await listUsers(store)).filter(u => u.email !== me.email);
   const contacts = (env.INTERNAL_NOTE_RECIPIENTS || []).filter(r => validEmail(r.email) && r.email.endsWith('@'+env.MAIL_DOMAIN));
   const recipients = [...new Map([...people.map(u => ({email:u.email, name:u.name || u.email, role:u.role})), ...contacts.map(r => ({...r, role:'contact'}))].map(r => [r.email,{email:r.email,name:r.name || r.email,role:r.role}])).values()];
@@ -41,7 +41,7 @@ export async function ticketNoteRoutes(request, env, url, me, {readTicket, sendM
     const notes = JSON.parse(raw);
     const existing = notes.find(n => n.id === body.id);
     if (existing) return existing.author.email === me.email ? json({note:existing}) : fail('Invalid note identifier.', 409);
-    const selected = body.recipients === undefined ? recipients.filter(r => r.role === 'admin').map(r => r.email) : body.recipients;
+    const selected = body.recipients === undefined ? recipients.filter(r => r.role !== 'user').map(r => r.email) : body.recipients;
     if (!Array.isArray(selected) || !selected.length || selected.length > 30 || selected.some(email => typeof email !== 'string' || !recipients.some(r => r.email === email))) return fail('Choose one or more people from the recipient list.');
     const to = [...new Set(selected)];
     if (notes.length >= 500) return fail('This ticket has reached its note limit. Contact an admin.', 409);
