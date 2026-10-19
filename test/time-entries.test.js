@@ -9,7 +9,7 @@ import {todayIn,suggestFields,formatMinutes} from '../proxy/src/time-entries.js'
 const admin={email:'admin@example.invalid',name:'Manager',role:'admin',dev:'builder',v:1};
 const user={email:'user@example.invalid',name:'Dana Developer',role:'user',dev:'builder',v:1};
 const other={email:'other@example.invalid',name:'Other Dev',role:'user',dev:'someone',v:1};
-const FIELDS={users:'x_studio_users',entryUuid:'x_aione_entry_uuid',userUuid:'x_aione_user_uuid',lineRef:'x_aione_ticket_ref',taskRef:'x_aione_ticket_ref'};
+const FIELDS={users:'x_studio_users',entryUuid:'x_aione_entry_uuid',userUuid:'x_aione_user_uuid',lineRef:'x_aione_ticket_ref'};
 const daysAgo=n=>new Date(Date.parse(todayIn()+'T12:00:00Z')-n*86400000).toISOString().slice(0,10);
 
 function fakeOdoo(){
@@ -17,7 +17,10 @@ function fakeOdoo(){
     employees:[{id:5,name:'Bot employee'}],lockDate:false,nextId:100,calls:[],
     // 'lost': Odoo saves the line but the answer never arrives; 'down': no answer and nothing saved; 'refuse': Odoo refuses.
     createMode:null,taskMode:null,helpdesk:{302:{id:300,name:'Printer down',ticket_ref:'302',user_id:[12,'Dana'],stage_id:[2,'In Progress'],project_id:[12,'Support']}}};
-  const match=(row,domain)=>domain.every(([f,op,v])=>op==='in'?v.includes(row[f]):row[f]===v);
+  const value=v=>Array.isArray(v)?v[0]:v;
+  // Odoo's "=like": % matches anything; everything else is literal.
+  const like=(text,pattern)=>new RegExp('^'+pattern.split('%').map(p=>p.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('.*')+'$').test(text);
+  const match=(row,domain)=>domain.every(([f,op,v])=>op==='in'?v.includes(value(row[f])):op==='=like'?like(String(row[f]),v):value(row[f])===v);
   o.fetch=async(url,init)=>{
     const body=JSON.parse(init.body),{service,method,args}=body.params,reply=result=>Response.json({jsonrpc:'2.0',id:body.id,result});
     const refuse=(message,name='odoo.exceptions.ValidationError')=>Response.json({jsonrpc:'2.0',id:body.id,error:{message:'Odoo Server Error',data:{name,message}}});
@@ -78,10 +81,10 @@ async function setup({mode='on',pilot=[]}={}){
 
 test('field discovery suggests the Users field and the custom reference fields',()=>{
   const line=[{name:'x_studio_users',label:'Users',custom:true},{name:'x_aione_entry_uuid',label:'Work entry id',custom:true},{name:'x_aione_user_uuid',label:'User id',custom:true},{name:'x_aione_ticket_ref',label:'Ticket',custom:true}];
-  const s=suggestFields({line,task:[{name:'x_aione_ticket_ref',label:'Ticket',custom:true}]});
-  assert.equal(s.users,'x_studio_users');assert.equal(s.entryUuid,'x_aione_entry_uuid');assert.equal(s.userUuid,'x_aione_user_uuid');assert.equal(s.lineRef,'x_aione_ticket_ref');assert.equal(s.taskRef,'x_aione_ticket_ref');
+  const s=suggestFields({line});
+  assert.equal(s.users,'x_studio_users');assert.equal(s.entryUuid,'x_aione_entry_uuid');assert.equal(s.userUuid,'x_aione_user_uuid');assert.equal(s.lineRef,'x_aione_ticket_ref');
   // Two fields labelled Users: the administrator must choose.
-  assert.equal(suggestFields({line:[...line,{name:'x_users2',label:'Users',custom:true}],task:[]}).users,'');
+  assert.equal(suggestFields({line:[...line,{name:'x_users2',label:'Users',custom:true}]}).users,'');
   assert.equal(formatMinutes(90),'1h 30m');assert.equal(formatMinutes(15),'15m');
 });
 
@@ -90,7 +93,7 @@ test('setup: administrators only; switching on needs every field and a valid Odo
   assert.equal((await s.call('/time-entries/setup','GET',undefined,user)).status,403);
   const view=await s.call('/time-entries/setup','GET',undefined,admin);
   assert.equal(view.data.suggested.users,'x_studio_users');assert.equal(view.data.defaults.ok,true);assert.equal(view.data.defaults.employee.name,'Bot employee');
-  assert.equal((await s.call('/time-entries/setup','PUT',{revision:0,mode:'on',fields:{...FIELDS,taskRef:''}},admin)).data.code,'setup_incomplete');
+  assert.equal((await s.call('/time-entries/setup','PUT',{revision:0,mode:'on',fields:{...FIELDS,lineRef:''}},admin)).data.code,'setup_incomplete');
   assert.equal((await s.call('/time-entries/setup','PUT',{revision:0,mode:'on',fields:{...FIELDS,entryUuid:'name'}},admin)).status,400);
   s.odoo.employees=[];
   const blocked=await s.call('/time-entries/setup','PUT',{revision:0,mode:'on',fields:FIELDS},admin);
@@ -115,7 +118,7 @@ test('logging work creates one Odoo task per ticket and one timesheet line per e
   assert.equal(first.status,201,JSON.stringify(first.data));assert.equal(first.data.entry.status,'synced');assert.equal(first.data.entry.statusLabel,'Synced');
   const second=await s.log(key,{minutes:15,description:'Wrote tests',date:daysAgo(3)});assert.equal(second.data.entry.status,'synced');
   assert.equal(s.odoo.tasks.size,1);const task=[...s.odoo.tasks.values()][0];
-  assert.equal(task.name,'['+key+'] Fix the report');assert.equal(task.x_aione_ticket_ref,'aione:internal:'+key);assert.equal(task.project_id[0],10);
+  assert.equal(task.name,'['+key+'] Fix the report');assert.equal(task.project_id[0],10);
   assert.equal(s.odoo.lines.size,2);const line=[...s.odoo.lines.values()][0];
   assert.equal(line.x_studio_users,'Dana Developer');assert.equal(line.x_aione_entry_uuid,first.data.entry.id);assert.equal(line.unit_amount,1.5);assert.equal(line.name,'Investigated the export');
   assert.equal(line.x_aione_ticket_ref,'internal:'+key);assert.match(line.x_aione_user_uuid,/^[0-9a-f-]{36}$/);assert.equal(line.task_id[0],task.id);assert.equal(line.employee_id,undefined);
@@ -127,6 +130,17 @@ test('logging work creates one Odoo task per ticket and one timesheet line per e
   assert.equal(view.data.destination.projectName,'Branch A');assert.equal(view.data.canLog,true);
   // Actual hours = the hours entered before the work log + the logged work (2 decimals), shown in lists.
   const batch=await s.call('/ticket-metadata/batch','POST',{keys:[key]});assert.equal(batch.data.records[key].loggedMinutes,105);assert.equal(batch.data.records[key].totalActualHours,1.75);
+});
+
+test('the ticket\'s task is found by its name in the project and reused',async()=>{
+  const s=await setup(),key=await s.ticket();
+  s.odoo.tasks.set(77,{id:77,name:'['+key+'] Fix the report (renamed)',project_id:[10,'Branch A']});
+  s.odoo.tasks.set(78,{id:78,name:'['+key+'9] Another ticket',project_id:[10,'Branch A']});
+  const r=await s.log(key);assert.equal(r.data.entry.status,'synced');
+  assert.equal(s.odoo.tasks.size,2);assert.equal([...s.odoo.lines.values()][0].task_id[0],77);
+  s.odoo.tasks.set(79,{id:79,name:'['+key+'] Copy',project_id:[10,'Branch A']});
+  await s.env.STORE.del('tw:AION:task:'+key);
+  const dup=await s.log(key);assert.equal(dup.data.entry.status,'review');assert.match(dup.data.entry.reason,/More than one Odoo task/);
 });
 
 test('input rules: required description, 1 minute to 24 hours, no future dates, Odoo lock date',async()=>{

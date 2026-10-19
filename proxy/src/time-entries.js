@@ -7,7 +7,8 @@
 //   e:<uuid>          one work entry (JSON); its id is the idempotency key the browser sends
 //   t:<KEY>           set of the ticket's entry ids        m:<YYYY-MM>  set of entry ids by work month
 //   pending           set of entries still to send          sum:<KEY>    the ticket's totals (for lists)
-//   task:<KEY>        the ticket's Odoo task {taskId, projectId} (or a pending create / a problem)
+//   task:<KEY>        the ticket's Odoo task {taskId, projectId} (or a pending create / a problem); in Odoo the
+//                     task is found by its name, "[KEY] Title", in the ticket's project
 //   lock:e:<uuid>, lock:task:<KEY>   short locks: one sync per entry, one task create per ticket
 // An entry and its set memberships are written in one atomic step (store.writeIndexed).
 //
@@ -40,8 +41,8 @@ const clean=(s,n)=>String(s||'').slice(0,n);
 const json=(data,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store'}});
 
 // ---- Setup ----
-export const FIELD_ROLES=['users','entryUuid','userUuid','lineRef','taskRef'];
-const blankConfig=()=>({revision:0,mode:'off',pilot:[],fields:{users:'',entryUuid:'',userUuid:'',lineRef:'',taskRef:''},mapping:{},verified:null,updatedAt:null,updatedBy:null});
+export const FIELD_ROLES=['users','entryUuid','userUuid','lineRef'];
+const blankConfig=()=>({revision:0,mode:'off',pilot:[],fields:{users:'',entryUuid:'',userUuid:'',lineRef:''},mapping:{},verified:null,updatedAt:null,updatedBy:null});
 export async function readConfig(env){
   const raw=await requireStore(env).get(K.cfg(env)),c=raw?JSON.parse(raw):{},b=blankConfig();
   return {...b,...c,fields:{...b.fields,...(c.fields||{})},mapping:{...(c.mapping||{})},pilot:Array.isArray(c.pilot)?c.pilot:[]};
@@ -53,11 +54,10 @@ const TEXT=new Set(['char','text']);
 const usable=f=>Object.entries(f||{}).filter(([n,d])=>TEXT.has(d.type)&&d.store!==false&&!d.readonly&&n!=='name').map(([n,d])=>({name:n,label:String(d.string||n),type:d.type,custom:n.startsWith('x_')}));
 async function odooFields(env){
   const attrs={attributes:['string','type','store','readonly']};
-  const [line,task]=await Promise.all([odoo(env,'account.analytic.line','fields_get',[],attrs),odoo(env,'project.task','fields_get',[],attrs)]);
-  return {line:usable(line),task:usable(task)};
+  return {line:usable(await odoo(env,'account.analytic.line','fields_get',[],attrs))};
 }
 // The "Users" text field: labelled Users, or a custom field named after users (not one of the id fields).
-export function suggestFields({line,task}){
+export function suggestFields({line}){
   const one=list=>list.length===1?list[0].name:'';
   const users=line.filter(f=>/^users?$/i.test(f.label.trim())||(f.custom&&/user/i.test(f.name)&&!/uuid|_id$/i.test(f.name)));
   const custom=line.filter(f=>f.custom);
@@ -65,8 +65,7 @@ export function suggestFields({line,task}){
     users:one(users),usersCandidates:users.map(f=>f.name),
     entryUuid:one(custom.filter(f=>/entry|external|work/i.test(f.name)&&/uuid|_id|ref/i.test(f.name))),
     userUuid:one(custom.filter(f=>/user/i.test(f.name)&&/uuid/i.test(f.name))),
-    lineRef:one(custom.filter(f=>/ticket/i.test(f.name)&&!/uuid/i.test(f.name))),
-    taskRef:one(task.filter(f=>f.custom&&/ticket|aione|dashboard/i.test(f.name)))
+    lineRef:one(custom.filter(f=>/ticket/i.test(f.name)&&!/uuid/i.test(f.name)))
   };
 }
 // Odoo fills in the employee and company of a timesheet line from the user the proxy signs in as: that user
@@ -159,8 +158,7 @@ async function saveSetup(env,me,b){
     if(missing.length)problem('Choose every Odoo field before switching on: '+missing.join(', ')+'.',400,'setup_incomplete');
     const fields=await odooFields(env),has=(list,n)=>list.some(f=>f.name===n),isCustom=n=>n.startsWith('x_');
     for(const r of ['users','entryUuid','userUuid','lineRef'])if(!has(fields.line,next.fields[r]))problem('Odoo timesheet lines have no editable text field '+next.fields[r]+'.',400,'setup_incomplete');
-    if(!has(fields.task,next.fields.taskRef))problem('Odoo tasks have no editable text field '+next.fields.taskRef+'.',400,'setup_incomplete');
-    for(const r of ['entryUuid','userUuid','lineRef','taskRef'])if(!isCustom(next.fields[r]))problem('Reference fields must be custom fields (x_…): '+next.fields[r]+'.',400,'setup_incomplete');
+    for(const r of ['entryUuid','userUuid','lineRef'])if(!isCustom(next.fields[r]))problem('Reference fields must be custom fields (x_…): '+next.fields[r]+'.',400,'setup_incomplete');
     const defaults=await checkDefaults(env);
     if(!defaults.ok)problem("Can't switch on: "+defaults.problem,400,'setup_defaults');
     next.verified={ok:true,at:new Date().toISOString(),user:defaults.user,company:defaults.company,employee:defaults.employee};
@@ -245,7 +243,7 @@ async function withLock(env,what,fn,busy){
 }
 
 // ---- Odoo sync ----
-const taskRef=e=>'aione:'+e.source+':'+e.ticket;
+const taskName=e=>('['+e.ticket+'] '+(e.ticketTitle||'')).trim().slice(0,250);
 async function destination(env,cfg,e){
   if(e.source==='odoo'){const pid=e.hdProjectId||cfg.mapping.helpdesk||null;return pid?{projectId:Number(pid)}:{setup:'This Odoo Helpdesk ticket has no project, and Work log setup has no default project for Helpdesk tickets.'};}
   const m=await readMetadata(env,e.ticket);
@@ -267,16 +265,14 @@ async function ensureTask(env,cfg,e,projectId){
     if(t.projectId!==projectId)return {review:"The ticket's Odoo project changed after its task #"+t.taskId+' was created in another project. Move the task in Odoo, then send again.'};
     return {taskId:t.taskId};
   }
-  const ref=taskRef(e),found=await odoo(env,'project.task','search_read',[[[cfg.fields.taskRef,'=',ref]]],{fields:['project_id'],context:{active_test:false},limit:5});
-  if(found.length>1){const review='More than one Odoo task is linked to '+e.ticket+' (tasks '+found.map(f=>'#'+f.id).join(', ')+'). Keep one and clear the reference on the others, then send again.';await put({review});return {review};}
-  if(found.length===1){
-    if(m2o(found[0].project_id)!==projectId){const review='The Odoo task #'+found[0].id+' for '+e.ticket+' is in another project. Move it to the ticket\'s project in Odoo, then send again.';await put({review});return {review};}
-    await put({taskId:found[0].id,projectId});return {taskId:found[0].id};
-  }
+  // The ticket's task in this project: named "[KEY] …" (an existing one is reused).
+  const found=await odoo(env,'project.task','search_read',[[['project_id','=',projectId],['name','=like','['+e.ticket+'] %']]],{fields:['name'],context:{active_test:false},limit:5});
+  if(found.length>1){const review='More than one Odoo task in the project is named ['+e.ticket+'] (tasks '+found.map(f=>'#'+f.id).join(', ')+'). Rename or merge the extra ones, then send again.';await put({review});return {review};}
+  if(found.length===1){await put({taskId:found[0].id,projectId});return {taskId:found[0].id};}
   if(t.dispatch){const review='Creating the Odoo task for '+e.ticket+' had an unclear result and no task was found. Check Odoo, then send again.';await put({review});return {review};}
   await put({dispatch:{at:new Date().toISOString(),projectId}});
   let id;
-  try{id=await odoo(env,'project.task','create',[{name:('['+e.ticket+'] '+(e.ticketTitle||'')).trim().slice(0,250),project_id:projectId,[cfg.fields.taskRef]:ref}]);}
+  try{id=await odoo(env,'project.task','create',[{name:taskName(e),project_id:projectId}]);}
   catch(err){if(err.definite)await put({});throw err;}
   await put({taskId:Number(id),projectId});return {taskId:Number(id)};
 }

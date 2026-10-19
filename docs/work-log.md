@@ -31,7 +31,9 @@ People log time on Jira, internal and Odoo Helpdesk tickets with **Log work** (i
 - If Odoo doesn't answer, the create is **never sent blindly again**. One exact match is linked. No match, or
   more than one match, goes to **Needs review**. An administrator can then check Odoo again, send it again, or
   link it to an existing line.
-- The same rules apply to the ticket's task. Sends are one at a time per entry and per ticket task.
+- The ticket's task is found by its name, `[KEY] …`, in the ticket's project (no field on tasks), and the
+  dashboard remembers its number once created. Two tasks with the same `[KEY]` name go to Needs review.
+- The same unclear-result rules apply to creating the ticket's task. Sends are one at a time per entry and per ticket task.
 
 ## Odoo preparation (no module is installed)
 
@@ -43,7 +45,6 @@ Create these **custom text fields** (Settings → Technical → Fields, or Studi
 | Timesheet line | e.g. `x_aione_entry_uuid` | the work entry's unique id |
 | Timesheet line | e.g. `x_aione_user_uuid` | the person's stable dashboard id |
 | Timesheet line | e.g. `x_aione_ticket_ref` | source and ticket, like `jira:AION-12` |
-| Task (`project.task`) | e.g. `x_aione_ticket_ref` | `aione:jira:AION-12` (links the ticket's one task) |
 
 Lines are created with Odoo's own defaults: the employee of the Odoo user the dashboard signs in as, in that
 user's company. That user needs **exactly one active employee** in its company, otherwise logging can't be

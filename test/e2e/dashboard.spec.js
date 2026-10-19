@@ -14,7 +14,7 @@ async function mockDashboard(page, { role = "admin", ticketLog = [], failure = f
   let historyFailures=historyFailure?1:0;
   // Work log (Odoo timesheets): off unless a test switches it on.
   const timeEntries=[],STATUSES={syncing:'Syncing',synced:'Synced',setup:'Needs setup',review:'Needs review'};
-  let timeSetup={revision:3,mode:workLog?'pilot':'off',pilot:['test@example.invalid'],fields:{users:'x_studio_users',entryUuid:'x_aione_entry_uuid',userUuid:'x_aione_user_uuid',lineRef:'x_aione_ticket_ref',taskRef:'x_aione_ticket_ref'},mapping:{},verified:null};
+  let timeSetup={revision:3,mode:workLog?'pilot':'off',pilot:['test@example.invalid'],fields:{users:'x_studio_users',entryUuid:'x_aione_entry_uuid',userUuid:'x_aione_user_uuid',lineRef:'x_aione_ticket_ref'},mapping:{},verified:null};
   page.on("pageerror", error => errors.push(error.message));
   await page.addInitScript(({ role, expired, filtersVisible }) => {
     if(sessionStorage.getItem("aion-test-initialized"))return;
@@ -50,7 +50,7 @@ async function mockDashboard(page, { role = "admin", ticketLog = [], failure = f
     if(/^\/time-entries\/[0-9a-f-]{36}$/.test(path)&&method==='PATCH'){const e=timeEntries.find(x=>path.endsWith(x.id)),{reason,revision,...patch}=body,from={date:e.date,minutes:e.minutes,description:e.description};Object.assign(e,patch);e.revision++;e.revisions=[...e.revisions,{n:e.revision,at:'2026-10-11T09:00:00Z',by:{name:'Test User'},reason,from,to:{date:e.date,minutes:e.minutes,description:e.description}}];return json({entry:e,summary:{}});}
     if(path==='/time-entries/report')return json({from:url.searchParams.get('from'),to:url.searchParams.get('to'),timeZone:'Asia/Jerusalem',statuses:STATUSES,rows:timeEntries.map(e=>({...e,user:e.author.name,clientName:'Synthetic Client',subClientName:''})),baselines:timeEntries.length?[{ticket:'AION-101',hours:1}]:[]});
     if(path==='/time-entries/setup'){if(method==='PUT')timeSetup={...timeSetup,...body,revision:timeSetup.revision+1,verified:body.mode==='off'?null:{ok:true}};
-      return json({config:timeSetup,odoo:true,statuses:STATUSES,fields:{line:[{name:'x_studio_users',label:'Users',type:'char',custom:true},{name:'x_aione_entry_uuid',label:'Work entry id',type:'char',custom:true},{name:'x_aione_user_uuid',label:'Dashboard user id',type:'char',custom:true},{name:'x_aione_ticket_ref',label:'Ticket',type:'char',custom:true}],task:[{name:'x_aione_ticket_ref',label:'Dashboard ticket',type:'char',custom:true}]},
+      return json({config:timeSetup,odoo:true,statuses:STATUSES,fields:{line:[{name:'x_studio_users',label:'Users',type:'char',custom:true},{name:'x_aione_entry_uuid',label:'Work entry id',type:'char',custom:true},{name:'x_aione_user_uuid',label:'Dashboard user id',type:'char',custom:true},{name:'x_aione_ticket_ref',label:'Ticket',type:'char',custom:true}]},
         suggested:{users:'x_studio_users',usersCandidates:['x_studio_users']},defaults:{ok:true,user:{id:7,name:'Odoo Bot'},company:{id:1,name:'AION'},employee:{id:5,name:'Bot employee'}},lockDate:'2026-09-30',
         projects:[{id:10,name:'Synthetic Project',partner:'Synthetic Client'}],catalog:[{id:'client',name:'Synthetic Client',parentId:null,odooProject:null}],users:[{email:'test@example.invalid',name:'Test User'}]});}
     if(path==='/ticket-notes'&&method==='GET')return json({notes:[],recipients:[{email:'karim@example.invalid',name:'Karim Example',role:'admin'},{email:'dev2@example.invalid',name:'Second Developer',role:'user'}]});
@@ -1015,5 +1015,15 @@ for(const width of [1280,390])test(`Work log page at ${width}px: report totals, 
  await expect.poll(()=>mock.calls.find(c=>c.path==='/time-entries/setup'&&c.method==='PUT')?.body?.mode).toBe('on');
  expect(mock.calls.find(c=>c.path==='/time-entries/setup'&&c.method==='PUT').body.fields.users).toBe('x_studio_users');
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+ expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+
+test('Work log setup loads once and stays steady while the dashboard refreshes',async({page})=>{
+ const mock=await mockDashboard(page,{workLog:true});await page.goto('/dashboard.html?page=worklog');const content=page.locator('#workspace-content');
+ await content.getByRole('tab',{name:'Setup'}).click();await expect(content).toContainText('Bot employee in AION');
+ await content.getByText('Everyone',{exact:true}).click();
+ await page.locator('#refresh').click();await expect.poll(()=>mock.calls.filter(c=>c.path==='/jira/search').length).toBeGreaterThan(1);
+ await expect(content).toContainText('Bot employee in AION');await expect(content.getByRole('radio',{name:/Everyone/})).toBeChecked();
+ expect(mock.calls.filter(c=>c.path==='/time-entries/setup').length).toBe(1);
  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });

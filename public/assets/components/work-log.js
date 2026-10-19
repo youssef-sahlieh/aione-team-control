@@ -157,11 +157,14 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,onLogged
   // ---- Work log page ----
   let report=null,filters={user:'',client:'',project:'',ticket:'',source:'',status:''},groupBy='user',tab='report';
   const SOURCES={jira:'Jira',internal:'Internal',odoo:'Odoo Helpdesk'};
-  function renderPage(target){
-    target.replaceChildren();
-    const wrap=el('div','wl-page');target.append(wrap);
+  // The dashboard redraws its pages whenever data refreshes: the page shown is kept as it is (no reload, no
+  // flashing). It is rebuilt only for a tab change or after saving (fresh).
+  let pageNode=null;
+  function renderPage(target,fresh=false){
+    if(pageNode&&!fresh){if(pageNode.parentNode!==target)target.replaceChildren(pageNode);return;}
+    const wrap=el('div','wl-page');pageNode=wrap;target.replaceChildren(wrap);
     if(isAdmin()){const tabs=el('div','wl-tabs');tabs.setAttribute('role','tablist');
-      for(const [id,label] of [['report','Report'],['setup','Setup']]){const b=button(label,()=>{tab=id;renderPage(target);},'btn'+(tab===id?' primary':''));b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===id));tabs.append(b);}
+      for(const [id,label] of [['report','Report'],['setup','Setup']]){const b=button(label,()=>{tab=id;renderPage(target,true);},'btn'+(tab===id?' primary':''));b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===id));tabs.append(b);}
       wrap.append(tabs);}
     if(tab==='setup'&&isAdmin())return renderSetup(wrap);
     renderReport(wrap);
@@ -226,15 +229,14 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,onLogged
     who.append(pilotBox);
     // Odoo fields.
     const fs=section('Odoo fields');
-    fs.append(el('p','msg','Create these as custom fields in Odoo (Settings → Technical → Fields, or Studio) if they don\'t exist yet: no module is installed. Every field must be a text field.'));
+    fs.append(el('p','msg','Fields on the Odoo timesheet line; each must be a text field. Each ticket gets one task in its project, named "[KEY] Ticket title".'));
     const fields={...cfg.fields},sug=s.suggested||{},grid=el('div','wl-grid');fs.append(grid);
     const pickField=(role,label,list,hint)=>{const sel=el('select','fsel');sel.append(new Option('Choose a field…',''));for(const f of list)sel.append(new Option(f.label+' ('+f.name+')',f.name));sel.value=fields[role]||sug[role]||'';fields[role]=sel.value;sel.addEventListener('change',()=>{fields[role]=sel.value;});field(grid,label,sel,hint);};
-    const line=s.fields?.line||[],task=s.fields?.task||[],custom=line.filter(f=>f.custom);
+    const line=s.fields?.line||[],custom=line.filter(f=>f.custom);
     pickField('users','"Users" on the timesheet line (the person\'s name)',line,sug.usersCandidates&&sug.usersCandidates.length>1?'More than one field looks like "Users": choose the right one.':(!sug.users&&!cfg.fields.users?'No field labelled "Users" was found: choose it.':''));
     pickField('entryUuid','Work entry id (custom)',custom,'Each line\'s unique id, used to find it again.');
     pickField('userUuid','Dashboard user id (custom)',custom,'The person\'s stable dashboard id.');
     pickField('lineRef','Ticket on the line (custom)',custom,'Source and ticket, like jira:AION-12.');
-    pickField('taskRef','Ticket on the task (custom, on Tasks)',task.filter(f=>f.custom),'Links the ticket\'s one task, like aione:jira:AION-12.');
     // Defaults.
     const def=section('Employee and company');
     if(s.defaults?.ok)def.append(el('p','msg ok','Timesheet lines are created as employee '+s.defaults.employee.name+' in '+s.defaults.company.name+' (Odoo\'s default for the user '+s.defaults.user.name+'). The person who did the work is written in "Users".'));
@@ -272,7 +274,7 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,onLogged
     actions.append(button('Save setup',async ev=>{
       ev.currentTarget.disabled=true;msg.className='msg';msg.textContent='Checking with Odoo…';
       try{const body={revision:cfg.revision,mode:modeValue,pilot:[...pilot],fields,mapping:Object.fromEntries(Object.entries(mapping).filter(([,v])=>v))};
-        await api('/time-entries/setup',{method:'PUT',body});if(toast)toast('Work log setup saved.');const parent=wrap.parentNode;renderPage(parent);}
+        await api('/time-entries/setup',{method:'PUT',body});if(toast)toast('Work log setup saved.');const parent=wrap.parentNode;renderPage(parent,true);}
       catch(err){fail(msg,err);ev.currentTarget.disabled=false;}
     },'btn primary'));
     if(cfg.updatedBy)box.append(el('p','msg','Last saved by '+cfg.updatedBy.name+', '+new Date(cfg.updatedAt).toLocaleString('en-GB',{timeZone:'Asia/Jerusalem'})+(cfg.mode!=='off'&&cfg.verified?' · checked with Odoo':'')+'.'));
