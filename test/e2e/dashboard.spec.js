@@ -5,7 +5,7 @@ import { jiraIssue, internalTicket, people } from "../fixtures/issues.js";
 // A synthetic Odoo Helpdesk ticket as the proxy returns it (developer "builder" from the Odoo assignee).
 const odooTicket = { key: "HD-300", id: 300, ref: "300", odoo: true, summary: "Synthetic Odoo request", status: "In Progress", statusCat: "indeterminate", devs: ["builder"], developerName: "Builder", customer: { name: "Ariel Amiri", email: "ariel@example.invalid" }, team: "ai1 | Support", priority: "Medium", created: "2026-10-09T08:00:00Z", updated: "2026-10-10T08:00:00Z", closed: "", due: null, url: "https://odoo.example.invalid/web#id=300&model=helpdesk.ticket&view_type=form" };
 
-async function mockDashboard(page, { role = "admin", ticketLog = [], failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1, odoo = false, github = false, billingRequired = false, missingEstimate = false } = {}) {
+async function mockDashboard(page, { role = "admin", ticketLog = [], failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1, odoo = false, github = false, billingRequired = false, missingEstimate = false, filtersVisible = true } = {}) {
   await page.clock.setFixedTime(new Date("2026-10-11T09:00:00Z"));
   const calls = [], unexpected = [], errors = [];
   const internalTickets=[structuredClone(internalTicket)];
@@ -13,16 +13,17 @@ async function mockDashboard(page, { role = "admin", ticketLog = [], failure = f
   const record=key=>metadata[key]||{revision:0,clientId:"client",subClientId:null,clientName:"Synthetic Client",subClientName:"",estimatedHours:missingEstimate?null:2,actualHours:null,workDone:"",...(role==="admin"?{billing:null}:{})};
   let historyFailures=historyFailure?1:0;
   page.on("pageerror", error => errors.push(error.message));
-  await page.addInitScript(({ role, expired }) => {
+  await page.addInitScript(({ role, expired, filtersVisible }) => {
     if(sessionStorage.getItem("aion-test-initialized"))return;
     sessionStorage.setItem("aion-test-initialized","1");
     localStorage.clear();
     localStorage.setItem("aione-session", JSON.stringify({ token: "synthetic-token", email: "test@example.invalid", expiresAt: expired ? 1 : Date.now() + 3600000, role }));
     localStorage.setItem("aion.notify", "0");
+    if(filtersVisible)localStorage.setItem("aion.ticket-filters.open."+encodeURIComponent("test@example.invalid"),"1");
     localStorage.setItem("aion.columns."+encodeURIComponent("test@example.invalid"),"all");
     // Exercise the existing downgrade of a saved administrator view for users.
     if (role === "user") localStorage.setItem("aion.view", "dev");
-  }, { role, expired });
+  }, { role, expired, filtersVisible });
   // Every external request is intercepted, including unexpected endpoints.
   // An unmatched request can never fall through to production Jira or mail.
   await page.route("**/*", async route => {
@@ -32,7 +33,7 @@ async function mockDashboard(page, { role = "admin", ticketLog = [], failure = f
     const path = url.pathname, method = req.method(), body = req.postDataJSON();
     calls.push({ path, method, body, ...(url.search?{query:url.search}:{}) });
     const json = value => route.fulfill({ json: value });
-    if (path === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people:assigneeTeam?{...people,...Object.fromEntries(["karim","youssef","rami","razan"].map(key=>[key,{id:`test-${key}`,name:key[0].toUpperCase()+key.slice(1),ini:key[0].toUpperCase()}]))}:people, devs: ["builder", "reviewer"], role, dev: "builder", email: "test@example.invalid", accounts: true, odoo, github, billingRequired, mail: false, capabilities:["ticket-business-v1"], ai:{enabled:!aiDisabled,readOnly:true} });
+    if (path === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people:assigneeTeam?{...people,...Object.fromEntries(["karim","youssef","rami","razan"].map(key=>[key,{id:`test-${key}`,name:key[0].toUpperCase()+key.slice(1),ini:key[0].toUpperCase()}]))}:people, devs: ["builder", "reviewer"], role, dev: "builder", email: "test@example.invalid", accounts: true, odoo, github, billingRequired, mail: false, capabilities:["ticket-business-v1","reports-all-v1","reports-saved-v1"], ai:{enabled:!aiDisabled,readOnly:true} });
     if(path==='/clients'&&method==='GET')return json(catalog);
     if(path==='/clients/odoo-sync'&&method==='POST'){if(url.searchParams.get('force')!=='1')return json({odoo:true,changed:false,syncedAt:1});catalog.entries.push({id:'odoo-client',name:'Odoo Customer',parentId:null,archived:false});catalog.revision++;return json({odoo:true,changed:true,added:1,projects:3,syncedAt:2});}
     if(path==='/clients/import/preview')return json({revision:1,rows:body.rows.length,added:1,clients:2,subClients:0,entries:[{id:'new-client',name:body.rows[0].displayName,parentId:null}]});
@@ -43,7 +44,7 @@ async function mockDashboard(page, { role = "admin", ticketLog = [], failure = f
     if(path==='/ticket-metadata/batch')return json({records:Object.fromEntries(body.keys.map(key=>[key,record(key)]))});
     if(path==='/ticket-metadata'&&method==='GET')return json({metadata:record(url.searchParams.get('key')),history:[],closed:false});
     if(path==='/ticket-metadata'&&method==='PUT'){if(mutationFailure)return route.fulfill({status:503,json:{code:'ticket_metadata',error:'Synthetic save failure'}});metadata[body.key]={...record(body.key),...body.fields,revision:body.fields.revision+1};return json({metadata:metadata[body.key]});}
-    if(path==='/reports/run')return json({workflow:body.workflow,generatedAt:'2026-10-11T09:00:00Z',period:{start:body.start,end:body.end},coverage:{examined:2},warnings:[],hoursLabel:'Current hours on tickets in the selected cohort; these are ticket totals, not hours worked during the period.',totals:{open:2,created:1,completed:0,atRisk:1,overrides:0},groups:[],tickets:[]});
+    if(['/reports/run','/reports/latest','/reports/refresh'].includes(path)){const report={workflow:body?.workflow||'all',generatedAt:'2026-10-11T09:00:00Z',period:{start:body?.start||'2026-10-05',end:body?.end||'2026-10-11'},coverage:{examined:2},warnings:[],hoursLabel:'Current hours on tickets in the selected cohort; these are ticket totals, not hours worked during the period.',totals:{open:2,created:1,completed:0,atRisk:1,overrides:0},groups:[],tickets:[{key:'AION-101',title:'Synthetic Jira task',clientId:'client',clientName:'Synthetic Client',status:'Open',closed:false,devs:['builder'],created:'2026-10-10T09:00:00Z',billing:'billable',estimatedHours:2,actualHours:3,missing:[],risks:['Overdue'],overEstimate:{hours:1,percent:50},overrides:[]},{key:'INT-101',title:'Synthetic internal task',internal:true,clientId:'client',clientName:'Synthetic Client',status:'Open',closed:false,devs:['reviewer'],created:'2026-09-01T09:00:00Z',billing:'not_billable',estimatedHours:2,actualHours:null,missing:[],risks:[],overrides:[]}]};return json(path==='/reports/run'?report:{report,cached:path==='/reports/latest',stale:false});}
     if(path==="/ai/chat")return aiFailure?route.fulfill({status:503,json:{code:"ai_unavailable",error:"AI service unavailable. Try again."}}):json({answer:"Review AION-101 first. AION-9999 is unverified. <img src=x onerror=alert(1)>",references:[{key:"AION-101",title:"Synthetic Jira task"}],readOnly:true});
     if(path==="/ai/brief")return briefFailure?route.fulfill({status:503,json:{code:"ai_unavailable",error:"Brief service unavailable. Try again."}}):json({key:body.key,brief:"Fix the reported issue so the workflow works correctly. <img src=x onerror=alert(1)>",updated:jiraIssue.fields.updated,readOnly:true});
     if(path==="/date-requests")return json({requests:[]});
@@ -182,7 +183,7 @@ for(const width of [320,1440])test(`AI panel retains session chat and links veri
 });
 test("developer AI suggestions omit team workload and failure preserves the question",async({page})=>{
   const mock=await mockDashboard(page,{role:"user",aiFailure:true});await page.goto("/dashboard.html");await page.locator("#ai-launcher").click();for(const button of await page.locator("[data-ai-admin]").all())await expect(button).toBeHidden();
-  await expect(page.locator("#ai-scope")).toHaveText("Read-only help with your tickets");await expect(page.getByRole("button",{name:"Explain a ticket",exact:true})).toBeVisible();await expect(page.locator(".ai-prompts button:visible")).toHaveCount(3);
+  await expect(page.locator("#ai-report-builder")).toBeHidden();await expect(page.locator("#ai-scope")).toHaveText("Read-only help with your tickets");await expect(page.getByRole("button",{name:"Explain a ticket",exact:true})).toBeVisible();await expect(page.locator(".ai-prompts button:visible")).toHaveCount(3);
   await page.locator("#ai-question").fill("What should I work on?");await page.locator("#ai-send").click();await expect(page.locator("#ai-status")).toContainText("AI service unavailable");await expect(page.locator("#ai-question")).toHaveValue("What should I work on?");await expect(page.locator("#ai-send")).toBeEnabled();expect(mock.errors).toEqual([]);
 });
 test("manager AI exposes project and team options",async({page})=>{
@@ -530,9 +531,9 @@ test('business internal creation defaults to Internal Tickets and includes clien
  await page.locator('#pop').getByRole('combobox',{name:'Client',exact:true}).fill('Synth');await page.locator('#pop').getByRole('option',{name:'Synthetic Client'}).click();await page.locator('#pop').getByRole('button',{name:'Create ticket',exact:true}).click();await expect(page.locator('#d-key')).toContainText('INT-102');
  const sent=mock.calls.find(c=>c.path==='/internal'&&c.method==='POST');expect(sent.body.assignee).toBe('__internal_tickets');expect(sent.body.metadata.clientId).toBe('client');expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
-test('business report workflow runs without AI and exports findings',async({page})=>{
- const mock=await mockDashboard(page,{aiDisabled:true});await page.goto('/dashboard.html?page=reports');await page.getByRole('button',{name:'Run now',exact:true}).click();await expect(page.locator('.report-results')).toContainText('not hours worked during the period');await expect(page.locator('.report-totals')).toContainText('Open: 2');
- const download=page.waitForEvent('download');await page.getByRole('button',{name:'Export ticket findings CSV'}).click();expect((await download).suggestedFilename()).toContain('aion-management');await page.screenshot({path:'test-results/business-reports.png',fullPage:true});expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+test('saved report opens automatically without AI and exports findings',async({page})=>{
+ const mock=await mockDashboard(page,{aiDisabled:true});await page.goto('/dashboard.html?page=reports');await expect(page.locator('.report-results')).toContainText('not hours worked during the period');await expect(page.locator('.report-totals')).toContainText('Open: 2');
+ const download=page.waitForEvent('download');await page.getByRole('button',{name:'Export ticket findings CSV'}).click();expect((await download).suggestedFilename()).toContain('aion-all');await page.screenshot({path:'test-results/business-reports.png',fullPage:true});expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
 test('clients are read from Odoo: background refresh on load and a sync button, no file upload',async({page})=>{
  const mock=await mockDashboard(page,{odoo:true});await page.goto('/dashboard.html?page=clients');
@@ -849,4 +850,47 @@ test('pictures in internal ticket comments show in place',async({page})=>{
  await page.goto('/dashboard.html#INT-101');
  await expect(page.locator('#d-comments .cimg img')).toHaveAttribute('src',/^blob:/);await expect(page.locator('#d-comments')).toContainText('thanks');
  expect(mock.errors).toEqual([]);
+});
+
+
+test('free hosted AI quota failure preserves the question and calculated reports remain usable',async({page})=>{
+ const mock=await mockDashboard(page);await page.route('**/ai/chat',route=>route.fulfill({status:429,json:{code:'ai_quota',error:'The free AI quota is temporarily exhausted. Calculated reports remain available.'}}));await page.goto('/dashboard.html');await page.locator('#ai-launcher').click();await page.locator('#ai-question').fill('Summarize this week');await page.locator('#ai-send').click();await expect(page.locator('#ai-status')).toContainText('free AI quota');await expect(page.locator('#ai-question')).toHaveValue('Summarize this week');await expect(page.locator('#ai-messages .ai-message-assistant')).toHaveCount(0);await page.keyboard.press('Escape');await page.goto('/dashboard.html?page=reports');await expect(page.locator('.report-totals')).toContainText('Open: 2');expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+
+test('AI report studio drafts scoped prompts without spending requests and preserves them on failure',async({page})=>{
+ const mock=await mockDashboard(page,{aiFailure:true});await page.goto('/dashboard.html');await page.locator('#ai-launcher').click();
+ await expect(page.locator('#ai-report-builder')).toBeVisible();await page.locator('#ai-report-days').selectOption('14');await page.locator('#ai-report-focus').fill('Sample client');
+ await page.getByRole('button',{name:'Hours review',exact:false}).click();await expect(page.locator('#ai-question')).toHaveValue(/workflow "hours" and days 14/);await expect(page.locator('#ai-question')).toHaveValue(/Sample client/);
+ expect(mock.calls.filter(c=>c.path==='/ai/chat')).toHaveLength(0);await page.locator('#ai-send').click();await expect(page.locator('#ai-status')).toContainText('AI service unavailable');await expect(page.locator('#ai-question')).toHaveValue(/workflow "hours"/);
+ await page.locator('#ai-new').click();await expect(page.locator('#ai-report-builder')).toBeVisible();expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+
+test('AI report formatting preserves evidence links and treats HTML and URLs as text',async({page})=>{
+ const mock=await mockDashboard(page);await page.route('**/ai/chat',route=>route.fulfill({json:{answer:'## Delivery review\n\n- **AION-101** is overdue. Confirm the next step.\n- <img src=x onerror=alert(1)> [open](javascript:alert(1))\n\n### Coverage\nOnly retrieved records were reviewed.',references:[{key:'AION-101',title:'Verified ticket'}]}}));
+ await page.goto('/dashboard.html');await page.locator('#ai-launcher').click();await page.locator('#ai-question').fill('Review delivery');await page.locator('#ai-send').click();const answer=page.locator('.ai-message-assistant');await expect(answer.locator('h3')).toHaveCount(2);await expect(answer.locator('li')).toHaveCount(2);await expect(answer.locator('strong a')).toHaveText('AION-101');await expect(answer.locator('img')).toHaveCount(0);await expect(answer.locator('a')).toHaveCount(1);await expect(answer).toContainText('<img src=x');expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+
+for(const width of [375,1440])test('AI answers have readable summaries, nested lists and copy at '+width+'px',async({page,context})=>{
+ await page.setViewportSize({width,height:950});await context.grantPermissions(['clipboard-read','clipboard-write']);const mock=await mockDashboard(page);
+ const content='**Summary**\nOne overdue ticket needs verification.\n\n## Priority findings\n- **AION-101**: Confirm regression verification.\n  - Recorded owner: sample developer.\n  - Due date: 2026-10-15.\n\n## Coverage\nCurrent ticket totals only.';
+ await page.route('**/ai/chat',route=>route.fulfill({json:{answer:content,references:[{key:'AION-101',title:'Verified ticket'}]}}));await page.goto('/dashboard.html');await page.locator('#ai-launcher').click();await page.locator('#ai-question').fill('Review delivery');await page.locator('#ai-send').click();const answer=page.locator('.ai-message-assistant');await expect(answer.locator('.ai-answer-summary')).toHaveText('One overdue ticket needs verification.');await expect(answer.locator('li > ul > li')).toHaveCount(2);await expect(answer.locator('.ai-answer-sources')).toHaveText('1 linked ticket');await answer.getByRole('button',{name:'Copy answer',exact:true}).click();await expect(answer.getByRole('button',{name:'Copied',exact:true})).toBeVisible();expect((await page.evaluate(()=>navigator.clipboard.readText())).replaceAll("\r\n","\n")).toBe(content);expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:'test-results/ai-answer-readable-'+width+'.png'});expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+
+test('combined reports filter, sort, paginate and export locally after a single request',async({page})=>{
+ const mock=await mockDashboard(page,{aiDisabled:true});let reads=0;await page.route('**/reports/latest',route=>{reads++;expect(route.request().method()).toBe('GET');const tickets=Array.from({length:120},(_,n)=>({key:'AION-'+(120-n),title:'Report task '+(120-n),clientId:n%2?'b':'a',clientName:n%2?'Client B':'Client A',devs:n%2?['reviewer']:['builder'],closed:false,status:'Open',created:'2026-10-10T10:00:00Z',estimatedHours:2,actualHours:n%3===0?3:null,missing:[],risks:n%3===0?['Overdue']:[],overrides:[],overEstimate:n%3===0?{hours:1,percent:50}:null}));return route.fulfill({json:{report:{workflow:'all',generatedAt:'2026-10-11T09:00:00Z',period:{start:'2026-10-05',end:'2026-10-11'},coverage:{examined:120,jiraComplete:true,internalComplete:true},warnings:[],hoursLabel:'Current ticket totals, not hours worked during the period.',tickets},cached:true,stale:false}});});
+ await page.goto('/dashboard.html?page=reports');await expect(page.locator('.report-filter-form')).toBeVisible();expect((await page.locator('.report-filter-form').boundingBox()).height).toBeLessThan(600);await expect(page.locator('.report-ticket')).toHaveCount(50);const allExport=page.waitForEvent('download');await page.getByRole('button',{name:'Export ticket findings CSV'}).click();const allDownload=await allExport;const allCsv=await (await import('node:fs/promises')).readFile(await allDownload.path(),'utf8');expect(allCsv.trimEnd().split(/\r?\n/)).toHaveLength(121);await expect(page.locator('.report-ticket').first()).toContainText('AION-120');await page.getByLabel('Report sort',{exact:true}).selectOption('key:asc');await expect(page.locator('.report-ticket').first()).toContainText('AION-1');
+ await page.getByRole('button',{name:'Next',exact:true}).click();await expect(page.locator('.report-ticket').first()).toContainText('AION-51');await page.getByLabel('Report developer',{exact:true}).selectOption('reviewer');await expect(page.locator('.report-totals')).toContainText('Open: 60');await page.getByLabel('Report type',{exact:true}).selectOption('hours');await expect(page.locator('.report-ticket')).toHaveCount(20);await expect(page.locator('.report-totals')).toContainText('Open: 20');await expect(page.locator('.report-totals')).toContainText('At risk: 20');
+ await page.getByLabel('Search report tickets',{exact:true}).fill('Report task 117');await expect(page.locator('.report-ticket')).toHaveCount(1);const download=page.waitForEvent('download');await page.getByRole('button',{name:'Export ticket findings CSV'}).click();expect((await download).suggestedFilename()).toContain('aion-hours');expect(reads).toBe(1);expect(mock.calls.filter(c=>c.path==='/ai/chat')).toHaveLength(0);await page.getByRole('button',{name:'Clear report filters'}).click();await expect(page.locator('.report-ticket').first()).toContainText('AION-120');expect(reads).toBe(1);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+
+test('all reports reject an older proxy rather than silently omitting records',async({page})=>{
+ const mock=await mockDashboard(page);await page.route('**/config',route=>route.fulfill({json:{site:'https://jira.example.invalid',project:'AION',people,devs:['builder'],role:'admin',email:'test@example.invalid',accounts:true,capabilities:['ticket-business-v1'],ai:{enabled:false}}}));await page.goto('/dashboard.html?page=reports');await expect(page.locator('.business-panel')).toContainText('updated backend (reports-saved-v1)');await expect(page.getByRole('button',{name:'Refresh report',exact:true})).toHaveCount(0);expect(mock.calls.filter(c=>c.path==='/reports/run')).toHaveLength(0);expect(mock.errors).toEqual([]);
+});
+
+test('saved report loads automatically, keeps filters local and preserves results if refresh fails',async({page})=>{
+ const mock=await mockDashboard(page);let refreshes=0;await page.route('**/reports/refresh',route=>{refreshes++;return route.fulfill({status:503,json:{error:'Report refresh failed; try later.'}});});await page.goto('/dashboard.html?page=reports');await expect(page.locator('.report-ticket')).toHaveCount(2);await expect(page.getByRole('button',{name:'Run now',exact:true})).toHaveCount(0);await expect(page.locator('.report-results')).toContainText('Saved report generated');await page.getByLabel('Report developer',{exact:true}).selectOption('builder');await expect(page.locator('.report-ticket')).toHaveCount(1);expect(mock.calls.filter(c=>c.path==='/reports/latest')).toHaveLength(1);await page.getByRole('button',{name:'Refresh report',exact:true}).click();await expect(page.locator('.business-panel')).toContainText('Report refresh failed; try later.');await expect(page.locator('.report-ticket')).toHaveCount(1);expect(refreshes).toBe(1);expect(mock.calls.filter(c=>c.path==='/ai/chat')).toHaveLength(0);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+
+for(const role of ['admin','user'])test(role+' All tickets opens directly on the table with filters collapsed',async({page})=>{
+ const mock=await mockDashboard(page,{role,filtersVisible:false});await page.goto('/dashboard.html?page=tickets');await expect(page.locator('#view .item')).toHaveCount(2);await expect(page.locator('#ticket-filters')).toBeHidden();await expect(page.locator('#tiles')).toBeVisible();await expect(page.getByRole('button',{name:'Show filters',exact:true})).toHaveAttribute('aria-expanded','false');const count=await page.locator('#view .item').count();await page.getByRole('button',{name:'Show filters',exact:true}).click();await expect(page.locator('.fpanel')).toBeVisible();await expect(page.locator('#quick-filters')).toBeVisible();await expect(page.getByRole('button',{name:'Hide filters',exact:true})).toHaveAttribute('aria-expanded','true');await page.getByRole('button',{name:'Hide filters',exact:true}).click();await expect(page.locator('#view .item')).toHaveCount(count);await page.reload();await expect(page.locator('#view .item')).toHaveCount(count);await expect(page.locator('#ticket-filters')).toBeHidden();expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });

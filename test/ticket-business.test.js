@@ -235,3 +235,11 @@ test('files added to a Jira ticket go to Jira as they are and the history names 
  assert.equal((await upload(new Uint8Array(0))).status,400);
  assert.equal((await upload(new Uint8Array(4*1024*1024+1))).status,413);
 });
+
+test('all report snapshot includes old closed tickets with one source scan and stays administrator-only',async()=>{
+ const s=await setup();let searches=0,internalReads=0;const deps={readSearch:async()=>{searches++;return {issues:[{key:'AION-1',fields:{summary:'Old closed ticket',status:{name:'Done',statusCategory:{key:'done'}},created:'2025-01-01T12:00:00Z'}}],isLast:true};},readInternal:async()=>{internalReads++;return [];}};
+ const all=await buildReport(s.env,admin,deps,{workflow:'all'},new Date('2026-10-15T12:00:00Z'));assert.equal(all.tickets.length,1);assert.equal(all.tickets[0].missing.length>0,true);assert.equal(searches,1);assert.equal(internalReads,1);assert.equal(all.totals.completed,0);await assert.rejects(buildReport(s.env,user,deps,{workflow:'all'}),/Only administrators/);assert.equal(searches,1);
+ const viaRoute=await s.call('/reports/run','POST',{workflow:'all'},admin);assert.equal(viaRoute.status,200);assert.equal((await viaRoute.json()).workflow,'all');assert.equal((await s.call('/reports/run','POST',{workflow:'all'},user)).status,403);
+});
+
+test('saved report endpoints are authenticated and refuse ordinary users',async()=>{const s=await setup();assert.equal((await s.call('/reports/latest')).status,403);assert.equal((await s.call('/reports/refresh','POST',{},user)).status,403);const first=await s.call('/reports/latest','GET',undefined,admin);assert.equal(first.status,200);assert.equal((await first.json()).report.workflow,'all');const second=await s.call('/reports/latest','GET',undefined,admin);assert.equal((await second.json()).cached,true);assert.equal((await s.call('/reports/refresh','POST',{},admin)).status,200);});

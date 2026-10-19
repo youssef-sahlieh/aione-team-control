@@ -1,3 +1,4 @@
+import { DEFAULT_GROQ_MODEL } from "./groq-ai.js";
 // API key health for administrators (GET /integrations): is each key accepted right now, and when does it
 // expire? GitHub reports a token's expiry itself; Odoo (17+) keeps an expiry date on its API keys, read from
 // the proxy's own Odoo user. Atlassian offers no way to read a token's expiry, so for Jira an administrator
@@ -70,6 +71,15 @@ async function checkOdoo(env) {
   }
 }
 
+async function checkGroq(env) {
+  try {
+    const res=await fetch('https://api.groq.com/openai/v1/models',{headers:{Authorization:'Bearer '+env.GROQ_API_KEY},redirect:'error',signal:AbortSignal.timeout(8000)});
+    if(!res.ok)return keyStatus({works:false,problem:res.status===401||res.status===403?'Groq rejected the API key. Update GROQ_API_KEY.':res.status===429?'Groq is rate limited. Try again later.':'Groq could not be checked.'});
+    const result=await res.json(),available=result.data?.some(m=>m.id===(env.AI_MODEL||DEFAULT_GROQ_MODEL));
+    return keyStatus({works:!!available,problem:'The configured Groq model is unavailable to this account.'});
+  }catch{return keyStatus({works:false,problem:"Groq can't be reached."});}
+}
+
 export async function integrationRoutes(request, env, me, path = "/integrations") {
   if (me.role !== "admin") return json({ code: "forbidden", error: "Only administrators can see the API keys' state." }, 403);
   // An administrator enters a key's expiry date (Jira's can't be read from Atlassian); empty clears it.
@@ -80,7 +90,7 @@ export async function integrationRoutes(request, env, me, path = "/integrations"
     if (b.date) await env.STORE.set("keyexp:" + b.id, String(b.date)); else await env.STORE.del("keyexp:" + b.id);
     return json({ ok: true });
   }
-  const checks = [["jira", "Jira API token", checkJira, true], ["github", "GitHub token", checkGithub, githubConfigured(env)], ["odoo", "Odoo API key", checkOdoo, odooConfigured(env)]];
+  const checks = [["jira", "Jira API token", checkJira, true], ["github", "GitHub token", checkGithub, githubConfigured(env)], ["odoo", "Odoo API key", checkOdoo, odooConfigured(env)], ["groq", "Groq AI key", checkGroq, (env.AI_VENDOR==="groq"||!env.AI_VENDOR&&!!env.GROQ_API_KEY)&&!!env.GROQ_API_KEY]];
   const keys = await Promise.all(checks.filter((c) => c[3]).map(async ([id, name, check]) => ({ id, name, ...(await check(env)) })));
   return json({ checkedAt: new Date().toISOString(), keys });
 }

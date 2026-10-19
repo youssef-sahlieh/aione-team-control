@@ -64,3 +64,5 @@
   .assignee-picker { left: 0; right: 0; top: auto; bottom: 0; width: 100%; max-width: 100%; max-height: 85dvh; border-radius: 16px 16px 0 0; }
   .assignee-picker::backdrop { background: var(--scrim); }
 }
+
+.ticket-filter-controls { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin:0 0 12px; }

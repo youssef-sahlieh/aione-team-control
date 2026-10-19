@@ -43,12 +43,29 @@ globalThis.fetch=async(url,options={})=>{
  return Response.json(i);
 };
 const env={INTERNAL_NOTE_RECIPIENTS:settings.INTERNAL_NOTE_RECIPIENTS,ALLOWED_ORIGIN:base,SESSION_SECRET:crypto.randomUUID(),JIRA_PROJECT:'AION',JIRA_SITE:'https://jira.preview.invalid',JIRA_EMAIL:'preview@aione.biz',JIRA_API_TOKEN:'local-only',STORE:store,MAIL_DOMAIN:'aione.biz',APP_URL:base,TEAM_EMAILS:admin.email,TEAM_CONFIG:JSON.stringify({people,devs:['builder','reviewer'],devEmails:{builder:user.email,reviewer:reviewer.email},devColors:{builder:'k1',reviewer:'k3'}}),MAILER:async mail=>{emails.push({...mail,at:new Date().toISOString()});}};
+// Offline demo only: run real authorized read tools, then format their results without an external model.
+env.AI_PROVIDER=async body=>{
+ const message=text=>({output:[{type:'message',content:[{type:'output_text',text}]}]});
+ const result=body.input.findLast(item=>item.type==='function_call_output');
+ if(result){const data=JSON.parse(result.output).data;
+  if(data.workflow)return message('DEMO RESPONSE · Sample data, no AI provider called.\n\n'+data.workflow+' report · '+data.period.start+' to '+data.period.end+' (Asia/Jerusalem)\n\nCalculated snapshot: '+data.totals.open+' open tickets; '+data.totals.created+' created and '+data.totals.completed+' completed in the period; '+data.totals.atRisk+' at risk.\n\nEvidence to review: '+(data.tickets.map(t=>t.key+' — '+t.title+(t.risks?.length?' ('+t.risks.join(', ')+')':'')).join('\n')||'No matching findings.')+'\n\nSuggested next step: review the cited tickets and confirm owners and due dates.\n\nLimitations: this is a deterministic demo response, not a model assessment. Hours are current ticket totals. Open work is a current snapshot. Only Jira and internal sample tickets are connected; Odoo, database and deployment checks are unavailable. '+(data.warnings||[]).join(' '));
+  return message('DEMO RESPONSE · Authorized sample tickets\n\n'+(data.tickets||[]).map(t=>t.key+' — '+t.title).join('\n')+'\n\nThis preview uses a deterministic response, not an external AI model. Live answers require server-side provider configuration.');
+ }
+ const question=body.input.findLast(item=>item.role==='user')?.content||'';
+ const workflow=/workflow "(management|delivery|hours|completeness)"/.exec(question)?.[1];
+ const name=workflow?'run_dashboard_report':'search_tickets';
+ if(!body.tools.some(t=>t.name===name))return message('Demo mode: management reports are administrator-only. Ask about your own tickets.');
+ return {output:[{type:'function_call',call_id:'demo-read',name,arguments:JSON.stringify(workflow?{workflow,days:Number(/days (7|14|30)/.exec(question)?.[1]||7)}:{text:'',status:'open',updatedDays:0})}]};
+};
 const tokens={admin:(await makeToken(env,admin.email,Date.now(),1)).token,user:(await makeToken(env,user.email,Date.now(),1)).token,reviewer:(await makeToken(env,reviewer.email,Date.now(),1)).token};
 const call=async(action,body,role='user')=>{const response=await handler.fetch(new Request(base+'/date-requests/'+action,{method:'POST',headers:{Authorization:'Bearer '+tokens[role],'Content-Type':'application/json'},body:JSON.stringify(body)}),env);if(!response.ok)throw new Error(await response.text());return (await response.json()).request;};
 await call('submit',{key:'AION-101',proposedDate:offset(3),reason:'API contract clarification is still pending. I need time for implementation and regression tests.',blocker:'Waiting for the integration team to confirm the filter format.'});
 await call('submit',{key:'AION-103',proposedDate:offset(2),reason:'The checkout regression needs another verification pass.'},'reviewer');
 await call('submit',{key:'INT-101',proposedDate:offset(5),reason:'The release checklist depends on the final QA sign-off.'});
 const rejected=await call('submit',{key:'AION-104',proposedDate:offset(10),reason:'Additional time requested for release documentation.'});await call('reject',{key:rejected.key,id:rejected.id,version:rejected.version,reason:'Keep the release date. Reduce the documentation scope and finish the essential notes first.'},'admin');
+// Prepare the sample report before the preview starts accepting browser requests.
+const warmedReport=await handler.fetch(new Request(base+'/reports/latest',{headers:{Authorization:'Bearer '+tokens.admin}}),env);
+if(!warmedReport.ok)throw new Error('Sample report warm-up failed.');
 const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8'};
 createServer(async(req,res)=>{
  try{
@@ -60,7 +77,7 @@ createServer(async(req,res)=>{
   if(!['GET','HEAD'].includes(req.method)){res.writeHead(405).end();return;}
   if(url.pathname==='/assets/config.js'){
    const me=role==='user'?user:admin;const session={token:tokens[role],email:me.email,role:me.role,expiresAt:Date.now()+3600000};
-   const code='window.AIONE_API=location.origin+"/api";localStorage.setItem("aione-session",'+JSON.stringify(JSON.stringify(session))+');window.addEventListener("DOMContentLoaded",()=>{const b=document.createElement("div");b.className="preview-banner";b.append(document.createTextNode("Local preview · Sample data · '+(role==='user'?'Developer':'Admin')+'"));for(const [name,url] of [["Admin","/preview/admin"],["Developer","/preview/user"],["Emails","/preview/emails"]]){const a=document.createElement("a");a.textContent=name;a.href=url;b.append(a);}document.body.prepend(b);});';
+   const code='window.AIONE_API=location.origin+"/api";localStorage.setItem("aione-session",'+JSON.stringify(JSON.stringify(session))+');window.addEventListener("DOMContentLoaded",()=>{const b=document.createElement("div");b.className="preview-banner";b.append(document.createTextNode("Local preview · Sample data · Demo AI · '+(role==='user'?'Developer':'Admin')+'"));for(const [name,url] of [["Admin","/preview/admin"],["Developer","/preview/user"],["Emails","/preview/emails"]]){const a=document.createElement("a");a.textContent=name;a.href=url;b.append(a);}document.body.prepend(b);});';
    res.writeHead(200,{'Content-Type':types['.js'],'Cache-Control':'no-store'}).end(code);return;
   }
   const p=resolve(root,'.'+decodeURIComponent(url.pathname==='/'?'/dashboard.html':url.pathname));if(!p.startsWith(root+sep)){res.writeHead(403).end();return;}

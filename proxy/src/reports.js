@@ -7,7 +7,7 @@ export function reportPeriod(options={},now=new Date()) {
 }
 export async function buildReport(env,me,{readSearch,readInternal,readHistory},options={},now=new Date()) {
   requireStore(env);if(me.role!=='admin')throw new BusinessError('Only administrators can run management reports.',403,'forbidden');
-  const workflow=options.workflow||'management';if(!['completeness','delivery','hours','management'].includes(workflow))throw new BusinessError('Choose a supported workflow.');
+  const workflow=options.workflow||'management';if(!['all','completeness','delivery','hours','management'].includes(workflow))throw new BusinessError('Choose a supported workflow.');
   const period=reportPeriod(options,now),catalog=await readCatalog(env),rows=[],warnings=[],seen=new Set(),started=Date.now();let token,complete=false;
   try{
     for(let page=0;page<20;page++){
@@ -40,7 +40,7 @@ export async function buildReport(env,me,{readSearch,readInternal,readHistory},o
   if(unknownCompletion.length)warnings.push(unknownCompletion.length+' retrieved completed tickets have no verified completion date. They are excluded from period completion counts.');
   const cohort=all.filter(t=>t.createdInPeriod||t.completedInPeriod),groups=new Map();
   for(const t of cohort){const key=[t.clientId,t.subClientId,t.billing].join('|'),g=groups.get(key)||{client:t.clientName||'Not set',subClient:t.subClientName||'',billing:t.billing||'Not set',tickets:0,estimatedHours:null,actualHours:null,missingEstimated:0,missingActual:0};g.tickets++;for(const [k,missing]of [['estimatedHours','missingEstimated'],['actualHours','missingActual']]){if(validHours(t[k]))g[k]=Math.round(((g[k]||0)+t[k])*100)/100;else g[missing]++;}groups.set(key,g);}
-  const findings=all.filter(t=>workflow==='completeness'?t.missing.length||t.overrides.length:workflow==='delivery'?t.risks.length:workflow==='hours'?t.overEstimate:!t.closed||t.createdInPeriod||t.completedInPeriod||t.overrides.length);
+  const findings=all.filter(t=>workflow==='all'?true:workflow==='completeness'?t.missing.length||t.overrides.length:workflow==='delivery'?t.risks.length:workflow==='hours'?t.overEstimate:!t.closed||t.createdInPeriod||t.completedInPeriod||t.overrides.length);
   return {workflow,generatedAt:now.toISOString(),period,coverage:{jiraComplete:complete,internalComplete,examined:unique.length,filtered:all.length},warnings:[...new Set(warnings)],hoursLabel:'Current hours on tickets created or completed in the selected cohort; these are ticket totals, not hours worked during the period.',totals:{open:all.filter(t=>!t.closed).length,created:all.filter(t=>t.createdInPeriod).length,completed:all.filter(t=>t.completedInPeriod).length,atRisk:all.filter(t=>t.risks.length).length,overrides:all.reduce((n,t)=>n+t.overrides.length,0)},groups:[...groups.values()],tickets:findings};
 }
 export async function reportRoutes(request,env,me,deps) {

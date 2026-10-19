@@ -1,3 +1,7 @@
+## Hosted free-tier option
+
+For a hosted option without paid-plan usage, use the Groq Free-plan integration described in [free hosted AI](free-hosted-ai.md). Set AI_VENDOR=groq and GROQ_API_KEY on the server. No subscription token is required.
+
 # AION AI v1
 
 The top-bar AION AI button opens a read-only chat panel. Questions can cover
@@ -129,3 +133,21 @@ production Jira, Claude or OpenAI. Live model quality and credentials have not b
 ## Dashboard business tools
 
 The ticket-business extension adds authorized internal ticket chat, dashboard business fields, and administrator-only deterministic report tools. See [ticket business fields](ticket-business.md) for setup, permissions, and report semantics. Internal briefs remain unsupported.
+
+## Report Studio (local review)
+
+Administrators can draft Management summary, Delivery risks, Hours review and Completeness check prompts from AIONE AI. Choose a 7, 14 or 30 day period (including today in Asia/Jerusalem), optionally describe a focus, choose a card, review the editable prompt, then Send. Drafting does not call an AI provider. A focus is narrative guidance; the existing report tool does not apply client/developer filtering, and broader totals must be labelled accordingly. Open work and risk checks are current snapshots; created/completed cohorts use the selected period.
+
+The assistant receives calculated totals, source coverage, generation time, ticket status/developers/due dates and activity evidence. It must disclose missing data and shortened evidence lists, distinguish facts from suggestions, and describe hours as current ticket totals. These tools currently cover Jira and internal tickets. Odoo, database health, integration health, prior-period trends and deployment evidence require the additional reporting work in the reporting plan.
+
+Run the isolated preview with `npm run preview:approvals` (default port 3100). Open `/preview/admin` or `/preview/user`. This preview enables a labelled, deterministic demo provider that uses the real authorized read/report tools against synthetic records, with no external AI calls. Its wording is a demonstration, not a live model assessment. Sample changes reset on restart. Production code does not enable this demo provider. Live Groq activation still requires the server-only key described in [free-hosted-ai.md](free-hosted-ai.md).
+
+### Report answer quality
+
+Report evidence is ranked before context limits are applied: older overdue work for delivery/management, largest excess hours for hours review, and closed-ticket gaps/overrides for completeness. Workflow finding counts are calculated separately and explicitly labelled as finding counts, not whole-project totals. Work done excerpts are bounded to 600 characters with an explicit truncation marker; full authorized details remain available through ticket reads.
+
+The answer policy asks for a short evidence-backed conclusion, prioritized findings with recorded developers/due dates/hours, proportional proposed next steps, and a short limitations section. Headings, bullets and bold text render through a restricted DOM renderer that never evaluates HTML or model-supplied URLs. Ticket links use verified references only; typographic dashes in verified keys are normalized to preserve those links.
+
+Recommendations also respect first-save estimate locking, closed-field locking, saved-estimate prerequisites for dates, and closure requirements. The model is instructed to preserve original estimates when explaining overruns, use the calculated variance percentage with its correct baseline, refer to recorded developers, and avoid inventing available workflow transitions. Live Groq quality checks used synthetic evidence through the actual report tool round trip; they do not verify authenticated production ticket results.
+
+Readability refinements: answer summaries use a highlighted block, standalone bold section labels render as headings, nested/numbered lists retain their hierarchy, and each answer has a Copy answer button plus a count of linked tickets. Copy preserves the original answer text. Arbitrary HTML and URLs remain plain text.

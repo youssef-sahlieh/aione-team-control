@@ -86,3 +86,12 @@
 @media(max-width:620px){.business-client-section,.business-work-section{grid-template-columns:1fr}}
 .business-client-section .business-field:last-child:nth-child(4){grid-column:auto}
 #business-fields>.btn.primary{display:block;width:auto;min-width:180px;margin:4px 0 0 auto;padding:9px 18px}
+
+.report-pagination { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:16px 0; }
+.report-table-scroll { max-width:100%; overflow-x:auto; }
+.business-panel .report-filter-form { align-items:end; }
+.report-results .report-ticket { content-visibility:auto; contain-intrinsic-size:auto 110px; }
+
+.business-panel .report-filter-form { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; }
+.report-filter-form .business-field { min-width:0; }
+.report-filter-form > .btn { align-self:end; min-height:44px; }

@@ -174,3 +174,59 @@ test("Claude defaults to Opus 5.5 with only an API key, handles refusals, and dr
   globalThis.fetch=async(url)=>String(url).includes("jira.test")?Response.json({issues:[],isLast:true}):Response.json({stop_reason:"refusal",stop_details:{type:"refusal",category:null},content:[]});
   const res=await chat();assert.equal(res.status,200);assert.match(JSON.stringify(await res.json()),/can't help with that/);
 });
+
+
+test('Groq configuration needs its own key and never falls back to paid providers',async()=>{
+ assert.equal(aiConfigured({AI_VENDOR:'groq',GROQ_API_KEY:'test'}),true);assert.equal(aiConfigured({GROQ_API_KEY:'test'}),true);
+ const {env,chat}=await setup();Object.assign(env,{AI_VENDOR:'groq',OPENAI_API_KEY:'paid-key',ANTHROPIC_API_KEY:'paid-key',AI_MODEL:'openai/gpt-oss-120b'});
+ assert.equal(aiConfigured(env),false);const r=await chat();assert.equal(r.status,503);assert.equal((await r.json()).code,'ai_not_configured');
+});
+test('Groq replays authorized tool results and returns only verified user ticket citations',async()=>{
+ const {env,chat,requests}=await setup();Object.assign(env,{AI_VENDOR:'groq',GROQ_API_KEY:'synthetic-groq-secret'});const sourceFetch=globalThis.fetch,bodies=[];
+ globalThis.fetch=async(url,init)=>{if(!String(url).startsWith('https://api.groq.com/'))return sourceFetch(url,init);assert.equal(String(url),'https://api.groq.com/openai/v1/chat/completions');assert.equal(init.headers.Authorization,'Bearer synthetic-groq-secret');const body=JSON.parse(init.body);bodies.push(body);return Response.json({choices:[{finish_reason:bodies.length===1?'tool_calls':'stop',message:bodies.length===1?{role:'assistant',content:null,tool_calls:[{id:'groq-read',type:'function',function:{name:'search_tickets',arguments:JSON.stringify({text:'',status:'open',updatedDays:0})}}]}:{role:'assistant',content:'Review AION-1 first.',reasoning:'Private reasoning'}}]});};
+ const r=await chat();assert.equal(r.status,200);const data=await r.json();assert.deepEqual(data.references.map(t=>t.key),['AION-1']);assert.equal(bodies.length,2);assert.equal(bodies[0].model,'openai/gpt-oss-120b');assert.equal(bodies[0].include_reasoning,false);assert.equal(bodies[0].parallel_tool_calls,false);assert.ok(bodies[0].tools.every(t=>!WRITE_TOOLS.includes(t.function.name)));assert.ok(!bodies[0].tools.some(t=>t.function.name==='run_dashboard_report'));
+ const toolResult=bodies[1].messages.find(m=>m.role==='tool');assert.equal(toolResult.tool_call_id,'groq-read');assert.match(toolResult.content,/AION-1/);assert.doesNotMatch(toolResult.content,/AION-2|OTHER-3|billing/);assert.doesNotMatch(JSON.stringify(bodies),/synthetic-groq-secret|synthetic-jira-token|Private reasoning/);assert.match(requests[0].body.jql,/labels = "ai1_builder"/);
+});
+test('Groq explains administrator deterministic reports without calculating authoritative counts',async()=>{
+ const {aiChat}=await import('../proxy/src/ai.js'),bodies=[];const env={AI_VENDOR:'groq',GROQ_API_KEY:'synthetic',STORE:memoryStore(),JIRA_PROJECT:'AION'};
+ globalThis.fetch=async(url,init)=>{bodies.push(JSON.parse(init.body));return Response.json({choices:[{finish_reason:bodies.length===1?'tool_calls':'stop',message:bodies.length===1?{role:'assistant',tool_calls:[{id:'report',type:'function',function:{name:'run_dashboard_report',arguments:JSON.stringify({workflow:'management',days:7})}}]}:{role:'assistant',content:'The calculated report has 7 open tickets. See INT-1.'}}]});};
+ const r=await aiChat(new Request('https://test/ai/chat',{method:'POST',body:JSON.stringify({message:'Weekly report'})}),env,{me:{email:'admin@test.invalid',role:'admin'},project:'AION',readSearch:async()=>({issues:[],isLast:true}),runReport:async()=>({workflow:'management',period:{},coverage:{jiraComplete:false},warnings:['Partial source coverage'],totals:{open:7},hoursLabel:'Current ticket totals',groups:[],tickets:[{key:'INT-1',title:'Synthetic',missing:[],risks:[],billing:'billable'}]})});
+ assert.equal(r.status,200);const result=JSON.parse(bodies[1].messages.find(m=>m.role==='tool').content).data;assert.equal(result.totals.open,7);assert.deepEqual(result.warnings,['Partial source coverage']);assert.equal(result.tickets[0].billing,'billable');
+});
+test('Groq rejects forged write and administrator tools from a user',async()=>{
+ for(const name of ['add_comment','run_dashboard_report']){const {env,chat,requests}=await setup();Object.assign(env,{AI_VENDOR:'groq',GROQ_API_KEY:'synthetic'});globalThis.fetch=async()=>Response.json({choices:[{message:{role:'assistant',tool_calls:[{id:'unsafe',type:'function',function:{name,arguments:JSON.stringify(name==='add_comment'?{key:'AION-1',text:'No'}:{workflow:'management',days:7})}}]}}]});const r=await chat();assert.equal(r.status,403);assert.equal(requests.length,0);}
+});
+test('Groq errors are redacted, do not retry or use another provider, and report quota clearly',async()=>{
+ for(const status of [401,429,500]){const {env,chat}=await setup();Object.assign(env,{AI_VENDOR:'groq',GROQ_API_KEY:'synthetic-secret',OPENAI_API_KEY:'paid-key',ANTHROPIC_API_KEY:'paid-key'});let count=0;globalThis.fetch=async url=>{count++;assert.equal(url,'https://api.groq.com/openai/v1/chat/completions');return Response.json({error:{message:'private provider details synthetic-secret'}},{status});};const r=await chat();assert.equal(r.status,status===429?429:502);const body=await r.json();if(status===429)assert.equal(body.code,'ai_quota');assert.doesNotMatch(JSON.stringify(body),/private|synthetic-secret|paid-key/);assert.equal(count,1);}
+});
+test('Groq daily call cap is atomic and blocks inference when storage or limit configuration fails',async()=>{
+ const {env,chat}=await setup();Object.assign(env,{AI_VENDOR:'groq',GROQ_API_KEY:'synthetic',GROQ_DAILY_REQUEST_LIMIT:'1'});let count=0;globalThis.fetch=async()=>{count++;return Response.json({choices:[{message:{role:'assistant',content:'Read-only answer'}}]});};assert.equal((await chat()).status,200);const limited=await chat();assert.equal(limited.status,429);assert.equal((await limited.json()).code,'ai_quota');assert.equal(count,1);
+ env.GROQ_DAILY_REQUEST_LIMIT='0';assert.equal((await chat()).status,503);assert.equal(count,1);
+ env.GROQ_DAILY_REQUEST_LIMIT='100';env.STORE.incr=async key=>{if(key.startsWith('rl:ai:groq:'))throw Error('Private storage failure');return 1;};assert.equal((await chat()).status,503);assert.equal(count,1);
+});
+test('Groq bounds evidence with explicit coverage and refuses oversized requests before calling the API',async()=>{
+ const {groqResponse}=await import('../proxy/src/groq-ai.js');let calls=0,body;globalThis.fetch=async(url,init)=>{calls++;body=JSON.parse(init.body);return Response.json({choices:[{message:{role:'assistant',content:'Summary'}}]});};
+ const evidence={source:'UNTRUSTED JIRA DATA',data:{totals:{open:100},tickets:Array.from({length:100},(_,i)=>({key:'AION-'+i,title:'x'.repeat(200)})),detailCoverage:{ticketsReturned:100,ticketsTotal:100}}};
+ const env={GROQ_API_KEY:'synthetic',STORE:memoryStore()};await groqResponse(env,{instructions:'Read only',input:[{role:'user',content:'Summarize'},{type:'function_call',call_id:'read',name:'search_tickets',arguments:'{}'},{type:'function_call_output',call_id:'read',output:JSON.stringify(evidence)}],tools:[],max_output_tokens:1800});
+ const data=JSON.parse(body.messages.find(m=>m.role==='tool').content).data;assert.equal(data.totals.open,100);assert.ok(data.tickets.length<100);assert.equal(data.detailCoverage.ticketsReturned,data.tickets.length);assert.equal(data.detailCoverage.ticketsTotal,100);assert.equal(data.modelContextCoverage.truncated,true);
+ await assert.rejects(groqResponse(env,{instructions:'x'.repeat(25000),input:[],tools:[]}),e=>e.code==='ai_context_limit');assert.equal(calls,1);
+});
+test('Groq malformed and truncated answers never masquerade as complete reports',async()=>{
+ for(const response of [{choices:[]},{choices:[{finish_reason:'length',message:{role:'assistant',content:'Partial'}}]},{choices:[{message:{role:'assistant',tool_calls:[{id:'bad',type:'function',function:{name:'read_issue',arguments:{key:'AION-1'}}}]}}]}]){const {env,chat}=await setup();Object.assign(env,{AI_VENDOR:'groq',GROQ_API_KEY:'synthetic'});globalThis.fetch=async()=>Response.json(response);const r=await chat();assert.ok([422,502].includes(r.status));assert.equal((await r.json()).answer,undefined);}
+});
+test('Groq briefs use only authorized title and description without tool access',async()=>{
+ const {env,chat}=await setup();Object.assign(env,{AI_VENDOR:'groq',GROQ_API_KEY:'synthetic'});const sourceFetch=globalThis.fetch;let sent;
+ globalThis.fetch=async(url,init)=>{if(!String(url).startsWith('https://api.groq.com'))return sourceFetch(url,init);sent=JSON.parse(init.body);return Response.json({choices:[{message:{role:'assistant',content:'Implement the requested ticket change.'}}]});};
+ const r=await chat({key:'AION-1'},'/ai/brief');assert.equal(r.status,200);assert.equal(sent.tools,undefined);assert.doesNotMatch(JSON.stringify(sent),/Ignore rules|synthetic-jira-token|synthetic/);assert.match(JSON.stringify(sent),/Title AION-1/);
+});
+
+test('reporting instructions require calculated facts and disclose unsupported operational evidence',async()=>{
+ let received;const {chat}=await setup('admin',async body=>{received=body;return message('No report has been run.');});
+ assert.equal((await chat({message:'Prepare a management report',history:[]})).status,200);
+ for(const expected of ['application-calculated totals','Missing values are unavailable, not zero','not individual effort or productivity','No prior-period trend','Odoo, database health','Separate verified facts','Focus requests do not change tool totals','users can set estimated hours once','do not recommend overwriting an original estimate','passing test alone is not proof'])assert.ok(received.instructions.includes(expected),expected);
+});
+
+test('typographic dashes in verified model citations are normalized without legitimizing unknown keys',async()=>{
+ let step=0;const {chat}=await setup('admin',async()=>step++===0?callTool('search_tickets',{text:'',status:'all',updatedDays:0}):message('Review **AION\u20111**; UNKNOWN\u201199 is unverified.'));
+ const r=await chat();assert.equal(r.status,200);const result=await r.json();assert.match(result.answer,/AION-1/);assert.match(result.answer,/UNKNOWN\u201199/);assert.deepEqual(result.references.map(x=>x.key),['AION-1']);
+});
