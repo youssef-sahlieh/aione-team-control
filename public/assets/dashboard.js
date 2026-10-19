@@ -1089,7 +1089,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(location.hash!=="#"+key){ const url=location.pathname+location.search+"#"+key; if(drawerPushed) history.replaceState(history.state,"",url); else { history.pushState(history.state,"",url); drawerPushed=true; } }
     const opening=!dz.key;dz.key=key;
     if(opening){drawerUI.open();$("d-reply").value="";commentMentions.reset();$("d-newdev").value="";}
-    ticketHistory.reset();drawerUI.select("overview");dateRequests.renderDrawer(key);
+    ticketHistory.reset();drawerUI.select("overview");$("d-aidesc-out").hidden=true;$("d-aidesc-out").replaceChildren();dateRequests.renderDrawer(key);
     closePop(); dz.key=key; const i=issueByKey(key);
     $("drawer").hidden=false; $("scrim").hidden=false; $("drawer").classList.toggle("is-int",isInt(key)); $("drawer").classList.toggle("is-odoo",isOdoo(key));
     $("d-key").textContent=key+(isInt(key)?"":" ↗"); $("d-key").href=$("d-open").href=ticketUrl(key); if(isInt(key)) $("d-key").removeAttribute("href");
@@ -1237,6 +1237,12 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const fld=(label,node)=>{ const f=el("div","fld"); f.appendChild(el("label",null,label)); f.appendChild(node); body.appendChild(f); return node; };
     const title=fld("Title",el("input","inp")); title.value=t?t.summary:""; title.dir="auto";
     const desc=fld("Description",el("textarea","inp")); desc.value=t?t.description||"":""; desc.dir="auto"; desc.placeholder="What needs doing…";
+    { const ai=el("button","btn ai-suggest","✧ Suggest with AI"), note=el("span","msg"); ai.type="button";
+      ai.addEventListener("click",async()=>{ if(!t&&!title.value.trim()){ note.className="msg err"; note.textContent="Write a title first."; title.focus(); return; }
+        ai.disabled=true; note.className="msg"; note.textContent="Writing…";
+        try{ const r=await api("/ai-describe",{method:"POST",body:t?{key,description:desc.value}:{title:title.value,description:desc.value}}); desc.value=r.suggestion; note.textContent="Suggested by AI: check and change it as you like."; desc.focus(); }
+        catch(err){ note.className="msg err"; note.textContent=errorText(err); } finally{ ai.disabled=false; } });
+      const row=el("div","inline"); row.append(ai,note); desc.closest(".fld").appendChild(row); }
     const prio=fld("Priority",el("select","fsel")); INT_PRIORITIES.forEach(x=>prio.appendChild(new Option(x,x))); prio.value=t?t.priority:"Medium";
     let devs=null, due=null, asg=null;
     if(!t){
@@ -1302,6 +1308,29 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       row.appendChild(fileActions(key,a.filename,a.mimeType,()=>apiFile("/jira/issue/"+key+"/attachments/"+a.id))); box.appendChild(row);
     });
   }
+  // Suggest description with AI: the AI writes one from the title, description and comments; you can
+  // adjust it, then replace the ticket's description (recorded with your name), copy it, or dismiss it.
+  $("d-aidesc").addEventListener("click",async()=>{
+    const key=dz.key, out=$("d-aidesc-out"), btn=$("d-aidesc"); if(!key||isOdoo(key)) return;
+    btn.disabled=true; out.hidden=false; out.replaceChildren(el("p","msg","Writing a description…"));
+    try{
+      const r=await api("/ai-describe",{method:"POST",body:{key}}); if(dz.key!==key) return;
+      const text=el("textarea","inp ai-desc-text"); text.value=r.suggestion; text.dir="auto"; text.rows=Math.min(16,Math.max(6,r.suggestion.split("\n").length+1)); text.setAttribute("aria-label","Suggested description");
+      const msg=el("span","msg"), acts=el("div","inline");
+      const replace=el("button","btn primary","Replace description"); replace.type="button";
+      replace.addEventListener("click",async()=>{ const value=text.value.trim(); if(!value){ msg.textContent="The description is empty."; return; }
+        if(!confirm("Replace the ticket's description with this one?")) return;
+        replace.disabled=true; msg.className="msg"; msg.textContent="Saving…";
+        try{ if(isInt(key)) putInternal((await internalApi.update(key,{description:value})).ticket); else await api("/jira/issue/"+key+"/description",{method:"PUT",body:{text:value,source:"ai"}});
+          out.hidden=true; out.replaceChildren(); toast(key+": description replaced."); if(dz.key===key) loadDetail(key); refreshKeys([key]); }
+        catch(err){ replace.disabled=false; msg.className="msg err"; msg.textContent=errorText(err); } });
+      const copy=el("button","btn","Copy"); copy.type="button"; copy.addEventListener("click",async()=>{ try{ await navigator.clipboard.writeText(text.value); msg.className="msg"; msg.textContent="Copied."; }catch(_){ msg.textContent="Couldn't copy."; } });
+      const dismiss=el("button","btn","Dismiss"); dismiss.type="button"; dismiss.addEventListener("click",()=>{ out.hidden=true; out.replaceChildren(); });
+      acts.append(replace,copy,dismiss,msg);
+      out.replaceChildren(el("p","msg","Suggested by AI from the ticket's title, description and comments. Check it, change anything you like, then replace."),text,acts);
+    }catch(err){ if(dz.key===key) out.replaceChildren(el("p","msg err",errorText(err))); }
+    finally{ btn.disabled=false; }
+  });
   $("d-note").addEventListener("click",e=>{ if(dz.key) notePopover(e.currentTarget,dz.key); });
   $("d-comment-note").addEventListener("click",e=>{ if(dz.key) notePopover(e.currentTarget,dz.key); });
   $("d-asg").addEventListener("click",e=>{ if(dz.key) assigneePopover(e.currentTarget,[dz.key]); });

@@ -107,3 +107,4 @@
 .client-project{border-top:1px solid var(--line);padding-top:8px;margin-top:8px}.client-project:first-of-type{border-top:0;margin-top:0;padding-top:0}
 .client-project>b{display:block;margin-bottom:4px}
 .client-card>.client-section:last-child{grid-column:1/-1}
+.catalog-search{width:100%;max-width:420px;margin:12px 0 4px}.catalog-found{margin:0 0 8px;font-size:13px;color:var(--muted)}

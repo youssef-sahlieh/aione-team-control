@@ -16,7 +16,7 @@
 //   (admin: everything; user: only the tickets labelled with their developer name). Without it, the
 //   emails in TEAM_EMAILS sign in with TEAM_PASSWORD as admins. The first sign-in with TEAM_PASSWORD
 //   after the database is added creates admin accounts for everyone in TEAM_EMAILS.
-import { BusinessError, businessResponse, catalogRoutes, clientDetails, metadataRoutes, readMetadata, readCatalog, publicMetadata, requireBilling, billingRequired, withTicketLock, guardedTransition } from "./ticket-metadata.js";
+import { BusinessError, businessResponse, catalogRoutes, metadataRoutes, readMetadata, readCatalog, publicMetadata, requireBilling, billingRequired, withTicketLock, guardedTransition } from "./ticket-metadata.js";
 import {savedReportRoutes} from "./saved-reports.js";
 import { reportRoutes, buildReport } from "./reports.js";
 import { dateRequestRoutes } from "./date-requests.js";
@@ -28,7 +28,7 @@ import { dbReportRoutes, dbReportCron } from "./db-report.js";
 import { odooAppRoutes, odooTranslations } from "./odoo-app.js";
 import { cookieSessionRequest } from "./sessions.js";
 import { SESSION_MS } from "./session-policy.js";
-import { aiChat, aiBrief, aiConfigured, aiClientName, AIError } from "./ai.js";
+import { aiChat, aiBrief, aiConfigured, aiDescription, AIError } from "./ai.js";
 import { githubConfigured, syncPulls, prsByKey } from "./github.js";
 import { recordTicketEvent, ticketLogRoutes } from "./ticket-log.js";
 import { integrationRoutes } from "./integrations.js";
@@ -408,13 +408,26 @@ async function route(request, env, url) {
     const devs=f.labels.filter(l=>/^ai1_/i.test(l)).map(l=>l.slice(4).toLowerCase());if(me.role!=="admin"&&(!me.dev||!devs.includes(me.dev)))return null;
     return {key,title:f.summary,description:f.description,devs,closed:f.status.statusCategory.key==="done",status:f.status.name,cat:f.status.statusCategory.key,created:f.created,updated:f.updated,due:f.duedate,completedAt:f.resolutiondate||null,assignee:f.assignee?.displayName,internal:false};
   };
-  // A suggested display name for a client, from its Odoo details (administrators; nothing is saved here).
-  if(path==="/clients/ai-name"&&method==="POST"){
-    if(me.role!=="admin")return fail("forbidden","Only administrators manage the client catalog.",403);
-    const b=await readJson(request);if(!b||typeof b.id!=="string")return fail("bad_request","Choose a client.",400);
-    try{return json({suggestion:await aiClientName(env,me,await clientDetails(env,b.id))});}
-    // AI service errors (including the hosted service's daily limit) come back with their own message.
-    catch(e){if(e instanceof BusinessError)throw e;if(e instanceof AIError||(e&&typeof e.status==="number"&&typeof e.code==="string"))return json({code:e.code,error:e.message},e.status);return fail("ai_unavailable","Could not suggest a name. Please try again.",502);}
+  // A suggested ticket description (nothing is saved here). With a key, only for a ticket you can see.
+  if(path==="/ai-describe"&&method==="POST"){
+    const b=await readJson(request);if(!b||typeof b!=="object")return fail("bad_request","Send a ticket or a title.",400);
+    let ticket;
+    if(typeof b.key==="string"&&b.key){
+      if(/^INT-\d+$/.test(b.key)){const t=await readBusinessTicket(b.key);if(!t)return fail("not_found","Ticket unavailable.",404);
+        ticket={title:t.title,description:t.description,comments:(t.comments||[]).map(c=>({author:c.author&&c.author.name,text:c.body}))};}
+      else if(new RegExp("^"+env.JIRA_PROJECT+"-\\d+$").test(b.key)){
+        const r=await jira(env,"/rest/api/2/issue/"+b.key+"?fields=summary,description,labels,comment,project",{signal:AbortSignal.timeout(15000)});
+        if(!r.ok)return r.res;const f=r.data.fields||{};
+        if(f.project?.key!==env.JIRA_PROJECT||(me.role!=="admin"&&!(f.labels||[]).some(l=>String(l).toLowerCase()==="ai1_"+me.dev)))return fail("not_found","Ticket unavailable.",404);
+        ticket={title:f.summary,description:typeof f.description==="string"?f.description:"",comments:((f.comment&&f.comment.comments)||[]).map(c=>({author:c.author&&c.author.displayName,text:typeof c.body==="string"?c.body:""}))};
+      }else return fail("bad_request","Choose a Jira or internal ticket.",400);
+    }else{
+      if(typeof b.title!=="string"||!b.title.trim()||b.title.length>300)return fail("bad_request","Write a title first.",400);
+      ticket={title:b.title,description:typeof b.description==="string"?b.description.slice(0,6000):"",comments:[]};
+    }
+    if(typeof b.description==="string"&&b.key)ticket.description=b.description.slice(0,6000)||ticket.description;
+    try{return json({suggestion:await aiDescription(env,me,ticket)});}
+    catch(e){if(e instanceof AIError||(e&&typeof e.status==="number"&&typeof e.code==="string"))return json({code:e.code,error:e.message},e.status);return fail("ai_unavailable","Could not suggest a description. Please try again.",502);}
   }
   if(path==="/clients"||path.startsWith("/clients/"))return catalogRoutes(request,env,url,me);
   // Many tickets at once (the dashboard's list): one database read for internal tickets and, for users, one
@@ -626,7 +639,7 @@ async function route(request, env, url) {
     } });
   }
 
-  const m = /^\/jira\/issue\/([A-Z][A-Z0-9_]*-\d+)(\/changelog|\/history|\/transitions|\/comment)?$/.exec(path);
+  const m = /^\/jira\/issue\/([A-Z][A-Z0-9_]*-\d+)(\/changelog|\/history|\/transitions|\/comment|\/description)?$/.exec(path);
   if (m && isOurKey(m[1])) {
     const key = m[1], sub = m[2] || "";
     if(sub==="/history"){
@@ -679,6 +692,14 @@ async function route(request, env, url) {
         const apply=async()=>{const res=pass(await jira(env,"/rest/api/3/issue/"+key+"/transitions",{method:"POST",body:{transition:{id:String(b.id)}},signal:AbortSignal.timeout(20000)}));if(res.ok)await recordTicketEvent(env,key,me,{action:"status",changes:{status:{from:ticket.status,to:target.to.name}},...(b.overrideReason?{text:"Closed with override: "+b.overrideReason}:{})});return res;};
         return closing||ticket.closed?guardedTransition(env,key,me,{closing,overrideReason:b.overrideReason},apply):apply();
       });
+    }
+    if (sub === "/description" && method === "PUT") {
+      const b = await readJson(request);
+      const text = b && typeof b.text === "string" ? b.text.trim() : "";
+      if (!text || text.length > 30000) return fail("bad_request", "Write a description first.", 400);
+      const result = await jira(env, "/rest/api/2/issue/" + key, { method: "PUT", body: { fields: { description: text } }, signal: AbortSignal.timeout(20000) });
+      if (result.ok) await recordTicketEvent(env, key, me, { action: "edit", changes: { description: { from: "(previous text)", to: "(new description)" } }, ...(b.source === "ai" ? { text: "Description suggested by AI" } : {}) });
+      return pass(result);
     }
     if (sub === "/comment" && method === "POST") {
       const b = await readJson(request);

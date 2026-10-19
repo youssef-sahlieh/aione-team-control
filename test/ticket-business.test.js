@@ -271,7 +271,7 @@ test('all report snapshot includes old closed tickets with one source scan and s
 });
 
 test('saved report endpoints are authenticated and refuse ordinary users',async()=>{const s=await setup();assert.equal((await s.call('/reports/latest')).status,403);assert.equal((await s.call('/reports/refresh','POST',{},user)).status,403);const first=await s.call('/reports/latest','GET',undefined,admin);assert.equal(first.status,200);assert.equal((await first.json()).report.workflow,'all');const second=await s.call('/reports/latest','GET',undefined,admin);assert.equal((await second.json()).cached,true);assert.equal((await s.call('/reports/refresh','POST',{},admin)).status,200);});
-test('client details come from Odoo (only fields it has) and an AI name, once chosen, is the name shown on tickets',async()=>{
+test('client details come from Odoo (only fields it has); a name chosen in the dashboard is shown on tickets until cleared',async()=>{
  const s=await setup();const realFetch=globalThis.fetch;
  Object.assign(s.env,{ODOO_URL:'https://odoo.invalid',ODOO_DB:'db',ODOO_LOGIN:'bot@example.invalid',ODOO_API_KEY:'k',AI_PROVIDER:async()=>({output:[{type:'message',content:[{type:'output_text',text:'"Acme Retail."'}]}]})});
  const cat=await readCatalog(s.env),acme=cat.entries.find(e=>e.name==='Acme'&&!e.parentId),branch=cat.entries.find(e=>e.name==='Branch A');
@@ -287,8 +287,6 @@ test('client details come from Odoo (only fields it has) and an AI name, once ch
   const d=await (await s.call('/clients/details?id='+acme.id,'GET',undefined,admin)).json();
   assert.equal(d.contact.email,'info@acme.example');assert.deepEqual(d.contact.tags,['VIP']);assert.equal(d.contact.people,2);assert.equal(d.contact.address,'Haifa, Israel');
   const p=d.projects.find(x=>x.name==='Branch A');assert.equal(p.odoo.manager,'Rami');assert.equal(p.odoo.tasks,7);
-  assert.equal((await s.call('/clients/ai-name','POST',{id:acme.id})).status,403);
-  const ai=await (await s.call('/clients/ai-name','POST',{id:acme.id},admin)).json();assert.equal(ai.suggestion,'Acme Retail');
   // Chosen AI name: stored on the client and shown on tickets; clearing it shows the Odoo name again.
   const rev=(await readCatalog(s.env)).revision;
   assert.equal((await s.call('/clients','PUT',{revision:rev,id:acme.id,aiName:'Acme Retail'},admin)).status,200);
@@ -297,4 +295,19 @@ test('client details come from Odoo (only fields it has) and an AI name, once ch
   assert.equal((await s.call('/clients','PUT',{revision:rev+1,id:acme.id,aiName:''},admin)).status,200);
   assert.equal((await readCatalog(s.env)).entries.find(e=>e.id===acme.id).aiName,undefined);
  }finally{globalThis.fetch=realFetch;}
+});
+test('AI suggests a ticket description from the ticket itself; replacing a Jira description is recorded with the real person',async()=>{
+ const s=await setup();let seen=null;
+ s.env.AI_PROVIDER=async body=>{seen=JSON.parse(body.input[0].content).data;return {output:[{type:'message',content:[{type:'output_text',text:'Goal:\n- Fix the labels'}]}]};};
+ const t=await s.create(admin,{summary:'Fix card labels',description:'Labels are wrong',metadata:{clientId:null,subClientId:null,billing:'billable'}});
+ const r=await (await s.call('/ai-describe','POST',{key:t.key})).json();assert.equal(r.suggestion,'Goal:\n- Fix the labels');
+ assert.equal(seen.title,'Fix card labels');assert.equal(seen.description,'Labels are wrong');
+ await s.env.STORE.set('it:INT-88',JSON.stringify({key:'INT-88',summary:'Other',devs:['other'],status:'Open'}));
+ assert.equal((await s.call('/ai-describe','POST',{key:'INT-88'})).status,404); // not your ticket
+ assert.equal((await s.call('/ai-describe','POST',{title:'  '})).status,400);
+ assert.equal((await s.call('/ai-describe','POST',{title:'New report',description:'draft'})).status,200);assert.equal(seen.title,'New report');
+ assert.equal((await s.call('/ai-describe','POST',{key:'AION-5'})).status,200);assert.equal(seen.title,'Synthetic task'); // a Jira ticket with your label
+ const put=await s.call('/jira/issue/AION-5/description','PUT',{text:'Goal:\n- Fix the labels',source:'ai'});assert.equal(put.status,200);
+ const sent=s.calls.find(c=>c.method==='PUT'&&c.url.endsWith('/rest/api/2/issue/AION-5'));assert.deepEqual(sent.body,{fields:{description:'Goal:\n- Fix the labels'}});
+ const log=(await (await s.call('/ticket-log?key=AION-5')).json()).events;assert.equal(log.at(-1).by.name,'Developer');assert.equal(log.at(-1).text,'Description suggested by AI');
 });

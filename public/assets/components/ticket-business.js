@@ -40,7 +40,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   let billingNeeded=false,enabled=false,catalog={revision:0,entries:[]},records={},editor=null;
   const reportBrowser=createReportBrowser({api,openIssue});
   const admin=()=>context().admin;
-  let odooOn=false;
+  let odooOn=false,catalogQuery='';
   const clients=()=>catalog.entries.filter(e=>!e.parentId&&!e.archived);
   const children=id=>catalog.entries.filter(e=>e.parentId===id&&!e.archived);
   async function loadCatalog(){catalog=await api('/clients');return catalog;}
@@ -176,8 +176,13 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       forms.append(customer,project);panel.append(forms);
     }else{
     const add=el('div','business-form'),name=field(add,'New client or project name',input('text','')),parent=field(add,'Parent (optional)',el('select','fsel'));option(parent,'Top-level client','');for(const c of clients())option(parent,c.name,c.id);add.append(button('Add',async()=>{try{catalog=await api('/clients',{method:'POST',body:{revision:catalog.revision,name:name.value,parentId:parent.value||null}});await onChange();target.replaceChildren();renderCatalog(target);}catch(err){message(msg,err);}}));panel.append(add);}
-    for(const c of catalog.entries.filter(e=>!e.parentId).sort((a,b)=>label(a).localeCompare(label(b)))){const group=el('details','catalog-group');group.append(el('summary','',label(c)+(c.aiName?' · Odoo: '+c.name:'')+(c.archived?' (archived)':'')));
+    const search=el('input','inp catalog-search');search.type='search';search.placeholder='Search customers or projects…';search.setAttribute('aria-label','Search customers');search.value=catalogQuery;
+    const found=el('p','catalog-found');panel.append(search,found);const groups=[];
+    const filter=()=>{catalogQuery=search.value;const q=search.value.trim().toLowerCase();let n=0;for(const [g,text] of groups){const show=!q||text.includes(q);g.hidden=!show;if(show)n++;}found.textContent=q?n+' of '+groups.length+' customers match':groups.length+' customers';};
+    search.addEventListener('input',filter);
+    for(const c of catalog.entries.filter(e=>!e.parentId).sort((a,b)=>label(a).localeCompare(label(b)))){const group=el('details','catalog-group');groups.push([group,[c.name,c.aiName||'',...catalog.entries.filter(e=>e.parentId===c.id).flatMap(e=>[e.name,e.aiName||''])].join(' ').toLowerCase()]);group.append(el('summary','',label(c)+(c.aiName?' · Odoo: '+c.name:'')+(c.archived?' (archived)':'')));
       const card=el('div','client-card');group.append(card);group.addEventListener('toggle',()=>{if(group.open&&!card.dataset.loaded){card.dataset.loaded='1';clientCard(card,c,target);}});for(const e of [c,...catalog.entries.filter(e=>e.parentId===c.id)]){const row=el('div','catalog-entry'),nm=input('text',e.name);nm.setAttribute('aria-label','Name for '+e.name);row.append(nm,button('Rename',async()=>change(e,{name:nm.value})),button(e.archived?'Restore':'Archive',async()=>change(e,{archived:!e.archived})));group.append(row);}panel.append(group);}
+    filter();
     async function change(e,patch){try{catalog=await api('/clients',{method:'PUT',body:{revision:catalog.revision,id:e.id,...patch}});await onChange();target.replaceChildren();renderCatalog(target);}catch(err){message(msg,err);}}
   }
   // Details of one client: its Odoo contact, its projects, its tickets in the dashboard, and its AI name.
@@ -189,15 +194,11 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const facts=(parent,rows)=>{const dl=el('dl','client-facts');for(const [k,v] of rows){if(v==null||v===''||(Array.isArray(v)&&!v.length))continue;dl.append(el('dt','',k));const dd=el('dd');if(v instanceof Node)dd.append(v);else dd.textContent=Array.isArray(v)?v.join(', '):String(v);dl.append(dd);}parent.append(dl);return dl;};
     const link=(text,href)=>{const a=el('a','',text);a.href=href;if(/^https?:/.test(href)){a.target='_blank';a.rel='noopener';}return a;};
     const date=v=>v?String(v).slice(0,10):'';
-    // Name: the Odoo name, the shown name, and an AI suggestion to accept or not.
+    // Name: the Odoo name (a name chosen earlier in the dashboard can be undone).
     const nameBox=section('Name');
-    facts(nameBox,[['Odoo name',d.client.name],['Shown as',d.client.aiName||d.client.name+' (Odoo name)']]);
-    const ai=el('div','client-ai'),out=el('span','msg');
-    const save=async aiName=>{try{catalog=await api('/clients',{method:'PUT',body:{revision:catalog.revision,id:c.id,aiName}});await onChange();page.replaceChildren();renderCatalog(page,aiName?'“'+aiName+'” is now shown for '+c.name+'.':'The Odoo name is shown again for '+c.name+'.');}catch(err){message(out,err);}};
-    ai.append(button('Suggest a name with AI',async e=>{const b=e.currentTarget;b.disabled=true;out.className='msg';out.textContent='Asking the AI…';
-      try{const r=await api('/clients/ai-name',{method:'POST',body:{id:c.id}});out.replaceChildren(el('b','','“'+r.suggestion+'”'),' ',button('Use this name',()=>save(r.suggestion),'btn primary'));}catch(err){message(out,err);}finally{b.disabled=false;}}));
-    if(d.client.aiName)ai.append(button('Show the Odoo name again',()=>save('')));
-    ai.append(out);nameBox.append(ai);
+    facts(nameBox,[['Odoo name',d.client.name],...(d.client.aiName?[['Shown as',d.client.aiName]]:[])]);
+    if(d.client.aiName){const out=el('span','msg'),row=el('div','client-ai');
+      row.append(button('Show the Odoo name again',async()=>{try{catalog=await api('/clients',{method:'PUT',body:{revision:catalog.revision,id:c.id,aiName:''}});await onChange();page.replaceChildren();renderCatalog(page,'The Odoo name is shown again for '+c.name+'.');}catch(err){message(out,err);}}),out);nameBox.append(row);}
     // Contact card from Odoo.
     const contact=section('Contact in Odoo'),k=d.contact;
     if(!k)contact.append(el('p','msg',c.name==='No contact'?'Projects without a contact in Odoo.':'This client is not linked to an Odoo contact.'));

@@ -909,19 +909,34 @@ test('the Clients page creates a new contact and a new project in Odoo',async({p
  expect(sent).toEqual([['customer',{name:'New Shop',email:'shop@example.invalid',phone:''}],['project',{name:'Shop POS',clientId:'shop'}]]);
  expect(mock.errors).toEqual([]);
 });
-test('a client opens its details card: Odoo contact, projects, its tickets, and an AI name to accept',async({page})=>{
+test('a client opens its details card (Odoo contact, projects, its tickets) and the customer search filters the list',async({page})=>{
  const mock=await mockDashboard(page,{odoo:true});let saved=null;
  await page.route('**/clients/details?*',r=>r.fulfill({json:{client:{id:'client',name:'Synthetic Client',aiName:'',archived:false},contact:{id:1,name:'Synthetic Client Ltd',email:'info@client.example',phone:'03-1',website:'client.example',address:'Haifa, Israel',tags:['VIP'],people:3,created:'2026-01-02 10:00:00',url:'https://odoo.invalid/web#id=1&model=res.partner&view_type=form'},projects:[{id:'p1',name:'Main project',aiName:'',archived:false,odoo:{manager:'Rami',updated:'2026-10-01 09:00:00',tasks:7,url:'https://odoo.invalid/web#id=10'}}]}}));
- await page.route('**/clients/ai-name',r=>r.fulfill({json:{suggestion:'Synthetic'}}));
  await page.route('**/clients',r=>{if(r.request().method()!=='PUT')return r.fallback();saved=r.request().postDataJSON();return r.fulfill({json:{revision:2,entries:[{id:'client',name:'Synthetic Client',aiName:saved.aiName,parentId:null,archived:false,sources:[]}]}});});
  await page.goto('/dashboard.html?page=clients');
  await page.locator('.catalog-group summary').filter({hasText:'Synthetic Client'}).click();
  const card=page.locator('.client-card').first();
  await expect(card).toContainText('info@client.example');await expect(card).toContainText('VIP');await expect(card).toContainText('Main project');await expect(card).toContainText('Rami');
  await expect(card).toContainText('Tickets');
- await card.getByRole('button',{name:'Suggest a name with AI'}).click();await expect(card).toContainText('“Synthetic”');
- await card.getByRole('button',{name:'Use this name'}).click();
- await expect.poll(()=>saved&&saved.aiName).toBe('Synthetic');
- await expect(page.locator('.catalog-group summary').filter({hasText:'Synthetic · Odoo: Synthetic Client'})).toBeVisible();
+ await expect(card.getByRole('button',{name:'Suggest a name with AI'})).toHaveCount(0);
+ // The search filters customers by name (or project name); clearing it shows them all again.
+ const search=page.getByLabel('Search customers');
+ await search.fill('nothing like this');await expect(page.locator('.catalog-group:visible')).toHaveCount(0);await expect(page.locator('.catalog-found')).toContainText('0 of');
+ await search.fill('synthetic');await expect(page.locator('.catalog-group:visible')).toHaveCount(1);
+ await search.fill('');await expect(page.locator('.catalog-found')).not.toContainText(' of ');
+ expect(saved).toBe(null);
+ expect(mock.errors).toEqual([]);
+});
+test('Suggest description with AI writes one for the ticket, which you can adjust and use',async({page})=>{
+ const mock=await mockDashboard(page);let saved=null;
+ await page.route('**/ai-describe',r=>r.fulfill({json:{suggestion:'Goal:\n- Fix the labels'}}));
+ await page.route('**/jira/issue/AION-101/description',r=>{saved=r.request().postDataJSON();return r.fulfill({json:{ok:true}});});
+ await page.goto('/dashboard.html#AION-101');
+ await page.getByRole('button',{name:'✧ Suggest description with AI'}).click();
+ const box=page.getByLabel('Suggested description');await expect(box).toHaveValue('Goal:\n- Fix the labels');
+ await box.fill('Goal:\n- Fix the labels on the card dialog');
+ page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'Replace description'}).click();
+ await expect.poll(()=>saved).toEqual({text:'Goal:\n- Fix the labels on the card dialog',source:'ai'});
+ await expect(page.locator('#toast')).toContainText('description replaced');
  expect(mock.errors).toEqual([]);
 });
