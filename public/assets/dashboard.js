@@ -21,6 +21,9 @@ import { createTicketNotes } from "./components/ticket-notes.js";
 import { createDateRequests } from "./components/date-requests.js";
 import { createCommentMentions } from "./components/comment-mentions.js";
 
+  // The dashboard keeps loading after the page itself has loaded; the browser's own scroll restore could then
+  // move you while you scroll, so it is off (redraws keep your place, see render).
+  try{ history.scrollRestoration="manual"; }catch(_){}
   // Filled in from the proxy's /config after sign-in (see applyConfig).
   let SITE="", PROJECT="", PEOPLE={}, DEVS=[], DEV_EMAIL={}, DEV_COLOR={}, BYID={}, JQL="", ME="", MAIL=false;
   // Administrators see and change everything. Users see only the tickets labelled ai1_<MY_DEV> (the proxy
@@ -411,7 +414,15 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     renderQuickFilters();
   }
 
+  // Redraws keep your place on the page: a redraw that briefly makes the page shorter (lists emptied and
+  // rebuilt) would otherwise send you back to the top while you scroll.
   function render(){
+    const y=window.scrollY; renderNow();
+    if(y&&Math.abs(window.scrollY-y)>1) window.scrollTo(0,Math.min(y,document.documentElement.scrollHeight-innerHeight));
+  }
+  // The list's width, measured before it is emptied (measuring an empty list makes the page jump up).
+  let viewWidth=0;
+  function renderNow(){
     if(!state.issues) return;
     if(!state.f.assignee.size) state.f.assignee=new Set(defaultAssigneeKeys(PEOPLE));
     // The proxy scopes developers by their authenticated ai1_ label. Do not
@@ -427,7 +438,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     $("vtitle").textContent=fd.l; $("vcount").textContent=items.length+" ticket"+(items.length===1?"":"s")+(filterCount()?" · filtered":"");
     const hint=$("hint"); hint.hidden=state.view==="list"||state.view==="assignee";
     hint.textContent=state.view==="dev"?"Drag a card onto a developer to assign them. From one developer to another moves it; onto “No developer” removes that developer.":"Drag a card to another column to change its status. Jira only allows some moves; you'll see a message when one isn't allowed.";
-    const v=$("view"); v.replaceChildren();
+    const v=$("view"); viewWidth=v.clientWidth; v.replaceChildren();
     if(!items.length){ const e=el("div","listwrap"); e.appendChild(el("div","empty","No tickets match. Pick another tile or clear some filters.")); v.appendChild(e); updateBulk(); return; }
     v.appendChild(state.view==="list"?listView(items,t):boardView(items,t,state.view));
     updateBulk();
@@ -541,7 +552,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   let workColumns=null;
   // Phones (under 900px) keep every column and scroll the list sideways inside its own box.
   function fitWorkColumns(){
-    const width=($("view").clientWidth||innerWidth)-16;let defs=workColumnDefs();const need=d=>d.reduce((a,[,n])=>a+n,0)+10*(d.length-1)+28,hidden=[];
+    const width=(viewWidth||$("view").clientWidth||innerWidth)-16;let defs=workColumnDefs();const need=d=>d.reduce((a,[,n])=>a+n,0)+10*(d.length-1)+28,hidden=[];
     if(width>=884)for(const c of WORK_DROP){if(need(defs)<=width)break;if(defs.some(d=>d[0]===c)){defs=defs.filter(d=>d[0]!==c);hidden.push(c);}}
     return {defs,hidden,keys:defs.map(d=>d[0]).join()};
   }
@@ -1055,7 +1066,17 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   let qt=null; $("q").addEventListener("input",e=>{ clearTimeout(qt); qt=setTimeout(()=>{ state.q=e.target.value.trim(); render(); },150); });
 
   const dz={key:null,labels:[],devs:new Set()};
-  function closeDrawer(force){ if(dz.key&&force!==true&&!drawerUI.allowClose())return false;ticketNotes.reset(dz.key);business.reset();$("drawer").hidden=true;$("scrim").hidden=true;dz.key=null;drawerUI.close();return true; }
+  // An open ticket is a step in the browser's history (#KEY), so Back closes it instead of leaving the dashboard.
+  // keepHistory: switching straight to another ticket (its own step replaces this one).
+  let drawerPushed=false, skipPop=false;
+  function closeDrawer(force,keepHistory){ if(dz.key&&force!==true&&!drawerUI.allowClose())return false;ticketNotes.reset(dz.key);business.reset();$("drawer").hidden=true;$("scrim").hidden=true;dz.key=null;drawerUI.close();
+    if(!keepHistory){ if(drawerPushed){ drawerPushed=false; skipPop=true; history.back(); } else if(location.hash) history.replaceState(history.state,"",location.pathname+location.search); }
+    return true; }
+  window.addEventListener("popstate",()=>{
+    if(skipPop){ skipPop=false; return; }
+    // Back (or Forward) away from the open ticket's step closes it; a ticket with unsaved edits asks first.
+    if(dz.key&&location.hash!=="#"+dz.key){ drawerPushed=false; if(!closeDrawer(false,true)){ history.pushState(history.state,"",location.pathname+location.search+"#"+dz.key); drawerPushed=true; } }
+  });
   $("d-close").addEventListener("click",closeDrawer); $("scrim").addEventListener("click",closeDrawer);
   function setMsg(id,text,ok){ const m=$(id); m.textContent=text||""; m.className="msg"+(text?(ok?" ok":" err"):""); }
   function renderDevChips(){ const box=$("d-devs"); box.replaceChildren(); const names=new Set(allDevs()); dz.devs.forEach(d=>names.add(d));
@@ -1067,7 +1088,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   $("d-size").addEventListener("click",()=>{ try{ localStorage.setItem("aion.drawer.full",drawerFull()?"0":"1"); }catch(_){} applyDrawerSize(); });
   applyDrawerSize();
   function openDrawer(key){ setTimeout(()=>{ if(dz.key===key) renderPrs(key); },0);
-    if(dz.key&&dz.key!==key&&!closeDrawer())return;
+    if(dz.key&&dz.key!==key&&!closeDrawer(false,true))return;
+    if(location.hash!=="#"+key){ const url=location.pathname+location.search+"#"+key; if(drawerPushed) history.replaceState(history.state,"",url); else { history.pushState(history.state,"",url); drawerPushed=true; } }
     const opening=!dz.key;dz.key=key;
     if(opening){drawerUI.open();$("d-reply").value="";commentMentions.reset();$("d-newdev").value="";}
     ticketHistory.reset();drawerUI.select("overview");dateRequests.renderDrawer(key);
@@ -1297,7 +1319,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(Date.now()-lastLoad>120000&&document.visibilityState==="visible"&&!batchBusy&&!reloading&&$("pop").hidden&&!drag){ lastLoad=Date.now(); reload(); } },1000);
   $("signout").addEventListener("click",()=>signOut());
   // The Work view re-fits its columns when the window size changes.
-  let resizeTimer=null; window.addEventListener("resize",()=>{ clearTimeout(resizeTimer); resizeTimer=setTimeout(()=>{ if(state.issues&&state.view==="list"&&state.columnsMode!=="all"&&$("pop").hidden&&!drag&&workColumns&&fitWorkColumns().keys!==workColumns.join()) render(); },150); });
+  let resizeTimer=null; window.addEventListener("resize",()=>{ clearTimeout(resizeTimer); resizeTimer=setTimeout(()=>{ if(state.issues&&state.view==="list"&&state.columnsMode!=="all"&&$("pop").hidden&&!drag&&workColumns&&(viewWidth=$("view").clientWidth,fitWorkColumns()).keys!==workColumns.join()) render(); },150); });
   const ticketHistory=createTicketHistory({api,getIssue:()=>issueByKey(dz.key),allowed:()=>IS_ADMIN&&!!dz.key&&!isOdoo(dz.key)&&!$("drawer").hidden,personName:k=>(PEOPLE[k]&&PEOPLE[k].name)||k,formatTime:value=>{const time=fmtWhen(value);return time.d+" "+time.t;}});
   const drawerUI=createIssueDrawer({canViewHistory:()=>IS_ADMIN,canViewFullHistory:()=>IS_ADMIN&&!!dz.key&&!isOdoo(dz.key),onSelect:id=>{if(id==="history")ticketHistory.load(dz.key);if(id==="notes")ticketNotes.load(dz.key);},isDirty:()=>{if(business.dirty(dz.key)||ticketNotes.dirty(dz.key))return true;const issue=issueByKey(dz.key);if(!issue)return !!$("d-reply").value.trim();return !!$("d-reply").value.trim()||!!$("d-newdev").value.trim()||dz.devs.size!==issue.devs.length||issue.devs.some(d=>!dz.devs.has(d));}});
   const ticketNotes=createTicketNotes({api,isAdmin:IS_ADMIN});
@@ -1310,7 +1332,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const syncErrors=createSyncErrors({api,onApiWrite,isAdmin:()=>IS_ADMIN,storageKey:()=>"aion.syncErrors."+encodeURIComponent((getSession()||{}).email||""),formatTime:v=>{const w=fmtWhen(v);return w.d+" "+w.t;},
     onRetried:key=>refreshKeys([key]),
     onChange:()=>{ const n=syncErrors?syncErrors.count():0, c=$("nav-error-count"); if(c){ c.textContent=String(n); c.hidden=!n; } if(workspace&&workspace.route().page==="errors"&&state.issues&&$("pop").hidden) render(); }});
-  const workspace=createWorkspace({state,context:()=>({renderErrors:target=>syncErrors.render(target),admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount(),dateRequests:dateRequests.all(),pendingDates:dateRequests.pendingCount(),renderReports:target=>business.renderReports(target),renderCatalog:target=>business.renderCatalog(target),renderRequests:(target,options)=>dateRequests.render(target,options)}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>!dz.key||closeDrawer()});
+  const workspace=createWorkspace({state,context:()=>({renderErrors:target=>syncErrors.render(target),admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount(),dateRequests:dateRequests.all(),pendingDates:dateRequests.pendingCount(),renderReports:target=>business.renderReports(target),renderCatalog:target=>business.renderCatalog(target),renderRequests:(target,options)=>dateRequests.render(target,options)}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>{ if(!dz.key) return true; if(!closeDrawer(false,true)) return false; drawerPushed=false; if(location.hash) history.replaceState(history.state,"",location.pathname+location.search); return true; }});
   const aiAssistant=createAIAssistant({openIssue:openDrawer,beforeOpen:()=>{if(dz.key&&!closeDrawer())return false;closePop();return true;}});
   const ticketBriefs=createTicketBriefs({api});
   const assigneeFilter=createAssigneeFilter({getSelection:()=>state.f.assignee,getOptions:()=>assigneeOptions(PEOPLE),getDefaults:()=>defaultAssigneeKeys(PEOPLE),getCounts:()=>countBy("assignee",i=>assigneeFilterKey(i,PEOPLE)),onApply:selected=>{state.f.assignee=selected;state.sel.clear();state.pageIndex=0;render();}});

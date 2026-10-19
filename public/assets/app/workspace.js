@@ -91,7 +91,8 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     render();
     $("page-heading").focus();
   }
-  window.addEventListener("popstate", () => { route = readRoute(new URL(location.href), context().admin); synchronize(); render(); });
+  // Back/Forward between dashboard pages; a step that only opens or closes a ticket (#KEY) leaves the page as it is.
+  window.addEventListener("popstate", () => { const next = readRoute(new URL(location.href), context().admin); if (next.page === route.page && next.mode === route.mode) return; route = next; synchronize(); render(); });
   const nav = $("main-nav");
   for (const [id, label] of pages) {
     const a = node("a", "nav-link"); a.href = `dashboard.html?page=${id}`; a.dataset.page = id; a.title = label;

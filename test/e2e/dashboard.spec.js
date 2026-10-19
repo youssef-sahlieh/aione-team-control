@@ -544,7 +544,7 @@ test('clients are read from Odoo: background refresh on load and a sync button, 
 });
 test('business fields lock on closed tickets and unsaved edits trigger discard confirmation',async({page})=>{
  const mock=await mockDashboard(page);await page.goto('/dashboard.html#INT-101');await page.locator('#business-fields').getByLabel('Work done').fill('Draft work');page.once('dialog',d=>d.dismiss());await page.locator('#d-close').click();await expect(page.locator('#drawer')).toBeVisible();page.once('dialog',d=>d.accept());await page.locator('#d-close').click();
- await page.route('**/ticket-metadata?key=INT-101',r=>r.fulfill({json:{metadata:{revision:1,clientId:'client',estimatedHours:1,actualHours:1,workDone:'Completed'},history:[],closed:true}}));await page.reload();await expect(page.locator('#business-fields').getByLabel('Work done')).toBeDisabled();await expect(page.locator('#business-fields')).toContainText('reopen');expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+ await page.route('**/ticket-metadata?key=INT-101',r=>r.fulfill({json:{metadata:{revision:1,clientId:'client',estimatedHours:1,actualHours:1,workDone:'Completed'},history:[],closed:true}}));await page.goto('/dashboard.html#INT-101');await expect(page.locator('#business-fields').getByLabel('Work done')).toBeDisabled();await expect(page.locator('#business-fields')).toContainText('reopen');expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
 
 for(const role of ['admin','user'])test('business closure failure '+role+' handles override permissions',async({page})=>{
@@ -789,4 +789,33 @@ test('saving developers from the ticket view moves a not-started Jira ticket to 
  await page.locator('#d-devs .fc').filter({hasText:'ai1_builder'}).click();await page.locator('#d-savedevs').click();
  await expect.poll(()=>jiraMoves).toEqual([{id:'21'}]);
  expect(mock.errors).toEqual([]);
+});
+test('fresh data arriving while you scroll keeps your place on the page',async({page})=>{
+ await page.setViewportSize({width:1440,height:700});const mock=await mockDashboard(page,{many:true});
+ await page.goto('/dashboard.html');await page.getByRole('button',{name:'Work view',exact:true}).click();await expect(page.locator('#view .item')).toHaveCount(25);
+ // Open again: the saved copy shows at once, the fresh tickets arrive later while you scroll.
+ await page.route('**/jira/search',async r=>{await new Promise(res=>setTimeout(res,1500));return r.fallback();});
+ await page.reload();await expect(page.locator('#view .item')).toHaveCount(25);
+ await page.evaluate(()=>window.scrollTo(0,900));const before=await page.evaluate(()=>window.scrollY);expect(before).toBeGreaterThan(500);
+ await expect(page.locator('#updated')).toContainText('updated',{timeout:10000});await page.waitForTimeout(1500);
+ expect(Math.abs(await page.evaluate(()=>window.scrollY)-before)).toBeLessThan(5);
+ for(let n=0;n<2;n++){await page.evaluate(()=>document.getElementById('refresh').click());await page.waitForTimeout(2200);}
+ expect(Math.abs(await page.evaluate(()=>window.scrollY)-before)).toBeLessThan(5);
+ expect(mock.errors).toEqual([]);
+});
+test('Back closes an open ticket and keeps you on the dashboard; Forward reopens it',async({page})=>{
+ const mock=await mockDashboard(page);await page.goto('/dashboard.html?page=tickets');
+ await page.locator('#view .ttl').filter({hasText:'Synthetic Jira task'}).click();await expect(page.locator('#drawer')).toBeVisible();
+ expect(new URL(page.url()).hash).toBe('#AION-101');
+ await page.goBack();await expect(page.locator('#drawer')).toBeHidden();expect(new URL(page.url()).pathname).toMatch(/dashboard\.html$/);expect(new URL(page.url()).hash).toBe('');
+ await page.goForward();await expect(page.locator('#drawer')).toBeVisible();
+ await page.locator('#d-close').click();await expect(page.locator('#drawer')).toBeHidden();await page.waitForTimeout(200);expect(new URL(page.url()).hash).toBe('');
+ expect(mock.errors).toEqual([]);
+});
+test('"← Dashboard" on Databases returns to the dashboard you came from, so Back does not land on Databases',async({page})=>{
+ const mock=await mockDashboard(page);await page.goto('/dashboard.html?page=tickets');await expect(page.locator('#view .item').first()).toBeVisible();
+ await page.goto('/databases.html',{referer:'http://127.0.0.1:4173/dashboard.html?page=tickets'});await expect(page.locator('a[href="dashboard.html"]')).toBeVisible();
+ await page.locator('a[href="dashboard.html"]').click();await page.waitForURL(/dashboard\.html\?page=tickets/);
+ await page.goBack().catch(()=>{});await page.waitForTimeout(300);
+ expect(page.url()).not.toMatch(/databases\.html/);
 });

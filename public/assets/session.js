@@ -100,3 +100,14 @@ async function request(path, method, body) {
   }
   return data;
 }
+
+// "← Dashboard" on the other pages (Databases, Audit & Deploy, Monitor, Users): when you came here from the
+// dashboard, go back to it instead of opening it again, so the browser's Back button keeps working in order.
+if (!/\/dashboard\.html$/.test(location.pathname)) {
+  document.addEventListener("click", (e) => {
+    const link = e.target.closest && e.target.closest('a[href="dashboard.html"]');
+    if (!link || e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+    let from = null; try { from = new URL(document.referrer); } catch {}
+    if (from && from.origin === location.origin && /\/dashboard\.html$/.test(from.pathname) && history.length > 1) { e.preventDefault(); history.back(); }
+  });
+}
