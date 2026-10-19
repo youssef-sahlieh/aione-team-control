@@ -108,7 +108,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   let ODOO=false; const ODOO_DETAIL={};
   const isOdoo=key=>/^HD-[0-9]+$/.test(key);
   // Pull requests in the product repositories that mention a ticket (matched by the proxy).
-  let GITHUB=false, PR_CHECKS=true; const PRS={};
+  let GITHUB=false, PR_CHECKS=true, PR_ERROR=""; const PRS={};
   // What needs attention on a PR: checks, reviews and comments ([class, short text, full text]).
   function prSignals(p){
     const s=p.status, out=[]; if(!s) return out;
@@ -128,7 +128,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   function prCell(i){
     const c=el("span","c-prs pr-cell"), list=PRS[i.key];
     if(isInt(i.key)||isOdoo(i.key)){ c.textContent=""; return c; }
-    if(!list){ c.appendChild(el("span","pr-none","…")); return c; }
+    if(!list){ if(PR_ERROR){ const e=el("span","pr-none pr-err","can't load"); e.title=PR_ERROR; c.appendChild(e); } else c.appendChild(el("span","pr-none","…")); return c; }
     if(!list.length){ c.appendChild(el("span","pr-none","—")); return c; }
     list.slice(0,3).forEach(p=>{ const line=el("div","pr-line"); const a=prLink(p,"#"+p.number); a.title=p.repo+" #"+p.number+" · "+p.state+" · "+p.title; line.appendChild(a);
       line.appendChild(el("span","pr-st pr-"+p.state,p.state));
@@ -141,8 +141,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     keys=[...new Set(keys)].filter(k=>!isInt(k)&&!isOdoo(k)); if(!GITHUB||!keys.length) return;
     try{
       for(let n=0;n<keys.length;n+=300){ const part=keys.slice(n,n+300); const r=await api("/github/prs?keys="+encodeURIComponent(part.join(","))+(refresh?"&refresh=1":"")); part.forEach(k=>{ PRS[k]=(r.prs&&r.prs[k])||[]; }); if(r.checks===false) PR_CHECKS=false; }
-      if($("pop").hidden&&!drag) render(); if(dz.key&&keys.includes(dz.key)) renderPrs(dz.key);
-    }catch(err){ if(dz.key&&keys.includes(dz.key)) renderPrs(dz.key,errorText(err)); }
+      PR_ERROR=""; if($("pop").hidden&&!drag) render(); if(dz.key&&keys.includes(dz.key)) renderPrs(dz.key);
+    }catch(err){ const first=!PR_ERROR; PR_ERROR=err.message||errorText(err); if(first){ toast("Pull requests can't be loaded",[PR_ERROR,"An administrator can check the GitHub token on the Sync errors page."],true); renderIfIdle(); } if(dz.key&&keys.includes(dz.key)) renderPrs(dz.key,PR_ERROR); }
   }
   function renderPrs(key,problem){
     const blk=$("d-prs-blk"), box=$("d-prs"); blk.hidden=!GITHUB||isInt(key)||isOdoo(key); if(blk.hidden) return;
@@ -444,8 +444,11 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     updateBulk();
   }
 
+  // Sorting by pull requests: the most active one counts (open, draft, merged, closed); none sorts last.
+  const PR_RANK={open:1,draft:2,merged:3,closed:4};
+  const prRank=key=>{ const list=PRS[key]; if(!list||!list.length) return null; return Math.min(...list.map(p=>PR_RANK[p.state]||5)); };
   function sortItems(items){
-    if(state.sort)return sortTickets(items,state.sort,IS_ADMIN);
+    if(state.sort)return sortTickets(state.sort.field==="prs"?items.map(i=>({...i,prRank:prRank(i.key)})):items,state.sort,IS_ADMIN);
     const fd=state.focus;
     return items.slice().sort((a,b)=>{
       if(fd==="recent"||fd==="reply"||fd==="closed") return a.updated<b.updated?1:-1;
@@ -471,7 +474,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const businessColumns=[['clientName','Client',150],['subClientName','Sub-client',150],['estimatedHours','Estimated hours',130],['actualHours','Actual hours',120],['workDone','Work done',220],...(IS_ADMIN?[['billing','Billing',130]]:[])];
     businessColumns.forEach(([key,label])=>h.appendChild(el('span','c-'+key,label)));
     if(GITHUB) h.appendChild(el('span','c-prs','Pull requests'));
-    const sortMap={'c-key':'key','c-ttl':'summary','c-who':'assigneeName','c-rep':'reporter','c-dev':'developers','c-st':'status','c-due':'due','c-cre':'created','c-upd':'updated'};
+    const sortMap={'c-key':'key','c-ttl':'summary','c-who':'assigneeName','c-rep':'reporter','c-dev':'developers','c-st':'status','c-due':'due','c-cre':'created','c-upd':'updated','c-prs':'prs'};
     for(const header of h.children){const key=sortMap[header.className]||businessColumns.find(c=>header.classList.contains('c-'+c[0]))?.[0];if(!key)continue;const label=header.textContent;header.replaceChildren();const b=el('button','column-sort',label+(state.sort?.field===key?(state.sort.direction==='asc'?' ↑':' ↓'):' ▾'));b.type='button';b.setAttribute('aria-label','Sort '+label);b.setAttribute('aria-haspopup','menu');b.addEventListener('click',()=>columnSortMenu(b,key));header.addEventListener('contextmenu',e=>{e.preventDefault();columnSortMenu(b,key);});header.append(b);}
     let widths=[28,92,300,...(showTicketBriefs()?[220]:[]),130,150,170,140,120,120,90,120,48,...businessColumns.map(c=>c[2]),...(GITHUB?[240]:[])];
     if(state.columnsMode!=='all'){

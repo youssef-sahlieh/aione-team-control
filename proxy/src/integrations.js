@@ -3,7 +3,7 @@
 // the proxy's own Odoo user. Atlassian offers no way to read a token's expiry, so for Jira an administrator
 // enters it on the Sync errors page (POST /integrations/expiry, kept as "keyexp:<id>"); the JIRA_TOKEN_EXPIRES
 // and ODOO_KEY_EXPIRES settings (YYYY-MM-DD) also work.
-import { githubConfigured } from "./github.js";
+import { githubConfigured, repos } from "./github.js";
 import { odoo, odooConfigured, odooUid } from "./odoo.js";
 
 const WARN_DAYS = 14;
@@ -36,7 +36,14 @@ async function checkGithub(env) {
     const res = await fetch("https://api.github.com/rate_limit", { headers: { Authorization: "Bearer " + env.GITHUB_TOKEN, Accept: "application/vnd.github+json", "User-Agent": "aion-team-control" }, signal: AbortSignal.timeout(8000) });
     const problem = res.status === 401 ? "GitHub rejected the token: it has expired or was revoked. Create a new token and update GITHUB_TOKEN." : !res.ok ? "GitHub answered " + res.status + "." : "";
     const expires = res.headers.get("github-authentication-token-expiration");
-    return { ...keyStatus({ works: res.ok, problem, expires }), expirySource: expires ? "github" : null, ...(res.ok && !expires ? { hint: "This token has no expiry date." } : {}) };
+    // A valid token can still be unable to open the repositories: try each one's pull requests.
+    let blocked = [];
+    if (res.ok) blocked = (await Promise.all(repos(env).map(async (repo) => {
+      const r = await fetch("https://api.github.com/repos/" + repo + "/pulls?state=all&per_page=1", { headers: { Authorization: "Bearer " + env.GITHUB_TOKEN, Accept: "application/vnd.github+json", "User-Agent": "aion-team-control" }, signal: AbortSignal.timeout(8000) }).catch(() => null);
+      return r && r.ok ? null : repo;
+    }))).filter(Boolean);
+    const noAccess = blocked.length ? "The token can't read pull requests in " + blocked.join(", ") + ". Give it access to these repositories with Pull requests: Read (and Checks + Commit statuses: Read for check results)." : "";
+    return { ...keyStatus({ works: res.ok && !blocked.length, problem: problem || noAccess, expires }), expirySource: expires ? "github" : null, ...(res.ok && !expires ? { hint: "This token has no expiry date." } : {}) };
   } catch { return keyStatus({ works: false, problem: "GitHub can't be reached." }); }
 }
 

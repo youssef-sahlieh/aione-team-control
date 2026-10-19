@@ -695,7 +695,10 @@ test('pull requests that mention a ticket show in the list and in the ticket',as
  await expect(cell.getByRole('link',{name:'#175'})).toHaveAttribute('href','https://github.com/KAD-org/flutter_pos_api/pull/175');
  await expect(cell.locator('.pr-line').filter({hasText:'#175'}).locator('.pr-sig')).toHaveText(['✗ checks','✎ changes','💬 6']);
  await expect(cell.locator('.pr-sig.bad').first()).toHaveAttribute('title','Checks failed: build');
- await expect(page.locator('#view .head .c-prs')).toHaveText('Pull requests');await page.setViewportSize({width:1920,height:900});await page.getByRole('button',{name:'Work view',exact:true}).click();await page.locator('.business-list').screenshot({path:'test-results/pr-column.png'});
+ await expect(page.locator('#view .head .c-prs')).toHaveText('Pull requests ▾');
+ // The column sorts: tickets with an open pull request first, tickets without any last.
+ await page.getByRole('button',{name:'Sort Pull requests'}).click();await page.getByRole('menuitem',{name:'Sort ascending'}).click();
+ await expect(page.locator('#view .item .c-key').first()).toContainText('AION-101');await expect(page.locator('#view .head .c-prs')).toContainText('↑');await page.setViewportSize({width:1920,height:900});await page.getByRole('button',{name:'Work view',exact:true}).click();await page.locator('.business-list').screenshot({path:'test-results/pr-column.png'});
  await page.locator('#view .item').filter({hasText:'AION-101'}).locator('.c-ttl').click();
  const section=page.locator('#d-prs-blk');await expect(section).toBeVisible();await expect(page.locator('#d-prs-count')).toHaveText('(2)');
  await expect(section.getByRole('link',{name:'flutter_pos #553'})).toHaveAttribute('href','https://github.com/KAD-org/flutter_pos/pull/553');
@@ -818,4 +821,12 @@ test('"← Dashboard" on Databases returns to the dashboard you came from, so Ba
  await page.locator('a[href="dashboard.html"]').click();await page.waitForURL(/dashboard\.html\?page=tickets/);
  await page.goBack().catch(()=>{});await page.waitForTimeout(300);
  expect(page.url()).not.toMatch(/databases\.html/);
+});
+
+test('when GitHub refuses the pull requests, the column says so instead of staying empty',async({page})=>{
+ const mock=await mockDashboard(page,{github:true});
+ await page.route('**/github/prs?*',r=>r.fulfill({status:502,json:{code:'github',error:"Couldn't read pull requests: the GitHub token can't read this repository."}}));
+ await page.goto('/dashboard.html');
+ await expect(page.locator('#view .item').filter({hasText:'AION-101'}).locator('.pr-err')).toHaveText("can't load");
+ await expect(page.locator('#toast')).toContainText("Pull requests can't be loaded");
 });

@@ -29,3 +29,12 @@ test('API key health: rejected, expired, expiring soon and working keys read pla
  const github=keyStatus({works:true,expires:'2027-01-01 10:00:00 UTC',now});assert.equal(github.status,'ok');assert.equal(github.expiresAt,'2027-01-01T10:00:00.000Z');
  assert.match(keyStatus({works:true,now,setting:'JIRA_TOKEN_EXPIRES'}).message,/JIRA_TOKEN_EXPIRES/);
 });
+test('the GitHub key check names repositories the token cannot read',async()=>{
+ const {integrationRoutes}=await import('../proxy/src/integrations.js');const real=globalThis.fetch;
+ globalThis.fetch=async url=>{const u=String(url);if(u.includes('/rest/api/3/myself'))return Response.json({});if(u.endsWith('/rate_limit'))return Response.json({},{headers:{'github-authentication-token-expiration':'2099-01-01 00:00:00 UTC'}});if(u.includes('/repos/KAD-org/open/pulls'))return Response.json([]);return new Response('{}',{status:404});};
+ try{
+  const env={JIRA_SITE:'https://jira.test',JIRA_EMAIL:'a',JIRA_API_TOKEN:'b',GITHUB_TOKEN:'t',GITHUB_REPOS:'KAD-org/open,KAD-org/hidden'};
+  const gh=(await (await integrationRoutes(new Request('https://p/integrations'),env,{role:'admin'})).json()).keys.find(k=>k.id==='github');
+  assert.equal(gh.status,'error');assert.match(gh.message,/KAD-org\/hidden/);assert.doesNotMatch(gh.message,/KAD-org\/open/);
+ }finally{globalThis.fetch=real;}
+});
