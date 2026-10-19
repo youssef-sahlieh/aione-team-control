@@ -51,3 +51,10 @@ test('authenticated handler checks Jira scope and never writes a Jira comment',a
  globalThis.fetch=async()=>Response.json({key:'AION-1',fields:{summary:'Task',project:{key:'AION'},labels:['ai1_other']}});
  assert.equal((await call('Bearer '+token)).status,404);
 });
+test('notes go between everyone in the dashboard, and the people a note was sent to can read it',async()=>{
+ const f=await fixture();const dev2={email:'dev2@aione.biz',name:'Second Developer',role:'user',dev:'builder'};await saveUser(f.env.STORE,f.other);await saveUser(f.env.STORE,dev2);
+ const list=(await f.call()).data.recipients;assert.deepEqual(list.map(r=>r.email).sort(),['admin@aione.biz','dev2@aione.biz','other@aione.biz']); // everyone but yourself
+ const sent=await f.call(f.user,{...f.note('For you only'),recipients:['dev2@aione.biz']});assert.equal(sent.status,201);assert.deepEqual(f.mails.at(-1).to,['dev2@aione.biz']);
+ assert.equal((await f.call(dev2)).data.notes.length,1); // the recipient sees it
+ assert.equal((await f.call(f.other)).data.notes.length,0); // someone it wasn't sent to doesn't
+});

@@ -38,6 +38,7 @@ async function mockDashboard(page, { role = "admin", ticketLog = [], failure = f
     if(path==='/clients/import/preview')return json({revision:1,rows:body.rows.length,added:1,clients:2,subClients:0,entries:[{id:'new-client',name:body.rows[0].displayName,parentId:null}]});
     if(path==='/clients/import'){catalog.entries.push({id:'new-client',name:body.rows[0].displayName,parentId:null,archived:false});catalog.revision++;return json(catalog);}
     if(path==='/ticket-log')return json({events:ticketLog});
+    if(path==='/ticket-notes'&&method==='GET')return json({notes:[],recipients:[{email:'karim@example.invalid',name:'Karim Example',role:'admin'},{email:'dev2@example.invalid',name:'Second Developer',role:'user'}]});
     if(path==='/integrations')return json({checkedAt:'2026-10-11T09:00:00Z',keys:[{id:'jira',name:'Jira API token',status:'warning',message:'Expires in 5 days. Create a new key before then.',expiresAt:'2026-10-16T00:00:00.000Z',days:5}]});
     if(path==='/ticket-metadata/batch')return json({records:Object.fromEntries(body.keys.map(key=>[key,record(key)]))});
     if(path==='/ticket-metadata'&&method==='GET')return json({metadata:record(url.searchParams.get('key')),history:[],closed:false});
@@ -302,7 +303,7 @@ test("partial history failure is disclosed and retry loads all pages",async({pag
 });
 test("drawer tabs retain draft and closing respects discard confirmation and focus",async({page})=>{
   const mock=await mockDashboard(page);await page.goto("/dashboard.html");const opener=page.locator("#view .ttl").filter({hasText:"Synthetic Jira task"});await opener.click();
-  await page.getByRole("tab",{name:"Comments",exact:true}).click();await page.locator("#d-reply").fill("Keep my draft");await page.getByRole("tab",{name:"Overview",exact:true}).click();await page.getByRole("tab",{name:"Comments",exact:true}).click();await expect(page.locator("#d-reply")).toHaveValue("Keep my draft");
+  await page.getByRole("tab",{name:"Comments",exact:true}).click();await page.locator("#d-reply").fill("Keep my draft");await page.getByRole("tab",{name:"History",exact:true}).click();await page.getByRole("tab",{name:"Comments",exact:true}).click();await expect(page.locator("#d-reply")).toHaveValue("Keep my draft");
   page.once("dialog",d=>d.dismiss());await page.locator("#d-close").click();await expect(page.locator("#drawer")).toBeVisible();
   page.once("dialog",d=>d.accept());await page.locator("#d-close").click();await expect(page.locator("#drawer")).toBeHidden();await expect(opener).toBeFocused();expect(mock.errors).toEqual([]);
 });
@@ -386,8 +387,7 @@ for (const key of ["AION-101", "INT-101"]) {
     await expect(page.locator("#d-desc")).toContainText(key.startsWith("INT") ? "Internal description" : "Rendered description");
     await expect(page.locator("#d-trans")).toContainText("In Development");
     if (key.startsWith("INT")) {
-      await page.getByRole("tab", { name: "Files", exact: true }).click();
-      await expect(page.locator("#i-att")).toBeVisible();
+      await expect(page.locator("#i-att")).toBeVisible(); // attachments are on the main page, like Jira
       await expect(page.locator("#d-open")).toBeHidden();
       expect(mock.calls.some(c => c.path.includes(key))).toBe(false);
     } else {
@@ -427,18 +427,17 @@ for(const role of ["admin","user"])test(`${role} due-date history visibility fol
   await expect(page.locator("#drawer")).toBeVisible();
   if(role==="admin"){
     await expect(page.locator("#page-heading")).toHaveText("Date requests");
-    await expect(page.getByRole("tab",{name:"Activity",exact:true})).toBeVisible();
-    await page.getByRole("tab",{name:"Activity",exact:true}).click();
+    await expect(page.getByRole("tab",{name:"Due date changes",exact:true})).toBeVisible();
+    await page.getByRole("tab",{name:"Due date changes",exact:true}).click();
     await expect(page.locator("#d-hist")).toBeVisible();
   }else{
     await expect(page.locator("#page-heading")).toHaveText("All tickets");
-    await expect(page.getByRole("tab",{name:"Activity",exact:true})).toHaveCount(0);
+    await expect(page.getByRole("tab",{name:"Due date changes",exact:true})).toHaveCount(0);
     await expect(page.getByRole("tab",{name:"History",exact:true})).toHaveCount(0);expect(mock.calls.some(c=>c.path.endsWith("/history"))).toBe(false);
     await expect(page.locator("#d-hist")).toBeHidden();
     await expect(page.locator("#d-due")).toBeVisible();
-    await page.getByRole("tab",{name:"Overview",exact:true}).focus();
-    await page.keyboard.press("ArrowRight");
-    await expect(page.getByRole("tab",{name:"Comments",exact:true})).toBeFocused();
+    // Users see only Comments and Internal notes in Activity (no history tabs).
+    await expect(page.locator("#drawer-tabs [role=tab]:not([hidden])")).toHaveText(["Comments","Internal notes"]);
     expect(mock.calls.some(c=>c.path.endsWith("/changelog"))).toBe(false);
   }
   await page.locator("#d-close").click();
@@ -495,7 +494,6 @@ test("admin sees Odoo Helpdesk tickets, filters them, opens one and writes back 
   await page.locator("#d-reply").fill("Looking into it");
   await page.locator("#d-send").click();
   await expect.poll(() => mock.calls.find(c => c.path === "/odoo/tickets/HD-300/note")?.body?.text).toBe("Looking into it");
-  await page.getByRole("tab", { name: "Overview", exact: true }).click();
   await page.locator("#d-trans .stbtn", { hasText: "Solved" }).click();
   await expect.poll(() => mock.calls.find(c => c.path === "/odoo/tickets/HD-300" && c.method === "PUT")?.body).toEqual({ stage: 3 });
   expect(mock.calls.some(c => c.path.startsWith("/jira/issue/HD-"))).toBe(false);
@@ -677,7 +675,7 @@ test('ticket details open full screen and attachments preview inside the dashboa
  await page.goto('/dashboard.html#AION-101');
  const drawer=page.locator('#drawer');await expect(drawer).toBeVisible();await expect(drawer).toHaveClass(/full/);
  await page.screenshot({path:'test-results/fullscreen.png'});const box=await drawer.boundingBox();expect(box.width).toBeGreaterThan(1200);
- await page.getByRole('tab',{name:'Files'}).click();const att=page.locator('#d-att .att').filter({hasText:'screen.png'});
+ const att=page.locator('#d-att .att').filter({hasText:'screen.png'});
  await expect(att.getByRole('link')).toHaveCount(0);
  await att.getByRole('button',{name:'Preview',exact:true}).click();
  const viewer=page.locator('dialog.file-preview');await expect(viewer).toBeVisible();await expect(viewer.locator('img.fp-img')).toBeVisible();await page.screenshot({path:'test-results/preview.png'});
@@ -747,5 +745,11 @@ test('the new internal ticket form is a large window that stays open while scrol
  await page.evaluate(()=>window.scrollTo(0,0));
  await page.locator('#view .item').filter({hasText:'INT-101'}).locator('.c-st button').click();
  await expect(page.locator('#pop').getByRole('button',{name:/On Hold/})).toBeVisible();
+ expect(mock.errors).toEqual([]);
+});
+test('internal notes can go to anyone in the dashboard, not only the developer list',async({page})=>{
+ const mock=await mockDashboard(page);await page.goto('/dashboard.html#AION-101');await page.locator('#d-note').click();
+ await expect(page.locator('#pop')).toContainText('Dashboard people');
+ await expect(page.locator('#pop').getByRole('button',{name:/Second Developer/})).toBeVisible();
  expect(mock.errors).toEqual([]);
 });

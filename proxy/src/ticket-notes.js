@@ -20,10 +20,13 @@ export async function ticketNoteRoutes(request, env, url, me, {readTicket, sendM
   const ticket = await readTicket(key);
   if (!ticket || (me.role !== 'admin' && (!me.dev || !ticket.devs.includes(me.dev)))) return fail('This ticket is unavailable.', 404);
   const storageKey = 'notes:' + env.JIRA_PROJECT + ':' + key;
-  const admins = (await listUsers(store)).filter(u => u.role === 'admin');
+  // Notes go between everyone in the dashboard (administrators and developers, not yourself), plus any
+  // configured contacts. Administrators are listed first and are the default choice.
+  const people = (await listUsers(store)).filter(u => u.email !== me.email);
   const contacts = (env.INTERNAL_NOTE_RECIPIENTS || []).filter(r => validEmail(r.email) && r.email.endsWith('@'+env.MAIL_DOMAIN));
-  const recipients = [...new Map([...admins.map(u => ({email:u.email, name:u.name || u.email})), ...contacts].map(r => [r.email,{email:r.email,name:r.name || r.email}])).values()];
-  const visible = notes => notes.filter(n => me.role === 'admin' || n.author.email === me.email);
+  const recipients = [...new Map([...people.map(u => ({email:u.email, name:u.name || u.email, role:u.role})), ...contacts.map(r => ({...r, role:'contact'}))].map(r => [r.email,{email:r.email,name:r.name || r.email,role:r.role}])).values()];
+  // A note is seen by administrators, its writer and the people it was sent to.
+  const visible = notes => notes.filter(n => me.role === 'admin' || n.author.email === me.email || (n.recipients || []).some(r => r.email === me.email));
   if (request.method === 'GET') return json({notes:visible(JSON.parse(await store.get(storageKey) || '[]')), recipients});
   const text = typeof body.text === 'string' ? body.text.trim() : '';
   if (!text || text.length > 5000) return fail('Write a note (up to 5000 characters).');
@@ -38,8 +41,8 @@ export async function ticketNoteRoutes(request, env, url, me, {readTicket, sendM
     const notes = JSON.parse(raw);
     const existing = notes.find(n => n.id === body.id);
     if (existing) return existing.author.email === me.email ? json({note:existing}) : fail('Invalid note identifier.', 409);
-    const selected = body.recipients === undefined ? recipients.map(r => r.email) : body.recipients;
-    if (!Array.isArray(selected) || !selected.length || selected.length > 30 || selected.some(email => typeof email !== 'string' || !recipients.some(r => r.email === email))) return fail('Choose one or more administrators from the recipient list.');
+    const selected = body.recipients === undefined ? recipients.filter(r => r.role === 'admin').map(r => r.email) : body.recipients;
+    if (!Array.isArray(selected) || !selected.length || selected.length > 30 || selected.some(email => typeof email !== 'string' || !recipients.some(r => r.email === email))) return fail('Choose one or more people from the recipient list.');
     const to = [...new Set(selected)];
     if (notes.length >= 500) return fail('This ticket has reached its note limit. Contact an admin.', 409);
     if (notes.filter(n => n.author.email === me.email && Date.parse(n.createdAt) > Date.now()-3600000).length >= 20) return fail('Too many notes. Try again later.', 429);
@@ -48,7 +51,7 @@ export async function ticketNoteRoutes(request, env, url, me, {readTicket, sendM
     const save = async () => { const next = JSON.stringify(notes); if (!await store.compareAndSet(storageKey, raw, next)) throw new Error('Notes changed concurrently'); raw = next; };
     await save();
     try {
-      if (!to.length) throw new Error('No admin recipients');
+      if (!to.length) throw new Error('No recipients');
       const result = await sendMail(me.email, {to, subject:note.subject, html:'<p>From '+esc(note.author.name)+' ('+esc(me.email)+')</p><p style="white-space:pre-wrap">'+esc(text)+'</p>'+(note.includeDetails?'<hr><p><b>'+esc(key)+' — '+esc(ticket.title)+'</b></p><p><a href="'+esc(String(env.APP_URL || '').replace(/\/$/, '')+'/dashboard.html?page=tickets#'+key)+'">Open ticket in AION Team Control</a></p>':'')});
       note.notification = result.ok ? 'sent' : 'failed';
     } catch { note.notification = 'failed'; }
