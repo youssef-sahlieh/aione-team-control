@@ -131,7 +131,7 @@
     <div class="blk"><h3>Comments <span id="d-ccount"></span></h3><div class="blk" id="d-comments"></div>
       <textarea class="inp" id="d-reply" placeholder="Write a comment or answer…" dir="auto" aria-label="New comment"></textarea>
       <div class="inline admin-only jira-only"><label class="tgl">Then assign to <select class="fsel auto" id="d-after"><option value="">Keep current assignee</option></select></label></div>
-      <div class="inline"><button class="btn primary" id="d-send" type="button">Add comment</button><button class="btn note note-action" id="d-comment-note" type="button" title="Email an internal note to the developer">Internal note</button><label class="btn jira-only" id="d-cattach" for="j-file">Attach a file</label><span class="msg" id="d-cmsg"></span></div></div>
+      <div class="inline"><button class="btn primary" id="d-send" type="button">Add comment</button><button class="btn note note-action" id="d-comment-note" type="button" title="Email an internal note to the developer">Internal note</button><label class="btn jira-only" id="d-cattach" for="j-file">Attach a file</label><label class="btn odoo-hide" for="c-img" title="Or paste a picture into the comment (Ctrl+V), or drag one onto it">Add picture</label><input type="file" id="c-img" accept="image/*" multiple hidden><span class="msg" id="d-cmsg"></span></div></div>
     <div class="blk"><h3>Ticket history</h3><div id="d-full-history" aria-live="polite"></div></div>
   </div>
 </aside>

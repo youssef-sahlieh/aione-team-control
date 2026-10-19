@@ -603,7 +603,7 @@ test('users edit hours and work done from the list but not client or billing',as
  expect(mock.errors).toEqual([]);
 });
 
-test('an administrator assigning a not-started ticket moves only Jira tickets to Dev Approved; internal tickets keep their status',async({page})=>{
+test('assigning developers to a not-started ticket only assigns: no status moves',async({page})=>{
  const mock=await mockDashboard(page);const internalPuts=[],jiraMoves=[];
  const fresh=structuredClone(jiraIssue);fresh.fields.status={name:'Pending Approval',statusCategory:{key:'new'}};fresh.fields.labels=['keep-label'];
  await page.route('**/jira/search',r=>r.fulfill({json:{issues:[fresh],isLast:true}}));
@@ -616,8 +616,7 @@ test('an administrator assigning a not-started ticket moves only Jira tickets to
   await page.locator('#pop input[data-dev="reviewer"]').check();await page.locator('#pop').getByRole('button',{name:'Save',exact:true}).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
  }
- await expect.poll(()=>jiraMoves).toEqual([{id:'21'}]);
- await expect.poll(()=>internalPuts.length).toBe(1);await page.waitForTimeout(300);expect(internalPuts.map(b=>b.status||null)).toEqual([null]); // developers saved, no status move
+ await expect.poll(()=>internalPuts.length).toBe(1);await page.waitForTimeout(500);expect(jiraMoves).toEqual([]);await page.waitForTimeout(300);expect(internalPuts.map(b=>b.status||null)).toEqual([null]); // developers saved, no status move
  expect(mock.errors).toEqual([]);
 });
 test('status changes from the list show at once and stay while Jira search catches up',async({page})=>{
@@ -782,7 +781,7 @@ test('files added to a Jira ticket upload to Jira from the ticket view',async({p
  expect(uploaded).toEqual({name:'notes.txt',size:10});
  expect(mock.errors).toEqual([]);
 });
-test('saving developers from the ticket view moves a not-started Jira ticket to Dev Approved',async({page})=>{
+test('saving developers from the ticket view only saves them: the status stays',async({page})=>{
  const mock=await mockDashboard(page);const jiraMoves=[];
  const fresh=structuredClone(jiraIssue);fresh.fields.status={name:'Open',statusCategory:{key:'new'}};fresh.fields.labels=['keep-label'];
  await page.route('**/jira/search',r=>r.fulfill({json:{issues:[fresh],isLast:true}}));
@@ -790,7 +789,7 @@ test('saving developers from the ticket view moves a not-started Jira ticket to 
  await page.route('**/jira/issue/AION-101/transitions',r=>{if(r.request().method()==='GET')return r.fulfill({json:{transitions:[{id:'21',name:'Approve',to:{name:'Dev Approved',statusCategory:{key:'indeterminate'}}},{id:'22',name:'Start',to:{name:'In Progress',statusCategory:{key:'indeterminate'}}}]}});jiraMoves.push(r.request().postDataJSON());return r.fulfill({json:{ok:true}});});
  await page.goto('/dashboard.html#AION-101');
  await page.locator('#d-devs .fc').filter({hasText:'ai1_builder'}).click();await page.locator('#d-savedevs').click();
- await expect.poll(()=>jiraMoves).toEqual([{id:'21'}]);
+ await expect(page.locator('#d-devmsg')).toHaveText('Saved.');await page.waitForTimeout(500);expect(jiraMoves).toEqual([]);
  expect(mock.errors).toEqual([]);
 });
 test('fresh data arriving while you scroll keeps your place on the page',async({page})=>{
@@ -829,4 +828,25 @@ test('when GitHub refuses the pull requests, the column says so instead of stayi
  await page.goto('/dashboard.html');
  await expect(page.locator('#view .item').filter({hasText:'AION-101'}).locator('.pr-err')).toHaveText("can't load");
  await expect(page.locator('#toast')).toContainText("Pull requests can't be loaded");
+});
+test('pasting a picture into a comment uploads it to the ticket and places it in the comment',async({page})=>{
+ const mock=await mockDashboard(page);let uploaded=null;
+ await page.route('**/jira/issue/AION-101/attachments?name=*',r=>{uploaded=new URL(r.request().url()).searchParams.get('name');return r.fulfill({status:201,json:{attachments:[{id:'960',filename:uploaded}]}});});
+ await page.goto('/dashboard.html#AION-101');
+ await page.locator('#d-reply').fill('See the screen:');
+ await page.locator('#d-reply').evaluate(ta=>{const dt=new DataTransfer();dt.items.add(new File([new Uint8Array([137,80,78,71])],'image.png',{type:'image/png'}));ta.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}));});
+ await expect(page.locator('#d-reply')).toHaveValue(/See the screen:\n!picture-\d{14}\.png\|thumbnail!\n/);
+ expect(uploaded).toMatch(/^picture-\d{14}\.png$/);
+ await page.locator('#d-send').click();await expect(page.locator('#d-cmsg')).toHaveText('Sent.');
+ expect(mock.calls.find(c=>c.path==='/jira/issue/AION-101/comment').body.text).toContain('!'+uploaded+'|thumbnail!');
+ expect(mock.errors).toEqual([]);
+});
+test('pictures in internal ticket comments show in place',async({page})=>{
+ const id='a'.repeat(32);const mock=await mockDashboard(page);
+ await page.route('**/internal',r=>r.request().method()!=='GET'?r.fallback():r.fulfill({json:{tickets:[{...internalTicket,statusCat:'new',attachments:[{id,filename:'pic.png',mimeType:'image/png',size:4,parts:1,created:'2026-10-11T08:00:00Z',author:{name:'Test'}}],comments:[{author:{name:'Test Lead'},created:'2026-10-11T08:00:00Z',body:'Look:\n!pic.png!\nthanks'}]}]}}));
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==','base64');
+ await page.route('**/internal/INT-101/attachments/'+id,r=>r.fulfill({status:200,contentType:'image/png',body:png}));
+ await page.goto('/dashboard.html#INT-101');
+ await expect(page.locator('#d-comments .cimg img')).toHaveAttribute('src',/^blob:/);await expect(page.locator('#d-comments')).toContainText('thanks');
+ expect(mock.errors).toEqual([]);
 });

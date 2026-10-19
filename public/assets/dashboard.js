@@ -215,9 +215,10 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     return ctx.attachments.find(a=>String(a.id)===id)||ctx.attachments.find(a=>name&&a.filename===name)||null;
   }
   function inlineImage(a,key){
+    const base=isInt(key)?"/internal/":"/jira/issue/";
     const box=el("button","cimg"); box.type="button"; box.title="Open "+a.filename; box.setAttribute("aria-label","Open image "+a.filename);
     const img=el("img"); img.alt=a.filename; img.loading="lazy"; box.appendChild(img);
-    const load=()=>apiFile("/jira/issue/"+key+"/attachments/"+a.id);
+    const load=()=>apiFile(base+key+"/attachments/"+a.id);
     const id=key+"/"+a.id;
     (IMAGES.get(id)||(IMAGES.set(id,load().then(r=>r.blob()).then(b=>URL.createObjectURL(b))),IMAGES.get(id)))
       .then(url=>{img.src=url;}).catch(()=>{IMAGES.delete(id);box.replaceWith(el("span","att","image: "+a.filename));});
@@ -681,7 +682,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
         return {key:k,added:[...want].filter(x=>!i.devs.includes(x)),run:()=>setDevs(k,want),patch:devsPatch(want)};
       }).filter(Boolean);
       if(!ops.length){ toast("Nothing to change."); return; }
-      await runBatch(startingOps(ops),target==="__none"?"Developer removed":"Assigned to ai1_"+target);
+      await runBatch(ops,target==="__none"?"Developer removed":"Assigned to ai1_"+target);
     } else if(mode==="status"){
       toast("Checking allowed moves…");
       const ops=[], skipped=[];
@@ -738,7 +739,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
         const same=want.size===cur.size&&[...want].every(d=>cur.has(d));
         return same?null:{key:k,added:[...want].filter(d=>!cur.has(d)),run:()=>setDevs(k,want),patch:devsPatch(want)}; }).filter(Boolean);
       if(!ops.length){ toast("Nothing to change."); return; }
-      await runBatch(startingOps(ops),mode==="remove"?"Developers removed":"Developers saved"); });
+      await runBatch(ops,mode==="remove"?"Developers removed":"Developers saved"); });
     foot.appendChild(save); p.appendChild(foot); placePop(anchor);
   }
   function duePopover(anchor,keys){
@@ -748,23 +749,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   }
   const initialsOf=n=>String(n||"?").split(/\s+/).filter(Boolean).map(x=>x[0]).join("").slice(0,2).toUpperCase()||"?";
   function assignOps(keys,id,name){ return keys.map(k=>{ const i=issueByKey(k); if(i&&i.assigneeId===id) return null; if(isOdoo(k)) return null; if(isInt(k)) return BYID[id]?{key:k,run:async()=>{await business.ensureBilling(k);return internalApi.update(k,{assignee:BYID[id]});}}:null; if(id===INTERNAL_ASSIGNEE)return null; return {key:k,run:async()=>{await business.ensureBilling(k);return jira.edit(k,{assignee:id?{accountId:id}:null},{assigneeName:id?name:"Unassigned"});}}; }).filter(Boolean); }
-  // When an administrator assigns a Jira ticket that hasn't started yet (Open / Pending Approval), it moves to
-  // "Dev Approved". Internal and Odoo tickets keep their status; so do tickets already in progress or done.
-  // Returns false when the status was meant to move but didn't. Reads the ticket as loaded (the page may already show the move).
-  async function startAssigned(key){
-    const i=loadedIssue(key); if(!IS_ADMIN||!i||i.cat!=="new"||isInt(key)||isOdoo(key)) return true;
-    const want="dev approved";
-    if(String(i.status||"").trim().toLowerCase()===want) return true;
-    const t=(await getTransitions(key)).find(x=>String((x.to&&x.to.name)||"").trim().toLowerCase()===want);
-    if(!t){ setTimeout(()=>toast(key+" was assigned, but its workflow can't move to “"+(want==="dev approved"?"Dev Approved":"In Development")+"” from "+i.status+"."),3500); return false; }
-    try{ await doTransition(key,t.id); return true; }
-    catch(err){ setTimeout(()=>toast(key+" was assigned, but the status didn't change",[errorText(err)],true),3500); return false; }
-  }
-  // The status move shows at once (startPatch) and is taken back if it doesn't happen.
-  const startingOps=ops=>IS_ADMIN?ops.map(o=>{ if(o.added&&!o.added.length) return o; const n={...o,startPatch:startPatch(o.key)};
-    n.run=async()=>{ const r=await o.run(); if(!await startAssigned(o.key)&&n._start) unpatch(o.key,n._start); return r; }; return n; }):ops;
   async function doAssign(keys,id,name){
-    const base=assignOps(keys,id,name).map(o=>({...o,patch:assigneePatch(id,name)})), ops=id?startingOps(base):base; if(!ops.length){ toast("Already assigned to "+name+"."); return {ok:0,fail:0}; }
+    const base=assignOps(keys,id,name).map(o=>({...o,patch:assigneePatch(id,name)})), ops=base; if(!ops.length){ toast("Already assigned to "+name+"."); return {ok:0,fail:0}; }
     const r=await runBatch(ops,"Assigned to "+name);
     if(r.ok&&id&&!BYID[id]) setTimeout(()=>toast(name+" isn't "+teamNames()+", so "+(r.ok===1?"this ticket":"these tickets")+" will leave the dashboard."),3300);
     return r;
@@ -912,7 +898,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // changed at the same time; then only those tickets are re-read.
   async function runBatch(ops,okText){
     batchBusy++; let ok=0, started=0; const fails=[], done=[], queue=ops.slice();
-    ops.forEach(o=>{ if(o.patch) o._p=patchIssue(o.key,o.patch); if(o.startPatch) o._start=patchIssue(o.key,o.startPatch); });
+    ops.forEach(o=>{ if(o.patch) o._p=patchIssue(o.key,o.patch); });
     const showDrawerStatus=()=>{ const i=dz.key&&issueByKey(dz.key); if(i&&ops.some(o=>o.key===dz.key)){ $("d-status").textContent=i.status; $("d-status").className="stbtn "+stK(i); } };
     if(PENDING.size){ mergeIssues(); renderIfIdle(); showDrawerStatus(); }
     // The ticket's allowed status moves change with it.
@@ -921,7 +907,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     let stop=false;
     const worker=async()=>{ while(queue.length&&!stop){ const op=queue.shift(); started++; if(ops.length>1) toast("Updating "+started+" of "+ops.length+"…");
       try{try{await runOne(op);}catch(error){if(error.code!=="billing_required"||!IS_ADMIN||isOdoo(op.key))throw error;await business.ensureBilling(op.key);await runOne(op);} ok++; done.push(op); }
-      catch(err){ if(op._p) unpatch(op.key,op._p); if(op._start) unpatch(op.key,op._start); const amb=err&&err.code==="network"; fails.push(op.key+": "+(amb?"Jira didn't confirm, check the ticket":errorText(err))); if(err&&err.code==="session") stop=true; } } };
+      catch(err){ if(op._p) unpatch(op.key,op._p); const amb=err&&err.code==="network"; fails.push(op.key+": "+(amb?"Jira didn't confirm, check the ticket":errorText(err))); if(err&&err.code==="session") stop=true; } } };
     await Promise.all(Array.from({length:Math.min(4,ops.length)},worker));
     batchBusy--;
     if(fails.length) toast(okText+" on "+ok+" of "+ops.length+". These need a look:",fails,true); else toast(okText+(ops.length>1?" on "+ok+" tickets":"")+".");
@@ -1057,8 +1043,6 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const statusPatch=(name,cat)=>matching(i=>({status:name,cat:cat||i.cat}),"status");
   const devsPatch=want=>matching(i=>({devs:[...want],labels:labelsWith(i.labels||[],new Set(want))}),"devs");
   const assigneePatch=(id,name)=>matching(()=>({assignee:BYID[id]||null,assigneeId:id||null,assigneeName:id?name:"Unassigned"}),"assigneeId");
-  // Assigning a ticket that hasn't started moves it forward (see startAssigned); shown at once too.
-  const startPatch=key=>{ const i=loadedIssue(key); if(!IS_ADMIN||!i||i.cat!=="new"||isInt(key)||isOdoo(key)) return null; const want="Dev Approved"; return String(i.status).trim().toLowerCase()===want.toLowerCase()?null:statusPatch(want,"indeterminate"); };
   $("refresh").addEventListener("click",async()=>{ const b=$("refresh"); b.disabled=true; b.textContent="Refreshing…"; await reload(); b.disabled=false; b.textContent="Refresh"; });
 
   document.querySelectorAll(".seg [data-v]").forEach(b=>b.addEventListener("click",()=>{ state.view=b.dataset.v; try{localStorage.setItem("aion.view",state.view);}catch(e){} render(); }));
@@ -1175,7 +1159,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     cm.forEach(c=>{ const name=(c.author&&c.author.name)||"Someone";
       const cd=el("div","cmt mine"); const meta=el("div","cmeta"); meta.appendChild(el("b",null,name)); meta.appendChild(el("span",null,ago(c.created)));
       const rb=el("button","linkbtn sp","Reply"); rb.type="button"; rb.addEventListener("click",()=>{ const ta=$("d-reply"); if(!ta.value.trim()) ta.value=name.split(" ")[0]+", "; ta.focus(); });
-      meta.appendChild(rb); cd.appendChild(meta); const b=el("div","plain rich",c.body); b.dir="auto"; cd.appendChild(b); box.appendChild(cd); });
+      meta.appendChild(rb); cd.appendChild(meta); const b=commentWithPictures(key,c.body); b.dir="auto"; cd.appendChild(b); box.appendChild(cd); });
   }
   // Attachments on internal tickets: stored by the proxy; downloads go through it with your sign-in.
   function renderIntAttachments(key){
@@ -1313,8 +1297,42 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   $("d-asg").addEventListener("click",e=>{ if(dz.key) assigneePopover(e.currentTarget,[dz.key]); });
   $("d-adddev").addEventListener("click",()=>{ const v=$("d-newdev").value.trim().replace(/^ai1_/i,"").replace(/\s+/g,"").toLowerCase(); if(!v){ setMsg("d-devmsg","Type a name first.",false); return; } dz.devs.add(v); $("d-newdev").value=""; renderDevChips(); setMsg("d-devmsg","Added ai1_"+v+". Press Save developers.",true); });
   $("d-newdev").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("d-adddev").click(); } });
-  $("d-savedevs").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const labels=labelsWith(dz.labels,new Set(dz.devs)); const prev=new Set(dz.labels.filter(isDevLabel).map(devOf)); const want=new Set(dz.devs); const r=await runBatch(startingOps([{key,added:[...dz.devs].filter(d=>!prev.has(d)),run:()=>(isOdoo(key)?odooApi.update(key,{devs:[...want]}):isInt(key)?internalApi.update(key,{devs:[...want]}):jira.edit(key,{labels})),patch:devsPatch(want)}]),"Developers saved"); setMsg("d-devmsg",r.fail?"Not saved.":"Saved.",!r.fail); });
+  $("d-savedevs").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const labels=labelsWith(dz.labels,new Set(dz.devs)); const prev=new Set(dz.labels.filter(isDevLabel).map(devOf)); const want=new Set(dz.devs); const r=await runBatch([{key,added:[...dz.devs].filter(d=>!prev.has(d)),run:()=>(isOdoo(key)?odooApi.update(key,{devs:[...want]}):isInt(key)?internalApi.update(key,{devs:[...want]}):jira.edit(key,{labels})),patch:devsPatch(want)}],"Developers saved"); setMsg("d-devmsg",r.fail?"Not saved.":"Saved.",!r.fail); });
   const commentMentions=createCommentMentions({textarea:$("d-reply"),search:q=>jira.users(q),enabled:()=>!!dz.key&&!isInt(dz.key)&&!isOdoo(dz.key)});
+  // Pictures in a comment: uploaded to the ticket right away (Jira or internal) and put in the text the way
+  // Jira does it (!name|thumbnail!), so they show inside the comment in Jira and here once it is sent.
+  // Paste (Ctrl+V), drag onto the comment box, or the Add picture button.
+  function insertAtCursor(ta,text){ const a=ta.selectionStart??ta.value.length, b=ta.selectionEnd??a; ta.value=ta.value.slice(0,a)+text+ta.value.slice(b); ta.selectionStart=ta.selectionEnd=a+text.length; ta.dispatchEvent(new Event("input",{bubbles:true})); ta.focus(); }
+  async function addCommentPictures(files){
+    const key=dz.key, ta=$("d-reply"); if(!key||isOdoo(key)) return;
+    for(const f of [...files].filter(f=>/^image\//.test(f.type))){
+      if(f.size>4*1024*1024){ setMsg("d-cmsg",(f.name||"The picture")+" is bigger than 4 MB.",false); continue; }
+      // Pasted pictures are all called image.png: a unique name keeps each one apart in the ticket.
+      const ext=((f.type.split("/")[1]||"png").replace("jpeg","jpg").replace(/[^a-z0-9]/g,""))||"png";
+      const stem=(f.name&&!/^image\.(png|jpe?g|gif|webp)$/i.test(f.name)?f.name.replace(/\.[^.]+$/,""):"picture").replace(/[^\w.-]+/g,"-").slice(0,60);
+      const name=stem+"-"+new Date().toISOString().replace(/\D/g,"").slice(0,14)+"."+ext;
+      setMsg("d-cmsg","Uploading "+name+"…",true);
+      try{
+        const r=await apiFile((isInt(key)?"/internal/":"/jira/issue/")+key+"/attachments?name="+encodeURIComponent(name),{method:"POST",body:f,type:f.type}), data=await r.json();
+        let saved=name;
+        if(isInt(key)){ INT[key]=data.ticket; saved=((data.ticket.attachments||[]).at(-1)||{}).filename||name; renderIntAttachments(key); }
+        else saved=((data.attachments||[])[0]||{}).filename||name;
+        if(dz.key!==key) return;
+        insertAtCursor(ta,(ta.value&&!/\n$/.test(ta.value.slice(0,ta.selectionStart))?"\n":"")+"!"+saved+(isInt(key)?"":"|thumbnail")+"!\n");
+        setMsg("d-cmsg","Picture added: it shows in the comment once you send it.",true);
+      }catch(err){ setMsg("d-cmsg","Picture not added: "+errorText(err),false); }
+    }
+  }
+  $("d-reply").addEventListener("paste",e=>{ const pics=[...((e.clipboardData&&e.clipboardData.files)||[])].filter(f=>/^image\//.test(f.type)); if(!pics.length) return; e.preventDefault(); addCommentPictures(pics); });
+  $("d-reply").addEventListener("dragover",e=>{ if([...((e.dataTransfer&&e.dataTransfer.items)||[])].some(i=>i.kind==="file")) e.preventDefault(); });
+  $("d-reply").addEventListener("drop",e=>{ const pics=[...((e.dataTransfer&&e.dataTransfer.files)||[])].filter(f=>/^image\//.test(f.type)); if(!pics.length) return; e.preventDefault(); addCommentPictures(pics); });
+  $("c-img").addEventListener("change",e=>{ const files=[...e.target.files]; e.target.value=""; addCommentPictures(files); });
+  // An internal ticket's comment text with its !name! picture markers shown as the pictures.
+  function commentWithPictures(key,body){
+    const box=el("div","plain rich"), atts=((INT[key]||{}).attachments)||[], text=String(body||""), marker=/!([^!\n|]+?)(?:\|[^!\n]*)?!/g; let at=0, m;
+    while((m=marker.exec(text))){ const a=atts.find(x=>x.filename===m[1]); if(!a||!isImage(a)) continue; box.append(text.slice(at,m.index), inlineImage(a,key)); at=m.index+m[0].length; }
+    box.append(text.slice(at)); return box;
+  }
   $("d-send").addEventListener("click",async()=>{ const key=dz.key, text=(isInt(key)||isOdoo(key))?$("d-reply").value.trim():commentMentions.text(); if(!key) return; if(!text){ setMsg("d-cmsg","Write something first.",false); return; } const after=$("d-after").value; const r=await runBatch([{key,run:()=>doComment(key,text)}],"Comment added"); if(!r.fail){$("d-reply").value="";commentMentions.reset();} setMsg("d-cmsg",r.fail?"Not sent.":"Sent.",!r.fail);
     if(!r.fail&&after){ const ix=after.indexOf("|"); const aid=after.slice(0,ix), aname=after.slice(ix+1); const r2=await doAssign([key],aid,aname); setMsg("d-cmsg",r2.fail?"Comment sent, but the assignee didn't change.":"Sent and assigned to "+aname+".",!r2.fail); } });
 
