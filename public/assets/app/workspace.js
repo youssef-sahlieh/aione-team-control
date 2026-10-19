@@ -27,7 +27,7 @@ const pages = [
   ["calendar", "Calendar", "Make space for what's next. Plan around your ticket due dates."],
   ["requests", "Date requests", "Review and decide proposed date changes."],
   ["reports", "Checks & Reports", "Run ticket checks and review management reports."],
-  ["clients", "Clients", "Manage clients, sub-clients, and catalog imports."],
+  ["clients", "Clients", "Manage clients (Odoo contacts) and their projects."],
   ["errors", "Sync errors", "Changes that didn't reach Jira, Odoo or the dashboard, ready to retry, and the state of the API keys."]
 ];
 function icon(name) {

@@ -481,7 +481,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const hc=el("span","c-ck"); hc.appendChild(all); h.appendChild(hc);
     [["c-key","Ticket ID"],["c-ttl","Title / Priority"],["c-who","Assignee"],["c-rep","Reporter"],["c-dev","Developers"],["c-st","Status"],["c-due","Due date"],["c-cre","Created date"],["c-upd","Updated"],["c-note","Internal note"],["c-actions",""]].forEach(([c,x])=>h.appendChild(el("span",c,x)));
     if(showTicketBriefs()){const label=el("span","c-brief","AI brief");label.title="Generate a short AI explanation of each Jira ticket.";h.insertBefore(label,h.querySelector(".c-who"));}
-    const businessColumns=[['clientName','Client',150],['subClientName','Sub-client',150],['estimatedHours','Estimated hours',130],['actualHours','Actual hours',120],['workDone','Work done',220],...(IS_ADMIN?[['billing','Billing',130]]:[])];
+    const businessColumns=[['clientName','Client',150],['subClientName','Project',150],['estimatedHours','Estimated hours',130],['actualHours','Actual hours',120],['workDone','Work done',220],...(IS_ADMIN?[['billing','Billing',130]]:[])];
     businessColumns.forEach(([key,label])=>h.appendChild(el('span','c-'+key,label)));
     if(GITHUB) h.appendChild(el('span','c-prs','Pull requests'));
     const sortMap={'c-key':'key','c-ttl':'summary','c-who':'assigneeName','c-rep':'reporter','c-dev':'developers','c-st':'status','c-due':'due','c-cre':'created','c-upd':'updated','c-prs':'prs'};

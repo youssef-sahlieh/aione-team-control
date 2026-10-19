@@ -156,12 +156,14 @@ test('user initial dates, submissions and revisions require a saved positive est
  assert.equal((await s.call('/date-requests/submit','POST',{...body,proposedDate:'2026-11-04'})).status,400);
 });
 
-test('clients sync from Odoo: every customer is a client, each project a sub-client of its customer; only admins force it',async()=>{
- const {env,call:api}=await setup();const realFetch=globalThis.fetch;let odooCalls=0;
+test('clients sync from Odoo: every contact is a client, each project a sub-client (Project) of its contact; only admins force it',async()=>{
+ const {env,call:api}=await setup();
+ // An earlier sync grouped contact-less projects under "No customer": renamed in place, keeping its projects.
+ {const c=await readCatalog(env);c.entries.push({id:'nc',name:'No customer',parentId:null,archived:false,sources:[]},{id:'old',name:'Old tool',parentId:'nc',archived:false,sources:[]});await env.STORE.set(catalogKey(env),JSON.stringify(c));}const realFetch=globalThis.fetch;let odooCalls=0;
  Object.assign(env,{ODOO_URL:'https://odoo.invalid',ODOO_DB:'db',ODOO_LOGIN:'bot@example.invalid',ODOO_API_KEY:'k'});
  globalThis.fetch=async(u,init)=>{const p=JSON.parse(init.body).params;if(p.service==='common')return Response.json({result:7});odooCalls++;
   const [model,method]=[p.args[3],p.args[4]];
-  if(model==='res.partner'&&method==='search_read')return Response.json({result:[{id:1,display_name:'Acme'},{id:2,display_name:'Solo Customer'}]});
+  if(model==='res.partner'&&method==='search_read'){assert.deepEqual(p.args[5],[[['parent_id','=',false],['user_ids','=',false]]]);return Response.json({result:[{id:1,display_name:'Acme'},{id:2,display_name:'Solo Customer'}]});}
   if(model==='res.partner'&&method==='read')return Response.json({result:[{id:5,commercial_partner_id:[1,'Acme']},{id:1,commercial_partner_id:[1,'Acme']}]});
   assert.equal(model,'project.project');assert.equal(method,'search_read');
   return Response.json({result:[{id:10,display_name:'Branch A',partner_id:[5,'Acme, John']},{id:11,display_name:'Branch B',partner_id:[1,'Acme']},{id:12,display_name:'In-house',partner_id:false}]});};
@@ -173,7 +175,7 @@ test('clients sync from Odoo: every customer is a client, each project a sub-cli
   const c=await readCatalog(env),top=n=>c.entries.find(e=>e.name===n&&!e.parentId),under=n=>c.entries.filter(e=>e.parentId===top(n).id).map(e=>e.name).sort();
   assert.deepEqual(under('Acme'),['Branch A','Branch B']); // a project of a person at Acme belongs to Acme
   assert.ok(top('Solo Customer'));assert.deepEqual(under('Solo Customer'),[]); // a customer without a project is still a client
-  assert.deepEqual(under('No customer'),['In-house']);assert.ok(!top('In-house'));
+  assert.deepEqual(under('No contact'),['In-house','Old tool']);assert.ok(!top('In-house'));assert.ok(!top('No customer'));assert.equal(top('No contact').id,'nc');
   assert.ok(top('Acme').sources.some(x=>x.source==='odoo-customer'&&x.row===1)); // the Odoo contact id is kept
   // A fresh catalog is not read from Odoo again on the automatic refresh, and nothing changes.
   const before=odooCalls,again=await (await call(user)).json();assert.equal(again.changed,false);assert.equal(odooCalls,before);

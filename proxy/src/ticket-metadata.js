@@ -41,8 +41,8 @@ export function selectionErrors(catalog,m,{active=false}={}) {
   if(!client || (active&&client.archived))return ['Choose a client'];
   const children=catalog.entries.filter(e=>e.parentId===client.id&&!e.archived);
   const sub=catalog.entries.find(e=>e.id===m.subClientId&&e.parentId===client.id);
-  if(m.subClientId&&(!sub||(active&&sub.archived)))errors.push('Choose a valid sub-client');
-  else if(!m.subClientId&&children.length)errors.push('Choose a sub-client');
+  if(m.subClientId&&(!sub||(active&&sub.archived)))errors.push('Choose a valid project');
+  else if(!m.subClientId&&children.length)errors.push('Choose a project');
   return errors;
 }
 export function closureErrors(catalog,m) {
@@ -97,15 +97,15 @@ export async function guardedTransition(env,key,me,{closing,overrideReason},appl
 const nameKey=n=>n.trim().normalize('NFC').toLocaleLowerCase('en-US');
 async function idFor(parent,name) { const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode((parent||'root')+'\0'+nameKey(name)));return 'c_'+Array.from(new Uint8Array(bytes).slice(0,16),x=>x.toString(16).padStart(2,'0')).join(''); }
 function cleanName(n) {if(typeof n!=='string'||!n.trim()||n.trim().length>300)problem('Client names must contain 1–300 characters.');return n.trim();}
-// Clients come straight from Odoo in two levels: every customer (a top-level contact with a customer
-// rank, with or without a project) is a client, and each project is a sub-client of its customer (the
-// company, when the project's contact is a person inside one). Projects without a customer go under
-// NO_CUSTOMER. Entries are only added (ids are stable by name), so tickets keep their client when Odoo changes.
+// Clients come straight from Odoo in two levels: every contact (top level, i.e. not a person inside a
+// company, and not an Odoo user account) is a client, with or without a project, and each project is a
+// sub-client - shown as "Project" - of its contact (the company, when the project's contact is a person
+// inside one). Projects without a contact go under NO_CUSTOMER. Entries are only added (ids are stable by name), so tickets keep their client when Odoo changes.
 const odooSyncKey=env=>prefix(env)+'catalog:odoo-sync';
-export const NO_CUSTOMER='No customer';
+export const NO_CUSTOMER='No contact';
 async function odooRows(env){
   const [customers,projects]=await Promise.all([
-    odoo(env,'res.partner','search_read',[[['customer_rank','>',0],['parent_id','=',false]]],{fields:['display_name'],order:'id',limit:4000}),
+    odoo(env,'res.partner','search_read',[[['parent_id','=',false],['user_ids','=',false]]],{fields:['display_name'],order:'id',limit:5000}),
     odoo(env,'project.project','search_read',[[]],{fields:['display_name','partner_id'],order:'id',limit:1000})
   ]);
   // A project's contact can be a person inside a company: the project belongs to the company.
@@ -129,7 +129,10 @@ export async function syncCatalogFromOdoo(env,{force=false}={}){
     const {customers,projects}=await odooRows(env);let changed=false,added=0;
     if(customers.length||projects.length)for(let attempt=0;;attempt++){
       const key=catalogKey(env),previous=await store.get(key),catalog=previous?JSON.parse(previous):{revision:0,entries:[]};
-      // Customers first (their Odoo contact id is kept as "odoo-customer" source), then projects under them.
+      // The group for projects without a contact was called "No customer": renamed in place (same id, same projects).
+      const legacy=catalog.entries.find(e=>!e.parentId&&e.name==='No customer');
+      if(legacy&&!catalog.entries.some(e=>!e.parentId&&e.name===NO_CUSTOMER))legacy.name=NO_CUSTOMER;
+      // Contacts first (their Odoo contact id is kept as "odoo-customer" source), then projects under them.
       let next=catalog,count=0;
       if(customers.length){const r=await prepareImport(next,customers,'odoo-customer');next=r.next;count+=r.preview.added;}
       if(projects.length){const r=await prepareImport(next,projects,'odoo');next=r.next;count+=r.preview.added;}
@@ -172,11 +175,11 @@ async function createInOdoo(env,url,me,b){
       created=await odoo(env,'res.partner','create',[{name,is_company:true,customer_rank:1,...(email?{email}:{}),...(phone?{phone}:{})}]);
     }else{
       const catalog=await readCatalog(env),client=catalog.entries.find(e=>e.id===b.clientId&&!e.parentId);
-      if(!client||client.name===NO_CUSTOMER)problem('Choose the customer this project belongs to.');
+      if(!client||client.name===NO_CUSTOMER)problem('Choose the contact this project belongs to.');
       // The customer's Odoo contact: kept from the sync, else found by its exact name.
       let partner=(client.sources||[]).find(x=>x.source==='odoo-customer')?.row;
       if(!partner){const [found]=await odoo(env,'res.partner','search_read',[[['name','=',client.name],['parent_id','=',false]]],{fields:['id'],limit:1});partner=found&&found.id;}
-      if(!partner)problem('This customer is not in Odoo. Create it as a customer first.');
+      if(!partner)problem('This contact is not in Odoo. Create it as a contact first.');
       created=await odoo(env,'project.project','create',[{name,partner_id:partner}]);
     }
   }catch(e){if(e instanceof BusinessError)throw e;problem("Odoo didn't create it: "+String(e.message||'unknown error').slice(0,200),502,'odoo');}
@@ -211,7 +214,7 @@ export async function catalogRoutes(request,env,url,me) {
     next=structuredClone(catalog);
     if(b.id){const e=next.entries.find(e=>e.id===b.id);if(!e)problem('Client not found.',404);if('name'in b)e.name=cleanName(b.name);if('archived'in b){if(typeof b.archived!=='boolean')problem('Invalid archive value.');e.archived=b.archived;}}
     else {const parentId=b.parentId||null;if(parentId&&!next.entries.some(e=>e.id===parentId&&!e.parentId&&!e.archived))problem('Choose an active parent client.');const name=cleanName(b.name);next.entries.push({id:await idFor(parentId,name),name,parentId,archived:false,sources:[]});}
-    const seen=new Set();for(const e of next.entries){const k=(e.parentId||'')+'|'+nameKey(e.name);if(seen.has(k))problem('This client or sub-client already exists.');seen.add(k);}
+    const seen=new Set();for(const e of next.entries){const k=(e.parentId||'')+'|'+nameKey(e.name);if(seen.has(k))problem('This client or project already exists.');seen.add(k);}
   }else problem('Not found.',404);
   next.revision=catalog.revision+1;
   const key=catalogKey(env),previous=await store.get(key);
