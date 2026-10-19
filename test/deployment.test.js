@@ -6,14 +6,14 @@ import handler from '../proxy/src/handler.js';
 test('health is public, uncached and exposes only the supported API contract',async()=>{
  const response=await handler.fetch(new Request('https://proxy.test/health'),{SESSION_SECRET:'private',JIRA_API_TOKEN:'private',TEAM_CONFIG:'private'});
  assert.equal(response.status,200);assert.equal(response.headers.get('Cache-Control'),'no-store');
- assert.deepEqual(await response.json(),{ok:true,apiVersion:1,capabilities:['date-requests-v1','ticket-notes-v1','odoo-helpdesk-v1','ticket-business-v1','db-report-v1','db-report-company-v1'],build:''});
+ assert.deepEqual(await response.json(),{ok:true,apiVersion:1,capabilities:['date-requests-v1','ticket-notes-v1','odoo-helpdesk-v1','ticket-business-v1','reports-all-v1','reports-saved-v1','db-report-v1','db-report-company-v1'],build:''});
 });
 test('old or incomplete backends cannot release the dashboard',()=>{
- for(const data of [null,{}, {ok:true}, {ok:true,apiVersion:1,capabilities:['date-requests-v1']}, {ok:true,apiVersion:2,capabilities:['date-requests-v1','ticket-notes-v1','ticket-business-v1']}])assert.equal(compatibleProxy(data),false);
+ for(const data of [{ok:true,apiVersion:1,capabilities:['date-requests-v1','ticket-notes-v1','ticket-business-v1']},null,{}, {ok:true}, {ok:true,apiVersion:1,capabilities:['date-requests-v1']}, {ok:true,apiVersion:2,capabilities:['date-requests-v1','ticket-notes-v1','ticket-business-v1']}])assert.equal(compatibleProxy(data),false);
 });
 test('wait retries old deployments and network failures, then accepts a compatible deployment',async()=>{
  let clock=0,calls=0;
- await waitForProxy({timeoutMs:50,intervalMs:10,now:()=>clock,sleep:async ms=>{clock+=ms;},log:()=>{},fetchImpl:async()=>{calls++;if(calls===1)throw Error('Offline');return calls===2?new Response('Not found',{status:404}):Response.json({ok:true,apiVersion:1,capabilities:['date-requests-v1','ticket-notes-v1','ticket-business-v1']});}});
+ await waitForProxy({timeoutMs:50,intervalMs:10,now:()=>clock,sleep:async ms=>{clock+=ms;},log:()=>{},fetchImpl:async()=>{calls++;if(calls===1)throw Error('Offline');return calls===2?new Response('Not found',{status:404}):Response.json({ok:true,apiVersion:1,capabilities:['date-requests-v1','ticket-notes-v1','ticket-business-v1','reports-all-v1','reports-saved-v1']});}});
  assert.equal(calls,3);
 });
 test('wait fails within its deadline and identifies Vercel Git configuration as the next step',async()=>{
@@ -37,4 +37,15 @@ test('the GitHub key check names repositories the token cannot read',async()=>{
   const gh=(await (await integrationRoutes(new Request('https://p/integrations'),env,{role:'admin'})).json()).keys.find(k=>k.id==='github');
   assert.equal(gh.status,'error');assert.match(gh.message,/KAD-org\/hidden/);assert.doesNotMatch(gh.message,/KAD-org\/open/);
  }finally{globalThis.fetch=real;}
+});
+
+
+
+test('Groq integration health is administrator-only, checks model access and never exposes its key',async()=>{
+ const {integrationRoutes}=await import('../proxy/src/integrations.js');let requests=0;
+ const env={AI_VENDOR:'groq',GROQ_API_KEY:'synthetic-groq-secret',JIRA_SITE:'https://jira.invalid',JIRA_EMAIL:'bot',JIRA_API_TOKEN:'synthetic-jira'};
+ globalThis.fetch=async(url,init)=>{requests++;if(String(url).includes('api.groq.com')){assert.equal(url,'https://api.groq.com/openai/v1/models');assert.equal(init.headers.Authorization,'Bearer synthetic-groq-secret');return Response.json({data:[{id:'openai/gpt-oss-120b'}]});}return Response.json({});};
+ assert.equal((await integrationRoutes(new Request('https://test/integrations'),env,{role:'user'})).status,403);assert.equal(requests,0);
+ const r=await integrationRoutes(new Request('https://test/integrations'),env,{role:'admin'}),data=await r.json();assert.equal(data.keys.find(k=>k.id==='groq').status,'ok');assert.doesNotMatch(JSON.stringify(data),/synthetic/);
+ env.AI_MODEL='unavailable';const missing=await (await integrationRoutes(new Request('https://test/integrations'),env,{role:'admin'})).json();assert.equal(missing.keys.find(k=>k.id==='groq').status,'error');
 });

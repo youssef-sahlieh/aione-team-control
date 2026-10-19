@@ -1,4 +1,5 @@
-import { reportCsv, createdDate } from '../models/ticket-business.js';
+import {createReportBrowser} from './report-browser.js';
+import { createdDate } from '../models/ticket-business.js';
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
 const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.addEventListener('click',fn);return b;};
 const field=(parent,label,node)=>{const l=el('label','business-field');node.setAttribute('aria-label',label);l.append(el('span','',label),node);parent.append(l);return node;};
@@ -36,7 +37,8 @@ function combobox(select){
 const input=(type,value)=>{const n=el('input','inp');n.type=type;n.value=value??'';return n;};
 const message=(target,e)=>{target.textContent=e.message||String(e);target.className='msg err';};
 export function createTicketBusiness({api,context,onChange,openIssue}){
-  let billingNeeded=false,enabled=false,catalog={revision:0,entries:[]},records={},editor=null,lastReport=null,reportOptions={workflow:'management',source:'all'};
+  let billingNeeded=false,enabled=false,catalog={revision:0,entries:[]},records={},editor=null;
+  const reportBrowser=createReportBrowser({api,openIssue});
   const admin=()=>context().admin;
   const clients=()=>catalog.entries.filter(e=>!e.parentId&&!e.archived);
   const children=id=>catalog.entries.filter(e=>e.parentId===id&&!e.archived);
@@ -151,25 +153,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     if(admin()){const billing=el('select','fsel');billing.setAttribute('aria-label','Filter by billing');for(const [v,l]of [['','All billing'],['__none','Billing not set'],['billable','Billable'],['not_billable','Not billable']])option(billing,l,v);billing.value=filter.billing||'';billing.addEventListener('change',()=>{filter.billing=billing.value;onFilter();});parent.append(billing);}
   }
   function matches(i,f={}){return (!f.clientId||(f.clientId==='__none'?!i.clientId:i.clientId===f.clientId))&&(!f.subClientId||i.subClientId===f.subClientId)&&(!f.missing||!i[f.missing])&&(!admin()||!f.billing||(f.billing==='__none'?!i.billing:i.billing===f.billing));}
-  function renderReports(target){
-    const panel=el('section','panel business-panel');target.append(panel);panel.append(el('h2','','Checks & Reports'),el('p','msg','Checks use application rules. Claude can explain report results through AION AI.'));
-    if(!enabled){panel.append(el('p','msg err','The updated backend is required.'));return;}
-    const form=el('div','business-form');panel.append(form);const workflow=field(form,'Workflow',el('select','fsel'));
-    for(const [v,l]of [['management','Management report'],['completeness','Ticket completeness'],['delivery','Delivery risks'],['hours','Hours review']])option(workflow,l,v);workflow.value=reportOptions.workflow;
-    const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Jerusalem',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),startDate=new Date(today+'T12:00:00Z');startDate.setUTCDate(startDate.getUTCDate()-6);
-    const start=field(form,'From',input('date',reportOptions.start||startDate.toISOString().slice(0,10))),end=field(form,'Through',input('date',reportOptions.end||today));
-    const source=field(form,'Ticket source',el('select','fsel'));for(const [v,l]of [['all','All tickets'],['jira','Jira'],['internal','Internal']])option(source,l,v);source.value=reportOptions.source;
-    const selects=selections(form,reportOptions),msg=el('p','msg'),output=el('div','report-results');panel.append(msg,output);
-    const show=report=>{output.replaceChildren(el('p','msg','Generated '+new Date(report.generatedAt).toLocaleString('en-GB',{timeZone:'Asia/Jerusalem'})+' · '+report.period.start+' to '+report.period.end+' · '+report.coverage.examined+' tickets examined'),el('p','',report.hoursLabel));
-      for(const w of report.warnings)output.append(el('p','msg err',w));
-      const totals=el('div','report-totals');const labels={open:'Open',created:'Created',completed:'Completed',atRisk:'At risk',overrides:'Overrides'};for(const [k,v]of Object.entries(report.totals))totals.append(el('span','',(labels[k]||k)+': '+v));output.append(totals);
-      output.append(button('Export ticket findings CSV',()=>{const url=URL.createObjectURL(new Blob(['\uFEFF'+reportCsv(report)],{type:'text/csv;charset=utf-8'})),a=el('a');a.href=url;a.download='aion-'+report.workflow+'-'+report.period.end+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}));
-      if(report.groups.length){const table=el('table','workload-table'),head=el('tr');for(const l of ['Client','Sub-client','Billing','Tickets','Estimated hours','Actual hours','Missing estimates / actuals'])head.append(el('th','',l));table.append(head);for(const g of report.groups){const tr=el('tr');for(const v of [g.client,g.subClient,g.billing,g.tickets,g.estimatedHours??'Unavailable',g.actualHours??'Unavailable',g.missingEstimated+' / '+g.missingActual])tr.append(el('td','',String(v)));table.append(tr);}output.append(table);}
-      for(const t of report.tickets){const row=el('div','report-ticket');row.append(button(t.key+' · '+t.title,()=>openIssue(t.key),'linkbtn'),el('p','',t.status+' · '+(t.clientName||'Client not set')+(t.subClientName?' / '+t.subClientName:'')),el('p','msg',[...t.missing,...t.risks,...(t.overEstimate?['Over estimate by '+t.overEstimate.hours+' h ('+t.overEstimate.percent+'%)']:[]),...t.overrides.map(o=>'Override: '+o.reason)].join(' · ')));output.append(row);}
-      if(!report.tickets.length)output.append(el('p','','No findings for this workflow.'));
-    };
-    const run=button('Run now',async()=>{run.disabled=true;msg.textContent='Reading tickets and calculating results…';try{reportOptions={workflow:workflow.value,start:start.value,end:end.value,source:source.value,...selects.read()};lastReport=await api('/reports/run',{method:'POST',body:reportOptions});msg.textContent='';show(lastReport);}catch(e){message(msg,e);}finally{run.disabled=false;}},'btn primary');form.append(run);if(lastReport)show(lastReport);
-  }
+  function renderReports(target){reportBrowser.render(target);}
   let catalogNote={text:'',at:0};
   function renderCatalog(target,note){
     const panel=el('section','panel business-panel');target.append(panel);panel.append(el('h2','','Clients & Sub-clients'));
@@ -180,5 +164,5 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     for(const c of catalog.entries.filter(e=>!e.parentId).sort((a,b)=>a.name.localeCompare(b.name))){const group=el('details','catalog-group');group.append(el('summary','',c.name+(c.archived?' (archived)':'')));for(const e of [c,...catalog.entries.filter(e=>e.parentId===c.id)]){const row=el('div','catalog-entry'),nm=input('text',e.name);nm.setAttribute('aria-label','Name for '+e.name);row.append(nm,button('Rename',async()=>change(e,{name:nm.value})),button(e.archived?'Restore':'Archive',async()=>change(e,{archived:!e.archived})));group.append(row);}panel.append(group);}
     async function change(e,patch){try{catalog=await api('/clients',{method:'PUT',body:{revision:catalog.revision,id:e.id,...patch}});await onChange();target.replaceChildren();renderCatalog(target);}catch(err){message(msg,err);}}
   }
-  return {configure:async cfg=>{billingNeeded=cfg.billingRequired===true;enabled=cfg.capabilities?.includes('ticket-business-v1')===true;if(enabled){await loadCatalog();if(cfg.odoo)api('/clients/odoo-sync',{method:'POST',body:{}}).then(r=>{if(r.changed)return loadCatalog();}).catch(()=>{});}},enabled:()=>enabled,load,decorate,canQuickEdit,quickEdit,quickLabel:name=>QUICK[name],createFields,renderEditor,dirty:key=>editor?.key===key&&editor.dirty(),reset:()=>{editor=null;},bulk,ensureBilling,overrideReason,filters,matches,renderReports,renderCatalog,loadCatalog};
+  return {configure:async cfg=>{reportBrowser.configure(cfg);billingNeeded=cfg.billingRequired===true;enabled=cfg.capabilities?.includes('ticket-business-v1')===true;if(enabled){await loadCatalog();if(cfg.odoo)api('/clients/odoo-sync',{method:'POST',body:{}}).then(r=>{if(r.changed)return loadCatalog();}).catch(()=>{});}},enabled:()=>enabled,load,decorate,canQuickEdit,quickEdit,quickLabel:name=>QUICK[name],createFields,renderEditor,dirty:key=>editor?.key===key&&editor.dirty(),reset:()=>{editor=null;},bulk,ensureBilling,overrideReason,filters,matches,renderReports,renderCatalog,loadCatalog};
 }

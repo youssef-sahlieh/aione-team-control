@@ -40,6 +40,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     PEOPLE={...PEOPLE,[INTERNAL_ASSIGNEE]:{name:"Internal Tickets",ini:"IT",id:INTERNAL_ASSIGNEE}};
     BYID={}; for(const k in PEOPLE) BYID[PEOPLE[k].id]=k;
     IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||""; MY_EMAIL=cfg.email||""; INTERNAL=!!cfg.accounts; ODOO=!!cfg.odoo; $("monitor-link").hidden=!ODOO; { const dl=$("dbreport-link"); if(dl) dl.hidden=!cfg.dbReport; } $("new-int").hidden=!INTERNAL;
+    const filtersKey="aion.ticket-filters.open."+encodeURIComponent(MY_EMAIL);
+    if(ticketFiltersKey!==filtersKey){ticketFiltersKey=filtersKey;ticketFiltersOpen=false;try{ticketFiltersOpen=localStorage.getItem(ticketFiltersKey)==="1";}catch{}}
     document.body.classList.toggle("role-user",!IS_ADMIN);
     $("users-link").hidden=!(IS_ADMIN&&cfg.accounts);
     if(IS_ADMIN){
@@ -256,6 +258,9 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   try{ const u=+localStorage.getItem("aion.upd"), d=+localStorage.getItem("aion.due"); if(u>=1&&u<=30) state.updDays=u; if(d>=1&&d<=90) state.dueDays=d; const cd=+localStorage.getItem("aion.closed"); if(cd>=1&&cd<=365) state.closedDays=cd; }catch(e){}
   try{ const v=localStorage.getItem("aion.view"); if(v) state.view=v; state.fopen=localStorage.getItem("aion.fopen")==="1"; const gg=localStorage.getItem("aion.group"); if(gg!==null) state.group=gg; }catch(e){}
 
+  let ticketFiltersOpen=false;
+  let ticketFiltersKey="";
+
   const FOCUS=[
     {id:"open",k:"k1",l:"All open",h:"Everything not done",f:i=>i.cat!=="done"},
     {id:"nodev",k:"k2",l:"No developer",h:"Waiting for a developer",f:i=>i.cat!=="done"&&!i.devs.length},
@@ -338,6 +343,10 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   function countBy(skip,fn){ const m={}; visible(skip).forEach(i=>{ [].concat(fn(i)).forEach(v=>{ m[v]=(m[v]||0)+1; }); }); return m; }
 
   function renderFilters(){
+    const ticketsPage=workspace.route().page==="tickets",expanded=!ticketsPage||ticketFiltersOpen;
+    $("ticket-filter-controls").hidden=!ticketsPage;$("ticket-filters").hidden=!expanded;
+    $("ticket-filters-toggle").textContent=expanded?"Hide filters":"Show filters";$("ticket-filters-toggle").setAttribute("aria-expanded",String(expanded));
+    $("ticket-filters-state").textContent=ticketsPage?(filterCount()?filterCount()+" active filters · ":"")+focusDef().l:"";
     const g=$("fgrid"); g.replaceChildren(); g.hidden=!IS_ADMIN||!state.fopen;
     $("ftoggle").textContent=state.fopen?"Hide more filters":"More filters"; $("ftoggle").setAttribute("aria-expanded",String(state.fopen));
     if(IS_ADMIN&&state.fopen){const help=el("p","filter-help","Select multiple options within a group to include either. Selections across groups are combined.");g.appendChild(help);}
@@ -1048,6 +1057,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   document.querySelectorAll(".seg [data-v]").forEach(b=>b.addEventListener("click",()=>{ state.view=b.dataset.v; try{localStorage.setItem("aion.view",state.view);}catch(e){} render(); }));
   $("notify").checked=notifyOn; $("notify").addEventListener("change",e=>{ notifyOn=e.target.checked; try{localStorage.setItem("aion.notify",notifyOn?"1":"0");}catch(x){} toast(notifyOn?(MAIL?"Developers will be emailed when assigned.":"You'll be offered an email to developers when you assign them."):"Assignment emails are off."); });
   $("grp").addEventListener("change",e=>{ state.group=e.target.value; try{localStorage.setItem("aion.group",state.group);}catch(x){} render(); });
+  $("ticket-filters-toggle").addEventListener("click",()=>{ticketFiltersOpen=!ticketFiltersOpen;try{localStorage.setItem(ticketFiltersKey,ticketFiltersOpen?"1":"0");}catch{}renderFilters();});
   $("ftoggle").addEventListener("click",()=>{ state.fopen=!state.fopen; try{localStorage.setItem("aion.fopen",state.fopen?"1":"0");}catch(e){} renderFilters(); });
   $("fclear").addEventListener("click",()=>{ state.f=defaultFilters();state.businessFilter={}; state.q=""; $("q").value=""; state.sel.clear(); render(); });
   let qt=null; $("q").addEventListener("input",e=>{ clearTimeout(qt); qt=setTimeout(()=>{ state.q=e.target.value.trim(); render(); },150); });

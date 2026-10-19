@@ -1,6 +1,6 @@
 import {pathToFileURL} from 'node:url';
 
-export const requiredCapabilities = ['date-requests-v1', 'ticket-notes-v1', 'ticket-business-v1'];
+export const requiredCapabilities = ['date-requests-v1', 'ticket-notes-v1', 'ticket-business-v1', 'reports-all-v1', 'reports-saved-v1'];
 export function compatibleProxy(data) {
   return data?.ok === true && data.apiVersion === 1 && Array.isArray(data.capabilities) && requiredCapabilities.every(feature => data.capabilities.includes(feature));
 }

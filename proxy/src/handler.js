@@ -17,6 +17,7 @@
 //   emails in TEAM_EMAILS sign in with TEAM_PASSWORD as admins. The first sign-in with TEAM_PASSWORD
 //   after the database is added creates admin accounts for everyone in TEAM_EMAILS.
 import { BusinessError, businessResponse, catalogRoutes, metadataRoutes, readMetadata, readCatalog, publicMetadata, requireBilling, billingRequired, withTicketLock, guardedTransition } from "./ticket-metadata.js";
+import {savedReportRoutes} from "./saved-reports.js";
 import { reportRoutes, buildReport } from "./reports.js";
 import { dateRequestRoutes } from "./date-requests.js";
 import { ticketNoteRoutes } from "./ticket-notes.js";
@@ -328,7 +329,7 @@ async function route(request, env, url) {
   // Public compatibility check for Pages publishing; exposes no runtime credentials or ticket data.
   if (path.startsWith("/monitor/odoo/translations") && method === "GET") return odooTranslations(env, url);
   if (path === "/cron/db-report") return dbReportCron(request, env, url);
-  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1", "db-report-v1", "db-report-company-v1"], build: String(env.BUILD || "").slice(0, 7)});
+  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1","reports-all-v1","reports-saved-v1", "db-report-v1", "db-report-company-v1"], build: String(env.BUILD || "").slice(0, 7)});
 
   // Jira Automation uses its own secret, never a team password or a user's browser session.
   if (path === "/notifications/jira-created") {
@@ -436,6 +437,7 @@ async function route(request, env, url) {
       if(r.data.isLast===true||r.data.values.length<100||r.data.total<=(page+1)*100)return latest;
     }return null;
   }};
+  if(path==="/reports/latest"||path==="/reports/refresh")return savedReportRoutes(request,env,me,reportDeps,path);
   if(path==="/reports/run")return reportRoutes(request,env,me,reportDeps);
   const email = me.email;
   const isAdmin = me.role === "admin";
@@ -506,7 +508,7 @@ async function route(request, env, url) {
   if (path === "/config" && method === "GET") {
     let team = {};
     try { team = JSON.parse(env.TEAM_CONFIG || "{}"); } catch {}
-    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE, capabilities:["ticket-business-v1","db-report-v1","db-report-company-v1"] });
+    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE, capabilities:["ticket-business-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1"] });
   }
 
   if (!isAdmin && (path === "/mail" || path === "/jira/users")) return fail("forbidden", "Only administrators can do that.", 403);

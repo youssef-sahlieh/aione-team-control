@@ -52,3 +52,5 @@ Browser ──► GitHub Pages (dashboard files, public)
 For the due-date request and admin approval workflow, see [due-date approvals](docs/due-date-approvals.md). Run `npm run preview:approvals` for an isolated local review at http://localhost:3100/preview/admin, with sample tickets and no production writes.
 
 Dashboard-only clients, work fields, closure validation and on-demand reports are documented in [ticket business fields](docs/ticket-business.md).
+
+Hosted free-tier AI setup: [Groq integration](docs/free-hosted-ai.md).
