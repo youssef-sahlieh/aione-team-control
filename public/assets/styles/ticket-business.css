@@ -27,6 +27,9 @@
 .catalog-group{padding:10px 0;border-bottom:1px solid var(--line)}
 .catalog-entry{display:flex;gap:8px;align-items:center;margin:10px 0}
 .catalog-entry input{flex:1;min-width:100px}
+.epic-map-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid var(--line)}
+.epic-map-name{flex:1;min-width:180px}
+.epic-map-row .fsel{flex:1;min-width:180px;max-width:100%}
 .report-totals{display:flex;flex-wrap:wrap;gap:20px;margin:16px 0;font-weight:600}
 .report-ticket{padding:12px 0;border-bottom:1px solid var(--line)}
 .report-ticket p{margin:4px 0}

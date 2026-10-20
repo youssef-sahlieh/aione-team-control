@@ -271,6 +271,41 @@ test('all report snapshot includes old closed tickets with one source scan and s
 });
 
 test('saved report endpoints are authenticated and refuse ordinary users',async()=>{const s=await setup();assert.equal((await s.call('/reports/latest')).status,403);assert.equal((await s.call('/reports/refresh','POST',{},user)).status,403);const first=await s.call('/reports/latest','GET',undefined,admin);assert.equal(first.status,200);assert.equal((await first.json()).report.workflow,'all');const second=await s.call('/reports/latest','GET',undefined,admin);assert.equal((await second.json()).cached,true);assert.equal((await s.call('/reports/refresh','POST',{},admin)).status,200);});
+
+test('Jira epics map to Odoo projects: tickets under a mapped epic take and follow its project, hand-picked clients stay',async()=>{
+ const s=await setup(),realFetch=globalThis.fetch,parents={'AION-10':'AION-1','AION-11':'AION-1','AION-12':'AION-1'};
+ globalThis.fetch=async(u,init={})=>{
+  const body=typeof init.body==='string'?JSON.parse(init.body):null;
+  if(String(u).includes('/search/jql')){
+   if(/issuetype = Epic/.test(body.jql))return Response.json({issues:[{key:'AION-1',fields:{summary:'Website',status:{statusCategory:{key:'indeterminate'}}}},{key:'AION-2',fields:{summary:'Mobile',status:{statusCategory:{key:'new'}}}}],isLast:true});
+   const epics=/parent in \(([^)]*)\)/.exec(body.jql)[1].split(',');
+   return Response.json({issues:Object.entries(parents).filter(([,p])=>epics.includes(p)).map(([key,p])=>({key,fields:{parent:{key:p},status:{statusCategory:{key:key==='AION-12'?'done':'new'}}}})),isLast:true});
+  }
+  return realFetch(u,init);
+ };
+ try{
+  await saveMetadata(s.env,'AION-11',{revision:0,clientId:s.client.id,subClientId:null},admin);
+  assert.equal((await s.call('/epic-map','GET',undefined,user)).status,403);
+  const listed=await (await s.call('/epic-map','GET',undefined,admin)).json();
+  assert.deepEqual(listed.epics.map(e=>e.key),['AION-1','AION-2']);assert.deepEqual(listed.map,{});
+  // A customer with projects under it isn't a project.
+  assert.equal((await s.call('/epic-map','PUT',{revision:0,epicKey:'AION-1',entryId:s.parent.id},admin)).status,400);
+  const saved=await (await s.call('/epic-map','PUT',{revision:0,epicKey:'AION-1',entryId:s.sub.id},admin)).json();
+  assert.equal(saved.sync.changed,2);
+  const m10=await readMetadata(s.env,'AION-10');assert.deepEqual([m10.clientId,m10.subClientId,m10.epicKey],[s.parent.id,s.sub.id,'AION-1']);
+  assert.equal((await readMetadata(s.env,'AION-12')).subClientId,s.sub.id);
+  assert.equal((await readMetadata(s.env,'AION-11')).clientId,s.client.id,'a hand-picked client is kept');
+  assert.equal((await s.call('/epic-map','PUT',{revision:0,epicKey:'AION-2',entryId:s.client.id},admin)).status,409);
+  // The ticket moves to another mapped epic and follows it.
+  parents['AION-10']='AION-2';
+  assert.equal((await s.call('/epic-map','PUT',{revision:1,epicKey:'AION-2',entryId:s.client.id},admin)).status,200);
+  const moved=await readMetadata(s.env,'AION-10');assert.deepEqual([moved.clientId,moved.subClientId,moved.epicKey],[s.client.id,null,'AION-2']);
+  // Choosing a client by hand stops following the epic.
+  const manual=await saveMetadata(s.env,'AION-10',{revision:moved.revision,clientId:s.parent.id,subClientId:s.sub.id},admin);assert.equal(manual.epicKey,null);
+  assert.equal((await (await s.call('/epic-map/sync?force=1','POST',{},admin)).json()).changed,0);
+  assert.equal((await s.call('/epic-map/sync?force=1','POST',{},user)).status,403);
+ }finally{globalThis.fetch=realFetch;}
+});
 test('client details come from Odoo (only fields it has); a name chosen in the dashboard is shown on tickets until cleared',async()=>{
  const s=await setup();const realFetch=globalThis.fetch;
  Object.assign(s.env,{ODOO_URL:'https://odoo.invalid',ODOO_DB:'db',ODOO_LOGIN:'bot@example.invalid',ODOO_API_KEY:'k',AI_PROVIDER:async()=>({output:[{type:'message',content:[{type:'output_text',text:'"Acme Retail."'}]}]})});
