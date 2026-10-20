@@ -536,3 +536,7 @@ button.key.odoo:hover{text-decoration:underline}
 .cimg:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .pr-err{color:#b42318;cursor:help}
 .drawer.is-odoo .odoo-hide{display:none!important}
+/* Suggest description with AI */
+.ai-desc{display:flex;flex-direction:column;gap:8px;margin-top:8px;padding:12px;border:1px solid var(--accent);border-radius:10px;background:var(--accent-soft,#f3f4ff)}
+.ai-desc .msg{margin:0}
+.ai-desc-text{width:100%;box-sizing:border-box;min-height:140px;resize:vertical;font:inherit;line-height:1.5}

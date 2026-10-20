@@ -16,6 +16,7 @@ const icons = {
   clients: "M3 6h18v15H3z M7 6V3h10v3 M7 11h10",
   requests: "M3 5v6h6 M3 11a9 9 0 1 1 2 7 M12 7v5l3 2",
   audit: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z M9 12l2 2 4-4",
+  worklog: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18 M12 7v5l3 3",
   errors: "M12 3l9 16H3z M12 10v4 M12 17h.01"
 };
 const pages = [
@@ -27,7 +28,8 @@ const pages = [
   ["calendar", "Calendar", "Make space for what's next. Plan around your ticket due dates."],
   ["requests", "Date requests", "Review and decide proposed date changes."],
   ["reports", "Checks & Reports", "Run ticket checks and review management reports."],
-  ["clients", "Clients", "Manage clients, sub-clients, and catalog imports."],
+  ["clients", "Clients", "Manage clients (Odoo contacts) and their projects."],
+  ["worklog", "Work log", "Time logged on tickets and sent to Odoo timesheets."],
   ["errors", "Sync errors", "Changes that didn't reach Jira, Odoo or the dashboard, ready to retry, and the state of the API keys."]
 ];
 function icon(name) {
@@ -112,7 +114,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
   const dbReport = node("a", "nav-link"); dbReport.id = "dbreport-link"; dbReport.href = "databases.html"; dbReport.dataset.link = "databases"; dbReport.title = "Databases"; dbReport.hidden = true;
   dbReport.append(icon("audit"), node("span", "", "Databases"));
   nav.insertBefore(dbReport, audit.nextSibling);
-  const navOrder = ["overview", "tickets", "audit", "databases", "requests", "internal", "workload", "boards", "calendar", "reports", "clients", "errors"];
+  const navOrder = ["overview", "tickets", "audit", "databases", "requests", "internal", "workload", "boards", "calendar", "reports", "clients", "worklog", "errors"];
   const navItem = id => nav.querySelector(id === "audit" ? "#monitor-link" : id === "databases" ? "#dbreport-link" : `[data-page="${id}"]`);
   function configure() {
     route = readRoute(new URL(location.href), context().admin);
@@ -239,16 +241,17 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     $("nav-date-count").textContent=String(context().pendingDates||0);
     $("nav-ticket-count").textContent = String(state.issues?.length || 0);
     $("nav-internal-count").textContent = String((state.issues||[]).filter(isInternalTicket).length);
-    const custom = ["overview", "requests", "workload", "calendar", "reports", "clients", "errors"].includes(route.page);
+    const custom = ["overview", "requests", "workload", "calendar", "reports", "clients", "worklog", "errors"].includes(route.page);
     $("tickets-area").hidden = custom; $("workspace-content").hidden = !custom;
     if (!custom) return false;
     const target = $("workspace-content"); target.replaceChildren();
-    if(context().filterCount&&!["requests","reports","clients","errors"].includes(route.page)){const info=node("div","summary-filter-info");info.append(node("span","","Using your current ticket filters"),button("Adjust filters →","linkbtn",()=>navigate("tickets")));target.appendChild(info);}
+    if(context().filterCount&&!["requests","reports","clients","worklog","errors"].includes(route.page)){const info=node("div","summary-filter-info");info.append(node("span","","Using your current ticket filters"),button("Adjust filters →","linkbtn",()=>navigate("tickets")));target.appendChild(info);}
     // Respect all active filters but include closed tickets for summary metrics.
     const data = allowedItems();
     if(route.page==="reports"&&context().admin)context().renderReports(target);
     if(route.page==="clients"&&context().admin)context().renderCatalog(target);
     if(route.page==="errors")context().renderErrors(target);
+    if(route.page==="worklog")context().renderWorkLog(target);
     if (route.page === "requests") context().renderRequests(target);
     if (route.page === "overview") {overview(data, target);const p=panel(context().admin?"Date requests awaiting review":"My date requests and decisions");p.classList.add("date-summary");const list=node("div");context().renderRequests(list,{summary:true});p.append(list,button("View all date requests →","linkbtn",()=>navigate("requests")));target.append(p);}
     if (route.page === "workload" && context().admin) workload(data, target);

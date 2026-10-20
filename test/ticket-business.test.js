@@ -52,11 +52,11 @@ test('internal creation defaults to shared assignee, stores fields separately an
  const noClient=await s.call('/internal','POST',{summary:'No client yet'},user);assert.equal(noClient.status,201);
  assert.equal((await readMetadata(s.env,(await noClient.json()).ticket.key)).clientId,null);
 });
-test('client selection requires matching active sub-client and locks administrator-only changes',async()=>{
+test('client selection requires an active client and locks administrator-only changes; any project can go with it',async()=>{
  const s=await setup();assert.equal((await s.call('/internal','POST',{summary:'Task',metadata:{clientId:s.parent.id}},user)).status,400);
  const t=await s.create(user,{metadata:{clientId:s.parent.id,subClientId:s.sub.id}});
  assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,clientId:s.client.id,subClientId:null}},user)).status,403);
- assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,clientId:s.client.id,subClientId:s.sub.id}},admin)).status,400);
+ assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,clientId:s.client.id,subClientId:s.sub.id}},admin)).status,200);
 });
 test('billing never reaches user metadata, history or batch reads and forged writes fail',async()=>{
  const s=await setup(),t=await s.create(admin,{metadata:{clientId:s.client.id,billing:'billable'}});
@@ -156,25 +156,53 @@ test('user initial dates, submissions and revisions require a saved positive est
  assert.equal((await s.call('/date-requests/submit','POST',{...body,proposedDate:'2026-11-04'})).status,400);
 });
 
-test('clients sync from Odoo projects: customer is the client, project the sub-client; only admins force it',async()=>{
- const {env,call:api}=await setup();const realFetch=globalThis.fetch;let odooCalls=0;
+test('clients sync from Odoo: every contact is a client, each project a sub-client (Project) of its contact; only admins force it',async()=>{
+ const {env,call:api}=await setup();
+ // An earlier sync grouped contact-less projects under "No customer": renamed in place, keeping its projects.
+ {const c=await readCatalog(env);c.entries.push({id:'nc',name:'No customer',parentId:null,archived:false,sources:[]},{id:'old',name:'Old tool',parentId:'nc',archived:false,sources:[]});await env.STORE.set(catalogKey(env),JSON.stringify(c));}const realFetch=globalThis.fetch;let odooCalls=0;
  Object.assign(env,{ODOO_URL:'https://odoo.invalid',ODOO_DB:'db',ODOO_LOGIN:'bot@example.invalid',ODOO_API_KEY:'k'});
  globalThis.fetch=async(u,init)=>{const p=JSON.parse(init.body).params;if(p.service==='common')return Response.json({result:7});odooCalls++;
-  assert.equal(p.args[3],'project.project');assert.equal(p.args[4],'search_read');
-  return Response.json({result:[{id:10,display_name:'Branch A',partner_id:[1,'Acme']},{id:11,display_name:'Branch B',partner_id:[1,'Acme']},{id:12,display_name:'In-house',partner_id:false}]});};
+  const [model,method]=[p.args[3],p.args[4]];
+  if(model==='res.partner'&&method==='search_read'){assert.deepEqual(p.args[5],[[['parent_id','=',false],['user_ids','=',false]]]);return Response.json({result:[{id:1,display_name:'Acme'},{id:2,display_name:'Solo Customer'}]});}
+  if(model==='res.partner'&&method==='read')return Response.json({result:[{id:5,commercial_partner_id:[1,'Acme']},{id:1,commercial_partner_id:[1,'Acme']}]});
+  assert.equal(model,'project.project');assert.equal(method,'search_read');
+  return Response.json({result:[{id:10,display_name:'Branch A',partner_id:[5,'Acme, John']},{id:11,display_name:'Branch B',partner_id:[1,'Acme']},{id:12,display_name:'In-house',partner_id:false}]});};
  try{
   const call=(me,q='')=>api('/clients/odoo-sync'+q,'POST',{},me);
   assert.equal((await call(user,'?force=1')).status,403);
   const r=await (await call(admin,'?force=1')).json();
-  assert.equal(r.changed,true);assert.equal(r.added,2);assert.equal(r.projects,3);
-  const c=await readCatalog(env),acme=c.entries.find(e=>e.name==='Acme'&&!e.parentId);
-  assert.deepEqual(c.entries.filter(e=>e.parentId===acme.id).map(e=>e.name).sort(),['Branch A','Branch B']);
-  assert.ok(c.entries.some(e=>e.name==='In-house'&&!e.parentId));assert.equal(c.entries.filter(e=>e.name==='Branch A').length,1);
+  assert.equal(r.changed,true);assert.equal(r.customers,2);assert.equal(r.projects,3);
+  const c=await readCatalog(env),top=n=>c.entries.find(e=>e.name===n&&!e.parentId),under=n=>c.entries.filter(e=>e.parentId===top(n).id).map(e=>e.name).sort();
+  assert.deepEqual(under('Acme'),['Branch A','Branch B']); // a project of a person at Acme belongs to Acme
+  assert.ok(top('Solo Customer'));assert.deepEqual(under('Solo Customer'),[]); // a customer without a project is still a client
+  assert.deepEqual(under('No contact'),['In-house','Old tool']);assert.ok(!top('In-house'));assert.ok(!top('No customer'));assert.equal(top('No contact').id,'nc');
+  assert.ok(top('Acme').sources.some(x=>x.source==='odoo-customer'&&x.row===1)); // the Odoo contact id is kept
   // A fresh catalog is not read from Odoo again on the automatic refresh, and nothing changes.
   const before=odooCalls,again=await (await call(user)).json();assert.equal(again.changed,false);assert.equal(odooCalls,before);
  }finally{globalThis.fetch=realFetch;}
 });
-
+test('administrators create a customer or a project in Odoo from the Clients page',async()=>{
+ const {env,call:api}=await setup();const realFetch=globalThis.fetch;const created=[];
+ Object.assign(env,{ODOO_URL:'https://odoo.invalid',ODOO_DB:'db',ODOO_LOGIN:'bot@example.invalid',ODOO_API_KEY:'k'});
+ const customers=[{id:1,display_name:'Acme'}],projects=[];
+ globalThis.fetch=async(u,init)=>{const p=JSON.parse(init.body).params;if(p.service==='common')return Response.json({result:7});
+  const [model,method,args]=[p.args[3],p.args[4],p.args[5]];
+  if(method==='create'){created.push({model,values:args[0]});const id=100+created.length;if(model==='res.partner')customers.push({id,display_name:args[0].name});else projects.push({id,display_name:args[0].name,partner_id:[args[0].partner_id,'x']});return Response.json({result:id});}
+  if(model==='res.partner'&&method==='search_read')return Response.json({result:customers});
+  if(model==='res.partner'&&method==='read')return Response.json({result:args[0].map(id=>({id,commercial_partner_id:[id,(customers.find(c=>c.id===id)||{}).display_name]}))});
+  return Response.json({result:projects});};
+ try{
+  assert.equal((await api('/clients/odoo/customer','POST',{name:'New Shop'},user)).status,403);
+  assert.equal((await api('/clients/odoo/customer','POST',{name:'New Shop',email:'not-an-email'},admin)).status,400);
+  const c=await api('/clients/odoo/customer','POST',{name:'New Shop',email:'shop@example.invalid',phone:'050'},admin);assert.equal(c.status,201);
+  assert.deepEqual(created[0],{model:'res.partner',values:{name:'New Shop',is_company:true,customer_rank:1,email:'shop@example.invalid',phone:'050'}});
+  const shop=(await c.json()).catalog.entries.find(e=>e.name==='New Shop'&&!e.parentId);assert.ok(shop);
+  const pr=await api('/clients/odoo/project','POST',{name:'Shop POS',clientId:shop.id},admin);assert.equal(pr.status,201);
+  assert.deepEqual(created[1],{model:'project.project',values:{name:'Shop POS',partner_id:customers.find(x=>x.display_name==='New Shop').id}});
+  assert.deepEqual((await pr.json()).catalog.entries.filter(e=>e.parentId===shop.id).map(e=>e.name),['Shop POS']);
+  assert.equal((await api('/clients/odoo/project','POST',{name:'Orphan',clientId:'missing'},admin)).status,400);
+ }finally{globalThis.fetch=realFetch;}
+});
 test('users set the estimate once; only administrators change it afterwards',async()=>{
  const {env}=await setup();const key='AION-77';
  let m=await saveMetadata(env,key,{revision:0,estimatedHours:3},user);assert.equal(m.estimatedHours,3);
@@ -277,4 +305,53 @@ test('Jira epics map to Odoo projects: tickets under a mapped epic take and foll
   assert.equal((await (await s.call('/epic-map/sync?force=1','POST',{},admin)).json()).changed,0);
   assert.equal((await s.call('/epic-map/sync?force=1','POST',{},user)).status,403);
  }finally{globalThis.fetch=realFetch;}
+});
+test('client details come from Odoo (only fields it has); a name chosen in the dashboard is shown on tickets until cleared',async()=>{
+ const s=await setup();const realFetch=globalThis.fetch;
+ Object.assign(s.env,{ODOO_URL:'https://odoo.invalid',ODOO_DB:'db',ODOO_LOGIN:'bot@example.invalid',ODOO_API_KEY:'k',AI_PROVIDER:async()=>({output:[{type:'message',content:[{type:'output_text',text:'"Acme Retail."'}]}]})});
+ const cat=await readCatalog(s.env),acme=cat.entries.find(e=>e.name==='Acme'&&!e.parentId),branch=cat.entries.find(e=>e.name==='Branch A');
+ acme.sources=[{source:'odoo-customer',row:1}];branch.sources=[{source:'odoo',row:10}];await s.env.STORE.set(catalogKey(s.env),JSON.stringify(cat));
+ globalThis.fetch=async(u,init)=>{const p=JSON.parse(init.body).params;if(p.service==='common')return Response.json({result:7});const [model,method,args]=[p.args[3],p.args[4],p.args[5]];
+  if(method==='fields_get')return Response.json({result:model==='res.partner'?{name:{},email:{},phone:{},website:{},city:{},country_id:{},vat:{},category_id:{},child_ids:{},create_date:{}}:{name:{},user_id:{},write_date:{},task_count:{}}});
+  if(model==='res.partner'&&method==='read'){assert.ok(!p.args[6].fields.includes('mobile'));return Response.json({result:[{id:1,name:'Acme Ltd',email:'info@acme.example',phone:'03-1',website:'acme.example',city:'Haifa',country_id:[1,'Israel'],vat:'51',category_id:[4],child_ids:[2,3],create_date:'2026-01-02 10:00:00'}]});}
+  if(model==='res.partner.category')return Response.json({result:[{id:4,name:'VIP'}]});
+  if(model==='project.project')return Response.json({result:[{id:10,name:'Branch A',user_id:[9,'Rami'],write_date:'2026-10-01 09:00:00',task_count:7}]});
+  return Response.json({result:[]});};
+ try{
+  assert.equal((await s.call('/clients/details?id='+acme.id)).status,403); // users don't see the catalog details
+  const d=await (await s.call('/clients/details?id='+acme.id,'GET',undefined,admin)).json();
+  assert.equal(d.contact.email,'info@acme.example');assert.deepEqual(d.contact.tags,['VIP']);assert.equal(d.contact.people,2);assert.equal(d.contact.address,'Haifa, Israel');
+  const p=d.projects.find(x=>x.name==='Branch A');assert.equal(p.odoo.manager,'Rami');assert.equal(p.odoo.tasks,7);
+  // Chosen AI name: stored on the client and shown on tickets; clearing it shows the Odoo name again.
+  const rev=(await readCatalog(s.env)).revision;
+  assert.equal((await s.call('/clients','PUT',{revision:rev,id:acme.id,aiName:'Acme Retail'},admin)).status,200);
+  const t=await s.create(admin,{metadata:{clientId:acme.id,subClientId:branch.id,billing:'billable'}});
+  const meta=(await (await s.call('/ticket-metadata/batch','POST',{keys:[t.key]},admin)).json()).records[t.key];assert.equal(meta.clientName,'Acme Retail');
+  assert.equal((await s.call('/clients','PUT',{revision:rev+1,id:acme.id,aiName:''},admin)).status,200);
+  assert.equal((await readCatalog(s.env)).entries.find(e=>e.id===acme.id).aiName,undefined);
+ }finally{globalThis.fetch=realFetch;}
+});
+test('AI suggests a ticket description from the ticket itself; replacing a Jira description is recorded with the real person',async()=>{
+ const s=await setup();let seen=null;
+ s.env.AI_PROVIDER=async body=>{seen=JSON.parse(body.input[0].content).data;return {output:[{type:'message',content:[{type:'output_text',text:'Goal:\n- Fix the labels'}]}]};};
+ const t=await s.create(admin,{summary:'Fix card labels',description:'Labels are wrong',metadata:{clientId:null,subClientId:null,billing:'billable'}});
+ const r=await (await s.call('/ai-describe','POST',{key:t.key})).json();assert.equal(r.suggestion,'Goal:\n- Fix the labels');
+ assert.equal(seen.title,'Fix card labels');assert.equal(seen.description,'Labels are wrong');
+ await s.env.STORE.set('it:INT-88',JSON.stringify({key:'INT-88',summary:'Other',devs:['other'],status:'Open'}));
+ assert.equal((await s.call('/ai-describe','POST',{key:'INT-88'})).status,404); // not your ticket
+ assert.equal((await s.call('/ai-describe','POST',{title:'  '})).status,400);
+ assert.equal((await s.call('/ai-describe','POST',{title:'New report',description:'draft'})).status,200);assert.equal(seen.title,'New report');
+ assert.equal((await s.call('/ai-describe','POST',{key:'AION-5'})).status,200);assert.equal(seen.title,'Synthetic task'); // a Jira ticket with your label
+ const put=await s.call('/jira/issue/AION-5/description','PUT',{text:'Goal:\n- Fix the labels',source:'ai'});assert.equal(put.status,200);
+ const sent=s.calls.find(c=>c.method==='PUT'&&c.url.endsWith('/rest/api/2/issue/AION-5'));assert.deepEqual(sent.body,{fields:{description:'Goal:\n- Fix the labels'}});
+ const log=(await (await s.call('/ticket-log?key=AION-5')).json()).events;assert.equal(log.at(-1).by.name,'Developer');assert.equal(log.at(-1).text,'Description suggested by AI');
+});
+test('any project can be chosen for a ticket, also one listed under another client',async()=>{
+ const s=await setup(),t=await s.create();
+ const m=await (await s.call('/ticket-metadata?key='+t.key,'GET',undefined,{email:'admin@example.invalid',role:'admin'})).json();
+ const r=await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:m.metadata.revision,clientId:s.client.id,subClientId:s.sub.id}},{email:'admin@example.invalid',role:'admin'});
+ assert.equal(r.status,200,JSON.stringify(await r.clone().json()));const saved=(await r.json()).metadata;
+ assert.equal(saved.clientId,s.client.id);assert.equal(saved.subClientId,s.sub.id);assert.equal(saved.subClientName,'Branch A');
+ const bad=await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:saved.revision,subClientId:s.parent.id}},{email:'admin@example.invalid',role:'admin'});
+ assert.equal(bad.status,400);
 });

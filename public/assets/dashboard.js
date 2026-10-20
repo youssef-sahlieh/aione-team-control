@@ -6,6 +6,7 @@ import { previewFile, canPreview } from "./components/file-preview.js";
 import { INTERNAL_ASSIGNEE, sortTickets, validSort, createdDate } from "./models/ticket-business.js";
 import { api, apiFile, getSession, signOut, onApiWrite } from "./session.js";
 import { createSyncErrors } from "./components/sync-errors.js";
+import { createWorkLog } from "./components/work-log.js";
 import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normalizeInternalIssue, normalizeOdooIssue } from "./models/issue.js";
 import { createFilters, matchesFilters } from "./models/filters.js";
 import { readViews, restoreView, savedViewKey, serializeView } from "./models/saved-views.js";
@@ -481,7 +482,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const hc=el("span","c-ck"); hc.appendChild(all); h.appendChild(hc);
     [["c-key","Ticket ID"],["c-ttl","Title / Priority"],["c-who","Assignee"],["c-rep","Reporter"],["c-dev","Developers"],["c-st","Status"],["c-due","Due date"],["c-cre","Created date"],["c-upd","Updated"],["c-note","Internal note"],["c-actions",""]].forEach(([c,x])=>h.appendChild(el("span",c,x)));
     if(showTicketBriefs()){const label=el("span","c-brief","AI brief");label.title="Generate a short AI explanation of each Jira ticket.";h.insertBefore(label,h.querySelector(".c-who"));}
-    const businessColumns=[['clientName','Client',150],['subClientName','Sub-client',150],['estimatedHours','Estimated hours',130],['actualHours','Actual hours',120],['workDone','Work done',220],...(IS_ADMIN?[['billing','Billing',130]]:[])];
+    const businessColumns=[['clientName','Client',150],['subClientName','Project',150],['estimatedHours','Estimated hours',130],['actualHours','Actual hours',120],['workDone','Work done',220],...(IS_ADMIN?[['billing','Billing',130]]:[])];
     businessColumns.forEach(([key,label])=>h.appendChild(el('span','c-'+key,label)));
     if(GITHUB) h.appendChild(el('span','c-prs','Pull requests'));
     const sortMap={'c-key':'key','c-ttl':'summary','c-who':'assigneeName','c-rep':'reporter','c-dev':'developers','c-st':'status','c-due':'due','c-cre':'created','c-upd':'updated','c-prs':'prs'};
@@ -1066,7 +1067,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // An open ticket is a step in the browser's history (#KEY), so Back closes it instead of leaving the dashboard.
   // keepHistory: switching straight to another ticket (its own step replaces this one).
   let drawerPushed=false, skipPop=false;
-  function closeDrawer(force,keepHistory){ if(dz.key&&force!==true&&!drawerUI.allowClose())return false;ticketNotes.reset(dz.key);business.reset();$("drawer").hidden=true;$("scrim").hidden=true;dz.key=null;drawerUI.close();
+  function closeDrawer(force,keepHistory){ if(dz.key&&force!==true&&!drawerUI.allowClose())return false;ticketNotes.reset(dz.key);business.reset();workLog.reset();$("drawer").hidden=true;$("scrim").hidden=true;dz.key=null;drawerUI.close();
     if(!keepHistory){ if(drawerPushed){ drawerPushed=false; skipPop=true; history.back(); } else if(location.hash) history.replaceState(history.state,"",location.pathname+location.search); }
     return true; }
   window.addEventListener("popstate",()=>{
@@ -1089,7 +1090,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(location.hash!=="#"+key){ const url=location.pathname+location.search+"#"+key; if(drawerPushed) history.replaceState(history.state,"",url); else { history.pushState(history.state,"",url); drawerPushed=true; } }
     const opening=!dz.key;dz.key=key;
     if(opening){drawerUI.open();$("d-reply").value="";commentMentions.reset();$("d-newdev").value="";}
-    ticketHistory.reset();drawerUI.select("overview");dateRequests.renderDrawer(key);
+    ticketHistory.reset();drawerUI.select("overview");$("d-aidesc-out").hidden=true;$("d-aidesc-out").replaceChildren();dateRequests.renderDrawer(key);
     closePop(); dz.key=key; const i=issueByKey(key);
     $("drawer").hidden=false; $("scrim").hidden=false; $("drawer").classList.toggle("is-int",isInt(key)); $("drawer").classList.toggle("is-odoo",isOdoo(key));
     $("d-key").textContent=key+(isInt(key)?"":" ↗"); $("d-key").href=$("d-open").href=ticketUrl(key); if(isInt(key)) $("d-key").removeAttribute("href");
@@ -1107,6 +1108,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   }
   async function loadDetail(key){
     business.renderEditor(key);
+    workLog.render(key);
     loadTransitions(key);
     if(isInt(key)){ renderInternal(key); return; }
     $("d-reply").placeholder="Write a comment or answer…";
@@ -1237,6 +1239,12 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const fld=(label,node)=>{ const f=el("div","fld"); f.appendChild(el("label",null,label)); f.appendChild(node); body.appendChild(f); return node; };
     const title=fld("Title",el("input","inp")); title.value=t?t.summary:""; title.dir="auto";
     const desc=fld("Description",el("textarea","inp")); desc.value=t?t.description||"":""; desc.dir="auto"; desc.placeholder="What needs doing…";
+    { const ai=el("button","btn ai-suggest","✧ Suggest with AI"), note=el("span","msg"); ai.type="button";
+      ai.addEventListener("click",async()=>{ if(!t&&!title.value.trim()){ note.className="msg err"; note.textContent="Write a title first."; title.focus(); return; }
+        ai.disabled=true; note.className="msg"; note.textContent="Writing…";
+        try{ const r=await api("/ai-describe",{method:"POST",body:t?{key,description:desc.value}:{title:title.value,description:desc.value}}); desc.value=r.suggestion; note.textContent="Suggested by AI: check and change it as you like."; desc.focus(); }
+        catch(err){ note.className="msg err"; note.textContent=errorText(err); } finally{ ai.disabled=false; } });
+      const row=el("div","inline"); row.append(ai,note); desc.closest(".fld").appendChild(row); }
     const prio=fld("Priority",el("select","fsel")); INT_PRIORITIES.forEach(x=>prio.appendChild(new Option(x,x))); prio.value=t?t.priority:"Medium";
     let devs=null, due=null, asg=null;
     if(!t){
@@ -1302,6 +1310,29 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       row.appendChild(fileActions(key,a.filename,a.mimeType,()=>apiFile("/jira/issue/"+key+"/attachments/"+a.id))); box.appendChild(row);
     });
   }
+  // Suggest description with AI: the AI writes one from the title, description and comments; you can
+  // adjust it, then replace the ticket's description (recorded with your name), copy it, or dismiss it.
+  $("d-aidesc").addEventListener("click",async()=>{
+    const key=dz.key, out=$("d-aidesc-out"), btn=$("d-aidesc"); if(!key||isOdoo(key)) return;
+    btn.disabled=true; out.hidden=false; out.replaceChildren(el("p","msg","Writing a description…"));
+    try{
+      const r=await api("/ai-describe",{method:"POST",body:{key}}); if(dz.key!==key) return;
+      const text=el("textarea","inp ai-desc-text"); text.value=r.suggestion; text.dir="auto"; text.rows=Math.min(16,Math.max(6,r.suggestion.split("\n").length+1)); text.setAttribute("aria-label","Suggested description");
+      const msg=el("span","msg"), acts=el("div","inline");
+      const replace=el("button","btn primary","Replace description"); replace.type="button";
+      replace.addEventListener("click",async()=>{ const value=text.value.trim(); if(!value){ msg.textContent="The description is empty."; return; }
+        if(!confirm("Replace the ticket's description with this one?")) return;
+        replace.disabled=true; msg.className="msg"; msg.textContent="Saving…";
+        try{ if(isInt(key)) putInternal((await internalApi.update(key,{description:value})).ticket); else await api("/jira/issue/"+key+"/description",{method:"PUT",body:{text:value,source:"ai"}});
+          out.hidden=true; out.replaceChildren(); toast(key+": description replaced."); if(dz.key===key) loadDetail(key); refreshKeys([key]); }
+        catch(err){ replace.disabled=false; msg.className="msg err"; msg.textContent=errorText(err); } });
+      const copy=el("button","btn","Copy"); copy.type="button"; copy.addEventListener("click",async()=>{ try{ await navigator.clipboard.writeText(text.value); msg.className="msg"; msg.textContent="Copied."; }catch(_){ msg.textContent="Couldn't copy."; } });
+      const dismiss=el("button","btn","Dismiss"); dismiss.type="button"; dismiss.addEventListener("click",()=>{ out.hidden=true; out.replaceChildren(); });
+      acts.append(replace,copy,dismiss,msg);
+      out.replaceChildren(el("p","msg","Suggested by AI from the ticket's title, description and comments. Check it, change anything you like, then replace."),text,acts);
+    }catch(err){ if(dz.key===key) out.replaceChildren(el("p","msg err",errorText(err))); }
+    finally{ btn.disabled=false; }
+  });
   $("d-note").addEventListener("click",e=>{ if(dz.key) notePopover(e.currentTarget,dz.key); });
   $("d-comment-note").addEventListener("click",e=>{ if(dz.key) notePopover(e.currentTarget,dz.key); });
   $("d-asg").addEventListener("click",e=>{ if(dz.key) assigneePopover(e.currentTarget,[dz.key]); });
@@ -1357,13 +1388,16 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const dueDateHistory=createDueDateHistory({api,tickets:()=>state.issues||[],internal:key=>INT[key],openIssue:openDrawer});
   const dateRequests=createDateRequests({api,renderHistory:target=>dueDateHistory.render(target),context:()=>({admin:IS_ADMIN,email:MY_EMAIL,ticket:issueByKey}),openIssue:openDrawer,onApplied:(key,due)=>{patchIssue(key,matching(()=>({due:due||null}),"due"));mergeIssues();renderIfIdle();if(dz.key===key)$("d-due").value=due||"";},onChange:key=>{if(dz.key)dateRequests.renderDrawer(dz.key);return (key?refreshKeys([key]):reload()).then(()=>{if(dz.key){dateRequests.renderDrawer(dz.key);loadDetail(dz.key);}});}});
   state.businessFilter={};
-  const business=createTicketBusiness({api,context:()=>({admin:IS_ADMIN,email:MY_EMAIL,key:dz.key}),onChange:keys=>{if(keys)return refreshKeys(keys);mergeIssues();saveCache();render();},openIssue:openDrawer});
+  // Log work → Odoo timesheets: ticket section, form, corrections, and the Work log page.
+  const workLog=createWorkLog({api,isAdmin:()=>IS_ADMIN,me:()=>({name:(getSession()||{}).name||ME,email:MY_EMAIL}),errorText,toast,openIssue:openDrawer,onLogged:key=>refreshKeys([key])});
+  $("d-logwork").addEventListener("click",()=>{ if(dz.key) workLog.openFor(dz.key,$("d-title").textContent); });
+  const business=createTicketBusiness({api,context:()=>({admin:IS_ADMIN,email:MY_EMAIL,key:dz.key,tickets:()=>state.issues||[]}),onChange:keys=>{if(keys)return refreshKeys(keys);mergeIssues();saveCache();render();},openIssue:openDrawer});
   $('b-client').addEventListener('click',()=>business.bulk(selected()).catch(err=>toast('Client assignment failed',[errorText(err)],true)));
   // Changes that didn't go through, kept to retry, and the API keys' state (Sync errors page).
   const syncErrors=createSyncErrors({api,onApiWrite,isAdmin:()=>IS_ADMIN,storageKey:()=>"aion.syncErrors."+encodeURIComponent((getSession()||{}).email||""),formatTime:v=>{const w=fmtWhen(v);return w.d+" "+w.t;},
     onRetried:key=>refreshKeys([key]),
     onChange:()=>{ const n=syncErrors?syncErrors.count():0, c=$("nav-error-count"); if(c){ c.textContent=String(n); c.hidden=!n; } if(workspace&&workspace.route().page==="errors"&&state.issues&&$("pop").hidden) render(); }});
-  const workspace=createWorkspace({state,context:()=>({renderErrors:target=>syncErrors.render(target),admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount(),dateRequests:dateRequests.all(),pendingDates:dateRequests.pendingCount(),renderReports:target=>business.renderReports(target),renderCatalog:target=>business.renderCatalog(target),renderRequests:(target,options)=>dateRequests.render(target,options)}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>{ if(!dz.key) return true; if(!closeDrawer(false,true)) return false; drawerPushed=false; if(location.hash) history.replaceState(history.state,"",location.pathname+location.search); return true; }});
+  const workspace=createWorkspace({state,context:()=>({renderErrors:target=>syncErrors.render(target),admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount(),dateRequests:dateRequests.all(),pendingDates:dateRequests.pendingCount(),renderReports:target=>business.renderReports(target),renderCatalog:target=>business.renderCatalog(target),renderWorkLog:target=>workLog.renderPage(target),renderRequests:(target,options)=>dateRequests.render(target,options)}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>{ if(!dz.key) return true; if(!closeDrawer(false,true)) return false; drawerPushed=false; if(location.hash) history.replaceState(history.state,"",location.pathname+location.search); return true; }});
   const aiAssistant=createAIAssistant({openIssue:openDrawer,beforeOpen:()=>{if(dz.key&&!closeDrawer())return false;closePop();return true;}});
   const ticketBriefs=createTicketBriefs({api});
   const assigneeFilter=createAssigneeFilter({getSelection:()=>state.f.assignee,getOptions:()=>assigneeOptions(PEOPLE),getDefaults:()=>defaultAssigneeKeys(PEOPLE),getCounts:()=>countBy("assignee",i=>assigneeFilterKey(i,PEOPLE)),onApply:selected=>{state.f.assignee=selected;state.sel.clear();state.pageIndex=0;render();}});

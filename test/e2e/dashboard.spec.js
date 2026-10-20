@@ -5,13 +5,16 @@ import { jiraIssue, internalTicket, people } from "../fixtures/issues.js";
 // A synthetic Odoo Helpdesk ticket as the proxy returns it (developer "builder" from the Odoo assignee).
 const odooTicket = { key: "HD-300", id: 300, ref: "300", odoo: true, summary: "Synthetic Odoo request", status: "In Progress", statusCat: "indeterminate", devs: ["builder"], developerName: "Builder", customer: { name: "Ariel Amiri", email: "ariel@example.invalid" }, team: "ai1 | Support", priority: "Medium", created: "2026-10-09T08:00:00Z", updated: "2026-10-10T08:00:00Z", closed: "", due: null, url: "https://odoo.example.invalid/web#id=300&model=helpdesk.ticket&view_type=form" };
 
-async function mockDashboard(page, { role = "admin", ticketLog = [], failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1, odoo = false, github = false, billingRequired = false, missingEstimate = false, filtersVisible = true } = {}) {
+async function mockDashboard(page, { role = "admin", ticketLog = [], failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1, odoo = false, github = false, billingRequired = false, missingEstimate = false, filtersVisible = true, workLog = false } = {}) {
   await page.clock.setFixedTime(new Date("2026-10-11T09:00:00Z"));
   const calls = [], unexpected = [], errors = [];
   const internalTickets=[structuredClone(internalTicket)];
   const catalog={revision:1,entries:[{id:"client",name:"Synthetic Client",parentId:null,archived:false,sources:[]}]},metadata={};
   const record=key=>metadata[key]||{revision:0,clientId:"client",subClientId:null,clientName:"Synthetic Client",subClientName:"",estimatedHours:missingEstimate?null:2,actualHours:null,workDone:"",...(role==="admin"?{billing:null}:{})};
   let historyFailures=historyFailure?1:0;
+  // Work log (Odoo timesheets): off unless a test switches it on.
+  const timeEntries=[],STATUSES={syncing:'Syncing',synced:'Synced',setup:'Needs setup',review:'Needs review'};
+  let timeSetup={revision:3,mode:workLog?'pilot':'off',pilot:['test@example.invalid'],fields:{users:'x_studio_users',entryUuid:'x_aione_entry_uuid',userUuid:'x_aione_user_uuid',lineRef:'x_aione_ticket_ref'},mapping:{},verified:null};
   page.on("pageerror", error => errors.push(error.message));
   await page.addInitScript(({ role, expired, filtersVisible }) => {
     if(sessionStorage.getItem("aion-test-initialized"))return;
@@ -39,6 +42,17 @@ async function mockDashboard(page, { role = "admin", ticketLog = [], failure = f
     if(path==='/clients/import/preview')return json({revision:1,rows:body.rows.length,added:1,clients:2,subClients:0,entries:[{id:'new-client',name:body.rows[0].displayName,parentId:null}]});
     if(path==='/clients/import'){catalog.entries.push({id:'new-client',name:body.rows[0].displayName,parentId:null,archived:false});catalog.revision++;return json(catalog);}
     if(path==='/ticket-log')return json({events:ticketLog});
+    if(path==='/time-entries'&&method==='GET'){const key=url.searchParams.get('ticket'),list=timeEntries.filter(e=>e.ticket===key),mins=list.reduce((n,e)=>n+e.minutes,0),hd=key.startsWith('HD-');
+      return json({ticket:key,source:key.startsWith('INT-')?'internal':hd?'odoo':'jira',closed:false,logging:!!workLog,canLog:!!workLog,today:'2026-10-11',maxMinutes:1440,lockDate:workLog?'2026-09-30':null,entries:list,
+        summary:{entries:list.length,loggedMinutes:mins,confirmedMinutes:mins,pendingMinutes:0,unsynced:0},baselineHours:hd?null:1,totalHours:Math.round((1+mins/60)*100)/100,
+        destination:workLog?{projectId:10,projectName:'Synthetic Project',taskId:null,taskName:'['+key+'] Synthetic (created with the first entry)'}:null});}
+    if(path==='/time-entries'&&method==='POST'){const e={id:body.id,ticket:body.ticket,source:'jira',date:body.date,minutes:body.minutes,description:body.description,author:{name:'Test User',email:'test@example.invalid'},createdAt:'2026-10-11T09:00:00Z',revision:0,status:'synced',statusLabel:'Synced',synced:true,reason:'',revisions:[],...(role==='admin'?{lineId:500+timeEntries.length}:{})};timeEntries.push(e);return route.fulfill({status:201,json:{entry:e,summary:{}}});}
+    if(/^\/time-entries\/[0-9a-f-]{36}$/.test(path)&&method==='PATCH'){const e=timeEntries.find(x=>path.endsWith(x.id)),{reason,revision,...patch}=body,from={date:e.date,minutes:e.minutes,description:e.description};Object.assign(e,patch);e.revision++;e.revisions=[...e.revisions,{n:e.revision,at:'2026-10-11T09:00:00Z',by:{name:'Test User'},reason,from,to:{date:e.date,minutes:e.minutes,description:e.description}}];return json({entry:e,summary:{}});}
+    if(path==='/time-entries/report')return json({from:url.searchParams.get('from'),to:url.searchParams.get('to'),timeZone:'Asia/Jerusalem',statuses:STATUSES,rows:timeEntries.map(e=>({...e,user:e.author.name,clientName:'Synthetic Client',subClientName:''})),baselines:timeEntries.length?[{ticket:'AION-101',hours:1}]:[]});
+    if(path==='/time-entries/setup'){if(method==='PUT')timeSetup={...timeSetup,...body,revision:timeSetup.revision+1,verified:body.mode==='off'?null:{ok:true}};
+      return json({config:timeSetup,odoo:true,statuses:STATUSES,fields:{line:[{name:'x_studio_users',label:'Users',type:'char',custom:true},{name:'x_aione_entry_uuid',label:'Work entry id',type:'char',custom:true},{name:'x_aione_user_uuid',label:'Dashboard user id',type:'char',custom:true},{name:'x_aione_ticket_ref',label:'Ticket',type:'char',custom:true}]},
+        suggested:{users:'x_studio_users',usersCandidates:['x_studio_users']},defaults:{ok:true,user:{id:7,name:'Odoo Bot'},company:{id:1,name:'AION'},employee:{id:5,name:'Bot employee'}},lockDate:'2026-09-30',
+        projects:[{id:10,name:'Synthetic Project',partner:'Synthetic Client'}],catalog:[{id:'client',name:'Synthetic Client',parentId:null,odooProject:null}],users:[{email:'test@example.invalid',name:'Test User'}]});}
     if(path==='/ticket-notes'&&method==='GET')return json({notes:[],recipients:[{email:'karim@example.invalid',name:'Karim Example',role:'admin'},{email:'dev2@example.invalid',name:'Second Developer',role:'user'}]});
     if(path==='/integrations')return json({checkedAt:'2026-10-11T09:00:00Z',keys:[{id:'jira',name:'Jira API token',status:'warning',message:'Expires in 5 days. Create a new key before then.',expiresAt:'2026-10-16T00:00:00.000Z',days:5}]});
     if(path==='/ticket-metadata/batch')return json({records:Object.fromEntries(body.keys.map(key=>[key,record(key)]))});
@@ -251,7 +265,7 @@ for(const role of ["admin"])for(const width of [320,1440])test(`${role} reporter
 for(const width of [320,1024,1440])test(`manager workspace keeps secondary tools accessible at ${width}px`,async({page})=>{
   await page.setViewportSize({width,height:1000});const mock=await mockDashboard(page);await page.goto("/dashboard.html");
   if(width<=820)await page.locator("#mobile-menu").click();
-  await expect(page.locator('#main-nav > a:not([hidden])')).toHaveCount(10);await expect(page.locator('[data-page="history"]')).toHaveCount(0);
+  await expect(page.locator('#main-nav > a:not([hidden])')).toHaveCount(11);await expect(page.locator('[data-page="history"]')).toHaveCount(0);
   await expect(page.locator('[data-page="requests"]')).toBeVisible();await page.locator('[data-page="requests"]').click();await expect(page.locator("#page-heading")).toHaveText("Date requests");
   if(width<=820)await page.locator("#mobile-menu").click();await page.locator('[data-page="tickets"]').click();
   await expect(page.locator("#quick-filters select")).toHaveCount(10);await expect(page.getByRole("combobox",{name:"Saved view",exact:true})).toBeHidden();await expect(page.locator("#bulk")).toBeHidden();
@@ -655,7 +669,7 @@ test('billing offers only Billable or Not billable, and client pickers can be se
  await page.goto('/dashboard.html#INT-101');const panel=page.locator('#business-fields');
  const billing=panel.getByLabel('Billing (administrators only)');await expect(billing).toBeVisible();
  expect(await billing.locator('option:not([hidden])').allTextContents()).toEqual(['Billable','Not billable']);
- const clientBox=panel.getByRole('combobox',{name:'Client',exact:true}),subBox=panel.getByRole('combobox',{name:'Sub-client',exact:true});
+ const clientBox=panel.getByRole('combobox',{name:'Client',exact:true}),subBox=panel.getByRole('combobox',{name:'Project',exact:true});
  await clientBox.fill('acm');await expect(panel.locator('.combo-list:not([hidden]) [role=option]')).toHaveText(['Acme Retail']);await clientBox.press('Enter');await expect(clientBox).toHaveValue('Acme Retail');
  await subBox.click();await expect(panel.locator('.combo-list:not([hidden]) [role=option]')).toHaveText(['Haifa Branch','Tel Aviv Branch']);await subBox.fill('haif');await panel.getByRole('option',{name:'Haifa Branch'}).click();await expect(subBox).toHaveValue('Haifa Branch');
  await expect(panel.locator('select.combo-native').first()).toHaveValue('acme');await panel.locator('.business-client-section').screenshot({path:'test-results/client-search.png'});
@@ -878,7 +892,7 @@ for(const width of [375,1440])test('AI answers have readable summaries, nested l
 
 test('combined reports filter, sort, paginate and export locally after a single request',async({page})=>{
  const mock=await mockDashboard(page,{aiDisabled:true});let reads=0;await page.route('**/reports/latest',route=>{reads++;expect(route.request().method()).toBe('GET');const tickets=Array.from({length:120},(_,n)=>({key:'AION-'+(120-n),title:'Report task '+(120-n),clientId:n%2?'b':'a',clientName:n%2?'Client B':'Client A',devs:n%2?['reviewer']:['builder'],closed:false,status:'Open',created:'2026-10-10T10:00:00Z',estimatedHours:2,actualHours:n%3===0?3:null,missing:[],risks:n%3===0?['Overdue']:[],overrides:[],overEstimate:n%3===0?{hours:1,percent:50}:null}));return route.fulfill({json:{report:{workflow:'all',generatedAt:'2026-10-11T09:00:00Z',period:{start:'2026-10-05',end:'2026-10-11'},coverage:{examined:120,jiraComplete:true,internalComplete:true},warnings:[],hoursLabel:'Current ticket totals, not hours worked during the period.',tickets},cached:true,stale:false}});});
- await page.goto('/dashboard.html?page=reports');await expect(page.locator('.report-filter-form')).toBeVisible();expect((await page.locator('.report-filter-form').boundingBox()).height).toBeLessThan(600);await expect(page.locator('.report-ticket')).toHaveCount(50);const allExport=page.waitForEvent('download');await page.getByRole('button',{name:'Export ticket findings CSV'}).click();const allDownload=await allExport;const allCsv=await (await import('node:fs/promises')).readFile(await allDownload.path(),'utf8');expect(allCsv.trimEnd().split(/\r?\n/)).toHaveLength(121);await expect(page.locator('.report-ticket').first()).toContainText('AION-120');await page.getByLabel('Report sort',{exact:true}).selectOption('key:asc');await expect(page.locator('.report-ticket').first()).toContainText('AION-1');
+ await page.goto('/dashboard.html?page=reports');await expect(page.locator('.report-filter-form')).toBeVisible();await expect.poll(async()=>(await page.locator('.report-filter-form').boundingBox())?.height).toBeLessThan(600);await expect(page.locator('.report-ticket')).toHaveCount(50);const allExport=page.waitForEvent('download');await page.getByRole('button',{name:'Export ticket findings CSV'}).click();const allDownload=await allExport;const allCsv=await (await import('node:fs/promises')).readFile(await allDownload.path(),'utf8');expect(allCsv.trimEnd().split(/\r?\n/)).toHaveLength(121);await expect(page.locator('.report-ticket').first()).toContainText('AION-120');await page.getByLabel('Report sort',{exact:true}).selectOption('key:asc');await expect(page.locator('.report-ticket').first()).toContainText('AION-1');
  await page.getByRole('button',{name:'Next',exact:true}).click();await expect(page.locator('.report-ticket').first()).toContainText('AION-51');await page.getByLabel('Report developer',{exact:true}).selectOption('reviewer');await expect(page.locator('.report-totals')).toContainText('Open: 60');await page.getByLabel('Report type',{exact:true}).selectOption('hours');await expect(page.locator('.report-ticket')).toHaveCount(20);await expect(page.locator('.report-totals')).toContainText('Open: 20');await expect(page.locator('.report-totals')).toContainText('At risk: 20');
  await page.getByLabel('Search report tickets',{exact:true}).fill('Report task 117');await expect(page.locator('.report-ticket')).toHaveCount(1);const download=page.waitForEvent('download');await page.getByRole('button',{name:'Export ticket findings CSV'}).click();expect((await download).suggestedFilename()).toContain('aion-hours');expect(reads).toBe(1);expect(mock.calls.filter(c=>c.path==='/ai/chat')).toHaveLength(0);await page.getByRole('button',{name:'Clear report filters'}).click();await expect(page.locator('.report-ticket').first()).toContainText('AION-120');expect(reads).toBe(1);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
@@ -893,4 +907,139 @@ test('saved report loads automatically, keeps filters local and preserves result
 
 for(const role of ['admin','user'])test(role+' All tickets opens directly on the table with filters collapsed',async({page})=>{
  const mock=await mockDashboard(page,{role,filtersVisible:false});await page.goto('/dashboard.html?page=tickets');await expect(page.locator('#view .item')).toHaveCount(2);await expect(page.locator('#ticket-filters')).toBeHidden();await expect(page.locator('#tiles')).toBeVisible();await expect(page.getByRole('button',{name:'Show filters',exact:true})).toHaveAttribute('aria-expanded','false');const count=await page.locator('#view .item').count();await page.getByRole('button',{name:'Show filters',exact:true}).click();await expect(page.locator('.fpanel')).toBeVisible();await expect(page.locator('#quick-filters')).toBeVisible();await expect(page.getByRole('button',{name:'Hide filters',exact:true})).toHaveAttribute('aria-expanded','true');await page.getByRole('button',{name:'Hide filters',exact:true}).click();await expect(page.locator('#view .item')).toHaveCount(count);await page.reload();await expect(page.locator('#view .item')).toHaveCount(count);await expect(page.locator('#ticket-filters')).toBeHidden();expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('the Clients page creates a new contact and a new project in Odoo',async({page})=>{
+ const mock=await mockDashboard(page,{odoo:true});const sent=[];
+ const entries=[{id:'client',name:'Synthetic Client',parentId:null,archived:false,sources:[]}];
+ await page.route('**/clients/odoo/customer',r=>{sent.push(['customer',r.request().postDataJSON()]);entries.push({id:'shop',name:'New Shop',parentId:null,archived:false,sources:[]});return r.fulfill({status:201,json:{created:101,catalog:{revision:2,entries}}});});
+ await page.route('**/clients/odoo/project',r=>{sent.push(['project',r.request().postDataJSON()]);entries.push({id:'pos',name:'Shop POS',parentId:'shop',archived:false,sources:[]});return r.fulfill({status:201,json:{created:102,catalog:{revision:3,entries}}});});
+ await page.goto('/dashboard.html?page=clients');
+ await page.getByLabel('New contact name').fill('New Shop');await page.getByLabel('Email (optional)').fill('shop@example.invalid');
+ await page.getByRole('button',{name:'Create contact'}).click();await expect(page.locator('.catalog-group summary').filter({hasText:'New Shop'})).toBeVisible();
+ await page.getByLabel('New project name').fill('Shop POS');
+ await page.getByRole('combobox',{name:'Contact'}).fill('New');await page.getByRole('option',{name:'New Shop'}).click();
+ await page.getByRole('button',{name:'Create project'}).click();
+ await expect.poll(()=>sent.length).toBe(2);
+ expect(sent).toEqual([['customer',{name:'New Shop',email:'shop@example.invalid',phone:''}],['project',{name:'Shop POS',clientId:'shop'}]]);
+ expect(mock.errors).toEqual([]);
+});
+test('a client opens its details card (Odoo contact, projects, its tickets) and the customer search filters the list',async({page})=>{
+ const mock=await mockDashboard(page,{odoo:true});let saved=null;
+ await page.route('**/clients/details?*',r=>r.fulfill({json:{client:{id:'client',name:'Synthetic Client',aiName:'',archived:false},contact:{id:1,name:'Synthetic Client Ltd',email:'info@client.example',phone:'03-1',website:'client.example',address:'Haifa, Israel',tags:['VIP'],people:3,created:'2026-01-02 10:00:00',url:'https://odoo.invalid/web#id=1&model=res.partner&view_type=form'},projects:[{id:'p1',name:'Main project',aiName:'',archived:false,odoo:{manager:'Rami',updated:'2026-10-01 09:00:00',tasks:7,url:'https://odoo.invalid/web#id=10'}}]}}));
+ await page.route('**/clients',r=>{if(r.request().method()!=='PUT')return r.fallback();saved=r.request().postDataJSON();return r.fulfill({json:{revision:2,entries:[{id:'client',name:'Synthetic Client',aiName:saved.aiName,parentId:null,archived:false,sources:[]}]}});});
+ await page.goto('/dashboard.html?page=clients');
+ await page.locator('.catalog-group summary').filter({hasText:'Synthetic Client'}).click();
+ const card=page.locator('.client-card').first();
+ await expect(card).toContainText('info@client.example');await expect(card).toContainText('VIP');await expect(card).toContainText('Main project');await expect(card).toContainText('Rami');
+ await expect(card).toContainText('Tickets');
+ await expect(card.getByRole('button',{name:'Suggest a name with AI'})).toHaveCount(0);
+ // The search filters customers by name (or project name); clearing it shows them all again.
+ const search=page.getByLabel('Search customers');
+ await search.fill('nothing like this');await expect(page.locator('.catalog-group:visible')).toHaveCount(0);await expect(page.locator('.catalog-found')).toContainText('0 of');
+ await search.fill('synthetic');await expect(page.locator('.catalog-group:visible')).toHaveCount(1);
+ await search.fill('');await expect(page.locator('.catalog-found')).not.toContainText(' of ');
+ expect(saved).toBe(null);
+ expect(mock.errors).toEqual([]);
+});
+test('Suggest description with AI writes one for the ticket, which you can adjust and use',async({page})=>{
+ const mock=await mockDashboard(page);let saved=null;
+ await page.route('**/ai-describe',r=>r.fulfill({json:{suggestion:'Goal:\n- Fix the labels'}}));
+ await page.route('**/jira/issue/AION-101/description',r=>{saved=r.request().postDataJSON();return r.fulfill({json:{ok:true}});});
+ await page.goto('/dashboard.html#AION-101');
+ await page.getByRole('button',{name:'✧ Suggest description with AI'}).click();
+ const box=page.getByLabel('Suggested description');await expect(box).toHaveValue('Goal:\n- Fix the labels');
+ await box.fill('Goal:\n- Fix the labels on the card dialog');
+ page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'Replace description'}).click();
+ await expect.poll(()=>saved).toEqual({text:'Goal:\n- Fix the labels on the card dialog',source:'ai'});
+ await expect(page.locator('#toast')).toContainText('description replaced');
+ expect(mock.errors).toEqual([]);
+});
+
+// Log work → Odoo timesheets.
+test('log work on a Jira ticket: form, shortcuts, Save and add another, work log list',async({page})=>{
+ const mock=await mockDashboard(page,{workLog:true});await page.goto('/dashboard.html#AION-101');
+ const section=page.locator('#work-log');await expect(section).toContainText('No work logged yet');
+ await page.locator('#d-logwork').click();const dialog=page.locator('dialog.wl-dialog');
+ await expect(dialog).toContainText('AION-101');await expect(dialog).toContainText('Synthetic Project › [AION-101] Synthetic');
+ await expect(dialog.getByLabel('Work date')).toHaveValue('2026-10-11');await expect(dialog.getByLabel('Work date')).toHaveAttribute('max','2026-10-11');await expect(dialog.getByLabel('Work date')).toHaveAttribute('min','2026-10-01');
+ await dialog.getByLabel('Duration').fill('1h 30m');await expect(dialog).toContainText('= 1h 30m');
+ await dialog.getByRole('button',{name:'Save',exact:true}).click();await expect(dialog).toContainText('Describe the work.');
+ await dialog.getByLabel('Description').fill('Fixed the export');await dialog.getByRole('button',{name:'Save and add another',exact:true}).click();
+ await expect(dialog).toContainText('1h 30m logged on AION-101 and saved in Odoo.');await expect(dialog.getByLabel('Duration')).toHaveValue('');
+ await dialog.getByRole('button',{name:'30m',exact:true}).click();await dialog.getByLabel('Description').fill('Review');await dialog.getByRole('button',{name:'Save',exact:true}).click();
+ await expect(dialog).toHaveCount(0);
+ await expect(section.locator('.wl-entry')).toHaveCount(2);await expect(section).toContainText('Actual hours: 3 = 1 h before the work log + 2h logged');await expect(section.locator('.wl-status').first()).toHaveText('Synced');
+ const posts=mock.calls.filter(c=>c.path==='/time-entries'&&c.method==='POST');expect(posts.map(c=>[c.body.minutes,c.body.date,c.body.ticket])).toEqual([[90,'2026-10-11','AION-101'],[30,'2026-10-11','AION-101']]);
+ expect(posts[0].body.id).not.toBe(posts[1].body.id);expect(posts[0].body.id).toMatch(/^[0-9a-f-]{36}$/);
+ expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('log work rejects future dates, dates in the Odoo lock, and durations over 24 hours',async({page})=>{
+ const mock=await mockDashboard(page,{workLog:true,role:'user'});await page.goto('/dashboard.html#AION-101');
+ await page.locator('#d-logwork').click();const dialog=page.locator('dialog.wl-dialog');
+ await dialog.getByLabel('Description').fill('Work');await dialog.getByLabel('Work date').fill('2026-10-12');await dialog.getByLabel('Duration').fill('30');
+ await dialog.getByRole('button',{name:'Save',exact:true}).click();await expect(dialog).toContainText('not in the future');
+ await dialog.getByLabel('Work date').fill('2026-09-30');await dialog.getByRole('button',{name:'Save',exact:true}).click();await expect(dialog).toContainText('Odoo is locked up to 2026-09-30');
+ await dialog.getByLabel('Work date').fill('2026-10-10');await dialog.getByLabel('Duration').fill('25h');await dialog.getByRole('button',{name:'Save',exact:true}).click();await expect(dialog).toContainText('between 1 minute and 24 hours');
+ expect(mock.calls.some(c=>c.path==='/time-entries'&&c.method==='POST')).toBe(false);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('corrections are for administrators and need a reason',async({page})=>{
+ const mock=await mockDashboard(page,{workLog:true});await page.goto('/dashboard.html#AION-101');
+ await page.locator('#d-logwork').click();let dialog=page.locator('dialog.wl-dialog');await dialog.getByLabel('Duration').fill('90');await dialog.getByLabel('Description').fill('Fixed the export');await dialog.getByRole('button',{name:'Save',exact:true}).click();
+ const section=page.locator('#work-log');await section.getByRole('button',{name:'Correct',exact:true}).click();dialog=page.locator('dialog.wl-dialog');
+ await dialog.getByLabel('Duration').fill('60');await dialog.getByRole('button',{name:'Save correction',exact:true}).click();await expect(dialog).toContainText('Give a reason');
+ await dialog.getByLabel('Reason for the correction (required)').fill('Entered 90 instead of 60');await dialog.getByRole('button',{name:'Save correction',exact:true}).click();
+ await expect(dialog).toHaveCount(0);await expect(section).toContainText('Corrected 1 time');
+ const patch=mock.calls.find(c=>c.method==='PATCH');expect(patch.body).toEqual({revision:0,reason:'Entered 90 instead of 60',minutes:60});
+ expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('users log work but do not see corrections',async({page})=>{
+ const mock=await mockDashboard(page,{workLog:true,role:'user'});await page.goto('/dashboard.html#AION-101');
+ await page.locator('#d-logwork').click();const dialog=page.locator('dialog.wl-dialog');await dialog.getByLabel('Duration').fill('15');await dialog.getByLabel('Description').fill('Call');await dialog.getByRole('button',{name:'Save',exact:true}).click();
+ await expect(page.locator('#work-log .wl-entry')).toHaveCount(1);await expect(page.locator('#work-log').getByRole('button',{name:'Correct'})).toHaveCount(0);
+ expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('work logging off: no Log work button and no work log section',async({page})=>{
+ const mock=await mockDashboard(page);await page.goto('/dashboard.html#AION-101');await expect(page.locator('#d-desc')).toContainText('Rendered description');
+ await expect.poll(()=>mock.calls.some(c=>c.path==='/time-entries')).toBe(true);
+ await expect(page.locator('#d-logwork')).toBeHidden();await expect(page.locator('#work-log')).toBeHidden();expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+for(const width of [1280,390])test(`Work log page at ${width}px: report totals, filters, and setup for administrators`,async({page})=>{
+ await page.setViewportSize({width,height:900});const mock=await mockDashboard(page,{workLog:true});await page.goto('/dashboard.html#AION-101');
+ await page.locator('#d-logwork').click();const dialog=page.locator('dialog.wl-dialog');await dialog.getByLabel('Duration').fill('2h');await dialog.getByLabel('Description').fill('Built the report');await dialog.getByRole('button',{name:'Save',exact:true}).click();await expect(dialog).toHaveCount(0);
+ await page.goto('/dashboard.html?page=worklog');const content=page.locator('#workspace-content');
+ await expect(content.locator('.wl-card').first()).toContainText('2 h');await expect(content).toContainText('Hours entered before the work log: 1 h on 1 tickets');
+ await content.getByLabel('Statuses').selectOption('review');await expect(content).toContainText('No work logged in this period with these filters.');
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+ await content.getByRole('tab',{name:'Setup'}).click();await expect(content).toContainText('Bot employee in AION');
+ await content.getByText('Everyone',{exact:true}).click();await content.getByRole('button',{name:'Save setup',exact:true}).click();
+ await expect.poll(()=>mock.calls.find(c=>c.path==='/time-entries/setup'&&c.method==='PUT')?.body?.mode).toBe('on');
+ expect(mock.calls.find(c=>c.path==='/time-entries/setup'&&c.method==='PUT').body.fields.users).toBe('x_studio_users');
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+ expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+
+test('Work log setup loads once and stays steady while the dashboard refreshes',async({page})=>{
+ const mock=await mockDashboard(page,{workLog:true});await page.goto('/dashboard.html?page=worklog');const content=page.locator('#workspace-content');
+ await content.getByRole('tab',{name:'Setup'}).click();await expect(content).toContainText('Bot employee in AION');
+ await content.getByText('Everyone',{exact:true}).click();
+ await page.locator('#refresh').click();await expect.poll(()=>mock.calls.filter(c=>c.path==='/jira/search').length).toBeGreaterThan(1);
+ await expect(content).toContainText('Bot employee in AION');await expect(content.getByRole('radio',{name:/Everyone/})).toBeChecked();
+ expect(mock.calls.filter(c=>c.path==='/time-entries/setup').length).toBe(1);
+ expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+
+test('the Project list offers every project: the client\'s own first, then all the others',async({page})=>{
+ const mock=await mockDashboard(page);
+ const catalog={revision:1,entries:[{id:'client',name:'Synthetic Client',parentId:null,archived:false,sources:[]},{id:'other',name:'Other Client',parentId:null,archived:false,sources:[]},{id:'none',name:'No contact',parentId:null,archived:false,sources:[]},
+  {id:'p1',name:'Website',parentId:'other',archived:false,sources:[]},{id:'p2',name:'Gardening app',parentId:'none',archived:false,sources:[]},{id:'p3',name:'Old one',parentId:'other',archived:true,sources:[]}]};
+ await page.route('**/clients',r=>r.request().method()==='GET'?r.fulfill({json:catalog}):r.fallback());
+ await page.goto('/dashboard.html#INT-101');const panel=page.locator('#business-fields');
+ const project=panel.locator('.business-client-section .combo-input').nth(1);await expect(project).toHaveAttribute('placeholder','No project (optional)');
+ await project.click();const list=panel.locator('.combo-list').nth(1);
+ await expect(list.locator('.combo-opt')).toHaveText(['Gardening app','Website · Other Client']);
+ await list.getByText('Gardening app',{exact:true}).click();await expect(project).toHaveValue('Gardening app');
+ await panel.getByRole('button',{name:'Save ticket fields',exact:true}).click();
+ await expect.poll(()=>mock.calls.find(c=>c.path==='/ticket-metadata'&&c.method==='PUT')?.body?.fields?.subClientId).toBe('p2');
+ expect(mock.calls.find(c=>c.path==='/ticket-metadata'&&c.method==='PUT').body.fields.clientId).toBe('client');
+ expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });

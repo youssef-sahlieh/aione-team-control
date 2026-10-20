@@ -227,6 +227,23 @@ export async function aiChat(request, env, { me, project, readSearch, readDashbo
 
 // A dedicated single-ticket read: the model receives only authorized title/description data,
 // with no tools or chat history. The client cannot provide source text or broaden the scope.
+export { AIError };
+
+// A clear ticket description written from the ticket's own title, description and recent comments.
+// ticket: {title, description, comments:[{author,text}]}; the data is passed as untrusted input.
+export async function aiDescription(env, me, ticket) {
+  if(!aiConfigured(env))throw new AIError("ai_not_configured","AI descriptions are unavailable until the AI service is configured.",503);
+  await rateLimit(env,me);
+  const data={title:String(ticket.title||"").slice(0,300),description:String(ticket.description||"").slice(0,6000),comments:(ticket.comments||[]).slice(-8).map(c=>({author:String(c.author||"").slice(0,80),text:String(c.text||"").slice(0,600)}))};
+  const result=await within(()=>modelResponse(env,{
+    instructions:"Write a clear description for this work ticket, for the developer who will do it. Use the same language as the ticket (Hebrew stays Hebrew, English stays English). Use only what the title, current description and comments say: never invent names, numbers, systems or requirements; if something important is unknown, add it under 'To confirm' as a question. Use short labelled parts where they apply, each label on its own line followed by a colon: Goal, Background, What to do (as lines starting with '- '), Expected result. Plain text only: no markdown headings, no bold, no code fences. At most 200 words. Reply with the description only.",
+    input:[{role:"user",content:JSON.stringify({source:"UNTRUSTED TICKET DATA",data}).replace(/</g,"\\u003c").replace(/>/g,"\\u003e")}],tools:[],tool_choice:"none",store:false,max_output_tokens:700
+  }),30000);
+  if(!Array.isArray(result.output)||result.output.some(item=>item.type==="function_call"))throw new AIError("ai_unavailable","The AI service returned an invalid description.",502);
+  const text=result.output.filter(item=>item.type==="message").flatMap(item=>item.content||[]).filter(part=>part.type==="output_text").map(part=>part.text).join("\n").replace(/^\s*```\w*\n?|\n?```\s*$/g,"").trim().slice(0,4000);
+  if(!text)throw new AIError("ai_unavailable","No description was returned. Please try again.",502);
+  return text;
+}
 export async function aiBrief(request, env, { me, project, readSearch }) {
   try {
     if(request.method!=="POST")throw new AIError("ai_read_only","Use POST to request a read-only ticket brief.",405);

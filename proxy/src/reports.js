@@ -1,4 +1,5 @@
-import { BusinessError, requireStore, readCatalog, readMetadata, publicMetadata, closureErrors, validHours } from './ticket-metadata.js';
+import { BusinessError, requireStore, readCatalog, readMetadata, publicMetadata, closureErrors, validHours, withLogged } from './ticket-metadata.js';
+import { readSummaries } from './time-entries.js';
 export const localDate=(date=new Date())=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Jerusalem',year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
 export function reportPeriod(options={},now=new Date()) {
   const end=options.end||localDate(now),d=new Date(end+'T12:00:00Z');d.setUTCDate(d.getUTCDate()-6);const start=options.start||d.toISOString().slice(0,10);
@@ -21,7 +22,9 @@ export async function buildReport(env,me,{readSearch,readInternal,readHistory},o
   if(!complete)warnings.push('Jira results are partial; totals cover only retrieved tickets.');
   let internalComplete=true;try{rows.push(...await readInternal());}catch{internalComplete=false;warnings.push('Internal tickets could not be fully retrieved.');}
   const unique=[...new Map(rows.map(t=>[t.key,t])).values()],all=[],unknownCompletion=[];let historyReads=0;
-  const metadata=new Map();for(let i=0;i<unique.length;i+=12)await Promise.all(unique.slice(i,i+12).map(async t=>metadata.set(t.key,await readMetadata(env,t.key))));
+  // Actual hours include the logged work entries.
+  const sums=await readSummaries(env,unique.map(t=>t.key)).catch(()=>({}));
+  const metadata=new Map();for(let i=0;i<unique.length;i+=12)await Promise.all(unique.slice(i,i+12).map(async t=>metadata.set(t.key,withLogged(await readMetadata(env,t.key),sums[t.key]))));
   for(const t of unique){
     const m=metadata.get(t.key);let completedAt=t.closed?(t.completedAt||m.completedAt):null;
     if(t.closed&&!completedAt&&!t.internal&&readHistory&&historyReads<20&&Date.now()-started<25000){historyReads++;try{completedAt=await readHistory(t.key,t.status);}catch{} }

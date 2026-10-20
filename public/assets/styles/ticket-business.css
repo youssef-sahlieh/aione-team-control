@@ -98,3 +98,16 @@
 .business-panel .report-filter-form { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; }
 .report-filter-form .business-field { min-width:0; }
 .report-filter-form > .btn { align-self:end; min-height:44px; }
+.catalog-create{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin:12px 0}.catalog-create h3{grid-column:1/-1;margin:0;font-size:13px}
+/* Clients page: details card per client. */
+.client-card{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin:8px 0 14px}
+.client-section{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--surface);min-width:0}
+.client-section h4{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.client-facts{display:grid;grid-template-columns:minmax(110px,auto) 1fr;gap:6px 12px;margin:0;font-size:13px}
+.client-facts dt{color:var(--muted)}.client-facts dd{margin:0;overflow-wrap:anywhere}
+.client-ai{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
+.client-tickets{display:flex;flex-direction:column;gap:2px;margin:4px 0}.client-tickets .linkbtn{text-align:left}
+.client-project{border-top:1px solid var(--line);padding-top:8px;margin-top:8px}.client-project:first-of-type{border-top:0;margin-top:0;padding-top:0}
+.client-project>b{display:block;margin-bottom:4px}
+.client-card>.client-section:last-child{grid-column:1/-1}
+.catalog-search{width:100%;max-width:420px;margin:12px 0 4px}.catalog-found{margin:0 0 8px;font-size:13px;color:var(--muted)}
