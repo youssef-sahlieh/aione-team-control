@@ -37,7 +37,7 @@ function combobox(select){
 const input=(type,value)=>{const n=el('input','inp');n.type=type;n.value=value??'';return n;};
 const message=(target,e)=>{target.textContent=e.message||String(e);target.className='msg err';};
 export function createTicketBusiness({api,context,onChange,openIssue}){
-  let billingNeeded=false,enabled=false,catalog={revision:0,entries:[]},records={},editor=null;
+  let billingNeeded=false,enabled=false,epicMapping=false,catalog={revision:0,entries:[]},records={},editor=null;
   const reportBrowser=createReportBrowser({api,openIssue});
   const admin=()=>context().admin;
   const clients=()=>catalog.entries.filter(e=>!e.parentId&&!e.archived);
@@ -106,6 +106,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       const r=await api('/ticket-metadata?key='+encodeURIComponent(key));if(context().key!==key)return;
       records[key]=r.metadata;target.replaceChildren(el('h3','','Ticket work & client'));
       target.append(el('p','business-guidance',r.closed?'Completed work is read-only. Reopen the ticket to make corrections.':'Complete the hours and work summary before closing. The client is optional.'));
+      if(r.metadata.epicKey)target.append(el('p','business-guidance','The client comes from epic '+r.metadata.epicKey+' and follows it. Choosing another client here stops that.'));
       const controls=createFields(target,{values:r.metadata,closed:r.closed}),msg=el('p','msg');let initial=JSON.stringify(controls.read()),editorRevision=r.metadata.revision;
       const readiness=el('div','work-readiness');target.insertBefore(readiness,controls.box);
       const updateReadiness=()=>{let value;try{value={...r.metadata,...controls.read()};}catch{value={...r.metadata};}readiness.replaceChildren();for(const [label,ready]of [['Estimate',value.estimatedHours>0],['Actual hours',value.actualHours>0],['Work done',!!value.workDone?.trim()]]){const chip=el('span','readiness-chip'+(ready?' ready':''),(ready?'✓ ':'○ ')+label);readiness.append(chip);}};controls.box.addEventListener('input',updateReadiness);controls.box.addEventListener('change',updateReadiness);updateReadiness();
@@ -163,6 +164,32 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const add=el('div','business-form'),name=field(add,'New client or sub-client name',input('text','')),parent=field(add,'Parent (optional)',el('select','fsel'));option(parent,'Top-level client','');for(const c of clients())option(parent,c.name,c.id);add.append(button('Add',async()=>{try{catalog=await api('/clients',{method:'POST',body:{revision:catalog.revision,name:name.value,parentId:parent.value||null}});await onChange();target.replaceChildren();renderCatalog(target);}catch(err){message(msg,err);}}));panel.append(add);
     for(const c of catalog.entries.filter(e=>!e.parentId).sort((a,b)=>a.name.localeCompare(b.name))){const group=el('details','catalog-group');group.append(el('summary','',c.name+(c.archived?' (archived)':'')));for(const e of [c,...catalog.entries.filter(e=>e.parentId===c.id)]){const row=el('div','catalog-entry'),nm=input('text',e.name);nm.setAttribute('aria-label','Name for '+e.name);row.append(nm,button('Rename',async()=>change(e,{name:nm.value})),button(e.archived?'Restore':'Archive',async()=>change(e,{archived:!e.archived})));group.append(row);}panel.append(group);}
     async function change(e,patch){try{catalog=await api('/clients',{method:'PUT',body:{revision:catalog.revision,id:e.id,...patch}});await onChange();target.replaceChildren();renderCatalog(target);}catch(err){message(msg,err);}}
+    if(epicMapping&&admin())renderEpicMap(target);
   }
-  return {configure:async cfg=>{reportBrowser.configure(cfg);billingNeeded=cfg.billingRequired===true;enabled=cfg.capabilities?.includes('ticket-business-v1')===true;if(enabled){await loadCatalog();if(cfg.odoo)api('/clients/odoo-sync',{method:'POST',body:{}}).then(r=>{if(r.changed)return loadCatalog();}).catch(()=>{});}},enabled:()=>enabled,load,decorate,canQuickEdit,quickEdit,quickLabel:name=>QUICK[name],createFields,renderEditor,dirty:key=>editor?.key===key&&editor.dirty(),reset:()=>{editor=null;},bulk,ensureBilling,overrideReason,filters,matches,renderReports,renderCatalog,loadCatalog};
+  // Jira epics → Odoo projects (epic-map.js): tickets under a mapped epic take that project as their client.
+  const projects=()=>catalog.entries.filter(e=>!e.archived&&(e.parentId||!catalog.entries.some(c=>c.parentId===e.id)))
+    .map(e=>({id:e.id,name:e.parentId?(catalog.entries.find(c=>c.id===e.parentId)?.name||'')+' / '+e.name:e.name})).sort((a,b)=>a.name.localeCompare(b.name));
+  let epicCache=null,epicNote={text:'',at:0};
+  async function renderEpicMap(target){
+    const panel=el('section','panel business-panel');target.append(panel);panel.append(el('h2','','Jira epics → Odoo projects'));
+    panel.append(el('p','business-guidance','Tickets under a mapped epic get that project as their client and sub-client, and follow the epic if they move to another mapped one. A client someone chose by hand on a ticket is kept.'));
+    const msg=el('p','msg','Loading epics from Jira…');panel.append(msg);
+    // The page redraws a few times while it loads; reuse a recent epic list instead of asking Jira each time.
+    let data;try{if(!epicCache||Date.now()-epicCache.at>60000)epicCache={at:Date.now(),data:api('/epic-map')};data=await epicCache.data;}catch(err){epicCache=null;message(msg,err);return;}
+    msg.textContent=Date.now()-epicNote.at<15000?epicNote.text:'';if(!data.epics.length){msg.textContent='No epics in Jira.';return;}
+    const list=el('div','epic-map');panel.append(list);const options=projects();
+    for(const ep of data.epics){
+      const row=el('div','epic-map-row'),label=el('span','epic-map-name',ep.name+' ('+ep.key+')'+(ep.done?' · done':''));label.dir='auto';
+      const select=el('select','fsel');select.setAttribute('aria-label','Odoo project for '+ep.name);option(select,'Not mapped','');for(const p of options)option(select,p.name,p.id);
+      const current=data.map[ep.key];if(current&&!options.some(p=>p.id===current))option(select,(catalog.entries.find(e=>e.id===current)?.name||'Unknown project')+' (archived)',current);
+      select.value=current||'';
+      select.addEventListener('change',async()=>{select.disabled=true;msg.className='msg';msg.textContent='Saving and updating tickets…';
+        try{const r=await api('/epic-map',{method:'PUT',body:{revision:data.revision,epicKey:ep.key,entryId:select.value||null}});data.revision=r.revision;data.map=r.map;
+          msg.textContent=r.sync?.error||(r.sync?.busy?'Saved. Tickets will be updated on the next sync.':'Saved. '+(r.sync?.changed||0)+' ticket'+(r.sync?.changed===1?'':'s')+' updated.');epicNote={text:msg.textContent,at:Date.now()};
+          if(r.sync?.changed){await load(Object.keys(records));await onChange();}}
+        catch(err){message(msg,err);select.value=data.map[ep.key]||'';}finally{select.disabled=false;}});
+      row.append(label,select);list.append(row);
+    }
+  }
+  return {configure:async cfg=>{reportBrowser.configure(cfg);billingNeeded=cfg.billingRequired===true;enabled=cfg.capabilities?.includes('ticket-business-v1')===true;epicMapping=enabled&&cfg.capabilities?.includes('epic-map-v1')===true;if(enabled){await loadCatalog();if(cfg.odoo)api('/clients/odoo-sync',{method:'POST',body:{}}).then(r=>{if(r.changed)return loadCatalog();}).catch(()=>{});if(epicMapping)api('/epic-map/sync',{method:'POST',body:{}}).then(async r=>{if(r.changed&&Object.keys(records).length){await load(Object.keys(records));await onChange();}}).catch(()=>{});}},enabled:()=>enabled,load,decorate,canQuickEdit,quickEdit,quickLabel:name=>QUICK[name],createFields,renderEditor,dirty:key=>editor?.key===key&&editor.dirty(),reset:()=>{editor=null;},bulk,ensureBilling,overrideReason,filters,matches,renderReports,renderCatalog,loadCatalog};
 }

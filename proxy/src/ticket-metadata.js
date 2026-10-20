@@ -11,7 +11,7 @@ export function requireStore(env) {
   return env.STORE;
 }
 const prefix=env=>'business:'+env.JIRA_PROJECT+':';
-const empty=()=>({revision:0,clientId:null,subClientId:null,billing:null,estimatedHours:null,actualHours:null,workDone:'',completedAt:null,history:[]});
+const empty=()=>({revision:0,clientId:null,subClientId:null,billing:null,estimatedHours:null,actualHours:null,workDone:'',completedAt:null,epicKey:null,history:[]});
 export const catalogKey=env=>prefix(env)+'catalog';
 export const metadataKey=(env,key)=>prefix(env)+'ticket:'+key;
 export async function readCatalog(env) { return JSON.parse(await requireStore(env).get(catalogKey(env)) || '{"revision":0,"entries":[]}'); }
@@ -71,6 +71,8 @@ export async function saveMetadata(env,key,patch,me,{closed=false,creating=false
   if(me.role!=='admin'&&'estimatedHours' in patch&&old.estimatedHours!=null&&Number(patch.estimatedHours)!==Number(old.estimatedHours))problem('The estimate is already set. Ask an administrator to change it.',403,'estimate_locked');
   for(const k of ['clientId','subClientId'])if(k in patch){if(patch[k]!==null&&(typeof patch[k]!=='string'||patch[k].length>80))problem('Invalid client selection.');m[k]=patch[k];}
   if('clientId' in patch && patch.clientId!==old.clientId && !('subClientId' in patch))m.subClientId=null;
+  // A client chosen by hand stops following the ticket's epic (see epic-map.js).
+  if(m.clientId!==old.clientId||m.subClientId!==old.subClientId)m.epicKey=null;
   // A new internal ticket may be opened without a client (it's needed later, to close it).
   const noClient=creating&&!m.clientId&&!m.subClientId;
   if(('clientId' in patch||'subClientId' in patch)&&!noClient){const errors=selectionErrors(catalog,m,{active:m.clientId!==old.clientId||m.subClientId!==old.subClientId});if(errors.length)problem(errors.join('. '));}
@@ -93,6 +95,19 @@ export async function guardedTransition(env,key,me,{closing,overrideReason},appl
   m.history.push({type:closing?'completed':'reopened',at,by:{email:me.email,name:me.name},changes:{}});
   if(missing.length)m.history.push({type:'override',at,by:{email:me.email,name:me.name},reason:overrideReason.trim(),missing,changes:{}});
   await persist(env,key,m,raw);return result;
+}
+// The client and sub-client of a ticket under a mapped Jira epic (epic-map.js). Only fills an empty client or
+// one that already came from an epic; a client chosen by hand is kept. Completed tickets only get an empty one filled.
+export async function applyEpicSelection(env,key,{epicKey,clientId,subClientId,closed=false}) {
+  return withTicketLock(env,key,async()=>{
+    const store=requireStore(env),raw=await store.get(metadataKey(env,key)),m={...empty(),...JSON.parse(raw||'{}')};
+    if((m.clientId||m.subClientId)&&(closed||!m.epicKey))return false;
+    if(m.clientId===clientId&&m.subClientId===subClientId&&m.epicKey===epicKey)return false;
+    const changes={};if(m.clientId!==clientId)changes.clientId={from:m.clientId,to:clientId};if(m.subClientId!==subClientId)changes.subClientId={from:m.subClientId,to:subClientId};
+    Object.assign(m,{clientId,subClientId,epicKey});m.revision++;m.updatedAt=new Date().toISOString();
+    m.history.push({type:'edit',at:m.updatedAt,by:{email:'',name:'Epic '+epicKey},changes});
+    await persist(env,key,m,raw);return true;
+  });
 }
 const nameKey=n=>n.trim().normalize('NFC').toLocaleLowerCase('en-US');
 async function idFor(parent,name) { const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode((parent||'root')+'\0'+nameKey(name)));return 'c_'+Array.from(new Uint8Array(bytes).slice(0,16),x=>x.toString(16).padStart(2,'0')).join(''); }

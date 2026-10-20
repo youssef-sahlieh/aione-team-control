@@ -28,6 +28,8 @@ All routes require the existing authenticated session:
 - POST /clients and PUT /clients: administrator add, rename, archive or restore with the current catalog revision.
 - POST /clients/import/preview: validate rows and return proposed additions without saving.
 - POST /clients/import: apply reviewed rows with the preview revision.
+- GET /epic-map (administrators): Jira epics and the Odoo project each is mapped to. PUT /epic-map {revision, epicKey, entryId|null} saves one mapping and updates its tickets.
+- POST /epic-map/sync: brings tickets under mapped epics in line (at most every 10 minutes; administrators may add ?force=1). Tickets with no client, or whose client came from an epic, take the epic's project; a client chosen by hand is kept; completed tickets only get an empty client filled.
 - POST /ticket-metadata/batch: read metadata for up to 100 authorized ticket keys.
 - GET /ticket-metadata?key=KEY: authorized metadata, filtered history and authoritative closed state.
 - PUT /ticket-metadata: body {key, fields:{revision, ...changes}}. Stale revisions and closed tickets return 409.

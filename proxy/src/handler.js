@@ -32,6 +32,7 @@ import { aiChat, aiBrief, aiConfigured } from "./ai.js";
 import { githubConfigured, syncPulls, prsByKey } from "./github.js";
 import { recordTicketEvent, ticketLogRoutes } from "./ticket-log.js";
 import { integrationRoutes } from "./integrations.js";
+import { epicMapRoutes } from "./epic-map.js";
 import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
 import { ROLES, checkPassword, createLinkToken, deleteUser, getUser, hashPassword, listUsers, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, useLinkToken, validDev, validEmail } from "./users.js";
 
@@ -329,7 +330,7 @@ async function route(request, env, url) {
   // Public compatibility check for Pages publishing; exposes no runtime credentials or ticket data.
   if (path.startsWith("/monitor/odoo/translations") && method === "GET") return odooTranslations(env, url);
   if (path === "/cron/db-report") return dbReportCron(request, env, url);
-  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1","reports-all-v1","reports-saved-v1", "db-report-v1", "db-report-company-v1"], build: String(env.BUILD || "").slice(0, 7)});
+  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1","reports-all-v1","reports-saved-v1", "db-report-v1", "db-report-company-v1","epic-map-v1"], build: String(env.BUILD || "").slice(0, 7)});
 
   // Jira Automation uses its own secret, never a team password or a user's browser session.
   if (path === "/notifications/jira-created") {
@@ -409,6 +410,7 @@ async function route(request, env, url) {
     return {key,title:f.summary,description:f.description,devs,closed:f.status.statusCategory.key==="done",status:f.status.name,cat:f.status.statusCategory.key,created:f.created,updated:f.updated,due:f.duedate,completedAt:f.resolutiondate||null,assignee:f.assignee?.displayName,internal:false};
   };
   if(path==="/clients"||path.startsWith("/clients/"))return catalogRoutes(request,env,url,me);
+  if(path==="/epic-map"||path==="/epic-map/sync")return epicMapRoutes(request,env,url,me,(p,init)=>jira(env,p,init));
   // Many tickets at once (the dashboard's list): one database read for internal tickets and, for users, one
   // Jira search for their own tickets, instead of one Jira read per ticket. Administrators see every project ticket.
   const readBusinessTickets = async keys => {
@@ -508,7 +510,7 @@ async function route(request, env, url) {
   if (path === "/config" && method === "GET") {
     let team = {};
     try { team = JSON.parse(env.TEAM_CONFIG || "{}"); } catch {}
-    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE, capabilities:["ticket-business-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1"] });
+    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE, capabilities:["ticket-business-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1","epic-map-v1"] });
   }
 
   if (!isAdmin && (path === "/mail" || path === "/jira/users")) return fail("forbidden", "Only administrators can do that.", 403);
@@ -678,7 +680,7 @@ async function route(request, env, url) {
       if (!text || text.length > 30000) return fail("bad_request", "Write a comment first.", 400);
       // Jira shows the proxy's account as the author, so the comment carries the real author's name.
       const author = me.name || me.email, owner = String(env.JIRA_EMAIL || "").toLowerCase() === String(me.email || "").toLowerCase();
-      const result = await jira(env, "/rest/api/2/issue/" + key + "/comment", { method: "POST", body: { body: owner ? text : text + "\n\n— " + author + " (via AION Team Control)" } });
+      const result = await jira(env, "/rest/api/2/issue/" + key + "/comment", { method: "POST", body: { body: owner ? text : text + "\n\n— " + author } });
       if (result.ok) await recordTicketEvent(env, key, me, { action: "comment", text, commentId: String(result.data?.id || "") });
       return pass(result);
     }
