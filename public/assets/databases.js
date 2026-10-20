@@ -29,6 +29,7 @@ const COLUMNS = [
   { key: "company", label: "Company", value: (r) => companyCell(r), sort: (r) => companyOf(r).toLowerCase() || null, csv: (r) => companyOf(r) },
   { key: "database", label: "Database", value: (r) => databaseCell(r), sort: (r) => (r.database || r.instance || "").toLowerCase(), csv: (r) => r.database || r.instance || "" },
   { key: "url", label: "URL", value: (r) => r.url ? linkCell(r.url) : el("span", "db-muted", "—"), sort: (r) => r.url || null, csv: (r) => r.url || "" },
+  { key: "adlink", label: "Audit & Deploy", value: (r) => adLinkCell(r), sort: (r) => (r.instance || null), csv: (r) => (r.instance ? adLinkUrl(r) : "") },
   { key: "version", label: "Odoo", value: (r) => r.odooVersion ? el("span", "db-ver", r.odooVersion) : el("span", "db-muted", "—"), sort: (r) => Number(r.odooVersion) || null, csv: (r) => r.odooVersion || "" },
   { key: "users", label: "Users", num: true, value: (r) => numCell(r, "users"), sort: (r) => inside(r, r.users), csv: (r) => num(r.users) },
   { key: "pos", label: "POS", num: true, value: (r) => numCell(r, "pos"), sort: (r) => inside(r, r.pos), csv: (r) => num(r.pos) },
@@ -38,9 +39,18 @@ const COLUMNS = [
   { key: "lastOrder", label: "Last order", value: (r) => timeCell(r, "lastOrder"), sort: (r) => inside(r, time(r.lastOrder)), csv: (r) => fmtDateTime(r.lastOrder) },
   { key: "expired", label: "Expiry", value: (r) => expiryCell(r), sort: (r) => inside(r, time(r.expires)), csv: (r) => !r.loginOk ? "" : r.expired === null ? "none" : r.expired ? "EXPIRED " + fmtDate(r.expires) : "ok " + fmtDate(r.expires) },
   { key: "flutter", label: "Flutter POS", value: (r) => r.flutter ? el("span", "db-pill ok", "Installed") : el("span", "db-pill", "No"), sort: (r) => (r.flutter ? 1 : 0), csv: (r) => r.flutter ? "yes" : "no" },
+  { key: "posver", label: "POS version", value: (r) => posVersionCell(r), sort: (r) => (r.posVersion ? r.posVersion.split(".").map((n) => n.padStart(6, "0")).join(".") : null), csv: (r) => posVersionText(r) },
   { key: "addons", label: "Add-ons", value: (r) => addonCell(r), sort: (r) => (r.addons || []).length, csv: (r) => (r.addons || []).join("; ") }
 ];
-const WEIGHT = { company: 2.2, database: 1.6, url: 1.5, version: 0.6, users: 0.75, pos: 0.6, branches: 0.85, created: 1, lastLogin: 1.3, lastOrder: 1.3, expired: 1.2, flutter: 0.95, addons: 2 };
+// Audit & Deploy link for each instance: the instance's page in Audit & Deploy.
+const AD_PAGE = "audit-deploy.html";
+const adLinkUrl = (r) => new URL(AD_PAGE + "#instances/" + encodeURIComponent(r.instance), location.href).href;
+function adLinkCell(r) {
+  if (!r.instance) return el("span", "db-muted", "—");
+  const a = el("a", "db-link", "Open"); a.href = adLinkUrl(r); a.target = "_blank"; a.rel = "noopener";
+  return a;
+}
+const WEIGHT = { company: 2.2, database: 1.6, url: 1.5, adlink: 1.1, version: 0.6, users: 0.75, pos: 0.6, branches: 0.85, created: 1, lastLogin: 1.3, lastOrder: 1.3, expired: 1.2, flutter: 0.95, posver: 1.1, addons: 2 };
 // Every column shows by default; phones swipe the table sideways to see them all.
 
 
@@ -65,6 +75,14 @@ function numCell(r, key) { if (!r.loginOk) return key === "users" ? el("span", "
 function branchCell(r) { if (!r.loginFound) return el("span", "db-muted", "—"); if (!r.loginOk) return el("span", "db-muted", "—"); if (!r.branches) return el("span", "db-muted", "none"); return el("span", "db-strong", String(r.branches)); }
 function timeCell(r, key) { if (!r.loginFound) return el("span", "db-muted", "—"); if (!r.loginOk) return el("span", "db-muted", "—"); if (!r[key]) return el("span", "db-muted", "never"); const s = el("span", "", fmtDateTime(r[key])); const a = ago(r[key]); if (a) s.append(el("small", "db-ago", " · " + a)); return s; }
 function expiryCell(r) { if (!r.loginFound || !r.loginOk) return el("span", "db-muted", "—"); if (r.expired === null) return el("span", "db-muted", "none"); return el("span", "db-pill " + (r.expired ? "bad" : "ok"), (r.expired ? "Expired " : "Valid ") + fmtDate(r.expires)); }
+// The installed POS add-on's version, with its date when Audit & Deploy gives one.
+const posVersionText = (r) => (r.posVersion ? r.posVersion + (r.posVersionDate ? " (" + fmtDate(r.posVersionDate) + ")" : "") : "");
+function posVersionCell(r) {
+  if (!r.posVersion) return el("span", "db-muted", "—");
+  const box = el("span", "", r.posVersion);
+  if (r.posVersionDate) box.append(el("small", "db-ago", " · " + fmtDate(r.posVersionDate)));
+  return box;
+}
 function addonCell(r) {
   const list = r.addons || [];
   const box = el("span", "db-addons");
@@ -210,18 +228,19 @@ function oneRowPerSite(rows) {
 function showReport(report) { REPORT = { ...report, rows: oneRowPerSite(report.rows || []) }; $("toolbar").hidden = false; $("tablewrap").hidden = false; showState(""); renderFilters(); render(); explainCompanies(); }
 
 // Says why company names are missing, instead of only showing empty cells.
-let serverHasCompanies = null;
+let serverHasCompanies = null, serverHasPosVersion = null;
 function explainCompanies() {
   const box = $("notice"), rows = (REPORT && REPORT.rows) || [];
   let text = "";
   if (serverHasCompanies === false) text = "Company names need the updated server: redeploy aione-team-proxy in Vercel (its /health page should list db-report-company-v1), then press Refresh now.";
+  else if (serverHasPosVersion === false) text = "POS versions need the updated server: redeploy aione-team-proxy in Vercel (its /health page should list db-report-pos-version-v1), then press Refresh now.";
   else if (rows.length && !rows.some((r) => "companySource" in r)) text = "This report was built before company names were added. Press Refresh now to rebuild it with company names.";
   box.hidden = !text; box.textContent = text;
 }
 
 async function load() {
   try {
-    api("/config").then((cfg) => { serverHasCompanies = (cfg.capabilities || []).includes("db-report-company-v1"); explainCompanies(); }).catch(() => {});
+    api("/config").then((cfg) => { serverHasCompanies = (cfg.capabilities || []).includes("db-report-company-v1"); serverHasPosVersion = (cfg.capabilities || []).includes("db-report-pos-version-v1"); explainCompanies(); }).catch(() => {});
     const data = await api("/db-report");
     if (data.report) showReport(data.report);
     else showState(data.building ? "Building the report for the first time… this can take a minute." : "No report yet.", false);

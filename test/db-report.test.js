@@ -51,7 +51,7 @@ function setup() {
     odoo999: { databases: ["test_db"] }
   };
   const addons = {
-    odoo503: { addons: [{ name: "flutter_pos_api" }, { name: "sale" }] },
+    odoo503: { addons: [{ name: "flutter_pos_api", installed_version: "19.0.3.97.2" }, { name: "sale" }] },
     odoo100: { addons: [{ name: "stock" }] }
   };
   // Knowledge base: full credentials for 503 only.
@@ -122,6 +122,7 @@ test("report covers production databases only, with inside numbers where a login
   assert.equal(ronit.url, "https://503.ai1.host");
   assert.equal(ronit.flutter, true);
   assert.deepEqual(ronit.addons, ["flutter_pos_api", "sale"]);
+  assert.equal(ronit.posVersion, "19.0.3.97.2"); assert.equal(ronit.posVersionDate, "");
   assert.equal(ronit.loginFound, true); assert.equal(ronit.loginOk, true);
   assert.equal(ronit.users, customer.users); assert.equal(ronit.pos, customer.pos);
   assert.equal(ronit.branches, 1); // companies 2 -> 1 extra branch (no res.branch model)
