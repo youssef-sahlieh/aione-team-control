@@ -51,7 +51,7 @@ function setup() {
     odoo999: { databases: ["test_db"] }
   };
   const addons = {
-    odoo503: { addons: [{ name: "flutter_pos_api", installed_version: "19.0.3.97.2" }, { name: "sale" }] },
+    odoo503: { addons: [{ name: "flutter_pos_api", module_version: "19.0.3.97.2" }, { name: "sale" }] },
     odoo100: { addons: [{ name: "stock" }] }
   };
   // Knowledge base: full credentials for 503 only.
