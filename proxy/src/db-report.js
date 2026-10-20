@@ -11,6 +11,7 @@
 // function's time limit, refreshes at most once a day on view (stale-while-revalidate), can be forced by
 // an admin, and runs daily from a Vercel cron.
 import { odoo, odooConfigured } from "./odoo.js";
+import { act } from "./monitor.js";
 
 const REPORT_KEY = "dbreport:v1";          // the finished/most-recent report
 const PROGRESS_KEY = "dbreport:progress";  // an in-flight incremental build
@@ -368,7 +369,9 @@ export async function dbReportRoutes(request, env, url, me) {
   if (path === "/db-report" && request.method === "GET") {
     const report = await readReport(env);
     let building = false;
-    if (!report || Date.now() - report.builtAt > STALE_MS) { const r = await buildReport(env); building = !r.busy; }
+    // A report saved before a column existed is rebuilt, so every row carries the current fields.
+    const outdated = !!report && (report.rows || []).some((r) => !("posVersion" in r));
+    if (!report || outdated || Date.now() - report.builtAt > STALE_MS) { const r = await buildReport(env); building = !r.busy; }
     const after = await readReport(env);
     return json({ report: after || report || null, building: building && (!after || !report || after.builtAt === (report && report.builtAt)) });
   }
@@ -377,6 +380,16 @@ export async function dbReportRoutes(request, env, url, me) {
     const r = await buildReport(env, { force: first });
     if (r.busy) return json({ busy: true });
     return json({ done: !!r.done, progress: r.progress || null, report: r.report || await readReport(env) });
+  }
+  // POST /db-report/action {instance, action} - instance actions from the Databases page. Only instances in the
+  // report; only restart for now. Recorded in the action log with the signed-in person's name.
+  if (path === "/db-report/action" && request.method === "POST") {
+    const b = (await request.json().catch(() => null)) || {};
+    const instance = String(b.instance || ""), action = String(b.action || "");
+    const report = await readReport(env);
+    if (!(report && (report.rows || []).some((r) => r.instance === instance))) return fail("unknown_instance", "That instance isn't in the database report. Press Refresh now and try again.", 404);
+    if (action !== "restart") return fail("unsupported", "Only restart is available here.", 400);
+    return act(env, me, { action: "Restart instance", target: instance, details: "Databases page", run: () => odoo(env, "file.hosting.service", "call_api", ["/api/docker/odoo/restart", "POST", { instances: [instance] }]) });
   }
   return fail("not_found", "Not found.", 404);
 }

@@ -63,6 +63,7 @@ function setup() {
   // Fake customer DB at 503.ai1.host.
   const customer = { users: 7, pos: 3, companies: 2, lastLogin: "2026-10-14 08:12:00", lastSession: "2026-10-15 09:00:00", lastOrder: "2026-10-15 10:49:22", expires: "2027-01-01 00:00:00" };
 
+  const actions = []; // Odoo calls the report's instance actions made
   globalThis.fetch = async (url, init = {}) => {
     const u = String(url);
     const body = JSON.parse(init.body || "{}");
@@ -74,6 +75,7 @@ function setup() {
       if (model === "monitor.data.snapshot" && method === "get_instances") return Response.json({ result: { payload: instances } });
       if (model === "monitor.data.snapshot" && method === "get_instance_config") return Response.json({ result: { payload: config[args[0]] || {} } });
       if (model === "monitor.data.snapshot" && method === "get_instance_addons") return Response.json({ result: { payload: addons[args[0]] || { addons: [] } } });
+      if (model === "file.hosting.service" && method === "call_api") { actions.push({ path: args[0], method: args[1], body: args[2] }); return Response.json({ result: { success: true } }); }
       if (model === "knowledge.article" && method === "search_read") {
         const dom = args[0];
         if (JSON.stringify(dom).includes("Our Customers")) return Response.json({ result: [{ id: 10 }] });
@@ -104,8 +106,8 @@ function setup() {
     ODOO_URL: "https://kadis.odoo.test", ODOO_DB: "db", ODOO_LOGIN: "bot@aione.biz", ODOO_API_KEY: "key",
     CRON_SECRET: "cron-secret-123"
   };
-  const call = (path, { method = "GET", token } = {}) => worker.fetch(new Request("https://p" + path, { method, headers: token ? { Authorization: "Bearer " + token } : {} }), env);
-  return { env, call, customer };
+  const call = (path, { method = "GET", token, body } = {}) => worker.fetch(new Request("https://p" + path, { method, headers: { ...(token ? { Authorization: "Bearer " + token } : {}), ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined }), env);
+  return { env, call, customer, actions };
 }
 
 test("report covers production databases only, with inside numbers where a login is found", async () => {
@@ -162,4 +164,42 @@ test('one row per web address: the instance with a working login and newer activ
   const site = rows.find((r) => r.url.includes("526"));
   assert.equal(site.instance, "odoo526b");
   assert.deepEqual(site.duplicates, [{ instance: "odoo526", database: "526_old" }]);
+});
+
+test("POST /db-report/action restarts a reported instance for admins only, and logs it", async () => {
+  const { env, call, actions } = setup();
+  const user = { email: "dev@aione.biz", name: "Dev", role: "user", dev: "builder", v: 1 };
+  const admin = { email: "boss@aione.biz", name: "Boss", role: "admin", dev: "", v: 1 };
+  await saveUser(env.STORE, user); await saveUser(env.STORE, admin);
+  const userTok = (await makeToken(env, user.email, Date.now(), 1)).token;
+  const adminTok = (await makeToken(env, admin.email, Date.now(), 1)).token;
+  // Build the report first so the action can check the instance against it.
+  for (let i = 0; i < 5; i++) { const r = await (await call("/db-report/refresh", { method: "POST", token: adminTok })).json(); if (r.done) break; }
+  const body = { instance: "odoo503", action: "restart" };
+  assert.equal((await call("/db-report/action", { method: "POST", token: userTok, body })).status, 403, "users can't act");
+  assert.equal((await call("/db-report/action", { method: "POST", token: adminTok, body: { instance: "odoo404", action: "restart" } })).status, 404, "instances outside the report are refused");
+  assert.equal((await call("/db-report/action", { method: "POST", token: adminTok, body: { instance: "odoo503", action: "stop" } })).status, 400, "only restart for now");
+  assert.equal(actions.length, 0, "refused calls never reach Odoo");
+  const ok = await call("/db-report/action", { method: "POST", token: adminTok, body });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(actions, [{ path: "/api/docker/odoo/restart", method: "POST", body: { instances: ["odoo503"] } }]);
+  const logged = JSON.parse(await env.STORE.get("mlog:1"));
+  assert.equal(logged.name, "Boss"); assert.equal(logged.action, "Restart instance"); assert.equal(logged.target, "odoo503"); assert.equal(logged.result, "success");
+});
+
+test("a report saved before the POS version existed is rebuilt when viewed", async () => {
+  const { env, call } = setup();
+  const admin = { email: "boss@aione.biz", name: "Boss", role: "admin", dev: "", v: 1 };
+  await saveUser(env.STORE, admin);
+  const adminTok = (await makeToken(env, admin.email, Date.now(), 1)).token;
+  // An old report: fresh, but its rows have no posVersion.
+  await env.STORE.set("dbreport:v1", JSON.stringify({ builtAt: Date.now(), count: 1, rows: [{ instance: "odoo503", database: "RonitYamProd" }] }), 3600);
+  let rows = [];
+  for (let i = 0; i < 5 && !rows.some((r) => "posVersion" in r); i++) {
+    const r = await (await call("/db-report", { token: adminTok })).json();
+    rows = (r.report && r.report.rows) || [];
+    if (!rows.some((x) => "posVersion" in x)) await call("/db-report/refresh", { method: "POST", token: adminTok });
+  }
+  const ronit = rows.find((x) => x.instance === "odoo503");
+  assert.equal(ronit.posVersion, "19.0.3.97.2");
 });
