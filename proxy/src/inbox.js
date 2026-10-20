@@ -11,7 +11,7 @@ const norm = (e) => String(e || "").trim().toLowerCase();
 // Adds one item to each person's inbox (never to the person who caused it). Failures never block the action.
 export async function addToInbox(store, emails, item, from) {
   if (!store?.get || !store?.set) return;
-  const entry = { id: crypto.randomUUID(), at: new Date().toISOString(), type: item.type, key: item.key, title: String(item.title || "").slice(0, 200), by: item.by || "", text: String(item.text || "").replace(/\s+/g, " ").trim().slice(0, 240) };
+  const entry = { id: crypto.randomUUID(), at: new Date().toISOString(), type: item.type, key: item.key, title: String(item.title || "").slice(0, 200), by: item.by || "", text: String(item.text || "").replace(/\s+/g, " ").trim().slice(0, 240), read: false };
   for (const email of new Set(emails.map(norm))) {
     if (!email || email === norm(from)) continue;
     try {
@@ -75,20 +75,37 @@ export async function inboxRoutes(request, env, url, me) {
   const store = env.STORE;
   if (!store?.get || !store?.set) return json({ items: [], seenAt: null, off: true });
   const email = norm(me.email);
-  if (request.method === "GET" && url.pathname.endsWith("/inbox")) {
-    let seenAt = await store.get("inbox-seen:" + email);
-    // First visit: start now, so older tickets don't all show up as new.
-    if (!seenAt) { seenAt = new Date().toISOString(); await store.set("inbox-seen:" + email, seenAt, YEARS); }
-    return json({ items: JSON.parse((await store.get("inbox:" + email)) || "[]"), seenAt });
-  }
-  if (request.method === "POST" && url.pathname.endsWith("/inbox/seen")) {
-    const seenAt = new Date().toISOString();
-    await store.set("inbox-seen:" + email, seenAt, YEARS);
-    return json({ seenAt });
+  // seenAt: when this person's notifications started; tickets created after it count as new until read.
+  let seenAt = await store.get("inbox-seen:" + email);
+  if (!seenAt) { seenAt = new Date().toISOString(); await store.set("inbox-seen:" + email, seenAt, YEARS); }
+  const answer = async () => {
+    // Items from before per-item reading count as read when they are older than seenAt.
+    const items = JSON.parse((await store.get("inbox:" + email)) || "[]").map((x) => ({ ...x, read: x.read ?? x.at <= seenAt }));
+    return json({ items, seenAt, readTickets: JSON.parse((await store.get("inbox-tickets:" + email)) || "[]") });
+  };
+  if (request.method === "GET" && url.pathname.endsWith("/inbox")) return answer();
+  // Older dashboards call this when the bell opens; reading is now per item, so it changes nothing.
+  if (request.method === "POST" && url.pathname.endsWith("/inbox/seen")) return json({ seenAt });
+  // Marks one item ({id}), new tickets ({tickets: [keys]}) or every item ({all: true}) as read.
+  if (request.method === "POST" && url.pathname.endsWith("/inbox/read")) {
+    let b; try { b = await request.json(); } catch { b = {}; }
+    const tickets = Array.isArray(b?.tickets) ? b.tickets.filter((k) => typeof k === "string" && /^[A-Z][A-Z0-9_]*-\d+$/.test(k)).slice(0, 100) : [];
+    if (b?.id || b?.all) await change(store, "inbox:" + email, (list) => list.map((x) => (b.all || x.id === b.id ? { ...x, read: true } : { ...x, read: x.read ?? x.at <= seenAt })));
+    if (tickets.length) await change(store, "inbox-tickets:" + email, (list) => [...new Set([...tickets, ...list])].slice(0, 500));
+    return answer();
   }
   if (request.method === "POST" && url.pathname.endsWith("/inbox/clear")) {
     await store.set("inbox:" + email, "[]", YEARS);
-    return json({ items: [] });
+    return answer();
   }
   return json({ code: "not_found", error: "Not found." }, 404);
+}
+
+// Read-modify-write of one JSON list, retried when someone else wrote it at the same time.
+async function change(store, key, fn) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const raw = await store.get(key), next = JSON.stringify(fn(JSON.parse(raw || "[]")));
+    if (!store.compareAndSet || raw === null || raw === undefined) { await store.set(key, next, YEARS); return; }
+    if (await store.compareAndSet(key, raw, next)) return;
+  }
 }

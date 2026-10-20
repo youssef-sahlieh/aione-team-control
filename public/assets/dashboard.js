@@ -80,6 +80,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     transitions:key=>api("/jira/issue/"+key+"/transitions"),
     transition:(key,id)=>api("/jira/issue/"+key+"/transitions",{method:"POST",body:{id}}),
     comment:(key,text,mentions)=>api("/jira/issue/"+key+"/comment",{method:"POST",body:{text,...(mentions&&mentions.length?{mentions}:{})}}),
+    editComment:(key,id,text)=>api("/jira/issue/"+key+"/comment/"+id,{method:"PUT",body:{text}}),
     changelog:key=>api("/jira/issue/"+key+"/changelog"),
     users:q=>api("/jira/users?q="+encodeURIComponent(q))
   };
@@ -91,6 +92,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     create:b=>api("/internal",{method:"POST",body:b}),
     update:(key,b)=>api("/internal/"+key,{method:"PUT",body:b}),
     comment:(key,text,mentions)=>api("/internal/"+key+"/comment",{method:"POST",body:{text,...(mentions&&mentions.length?{mentions}:{})}}),
+    editComment:(key,n,created,text)=>api("/internal/"+key+"/comment/"+n,{method:"PUT",body:{text,created}}),
     remove:key=>api("/internal/"+key,{method:"DELETE"})
   };
   const isInt=key=>/^INT-\d+$/.test(key);
@@ -1146,11 +1148,15 @@ import { createCommentMentions } from "./components/comment-mentions.js";
         for(const k in PEOPLE) add(PEOPLE[k].id,PEOPLE[k].name,""); }
       const cm=(f.comment&&f.comment.comments)||[]; $("d-ccount").textContent="("+((f.comment&&f.comment.total)||cm.length)+")";
       const box=$("d-comments"); box.replaceChildren(); if(!cm.length) box.appendChild(el("div","msg","No comments yet."));
-      const writers=Object.fromEntries(((await logged).events||[]).filter(e=>e.commentId).map(e=>[String(e.commentId),e.by&&e.by.name])); if(dz.key!==key) return;
+      const events=((await logged).events||[]).filter(e=>e.commentId), writers=Object.fromEntries(events.map(e=>[String(e.commentId),e.by&&e.by.name])), writerMail=Object.fromEntries(events.map(e=>[String(e.commentId),String((e.by&&e.by.email)||"").toLowerCase()])); if(dz.key!==key) return;
       cm.forEach(c=>{ const aid=c.author&&c.author.accountId, name=writers[String(c.id)]||(c.author&&c.author.displayName)||"Someone";
-        const cd=el("div","cmt"+(BYID[aid]?" mine":" ext")); const meta=el("div","cmeta"); meta.appendChild(el("b",null,name)); meta.appendChild(el("span",null,ago(c.created)));
+        const cd=el("div","cmt"+(BYID[aid]?" mine":" ext")); const meta=el("div","cmeta"); meta.appendChild(el("b",null,name)); meta.appendChild(el("span",null,ago(c.created)+(c.created&&c.updated&&c.updated.slice(0,19)!==c.created.slice(0,19)?" · edited":"")));
         const rb=el("button","linkbtn sp","Reply"); rb.type="button"; rb.addEventListener("click",()=>{ const t=$("d-reply"); if(!t.value.trim()) t.value=name.split(" ")[0]+", "; t.focus(); t.scrollIntoView({block:"center",behavior:"smooth"}); });
-        meta.appendChild(rb); cd.appendChild(meta); const b=richNode(c.body,pictures); b.classList.add("rich"); b.dir="auto"; cd.appendChild(b); box.appendChild(cd); });
+        meta.appendChild(rb); cd.appendChild(meta); let b=richNode(c.body,pictures); b.classList.add("rich"); b.dir="auto"; cd.appendChild(b); box.appendChild(cd);
+        // Your own comments (any comment for administrators). Comments written here end with "— Name", which the proxy keeps.
+        if(IS_ADMIN||(writerMail[String(c.id)]&&writerMail[String(c.id)]===MY_EMAIL.toLowerCase())){
+          let text=String(c.body||""); if(writers[String(c.id)]) text=text.replace(/\n\n— [^\n]*$/,"");
+          addCommentEdit(meta,()=>b,()=>text,async next=>{ const r=await jira.editComment(key,c.id,next); text=next; const nb=richNode((r&&r.body)||next,pictures); nb.classList.add("rich"); nb.dir="auto"; b=nb; return nb; }); } });
     }catch(err){ if(dz.key===key) $("d-desc").replaceChildren(el("span","msg err",errorText(err))); }
   }
   // Drawer contents for an internal ticket (all data is already loaded).
@@ -1181,10 +1187,31 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     renderIntAttachments(key);
     const cm=t.comments||[]; $("d-ccount").textContent="("+cm.length+")";
     const box=$("d-comments"); box.replaceChildren(); if(!cm.length) box.appendChild(el("div","msg","No comments yet."));
-    cm.forEach(c=>{ const name=(c.author&&c.author.name)||"Someone";
-      const cd=el("div","cmt mine"); const meta=el("div","cmeta"); meta.appendChild(el("b",null,name)); meta.appendChild(el("span",null,ago(c.created)));
+    cm.forEach((c,n)=>{ const name=(c.author&&c.author.name)||"Someone";
+      const cd=el("div","cmt mine"); const meta=el("div","cmeta"); meta.appendChild(el("b",null,name)); meta.appendChild(el("span",null,ago(c.created)+(c.edited?" · edited":"")));
       const rb=el("button","linkbtn sp","Reply"); rb.type="button"; rb.addEventListener("click",()=>{ const ta=$("d-reply"); if(!ta.value.trim()) ta.value=name.split(" ")[0]+", "; ta.focus(); });
-      meta.appendChild(rb); cd.appendChild(meta); const b=commentWithPictures(key,c.body); b.dir="auto"; cd.appendChild(b); box.appendChild(cd); });
+      meta.appendChild(rb); cd.appendChild(meta); const b=commentWithPictures(key,c.body); b.dir="auto"; cd.appendChild(b); box.appendChild(cd);
+      // Your own comments (any comment for administrators).
+      if(IS_ADMIN||String((c.author&&c.author.email)||"").toLowerCase()===MY_EMAIL.toLowerCase())
+        addCommentEdit(meta,()=>b,()=>String(c.body||""),async next=>{ const r=await internalApi.editComment(key,n,c.created,next); if(r&&r.ticket) putInternal(r.ticket); if(dz.key===key) renderInternal(key); return null; }); });
+  }
+  // An Edit button in a comment's header: the text turns into a box with Save and Cancel. save(text) sends it
+  // and returns the comment's new text node (or null when the whole list was redrawn).
+  function addCommentEdit(meta,body,original,save){
+    const eb=el("button","linkbtn","Edit"); eb.type="button"; meta.appendChild(eb);
+    eb.addEventListener("click",()=>{
+      const old=body(); if(!old.isConnected) return;
+      const box=el("div","cedit"), ta=el("textarea","inp"); ta.value=original(); ta.dir="auto"; ta.style.width="100%"; ta.rows=Math.min(12,Math.max(3,ta.value.split("\n").length+1)); ta.setAttribute("aria-label","Edit comment");
+      const ok=el("button","btn primary","Save"), no=el("button","btn","Cancel"), msg=el("span","msg"), row=el("div","inline"); ok.type=no.type="button"; row.append(ok,no,msg); box.append(ta,row);
+      old.replaceWith(box); eb.hidden=true; ta.focus();
+      const done=node=>{ if(node) box.replaceWith(node); else if(box.isConnected) box.replaceWith(old); eb.hidden=false; };
+      no.addEventListener("click",()=>done(null));
+      ok.addEventListener("click",async()=>{ const text=ta.value.trim(); if(!text){ msg.textContent="Write something first."; msg.className="msg err"; return; }
+        if(text===original().trim()){ done(null); return; }
+        ok.disabled=no.disabled=ta.disabled=true; ok.textContent="Saving…"; msg.textContent="";
+        try{ done(await save(text)); toast("Comment updated"); }
+        catch(err){ ok.disabled=no.disabled=ta.disabled=false; ok.textContent="Save"; msg.textContent=errorText(err); msg.className="msg err"; } });
+    });
   }
   // Attachments on internal tickets: stored by the proxy; downloads go through it with your sign-in.
   function renderIntAttachments(key){
@@ -1389,8 +1416,13 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     while((m=marker.exec(text))){ const a=atts.find(x=>x.filename===m[1]); if(!a||!isImage(a)) continue; box.append(text.slice(at,m.index), inlineImage(a,key)); at=m.index+m[0].length; }
     box.append(text.slice(at)); return box;
   }
-  $("d-send").addEventListener("click",async()=>{ const key=dz.key, text=isOdoo(key)?$("d-reply").value.trim():commentMentions.text(), mentions=isOdoo(key)?[]:commentMentions.mentioned().filter(id=>id.includes("@")); if(!key) return; if(!text){ setMsg("d-cmsg","Write something first.",false); return; } const after=$("d-after").value; let notified=[]; const r=await runBatch([{key,run:()=>doComment(key,text,mentions).then(res=>{notified=(res&&res.notified)||[];return res;})}],"Comment added"); if(!r.fail){$("d-reply").value="";commentMentions.reset();} setMsg("d-cmsg",r.fail?"Not sent.":notified.length?"Sent. Notified "+notified.join(", ")+".":"Sent.",!r.fail);
-    if(!r.fail&&after){ const ix=after.indexOf("|"); const aid=after.slice(0,ix), aname=after.slice(ix+1); const r2=await doAssign([key],aid,aname); setMsg("d-cmsg",r2.fail?"Comment sent, but the assignee didn't change.":"Sent and assigned to "+aname+".",!r2.fail); } });
+  // One comment per click: the button stays off until the comment is sent (a second click sent it twice).
+  let sendingComment=false;
+  $("d-send").addEventListener("click",async()=>{ if(sendingComment) return; const key=dz.key, text=isOdoo(key)?$("d-reply").value.trim():commentMentions.text(), mentions=isOdoo(key)?[]:commentMentions.mentioned().filter(id=>id.includes("@")); if(!key) return; if(!text){ setMsg("d-cmsg","Write something first.",false); return; }
+    const btn=$("d-send"); sendingComment=true; btn.disabled=true; btn.textContent="Sending…";
+    try{ const after=$("d-after").value; let notified=[]; const r=await runBatch([{key,run:()=>doComment(key,text,mentions).then(res=>{notified=(res&&res.notified)||[];return res;})}],"Comment added"); if(!r.fail){$("d-reply").value="";commentMentions.reset();} setMsg("d-cmsg",r.fail?"Not sent.":notified.length?"Sent. Notified "+notified.join(", ")+".":"Sent.",!r.fail);
+      if(!r.fail&&after){ const ix=after.indexOf("|"); const aid=after.slice(0,ix), aname=after.slice(ix+1); const r2=await doAssign([key],aid,aname); setMsg("d-cmsg",r2.fail?"Comment sent, but the assignee didn't change.":"Sent and assigned to "+aname+".",!r2.fail); } }
+    finally{ sendingComment=false; btn.disabled=false; btn.textContent="Add comment"; } });
 
   setInterval(()=>{ const a=$("auto"); if(!a||!lastLoad) return; const left=Math.max(0,120-Math.round((Date.now()-lastLoad)/1000)); a.textContent="next refresh in "+(left>=60?Math.floor(left/60)+"m "+(left%60)+"s":left+"s");
     if(Date.now()-lastLoad>120000&&document.visibilityState==="visible"&&!batchBusy&&!reloading&&$("pop").hidden&&!drag){ lastLoad=Date.now(); reload(); } },1000);

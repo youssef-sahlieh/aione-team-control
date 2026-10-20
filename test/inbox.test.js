@@ -48,3 +48,30 @@ test('Jira account mentions map to dashboard people through the team settings',a
   assert.deepEqual(await jiraMentionEmails(f.env,'hi [~accountid:acc-rami] and [~accountid:unknown]'),['dev@aione.biz']);
   assert.deepEqual(await notifyMentions(f.env,f.dev,{emails:['dev@aione.biz'],key:'AION-1',title:'T',text:'self'}),[]);
 });
+
+test('notifications stay unread until each one is read; new tickets are remembered as read',async()=>{
+  const f=await fixture();await f.inbox(f.dev);
+  await addToInbox(f.env.STORE,['dev@aione.biz'],{type:'note',key:'AION-1',title:'T',by:'Admin',text:'one'},'admin@aione.biz');
+  await addToInbox(f.env.STORE,['dev@aione.biz'],{type:'mention',key:'AION-2',title:'T',by:'Admin',text:'two'},'admin@aione.biz');
+  const read=async body=>{const url=new URL('https://proxy.test/inbox/read');return (await inboxRoutes(new Request(url,{method:'POST',body:JSON.stringify(body)}),f.env,url,f.dev)).json();};
+  const seen=new URL('https://proxy.test/inbox/seen');await inboxRoutes(new Request(seen,{method:'POST'}),f.env,seen,f.dev);
+  let r=await f.inbox(f.dev);assert.deepEqual(r.items.map(x=>x.read),[false,false]);
+  r=await read({id:r.items[0].id});assert.deepEqual(r.items.map(x=>x.read),[true,false]);
+  r=await read({tickets:['AION-9','bad key']});assert.deepEqual(r.readTickets,['AION-9']);
+  r=await read({all:true});assert.ok(r.items.every(x=>x.read));
+});
+
+test('internal comments can be edited by their writer or an administrator only',async()=>{
+  const f=await fixture();
+  const create=new URL('https://proxy.test/internal');
+  const {ticket}=await (await internalRoutes(new Request(create,{method:'POST',body:JSON.stringify({summary:'Fix login',devs:['rami','razan']})}),f.env,create,f.admin,{})).json();
+  const post=new URL('https://proxy.test/internal/'+ticket.key+'/comment');
+  const added=await (await internalRoutes(new Request(post,{method:'POST',body:JSON.stringify({text:'first'})}),f.env,post,f.dev,{})).json();
+  const created=added.ticket.comments[0].created, url=new URL('https://proxy.test/internal/'+ticket.key+'/comment/0');
+  const edit=(me,body)=>internalRoutes(new Request(url,{method:'PUT',body:JSON.stringify(body)}),f.env,url,me,{});
+  assert.equal((await edit(f.other,{text:'hijack',created})).status,403);
+  assert.equal((await edit(f.dev,{text:'stale',created:'2000-01-01T00:00:00.000Z'})).status,409);
+  const mine=await (await edit(f.dev,{text:'fixed',created})).json();assert.equal(mine.ticket.comments[0].body,'fixed');assert.ok(mine.ticket.comments[0].edited);
+  assert.equal((await edit(f.admin,{text:'by admin',created})).status,200);
+  assert.equal(mine.ticket.comments.length,1);
+});

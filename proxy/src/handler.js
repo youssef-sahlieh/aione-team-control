@@ -32,7 +32,7 @@ import { cookieSessionRequest } from "./sessions.js";
 import { SESSION_MS } from "./session-policy.js";
 import { aiChat, aiBrief, aiConfigured, aiDescription, AIError } from "./ai.js";
 import { githubConfigured, syncPulls, prsByKey } from "./github.js";
-import { recordTicketEvent, ticketLogRoutes } from "./ticket-log.js";
+import { recordTicketEvent, ticketLogRoutes, readTicketLog } from "./ticket-log.js";
 import { integrationRoutes } from "./integrations.js";
 import { epicMapRoutes } from "./epic-map.js";
 import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
@@ -657,7 +657,7 @@ async function route(request, env, url) {
     } });
   }
 
-  const m = /^\/jira\/issue\/([A-Z][A-Z0-9_]*-\d+)(\/changelog|\/history|\/transitions|\/comment|\/description)?$/.exec(path);
+  const m = /^\/jira\/issue\/([A-Z][A-Z0-9_]*-\d+)(\/changelog|\/history|\/transitions|\/comment(?:\/\d{1,20})?|\/description)?$/.exec(path);
   if (m && isOurKey(m[1])) {
     const key = m[1], sub = m[2] || "";
     if(sub==="/history"){
@@ -717,6 +717,20 @@ async function route(request, env, url) {
       if (!text || text.length > 30000) return fail("bad_request", "Write a description first.", 400);
       const result = await jira(env, "/rest/api/2/issue/" + key, { method: "PUT", body: { fields: { description: text } }, signal: AbortSignal.timeout(20000) });
       if (result.ok) await recordTicketEvent(env, key, me, { action: "edit", changes: { description: { from: "(previous text)", to: "(new description)" } }, ...(b.source === "ai" ? { text: "Description suggested by AI" } : {}) });
+      return pass(result);
+    }
+    // Editing a comment: its writer (from the dashboard's own log, since Jira shows the proxy's account)
+    // or an administrator. A comment written here keeps its writer's name at the end.
+    const edit = /^\/comment\/(\d{1,20})$/.exec(sub);
+    if (edit && method === "PUT") {
+      const b = await readJson(request);
+      const text = b && typeof b.text === "string" ? b.text.trim() : "";
+      if (!text || text.length > 30000) return fail("bad_request", "Write a comment first.", 400);
+      const wrote = (await readTicketLog(env, key)).find((e) => e.action === "comment" && String(e.commentId) === edit[1]);
+      if (!isAdmin && String(wrote?.by?.email || "").toLowerCase() !== String(me.email || "").toLowerCase()) return fail("forbidden", "You can only edit your own comments.", 403);
+      const writer = wrote?.by, owner = !writer || String(env.JIRA_EMAIL || "").toLowerCase() === String(writer.email || "").toLowerCase();
+      const result = await jira(env, "/rest/api/2/issue/" + key + "/comment/" + edit[1], { method: "PUT", body: { body: owner ? text : text + "\n\n— " + (writer.name || writer.email) }, signal: AbortSignal.timeout(20000) });
+      if (result.ok) await recordTicketEvent(env, key, me, { action: "edit", changes: { comment: { from: "(previous text)", to: "(edited comment)" } }, text });
       return pass(result);
     }
     if (sub === "/comment" && method === "POST") {
