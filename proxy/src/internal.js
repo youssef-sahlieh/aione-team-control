@@ -36,6 +36,7 @@ async function dropFile(store, a) {
 
 import { normDev, validDev } from "./users.js";
 import { recordTicketEvent } from "./ticket-log.js";
+import { notifyMentions } from "./inbox.js";
 
 export const STATUSES = [
   { name: "Open", cat: "new" },
@@ -120,7 +121,7 @@ function applyFields(t, b, me, creating, people = []) {
 // What the dashboard gets: the ticket with its status category for the existing views.
 const view = (t) => ({ ...t, statusCat: statusCat(t.status), internal: true });
 
-export async function internalRoutes(request, env, url, me) {
+export async function internalRoutes(request, env, url, me, deps = {}) {
   const store = env.STORE, path = url.pathname, method = request.method;
   if (!store) return fail("no_store", "Internal tickets need the database. See SETUP.md.", 501);
   if (me.role !== "admin" && !me.dev) return fail("forbidden", "Your account has no developer name.", 403);
@@ -210,12 +211,16 @@ export async function internalRoutes(request, env, url, me) {
   if (!t || !canSee(me, t)) return fail("not_found", "No such internal ticket.", 404);
 
   if (m[2] && method === "POST") {
-    const text = String(((await readJson(request)) || {}).text || "").trim();
+    const b = (await readJson(request)) || {};
+    const text = String(b.text || "").trim();
     if (!text || text.length > 20000) return fail("bad_request", "Write a comment first.", 400);
+    const mentions = Array.isArray(b.mentions) ? b.mentions.filter((e) => typeof e === "string").slice(0, 20) : [];
     t.comments = [...(t.comments || []), { author: by(me), created: now(), body: text }].slice(-500);
     t.updated = now();
     await saveTicket(store, t);
-    return json({ ticket: view(t) }, 201);
+    // @mentioned people get a notification and an email (see inbox.js).
+    const notified = mentions.length ? await notifyMentions(env, me, { emails: mentions, key: t.key, title: t.summary, text, sendMail: deps.sendMail }) : [];
+    return json({ ticket: view(t), notified }, 201);
   }
 
   if (!m[2] && method === "PUT") {

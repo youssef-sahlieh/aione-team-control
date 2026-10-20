@@ -5,7 +5,7 @@ import { jiraIssue, internalTicket, people } from "../fixtures/issues.js";
 // A synthetic Odoo Helpdesk ticket as the proxy returns it (developer "builder" from the Odoo assignee).
 const odooTicket = { key: "HD-300", id: 300, ref: "300", odoo: true, summary: "Synthetic Odoo request", status: "In Progress", statusCat: "indeterminate", devs: ["builder"], developerName: "Builder", customer: { name: "Ariel Amiri", email: "ariel@example.invalid" }, team: "ai1 | Support", priority: "Medium", created: "2026-10-09T08:00:00Z", updated: "2026-10-10T08:00:00Z", closed: "", due: null, url: "https://odoo.example.invalid/web#id=300&model=helpdesk.ticket&view_type=form" };
 
-async function mockDashboard(page, { role = "admin", ticketLog = [], failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1, odoo = false, github = false, billingRequired = false, missingEstimate = false, filtersVisible = true, workLog = false } = {}) {
+async function mockDashboard(page, { inbox = [], role = "admin", ticketLog = [], failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1, odoo = false, github = false, billingRequired = false, missingEstimate = false, filtersVisible = true, workLog = false } = {}) {
   await page.clock.setFixedTime(new Date("2026-10-11T09:00:00Z"));
   const calls = [], unexpected = [], errors = [];
   const internalTickets=[structuredClone(internalTicket)];
@@ -53,6 +53,8 @@ async function mockDashboard(page, { role = "admin", ticketLog = [], failure = f
       return json({config:timeSetup,odoo:true,statuses:STATUSES,fields:{line:[{name:'x_studio_users',label:'Users',type:'char',custom:true},{name:'x_aione_entry_uuid',label:'Work entry id',type:'char',custom:true},{name:'x_aione_user_uuid',label:'Dashboard user id',type:'char',custom:true},{name:'x_aione_ticket_ref',label:'Ticket',type:'char',custom:true}]},
         suggested:{users:'x_studio_users',usersCandidates:['x_studio_users']},defaults:{ok:true,user:{id:7,name:'Odoo Bot'},company:{id:1,name:'AION'},employee:{id:5,name:'Bot employee'}},lockDate:'2026-09-30',
         projects:[{id:10,name:'Synthetic Project',partner:'Synthetic Client'}],catalog:[{id:'client',name:'Synthetic Client',parentId:null,odooProject:null}],users:[{email:'test@example.invalid',name:'Test User'}]});}
+    if(path==='/inbox')return json({items:inbox,seenAt:'2026-10-11T08:00:00.000Z'});
+    if(path==='/inbox/seen')return json({seenAt:'2026-10-11T09:00:00.000Z'});
     if(path==='/ticket-notes'&&method==='GET')return json({notes:[],recipients:[{email:'karim@example.invalid',name:'Karim Example',role:'admin'},{email:'dev2@example.invalid',name:'Second Developer',role:'user'}]});
     if(path==='/integrations')return json({checkedAt:'2026-10-11T09:00:00Z',keys:[{id:'jira',name:'Jira API token',status:'warning',message:'Expires in 5 days. Create a new key before then.',expiresAt:'2026-10-16T00:00:00.000Z',days:5}]});
     if(path==='/ticket-metadata/batch')return json({records:Object.fromEntries(body.keys.map(key=>[key,record(key)]))});
@@ -92,7 +94,7 @@ async function mockDashboard(page, { role = "admin", ticketLog = [], failure = f
   return { calls, unexpected, errors };
 }
 
-for(const role of ['admin','user'])test(`${role} Jira mentions pick people and send account IDs`,async({page})=>{
+for(const role of ['admin'])test(`${role} Jira mentions pick people and send account IDs`,async({page})=>{
   const mock=await mockDashboard(page,{role});await page.goto('/dashboard.html#AION-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();
   const input=page.locator('#d-reply');await input.fill('Please check @ka');await expect(page.getByRole('option',{name:'Karim Example',exact:true})).toBeVisible();await input.press('Enter');await expect(input).toHaveValue('Please check @Karim Example ');
   await input.press('Home');await input.press('Home');await input.press('Control+Home');await input.press('ArrowRight');await input.press('Control+Home');await input.press('Q');
@@ -100,9 +102,21 @@ for(const role of ['admin','user'])test(`${role} Jira mentions pick people and s
   await page.locator('#d-send').click();await expect(page.locator('#d-cmsg')).toHaveText('Sent.');
   const sent=mock.calls.find(c=>c.path==='/jira/issue/AION-101/comment');expect(sent.body.text).toBe('QPlease check [~accountid:synthetic-karim]  [~accountid:synthetic-youssef]');expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
-test('editing a selected mention makes it plain text and internal tickets have no picker',async({page})=>{
+test('users mention dashboard people on Jira tickets; they are sent as emails to notify',async({page})=>{
+  const mock=await mockDashboard(page,{role:'user'});await page.goto('/dashboard.html#AION-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();
+  const input=page.locator('#d-reply');await input.fill('Please check @se');await expect(page.getByRole('option',{name:'Second Developer',exact:true})).toBeVisible();await input.press('Enter');await expect(input).toHaveValue('Please check @Second Developer ');
+  await page.locator('#d-send').click();await expect(page.locator('#d-cmsg')).toHaveText('Sent.');
+  const sent=mock.calls.find(c=>c.path==='/jira/issue/AION-101/comment');expect(sent.body).toEqual({text:'Please check @Second Developer',mentions:['dev2@example.invalid']});expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('editing a selected mention makes it plain text and internal tickets mention dashboard people',async({page})=>{
   const mock=await mockDashboard(page);await page.goto('/dashboard.html#AION-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();const input=page.locator('#d-reply');await input.fill('@ka');await expect(page.getByRole('option',{name:'Karim Example',exact:true})).toBeVisible();await input.press('Enter');await input.fill('@Karim Edited');await input.press('Escape');await page.locator('#d-send').click();await expect(page.locator('#d-cmsg')).toHaveText('Sent.');expect(mock.calls.find(c=>c.path.endsWith('/comment')).body.text).toBe('@Karim Edited');
-  await page.locator('#d-close').click();await page.goto('/dashboard.html#INT-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();await input.fill('@ka');await expect(page.locator('.mention-hint')).toBeHidden();await expect(page.locator('#comment-mention-picker')).toBeHidden();expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+  await page.locator('#d-close').click();await page.goto('/dashboard.html#INT-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();await input.fill('@ka');await expect(page.locator('.mention-hint').first()).toBeVisible();await expect(page.getByRole('option',{name:'Karim Example',exact:true})).toBeVisible();await input.press('Enter');await page.locator('#d-send').click();await expect(page.locator('#d-cmsg')).toHaveText('Sent.');
+  expect(mock.calls.find(c=>c.path==='/internal/INT-101/comment').body).toEqual({text:'@Karim Example',mentions:['karim@example.invalid']});expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('the bell shows mentions and notes and opens the ticket',async({page})=>{
+  const mock=await mockDashboard(page,{inbox:[{id:'n1',at:'2026-10-11T08:30:00.000Z',type:'mention',key:'AION-101',title:'Synthetic Jira task',by:'Karim Example',text:'@Test can you check?'}]});await page.goto('/dashboard.html');
+  const bell=page.locator('#inbox-btn');await expect(page.locator('#inbox-count')).toBeVisible();await bell.click();await expect(page.locator('#inbox-panel')).toContainText('Karim Example mentioned you');
+  await page.locator('.inbox-item',{hasText:'Karim Example'}).click();await expect(page.locator('#drawer')).toBeVisible();expect(mock.calls.some(c=>c.path==='/inbox/seen')).toBe(true);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
 
 test('legacy Jira history route displays real field changes when all events are returned',async({page})=>{

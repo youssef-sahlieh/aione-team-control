@@ -22,6 +22,7 @@ import { reportRoutes, buildReport } from "./reports.js";
 import { dateRequestRoutes } from "./date-requests.js";
 import { ticketNoteRoutes } from "./ticket-notes.js";
 import { internalRoutes } from "./internal.js";
+import { inboxRoutes, notifyMentions, jiraMentionEmails, addToInbox } from "./inbox.js";
 import { odooConfigured, odooRoutes, odooTicketInfo, odooTicketForTime } from "./odoo.js";
 import { timeRoutes, timeSyncCron } from "./time-entries.js";
 import { monitorRoutes } from "./monitor.js";
@@ -525,7 +526,8 @@ async function route(request, env, url) {
     },
     sendMail:(from,body)=>sendMail(env,from,body)
   });
-  if (path === "/internal" || path.startsWith("/internal/")) return internalRoutes(request, env, url, me);
+  if (path === "/inbox" || path.startsWith("/inbox/")) return inboxRoutes(request, env, url, me);
+  if (path === "/internal" || path.startsWith("/internal/")) return internalRoutes(request, env, url, me, { sendMail: (from, body) => sendMail(env, from, body) });
   if (path === "/odoo/tickets" || path.startsWith("/odoo/tickets/")) return odooRoutes(request, env, url, me);
   if (path.startsWith("/monitor/odoo/")) return odooAppRoutes(request, env, url, me);
   if (path.startsWith("/monitor/")) return monitorRoutes(request, env, url, me);
@@ -544,7 +546,13 @@ async function route(request, env, url) {
 
   if (!isAdmin && (path === "/mail" || path === "/jira/users")) return fail("forbidden", "Only administrators can do that.", 403);
 
-  if (path === "/mail" && method === "POST") return sendMail(env, email, await readJson(request));
+  if (path === "/mail" && method === "POST") {
+    const b = await readJson(request), res = await sendMail(env, email, b);
+    // An internal note about a ticket also shows in the recipients' dashboard notifications.
+    if (res.ok && b?.note && typeof b.note.key === "string" && /^[A-Z][A-Z0-9_]*-\d+$/.test(b.note.key) && typeof b.note.text === "string")
+      await addToInbox(env.STORE, b.to, { type: "note", key: b.note.key, title: String(b.note.title || ""), by: me.name || email, text: b.note.text }, email);
+    return res;
+  }
 
   // Ticket lists only show each ticket's latest comment: slim results drop the rest (and the
   // description), which makes list loads several times smaller. One ticket's details are never slim.
@@ -719,6 +727,22 @@ async function route(request, env, url) {
       const author = me.name || me.email, owner = String(env.JIRA_EMAIL || "").toLowerCase() === String(me.email || "").toLowerCase();
       const result = await jira(env, "/rest/api/2/issue/" + key + "/comment", { method: "POST", body: { body: owner ? text : text + "\n\n— " + author } });
       if (result.ok) await recordTicketEvent(env, key, me, { action: "comment", text, commentId: String(result.data?.id || "") });
+      // Jira emails the people mentioned itself; the dashboard bell shows it too (no second email).
+      // Dashboard people mentioned by name (b.mentions, emails) also get an email from the dashboard.
+      const named = Array.isArray(b.mentions) ? b.mentions.filter((e) => typeof e === "string").slice(0, 20) : [];
+      if (result.ok && (named.length || text.includes("[~accountid:"))) {
+        try {
+          if (named.length) {
+            const t = await jira(env, "/rest/api/2/issue/" + key + "?fields=summary", { signal: AbortSignal.timeout(10000) });
+            result.data = { ...(result.data || {}), notified: await notifyMentions(env, me, { emails: named, key, title: t.ok ? t.data?.fields?.summary : "", text, sendMail: (from, body) => sendMail(env, from, body) }) };
+          }
+          const emails = await jiraMentionEmails(env, text);
+          if (emails.length) {
+            const t = await jira(env, "/rest/api/2/issue/" + key + "?fields=summary", { signal: AbortSignal.timeout(10000) });
+            await notifyMentions(env, me, { emails, key, title: t.ok ? t.data?.fields?.summary : "", text: text.replace(/\[~accountid:[\w:-]+\]/g, "@") });
+          }
+        } catch { console.warn("jira_mention_inbox_failed"); }
+      }
       return pass(result);
     }
   }

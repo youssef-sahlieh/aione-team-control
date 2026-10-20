@@ -1,4 +1,5 @@
 import { listUsers, validEmail } from './users.js';
+import { addToInbox } from './inbox.js';
 
 const json = (data, status = 200) => Response.json(data, {status, headers: {'Cache-Control':'no-store'}});
 const fail = (error, status = 400) => json({code:'ticket_notes', error}, status);
@@ -56,6 +57,7 @@ export async function ticketNoteRoutes(request, env, url, me, {readTicket, sendM
       note.notification = result.ok ? 'sent' : 'failed';
     } catch { note.notification = 'failed'; }
     await save();
+    await addToInbox(store, to, {type:'note', key, title:ticket.title, by:note.author.name, text}, me.email);
     return json({note}, 201);
   } finally { await store.deleteIfValue(lock, owner); }
 }

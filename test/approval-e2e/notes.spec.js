@@ -9,9 +9,9 @@ test('developer sends a private ticket note that admins can read',async({page})=
   await expect(page.getByRole('checkbox',{name:'Youssef',exact:true})).toBeChecked();
   await expect(page.getByRole('checkbox',{name:'Karim',exact:true})).toBeChecked();
   await page.getByRole('checkbox',{name:'Youssef',exact:true}).uncheck();
-  await page.getByLabel('Note to admins',{exact:true}).fill('Please review the deployment blocker before tomorrow.');
-  await page.getByRole('button',{name:'Send to admins',exact:true}).click();
-  await expect(page.locator('#panel-notes')).toContainText('Note saved and emailed to admins.');
+  await page.getByLabel('Note',{exact:true}).fill('Please review the deployment blocker before tomorrow.');
+  await page.getByRole('button',{name:'Send note',exact:true}).click();
+  await expect(page.locator('#panel-notes')).toContainText('Note saved and emailed.');
   await expect(page.locator('#panel-notes')).toContainText('Please review the deployment blocker before tomorrow.');
   await expect(page.locator('#panel-notes')).toContainText('Sent to: Preview Admin, Ellen, Karim');
   await page.getByRole('tab',{name:'Comments',exact:true}).click();
