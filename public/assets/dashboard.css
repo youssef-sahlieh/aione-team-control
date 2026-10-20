@@ -422,8 +422,7 @@ button.key.odoo:hover{text-decoration:underline}
 /* Column widths (percent so it scales to the viewport). */
 .db-ver{font-weight:600;font-family:var(--mono,monospace)}
 .db-link{color:var(--accent);text-decoration:none;font-family:var(--mono,monospace)}
-.db-link:hover{text-decoration:underline}
-.db-strong{font-weight:600}.db-ago{color:var(--muted)}
+.db-link:hover{text-decoration:underline}.db-strong{font-weight:600}.db-ago{color:var(--muted)}
 .db-count{color:var(--muted);font-family:var(--mono,monospace)}
 .db-addon-names{white-space:normal}
 .db-pill{font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:999px;background:var(--sunk,#eef1f4);color:var(--muted);white-space:nowrap}

@@ -265,6 +265,10 @@ async function instanceFacts(env, inst) {
   if (!/^[\w-]+$/.test(dbFromFilter)) dbFromFilter = ""; // ignore wildcard filters like "119_.*"
   const databases = [...new Set([...(cfg.databases || []), cfg.selected_database, f.db_name, dbFromFilter].filter(Boolean))].filter((d) => /^[\w-]+$/.test(d) && isProductionName(d));
   const addons = (add.addons || []).map((a) => a.name).filter(Boolean).sort();
+  // The installed POS add-on's version (and its date when Odoo gives one).
+  const posAddon = (add.addons || []).find((a) => /flutter/i.test(a.name || "")) || null;
+  const posVersion = posAddon ? String(posAddon.installed_version || posAddon.version || "") : "";
+  const posVersionDate = posAddon ? String(posAddon.installed_date || posAddon.installed_at || posAddon.write_date || "") : "";
   // Odoo major version from the server's public version endpoint (works without a login).
   const base = inst.domain ? "https://" + inst.domain : "";
   let odooVersion = "";
@@ -281,6 +285,8 @@ async function instanceFacts(env, inst) {
     addons,
     addonCount: addons.length,
     flutter: addons.some((a) => /flutter/i.test(a)),
+    posVersion,
+    posVersionDate,
     configError: cfg.database_inventory_error || cfg.error || ""
   };
 }
