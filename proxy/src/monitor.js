@@ -36,7 +36,7 @@ async function readLog(env, before, limit) {
 }
 
 // Runs an action in Odoo and records it in both logs. A failure is recorded too.
-async function act(env, me, { action, target, details, run }) {
+export async function act(env, me, { action, target, details, run }) {
   let result, error = "";
   try { result = await run(); }
   catch (err) { error = (err && err.message) || "Odoo error"; }

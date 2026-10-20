@@ -40,7 +40,8 @@ const COLUMNS = [
   { key: "expired", label: "Expiry", value: (r) => expiryCell(r), sort: (r) => inside(r, time(r.expires)), csv: (r) => !r.loginOk ? "" : r.expired === null ? "none" : r.expired ? "EXPIRED " + fmtDate(r.expires) : "ok " + fmtDate(r.expires) },
   { key: "flutter", label: "Flutter POS", value: (r) => r.flutter ? el("span", "db-pill ok", "Installed") : el("span", "db-pill", "No"), sort: (r) => (r.flutter ? 1 : 0), csv: (r) => r.flutter ? "yes" : "no" },
   { key: "posver", label: "POS version", value: (r) => posVersionCell(r), sort: (r) => (r.posVersion ? r.posVersion.split(".").map((n) => n.padStart(6, "0")).join(".") : null), csv: (r) => posVersionText(r) },
-  { key: "addons", label: "Add-ons", value: (r) => addonCell(r), sort: (r) => (r.addons || []).length, csv: (r) => (r.addons || []).join("; ") }
+  { key: "addons", label: "Add-ons", value: (r) => addonCell(r), sort: (r) => (r.addons || []).length, csv: (r) => (r.addons || []).join("; ") },
+  { key: "control", label: "Actions", action: true, value: (r) => actionCell(r), sort: () => null, csv: () => "" }
 ];
 // Audit & Deploy link for each instance: the instance's page in Audit & Deploy.
 const AD_PAGE = "audit-deploy.html";
@@ -50,7 +51,7 @@ function adLinkCell(r) {
   const a = el("a", "db-link", "Open"); a.href = adLinkUrl(r); a.target = "_blank"; a.rel = "noopener";
   return a;
 }
-const WEIGHT = { company: 2.2, database: 1.6, url: 1.5, adlink: 1.1, version: 0.6, users: 0.75, pos: 0.6, branches: 0.85, created: 1, lastLogin: 1.3, lastOrder: 1.3, expired: 1.2, flutter: 0.95, posver: 1.1, addons: 2 };
+const WEIGHT = { company: 2.2, database: 1.6, url: 1.5, adlink: 1.1, version: 0.6, users: 0.75, pos: 0.6, branches: 0.85, created: 1, lastLogin: 1.3, lastOrder: 1.3, expired: 1.2, flutter: 0.95, posver: 1.1, addons: 2, control: 0.9 };
 // Every column shows by default; phones swipe the table sideways to see them all.
 
 
@@ -104,6 +105,63 @@ function addonCell(r) {
     box.append(" ", more);
   }
   return box;
+}
+
+// Instance actions. Each opens a preview with all three; the chosen one needs its own confirm button.
+// Only restart reaches Odoo for now; start and stop are shown but not available yet.
+const ACTIONS = [
+  { key: "restart", title: "Restart Instance", desc: "Restart the container", tone: "warn", icon: "↻", note: "The site is unavailable for a short time while the container restarts.", enabled: true },
+  { key: "start", title: "Start Instance", desc: "Scale to 1 replica", tone: "ok", icon: "▶", note: "", enabled: false },
+  { key: "stop", title: "Stop Instance", desc: "Scale to 0 replicas", tone: "bad", icon: "■", note: "", enabled: false }
+];
+function actionCell(r) {
+  if (!r.instance) return el("span", "db-muted", "—");
+  const b = el("button", "btn db-act-open", "Actions"); b.type = "button"; b.setAttribute("aria-haspopup", "dialog");
+  b.addEventListener("click", () => openActions(r, b));
+  return b;
+}
+function openActions(r, opener) {
+  const dlg = $("action-dialog");
+  let picked = null;
+  const title = el("h2", "", "Instance actions"); title.id = "action-title";
+  const who = el("p", "db-act-who", (companyOf(r) || r.database || r.instance) + " · " + r.instance + (r.url ? " · " + r.url.replace(/^https?:\/\//, "") : ""));
+  const cards = el("div", "db-act-cards");
+  const note = el("p", "db-act-note", "Choose an action to see what it does.");
+  const cancel = el("button", "btn", "Cancel"); cancel.type = "button";
+  const confirm = el("button", "btn primary", "Confirm"); confirm.type = "button"; confirm.disabled = true;
+  for (const a of ACTIONS) {
+    const card = el("button", "db-act-card db-act-" + a.tone); card.type = "button"; card.disabled = !a.enabled;
+    card.setAttribute("aria-pressed", "false");
+    card.append(el("span", "db-act-icon", a.icon), el("span", "db-act-title", a.title), el("span", "db-act-desc", a.enabled ? a.desc : a.desc + " · not available yet"));
+    card.addEventListener("click", () => {
+      picked = a;
+      for (const c of cards.children) c.setAttribute("aria-pressed", String(c === card));
+      note.textContent = a.note + " Press Confirm to continue.";
+      confirm.disabled = false;
+    });
+    cards.append(card);
+  }
+  confirm.addEventListener("click", async () => {
+    if (!picked) return;
+    confirm.disabled = true; confirm.textContent = "Working…";
+    try {
+      await api("/db-report/action", { method: "POST", body: { instance: r.instance, action: picked.key } });
+      confirm.textContent = "Confirm";
+      dlg.close();
+      toast(picked.title + " sent to " + r.instance + ". It can take a minute.");
+    } catch (err) {
+      if (err && err.code === "session") { signOut(true); return; }
+      confirm.disabled = false; confirm.textContent = "Confirm";
+      note.textContent = errText(err);
+    }
+  });
+  cancel.addEventListener("click", () => dlg.close());
+  const foot = el("div", "db-dlg-foot"); foot.append(cancel, confirm);
+  const body = el("div", "db-dlg-body"); body.append(title, who, cards, note, foot);
+  dlg.replaceChildren(body);
+  dlg.onclose = () => opener && opener.focus();
+  dlg.showModal();
+  cancel.focus(); // Enter or Space does nothing until an action is chosen and confirmed
 }
 
 // Filters: [id, label, options [value, label, test(row)]]. The Odoo options are filled from the report.
@@ -268,8 +326,9 @@ async function continueBuild(force) {
 function downloadCsv() {
   if (!REPORT) return;
   const esc = (v) => '"' + String(v).replace(/"/g, '""') + '"';
-  const lines = [COLUMNS.map((c) => esc(c.label)).join(",")];
-  for (const r of visibleRows()) lines.push(COLUMNS.map((c) => esc(c.csv(r))).join(","));
+  const csvCols = COLUMNS.filter((c) => !c.action);
+  const lines = [csvCols.map((c) => esc(c.label)).join(",")];
+  for (const r of visibleRows()) lines.push(csvCols.map((c) => esc(c.csv(r))).join(","));
   const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
   a.download = "aion-databases-" + fmtDate(new Date().toISOString()) + ".csv";
