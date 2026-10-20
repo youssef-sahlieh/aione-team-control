@@ -266,7 +266,9 @@ async function instanceFacts(env, inst) {
   const databases = [...new Set([...(cfg.databases || []), cfg.selected_database, f.db_name, dbFromFilter].filter(Boolean))].filter((d) => /^[\w-]+$/.test(d) && isProductionName(d));
   const addons = (add.addons || []).map((a) => a.name).filter(Boolean).sort();
   // The installed POS add-on's version (and its date when Odoo gives one).
-  const posAddon = (add.addons || []).find((a) => /flutter/i.test(a.name || "")) || null;
+  // Several add-ons can mention Flutter; the POS add-on itself is flutter_pos_api, then any with a version.
+  const flutterAddons = (add.addons || []).filter((a) => /flutter/i.test(a.name || ""));
+  const posAddon = flutterAddons.find((a) => /^flutter_pos_api$/i.test(a.name)) || flutterAddons.find((a) => a.module_version) || flutterAddons[0] || null;
   const posVersion = posAddon ? String(posAddon.module_version || posAddon.installed_version || posAddon.version || "") : "";
   const posVersionDate = posAddon ? String(posAddon.installed_date || posAddon.installed_at || posAddon.write_date || "") : "";
   // Odoo major version from the server's public version endpoint (works without a login).
