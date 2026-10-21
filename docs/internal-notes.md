@@ -1,13 +1,15 @@
 # Internal ticket notes
 
-Users have the same **Internal note** buttons and ticket column as admins. Click one to open a composer with recipient chips, Subject, Note and an optional ticket-details link. User recipients are approved admin contacts; the user action saves a private note and emails its selected recipients. Admins keep their existing developer email composer. The **Internal notes** tab also provides saved notes and a form to send to admins.
+The **Internal notes** tab on a ticket is a team thread inside AION. It is not email and not a Jira comment. Type `@` to pick someone from the dashboard people; each person you mention gets an email with a link to the ticket and an entry in their bell notifications.
 
-Notes are stored in the account database separately from Jira and internal ticket comments. Admins can view all notes on an accessible ticket. Users can submit notes only on tickets assigned to their developer name, and can view only their own notes while they retain access to the ticket. The server enforces these permissions.
+Notes are stored in the account database (`notes:<JIRA_PROJECT>:<ticket>`), separately from Jira. Everyone who can open a ticket can read its notes: administrators, and developers whose developer name is on the ticket. Anyone else gets "This ticket is unavailable." People can't mention themselves.
 
-Every note records its sender, developer name, selected recipients and creation time. Users can choose Ellen (ellen@aione.biz), Youssef (youssef@aione.biz), Karim (karim@aione.biz), or other existing account admins. The fixed contacts are defined in proxy/settings.js; recipient selection never grants admin privileges. Reading all ticket notes still requires an admin account. Selected recipients receive an email with a dashboard link when mail delivery is configured. If email fails, the note remains saved and the UI reports that delivery was not confirmed. Retrying the same submission does not create another note or email. Notes are limited to 5000 characters, 20 submissions per author per ticket per hour, and 500 notes per ticket.
+Each note records its author, developer name, mentioned people and creation time. Mentions must be people from the dashboard list; the server rejects anyone else. Notes are limited to 5000 characters, 20 per author per ticket per hour, and 500 per ticket. Retrying the same submission does not create a second note or a second notification. Reusing a note id from someone else is refused.
 
-No Jira comment is created and no due date is changed. The existing admin email-to-developer action remains available as **Email developer**. The new `/ticket-notes` endpoint requires deployment of the updated proxy before publishing the frontend.
+No Jira comment is created and no due date is changed. The admin **Email developer** action is separate and still works as before.
+
+If email delivery fails, the note is still saved and the bell notification is still written; the failure is logged on the server. The `/ticket-notes` endpoint needs the updated proxy deployed before the frontend is published.
 
 ## Notifications
 
-The bell in the top bar shows, for each person: @mentions in comments, internal notes sent to them (from the notes composer or the administrator email composer), and tickets created since they last opened the bell that are assigned to their developer name (every new ticket for administrators). It checks every minute and shows a short message when something new arrives. Items are kept per person in the account database (`inbox:<email>`, last 100); opening the bell marks them read. The `/inbox` endpoints need the updated proxy deployed.
+The bell in the top bar lists, for each person: @mentions in Jira comments and internal tickets, internal notes that mention them, and tickets created since they last opened the bell that are assigned to their developer name (every new ticket for administrators). It checks every minute. Each item is marked read on its own, or all at once. Items are kept per person in the account database (`inbox:<email>`, newest 100). The `/inbox` and `/inbox/read` endpoints need the updated proxy deployed.

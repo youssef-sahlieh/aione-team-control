@@ -111,7 +111,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const doComment=(key,text,mentions)=>isOdoo(key)?odooApi.note(key,text).then(r=>{delete ODOO_DETAIL[key];return r;}):isInt(key)?internalApi.comment(key,text,mentions):jira.comment(key,text,mentions);
   // Everyone in the dashboard you can @mention or send a note to on a ticket (not you), kept per ticket.
   const MENTION_PEOPLE={};
-  const mentionPeople=key=>(MENTION_PEOPLE[key]=MENTION_PEOPLE[key]||api("/ticket-notes?key="+encodeURIComponent(key)).then(r=>(r.recipients||[]).map(p=>({name:p.name,email:String(p.email).toLowerCase(),role:p.role}))).catch(err=>{delete MENTION_PEOPLE[key];throw err;}));
+  const mentionPeople=key=>(MENTION_PEOPLE[key]=MENTION_PEOPLE[key]||api("/ticket-notes?key="+encodeURIComponent(key)).then(r=>(r.people||[]).map(p=>({name:p.name,email:String(p.email).toLowerCase(),role:p.role}))).catch(err=>{delete MENTION_PEOPLE[key];throw err;}));
   // Same shape as a Jira ticket after norm(), so tiles, filters, boards and history all work unchanged.
   const normInternal=t=>normalizeInternalIssue(t,PEOPLE);
   // Odoo Helpdesk tickets (HD-…): read from Odoo through the proxy; stage, developer and notes are saved back to Odoo.
@@ -600,7 +600,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const dw=el("span","c-due"); dw.appendChild(dueButton(i,t)); r.appendChild(dw);
     { const cr=el("span","upd c-cre",createdDate(i.created)); cr.title="Created "+fmtWhen(i.created).d+" "+fmtWhen(i.created).t+" (Asia/Jerusalem)"; cr.style.fontFamily="var(--mono)"; r.appendChild(cr); }
     r.appendChild(el("span","upd c-upd",ago(i.updated)));
-    { const nb=el("button","notebtn c-note email-button","Internal note"); nb.type="button"; nb.setAttribute("aria-label","Internal note for "+i.key);nb.title=IS_ADMIN?"Email the developer directly (not posted in Jira)":"Send a private note to admins"; nb.addEventListener("click",e=>{ e.stopPropagation(); notePopover(nb,i.key); }); r.appendChild(nb); }
+    { const nb=el("button","notebtn c-note email-button","Internal note"); nb.type="button"; nb.setAttribute("aria-label","Internal note for "+i.key);nb.title="Internal notes for the team (not posted in Jira)"; nb.addEventListener("click",e=>{ e.stopPropagation(); notePopover(nb,i.key); }); r.appendChild(nb); }
 
     const actions=el("span","c-actions"), menu=el("button","icon-btn row-menu","⋯");menu.type="button";menu.setAttribute("aria-label","Actions for "+i.key);menu.setAttribute("aria-haspopup","dialog");menu.addEventListener("click",()=>rowActions(menu,i));actions.appendChild(menu);r.appendChild(actions);
     for(const key of ['clientName','subClientName','estimatedHours','actualHours','workDone',...(IS_ADMIN?['billing']:[])]){const value=i[key],text=key==='billing'?(value==='not_billable'?'Not billable':value==='billable'?'Billable':'Not set'):value??'Not set';const f=key==='clientName'||key==='subClientName'?'client':key,edit=business.canQuickEdit(i,f);const c=el(edit?'button':'span','business-cell c-'+key+(edit?' cell-edit':''),String(text||'Not set'));if(edit){c.type='button';c.setAttribute('aria-label','Edit '+business.quickLabel(f)+' for '+i.key);c.addEventListener('click',e=>{e.stopPropagation();businessPopover(c,i,f);});}if(key==='workDone'){c.textContent=value?value.slice(0,100)+(value.length>100?'…':''):'Not set';c.title=value||'';}r.append(c);}
@@ -685,7 +685,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(mode!=="status") r3.appendChild(statusButton(i));
     if(mode!=="dev") r3.appendChild(devButton(i));
     const db=dueButton(i,t); db.classList.add("sp"); r3.appendChild(db); c.appendChild(r3);
-    { const nb=el("button","notebtn","✉ Internal notes"); nb.type="button"; nb.addEventListener("click",e=>{ e.stopPropagation(); notePopover(nb,i.key); }); c.appendChild(nb); }
+    { const nb=el("button","notebtn","Internal notes"); nb.type="button"; nb.addEventListener("click",e=>{ e.stopPropagation(); notePopover(nb,i.key); }); c.appendChild(nb); }
     return c;
   }
   async function onDrop(d,target,mode){
@@ -798,83 +798,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       }catch(err){ res.replaceChildren(el("div","note",errorText(err))); } },300); });
     foot.appendChild(inp); p.appendChild(foot); p.appendChild(res); placePop(anchor);
   }
-  async function userNotePopover(anchor,key){
-    const i=issueByKey(key);if(!i)return;
-    const p=$("pop");p.replaceChildren();p.classList.add("wide");
-    p.appendChild(el("h4",null,"Internal note · "+key+" · to people in the dashboard, not posted in Jira"));
-    const body=el("div","body");p.appendChild(body);
-    const f1=el("div","fld");f1.appendChild(el("label",null,"To"));const rc=el("div","rcpts");rc.textContent="Loading admins…";f1.appendChild(rc);body.appendChild(f1);
-    const f3=el("div","fld"),subj=el("input","inp");subj.id="user-note-subject";subj.maxLength=200;subj.value="Internal note: "+key+" – "+i.summary;const sl=el("label",null,"Subject");sl.htmlFor=subj.id;f3.append(sl,subj);body.append(f3);
-    const f4=el("div","fld"),ta=el("textarea","inp");ta.id="user-note-body";ta.maxLength=5000;ta.dir="auto";ta.placeholder="Write your note… Type @ to mention a developer or anyone in the dashboard.";const nl=el("label",null,"Note");nl.htmlFor=ta.id;f4.append(nl,ta);body.append(f4);
-    const f5=el("label","tgl"),details=el("input","ck");details.type="checkbox";details.checked=true;f5.append(details," Include ticket details and link");body.append(f5);
-    const foot=el("div","foot"),msg=el("span","msg"),send=el("button","btn primary sp","Send email");send.type="button";send.disabled=true;msg.setAttribute("role","status");foot.append(msg,send);p.append(foot);placePop(anchor);ta.focus();
-    const chosen=new Set(),chips=new Map();let recipients=[],id=crypto.randomUUID();
-    const changed=()=>{id=crypto.randomUUID();};ta.addEventListener("input",changed);subj.addEventListener("input",changed);details.addEventListener("change",changed);
-    // @name in the note also sends the note to that person.
-    createCommentMentions({textarea:ta,enabled:()=>true,local:()=>true,people:()=>mentionPeople(key),onChoose:person=>{const chip=chips.get(person.accountId.toLowerCase());if(!chip)return;chosen.add(chip.title);chip.setAttribute("aria-pressed","true");changed();}});
-    try{const result=await api("/ticket-notes?key="+encodeURIComponent(key));if(!p.contains(send))return;recipients=result.recipients||[];rc.replaceChildren();
-      for(const person of recipients){const on=person.role!=="user";if(on)chosen.add(person.email);const chip=el("button","fc",person.name+(person.role==="admin"?" · admin":""));chips.set(String(person.email).toLowerCase(),chip);chip.type="button";chip.title=person.email;chip.setAttribute("aria-label",person.name);chip.setAttribute("aria-pressed",String(on));chip.onclick=()=>{chosen.has(person.email)?chosen.delete(person.email):chosen.add(person.email);chip.setAttribute("aria-pressed",String(chosen.has(person.email)));changed();};rc.append(chip);}
-      send.disabled=!recipients.length;if(!recipients.length)msg.textContent="No one else is in the dashboard yet.";placePop(anchor);
-    }catch(error){if(p.contains(send)){rc.textContent="";msg.textContent=error.message;msg.className="msg err";}}
-    send.onclick=async()=>{if(!chosen.size){msg.textContent="Pick at least one person.";return;}if(!ta.value.trim()){msg.textContent="Write the note first.";ta.focus();return;}
-      send.disabled=true;send.textContent="Sending…";ta.disabled=subj.disabled=details.disabled=true;rc.querySelectorAll("button").forEach(b=>b.disabled=true);
-      try{const result=await api("/ticket-notes",{method:"POST",body:{key,id,text:ta.value.trim(),subject:subj.value.trim(),includeDetails:details.checked,recipients:[...chosen]}});if(p.contains(send))closePop();toast(result.note.notification==="sent"?"Internal note emailed.":"Internal note saved. Email delivery was not confirmed.",recipients.filter(r=>chosen.has(r.email)).map(r=>r.name));}
-      catch(error){msg.textContent=error.message;msg.className="msg err";send.disabled=false;send.textContent="Send email";ta.disabled=subj.disabled=details.disabled=false;rc.querySelectorAll("button").forEach(b=>b.disabled=false);}
-    };
-  }
-  function notePopover(anchor,key){
-    if(!IS_ADMIN){userNotePopover(anchor,key);return;}
-    const i=issueByKey(key); if(!i) return;
-    const p=$("pop"); p.replaceChildren(); p.classList.add("wide");
-    p.appendChild(el("h4",null,"Internal note · "+key+" · email only, not posted in Jira"));
-    const body=el("div","body"); p.appendChild(body);
-    const f1=el("div","fld"); f1.appendChild(el("label",null,"To")); const rc=el("div","rcpts"); f1.appendChild(rc); body.appendChild(f1);
-    const chosen=new Set(i.devs.filter(d=>DEV_EMAIL[d]));
-    Object.keys(DEV_EMAIL).sort().forEach(d=>{ const c=el("button","fc "+devK(d)); c.type="button"; c.appendChild(el("span","sw")); c.appendChild(el("span",null,"ai1_"+d)); if(i.devs.includes(d)) c.appendChild(el("span","cnt","on ticket"));
-      c.setAttribute("aria-pressed",String(chosen.has(d))); c.title=DEV_EMAIL[d];
-      c.addEventListener("click",()=>{ chosen.has(d)?chosen.delete(d):chosen.add(d); c.setAttribute("aria-pressed",String(chosen.has(d))); }); rc.appendChild(c); });
-    // Everyone else in the dashboard, besides the developer list above.
-    const fp=el("div","fld"); fp.appendChild(el("label",null,"Dashboard people")); const pp=el("div","rcpts"); pp.textContent="Loading…"; fp.appendChild(pp); body.appendChild(fp);
-    const people=new Set();
-    api("/ticket-notes?key="+encodeURIComponent(key)).then(r=>{ if(!p.contains(pp)) return; pp.replaceChildren(); const devMails=new Set(Object.values(DEV_EMAIL).map(e=>String(e).toLowerCase()));
-      const list=(r.recipients||[]).filter(x=>!devMails.has(String(x.email).toLowerCase())); if(!list.length) pp.textContent="Everyone is in the developer list above.";
-      list.forEach(x=>{ const c=el("button","fc",x.name+(x.role==="admin"?" · admin":"")); c.type="button"; c.title=x.email; c.setAttribute("aria-pressed","false"); c.addEventListener("click",()=>{ people.has(x.email)?people.delete(x.email):people.add(x.email); c.setAttribute("aria-pressed",String(people.has(x.email))); }); pp.appendChild(c); });
-    }).catch(()=>{ if(p.contains(pp)) pp.textContent="Couldn't load the dashboard people."; });
-    const f2=el("div","fld"); f2.appendChild(el("label",null,"Also send to (optional, comma separated)")); const extra=el("input","inp"); extra.type="text"; extra.placeholder="name@aione.biz"; f2.appendChild(extra); body.appendChild(f2);
-    const f3=el("div","fld"); f3.appendChild(el("label",null,"Subject")); const subj=el("input","inp"); subj.value="Internal note: "+key+" – "+i.summary; f3.appendChild(subj); body.appendChild(f3);
-    const f4=el("div","fld"); f4.appendChild(el("label",null,"Note")); const ta=el("textarea","inp"); ta.dir="auto"; ta.placeholder="Write your note… Type @ to mention a developer."; f4.appendChild(ta); body.appendChild(f4);
-    // @name in the note picks that developer (or dashboard person) as a recipient too.
-    const devByMail=new Map(Object.entries(DEV_EMAIL).map(([d,e])=>[String(e).toLowerCase(),d]));
-    const press=(box,email)=>box.querySelectorAll("button").forEach(c=>{ if(String(c.title).toLowerCase()===email) c.setAttribute("aria-pressed","true"); });
-    createCommentMentions({textarea:ta,enabled:()=>true,local:()=>true,
-      people:async()=>{ const list=await mentionPeople(key).catch(()=>[]), seen=new Set(list.map(x=>x.email)); return [...Object.entries(DEV_EMAIL).filter(([,e])=>!seen.has(String(e).toLowerCase())).map(([d,e])=>({name:devFirstName(d),email:String(e).toLowerCase()})),...list]; },
-      onChoose:person=>{ const email=person.accountId.toLowerCase(), d=devByMail.get(email); if(d){ chosen.add(d); press(rc,email); } else { people.add(email); press(pp,email); } }});
-    const f5=el("label","tgl"); f5.style.padding="2px 12px 8px"; const cc=el("input","ck"); cc.type="checkbox"; cc.checked=true; f5.appendChild(cc); f5.append(" Include ticket details and link"); body.appendChild(f5);
-    const foot=el("div","foot"); const msg=el("span","msg"); const send=el("button","btn primary sp",MAIL?"Send email":"Open in Outlook"); send.type="button"; send.title=MAIL?"Sends right away, in your name. Replies come to your inbox.":"Opens a ready-made email in your mail app. Check it and press Send there.";
-    send.addEventListener("click",async()=>{
-      const to=[...new Set([...chosen].map(d=>DEV_EMAIL[d]).concat([...people],extra.value.split(/[,;\s]+/).map(x=>x.trim()).filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x))))];
-      const text=ta.value.trim();
-      if(!to.length){ msg.textContent="Pick at least one person."; msg.className="msg err"; return; }
-      if(!text){ msg.textContent="Write the note first."; msg.className="msg err"; ta.focus(); return; }
-      const names=[...chosen].map(devFirstName), subject=subj.value.trim()||("Internal note: "+key);
-      if(!MAIL){
-        let plain="Hi "+(names.length?names.join(", "):"team")+",\n\n"+text+"\n";
-        if(cc.checked) plain+="\n---\nTicket: "+key+" – "+i.summary+"\n"+dashUrl(key)+(isInt(key)?"":"\nIn "+sourceName(key)+": "+ticketUrl(key))+"\nStatus: "+i.status+" · Due: "+(i.due?fmtDate(i.due):"Not set")+" · Assignee: "+(i.assignee?PEOPLE[i.assignee].name:i.assigneeName)+(i.parent?" · Epic: "+i.parent.name:"")+"\n";
-        plain+="\nThanks,\n"+ME+"\n";
-        openEmail(to,subject,plain);
-        closePop(); toast("Email opened in Outlook. Check it and press Send there.",to); return;
-      }
-      send.disabled=true; send.textContent="Sending…"; msg.textContent="";
-      let html="<p>Hi "+esc(names.length?names.join(", "):"team")+",</p>"+text.split(/\n{2,}/).map(par=>"<p>"+esc(par).replace(/\n/g,"<br>")+"</p>").join("");
-      if(cc.checked) html+="<hr><p><b>Ticket:</b> <a href=\""+esc(dashUrl(key))+"\">"+esc(key)+"</a> – "+esc(i.summary)+(isInt(key)?"":" (<a href=\""+esc(ticketUrl(key))+"\">"+sourceName(key)+"</a>)")+"<br><b>Status:</b> "+esc(i.status)+" · <b>Due:</b> "+esc(i.due?fmtDate(i.due):"Not set")+" · <b>Assignee:</b> "+esc(i.assignee?PEOPLE[i.assignee].name:i.assigneeName)+(i.parent?" · <b>Epic:</b> "+esc(i.parent.name):"")+"</p>";
-      html+="<p>Thanks,<br>"+esc(ME)+"</p>";
-      try{ await api("/mail",{method:"POST",body:{to,subject,html,note:{key,title:i.summary,text}}});
-        closePop(); toast("Internal note sent to "+to.length+" recipient"+(to.length===1?"":"s"),to);
-      }catch(err){ send.disabled=false; send.textContent="Send email"; msg.className="msg err";
-        msg.textContent=err.code==="network"?"The server didn't confirm. Ask the recipient before sending again.":err.message; }
-    });
-    foot.appendChild(msg); foot.appendChild(send); p.appendChild(foot); placePop(anchor); ta.focus();
-  }
+  // Internal notes live in the ticket drawer's Notes tab (inside AION, not email).
+  function notePopover(anchor,key){ closePop(); openDrawer(key); drawerUI.select("notes"); }
   async function getTransitions(key){
     if(isOdoo(key)){ const d=await odooDetail(key); return (d.stages||[]).filter(s=>s.name!==d.ticket.status).map(s=>({id:s.id,name:"Move to "+s.name,to:{name:s.name,statusCategory:{key:s.cat}}})); }
     if(isInt(key)){ const t=INT[key]; return INT_STATUSES.filter(s=>!t||s.name!==t.status).map(s=>({id:s.name,name:s.name==="Closed"?"Close":"Move to "+s.name,to:{name:s.name,statusCategory:{key:s.cat}}})); }

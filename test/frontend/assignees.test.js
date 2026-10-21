@@ -5,8 +5,8 @@ import { createFilters, matchesFilters } from "../../public/assets/models/filter
 import { restoreView, serializeView } from "../../public/assets/models/saved-views.js";
 const people={karim:{name:"Karim Team"},ys:{name:"Youssef Team"},rami:{name:"Rami"},rz:{name:"Razan"},ellen:{name:"Ellen"}};
 test("default assignees exclude Razan while keeping her available explicitly",()=>{
-  assert.deepEqual(defaultAssigneeKeys(people),["karim","ys","rami","__internal_tickets"]);
-  assert.deepEqual(assigneeOptions(people).map(([key])=>key),["karim","ys","rami","rz","__internal_tickets"]);
+  assert.deepEqual(defaultAssigneeKeys(people),["karim","ys","rami","ellen","__internal_tickets"]);
+  assert.deepEqual(assigneeOptions(people).map(([key])=>key),["karim","ys","rami","ellen","rz","__internal_tickets"]);
   const {rz,...withoutRazan}=people;
   assert.equal(defaultAssigneeKeys(withoutRazan).includes("razan"),false);
   assert.equal(assigneeFilterKey({assignee:null,assigneeName:"Razan Team"},withoutRazan),"razan");
@@ -14,7 +14,7 @@ test("default assignees exclude Razan while keeping her available explicitly",()
 test("Others includes configured outsiders, unknown Jira accounts and unassigned tickets only when selected",()=>{
   const f=createFilters();f.assignee=new Set(defaultAssigneeKeys(people));
   const match=i=>matchesFilters(i,"2026-10-11",{filters:f,query:"",needsReply:()=>false,assigneeKey:i=>assigneeFilterKey(i,people)});
-  for(const issue of [{assignee:"ellen"},{assignee:null,assigneeName:"Someone else"},{assignee:null,assigneeName:"Unassigned"}]){
+  for(const issue of [{assignee:"stranger"},{assignee:null,assigneeName:"Someone else"},{assignee:null,assigneeName:"Unassigned"}]){
     assert.equal(match(issue),false);f.assignee.add("other");assert.equal(match(issue),true);f.assignee.delete("other");
   }
   assert.equal(match({assignee:"rz"}),false);f.assignee.add("other");assert.equal(match({assignee:"rz"}),false);f.assignee.add("rz");assert.equal(match({assignee:"rz"}),true);

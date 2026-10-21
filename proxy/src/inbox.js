@@ -56,12 +56,12 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 
 // Someone was @mentioned in a comment: a dashboard notification, and an email when mail is set up.
 // Returns the names of the people notified. Only dashboard people can be notified this way.
-export async function notifyMentions(env, me, { emails, key, title, text, sendMail }) {
+export async function notifyMentions(env, me, { emails, key, title, text, sendMail, type = "mention" }) {
   const people = await mentionablePeople(env), wanted = new Set((emails || []).map(norm));
   const to = people.filter((p) => wanted.has(p.email) && p.email !== norm(me.email));
   if (!to.length) return [];
   const by = me.name || me.email;
-  await addToInbox(env.STORE, to.map((p) => p.email), { type: "mention", key, title, by, text }, me.email);
+  await addToInbox(env.STORE, to.map((p) => p.email), { type, key, title, by, text }, me.email);
   if (sendMail) {
     const link = String(env.APP_URL || "").replace(/\/$/, "") + "/dashboard.html?page=tickets#" + key;
     try {

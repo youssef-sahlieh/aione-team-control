@@ -2,12 +2,12 @@
 // When local() is true (internal tickets, internal notes) the people come from the dashboard instead:
 // names stay as typed, and mentioned() gives the emails of the people still mentioned in the text.
 let pickers=0;
-export function createCommentMentions({textarea,search,enabled,local=()=>false,people,onChoose}) {
+export function createCommentMentions({textarea,search,enabled,local=()=>false,people,onChoose,localHint}) {
   const n=pickers++,box=document.createElement('div');box.className='mention-picker';box.id='comment-mention-picker'+(n?'-'+n:'');box.setAttribute('role','listbox');box.hidden=true;textarea.after(box);
   const hint=document.createElement('p');hint.className='mention-hint';box.after(hint);
   textarea.setAttribute('aria-controls',box.id);textarea.setAttribute('aria-expanded','false');
   let previous=textarea.value,mentions=[],timer,turn=0,choices=[],active=0,query=null;
-  function label(){const own=local();box.setAttribute('aria-label',own?'Mention someone':'Mention a Jira user');hint.textContent=own?'Type @ to mention someone. They get a notification and an email.':'Type @ and at least two letters to mention someone.';hint.hidden=!enabled();}
+  function label(){const own=local();box.setAttribute('aria-label',own?'Mention someone':'Mention a Jira user');hint.textContent=own?(localHint||'Type @ to mention someone. They get a notification and an email.'):'Type @ and at least two letters to mention someone.';hint.hidden=!enabled();}
   function close(){clearTimeout(timer);turn++;box.hidden=true;textarea.setAttribute('aria-expanded','false');textarea.removeAttribute('aria-activedescendant');choices=[];query=null;}
   function sync(){
     const next=textarea.value;if(next===previous)return;

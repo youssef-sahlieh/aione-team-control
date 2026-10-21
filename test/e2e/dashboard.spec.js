@@ -55,7 +55,7 @@ async function mockDashboard(page, { inbox = [], role = "admin", ticketLog = [],
         projects:[{id:10,name:'Synthetic Project',partner:'Synthetic Client'}],catalog:[{id:'client',name:'Synthetic Client',parentId:null,odooProject:null}],users:[{email:'test@example.invalid',name:'Test User'}]});}
     if(path==='/inbox')return json({items:inbox,seenAt:'2026-10-11T08:00:00.000Z',readTickets:inboxTickets});
     if(path==='/inbox/read'){inbox=inbox.map(x=>body.all||x.id===body.id?{...x,read:true}:x);inboxTickets.push(...(body.tickets||[]));return json({items:inbox,seenAt:'2026-10-11T08:00:00.000Z',readTickets:inboxTickets});}
-    if(path==='/ticket-notes'&&method==='GET')return json({notes:[],recipients:[{email:'karim@example.invalid',name:'Karim Example',role:'admin'},{email:'dev2@example.invalid',name:'Second Developer',role:'user'}]});
+    if(path==='/ticket-notes'&&method==='GET')return json({notes:[],people:[{email:'karim@example.invalid',name:'Karim Example',role:'admin'},{email:'dev2@example.invalid',name:'Second Developer',role:'user'}]});
     if(path==='/integrations')return json({checkedAt:'2026-10-11T09:00:00Z',keys:[{id:'jira',name:'Jira API token',status:'warning',message:'Expires in 5 days. Create a new key before then.',expiresAt:'2026-10-16T00:00:00.000Z',days:5}]});
     if(path==='/ticket-metadata/batch')return json({records:Object.fromEntries(body.keys.map(key=>[key,record(key)]))});
     if(path==='/ticket-metadata'&&method==='GET')return json({metadata:record(url.searchParams.get('key')),history:[],closed:false});
@@ -153,7 +153,7 @@ test('legacy Jira history cannot claim completeness when its expanded events are
 });
 
 for(const width of [320,1440])test(`internal note buttons open the email composer at ${width}px`,async({page})=>{
-  await page.setViewportSize({width,height:900});const mock=await mockDashboard(page);await page.goto('/dashboard.html#AION-101');await expect(page.locator('#d-note')).toBeInViewport();await page.locator('#d-note').click();await expect(page.locator('#pop')).toContainText('Internal note · AION-101');await expect(page.locator('#pop textarea')).toBeFocused();await page.keyboard.press('Escape');await page.getByRole('tab',{name:'Comments',exact:true}).click();await expect(page.locator('#d-comment-note')).toBeVisible();await page.locator('#d-comment-note').click();await expect(page.locator('#pop textarea')).toBeFocused();expect(mock.calls.some(c=>c.path==='/mail')).toBe(false);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+  await page.setViewportSize({width,height:900});const mock=await mockDashboard(page);await page.goto('/dashboard.html#AION-101');await expect(page.locator('#d-note')).toBeInViewport();await page.locator('#d-note').click();await expect(page.locator('#drawer')).toBeVisible();await expect(page.getByRole('tab',{name:'Internal notes',exact:true})).toHaveAttribute('aria-selected','true');await expect(page.locator('#panel-notes #ticket-note-text')).toBeVisible();await page.getByRole('tab',{name:'Comments',exact:true}).click();await expect(page.locator('#d-comment-note')).toBeVisible();await page.locator('#d-comment-note').click();await expect(page.locator('#panel-notes #ticket-note-text')).toBeVisible();expect(mock.calls.some(c=>c.path==='/mail')).toBe(false);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
 test('internal note buttons are available to users',async({page})=>{
   const mock=await mockDashboard(page,{role:'user'});await page.goto('/dashboard.html#AION-101');await expect(page.locator('#d-note')).toBeVisible();await page.getByRole('tab',{name:'Comments',exact:true}).click();await expect(page.locator('#d-comment-note')).toBeVisible();expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
@@ -162,7 +162,7 @@ test('internal note buttons are available to users',async({page})=>{
 for(const width of [320,1024,1440])test(`manager Internal note column opens a ticket composer at ${width}px`,async({page})=>{
   await page.setViewportSize({width,height:900});const mock=await mockDashboard(page);await page.goto('/dashboard.html');await expect(page.locator('#view .item')).toHaveCount(2);
   if(width===1440)await expect(page.locator('#view .gr.head .c-note')).toHaveText('Internal note');
-  for(const key of ['AION-101','INT-101']){const button=page.getByRole('button',{name:'Internal note for '+key,exact:true});await expect(button).toBeVisible();await expect(button).toHaveText('Internal note');await button.click();await expect(page.locator('#drawer')).toBeHidden();await expect(page.locator('#pop')).toContainText('Internal note · '+key);await expect(page.locator('#pop textarea')).toBeFocused();await page.keyboard.press('Escape');}
+  for(const key of ['AION-101','INT-101']){const button=page.getByRole('button',{name:'Internal note for '+key,exact:true});await expect(button).toBeVisible();await expect(button).toHaveText('Internal note');await button.click();await expect(page.locator('#drawer')).toBeVisible();await expect(page.locator('#panel-notes #ticket-note-text')).toBeVisible();await page.locator('#d-close').click();await expect(page.locator('#drawer')).toBeHidden();}
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:`test-results/email-column-${width}.png`,fullPage:true});expect(mock.calls.some(c=>c.path==='/mail')).toBe(false);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
 test('regular users have the same Internal note column',async({page})=>{
@@ -256,7 +256,7 @@ for(const role of ["admin","user"])test(`${role} defaults to three assignees and
   await expect(page.locator("#view .item")).toHaveCount(3);
   await expect(page.locator("#view")).not.toContainText("Task for razan");
   await expect(page.locator("#view")).not.toContainText("Task for someone");
-  await expect(page.locator("#assignee-filter-trigger")).toHaveAttribute("title","Karim, Youssef, Rami, Internal Tickets (default)");
+  await expect(page.locator("#assignee-filter-trigger")).toHaveAttribute("title","Karim, Youssef, Rami, Ellen, Internal Tickets (default)");
   if(role==="user"){
     await expect(page.locator("#ftoggle")).toBeHidden();await expect(page.locator("#active")).toHaveText("Default team");
     await selectAssignees(page,["Karim","Youssef","Rami","Razan"]);await expect(page.locator("#view .item")).toHaveCount(4);await page.locator("#fclear").click();
@@ -277,12 +277,12 @@ for(const role of ["admin","user"])test(`${role} defaults to three assignees and
 });
 for(const width of [320,1440])test(`filter labels and selections remain clear at ${width}px`,async({page})=>{
   await page.setViewportSize({width,height:900});const mock=await mockDashboard(page,{role:"user",assigneeTeam:true});await page.goto("/dashboard.html");
-  await expect(page.locator("#filter-summary")).toHaveText("3 tickets match · 4 selected");await expect(page.locator(".quick-field > span").filter({hasText:"Assignee"})).toBeVisible();
+  await expect(page.locator("#filter-summary")).toHaveText("3 tickets match · 5 selected");await expect(page.locator(".quick-field > span").filter({hasText:"Assignee"})).toBeVisible();
   await expect(page.locator("#ftoggle")).toBeHidden();await expect(page.locator("#fgrid")).toBeHidden();
   for(const label of ["Reporter","Priority","Developer","Saved view"])await expect(page.getByRole("combobox",{name:label,exact:true})).toHaveCount(0);
   await expect(page.locator("#quick-filters select:visible")).toHaveCount(6);
   await selectAssignees(page,["Razan"]);await expect(page.locator("#view .item")).toHaveCount(1);await expect(page.locator("#filter-summary")).toHaveText("1 ticket match · 1 selected");
-  await page.getByRole("button",{name:"Reset filters",exact:true}).click();await expect(page.locator("#view .item")).toHaveCount(3);await expect(page.locator("#filter-summary")).toHaveText("3 tickets match · 4 selected");
+  await page.getByRole("button",{name:"Reset filters",exact:true}).click();await expect(page.locator("#view .item")).toHaveCount(3);await expect(page.locator("#filter-summary")).toHaveText("3 tickets match · 5 selected");
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.locator(".fpanel").screenshot({path:`test-results/filters-${width}.png`});expect(mock.errors).toEqual([]);
 });
 for(const role of ["admin"])for(const width of [320,1440])test(`${role} reporter, status and priority stay visible and filter together at ${width}px`,async({page})=>{
@@ -806,8 +806,9 @@ test('the new internal ticket form is a large window that stays open while scrol
 });
 test('internal notes can go to anyone in the dashboard, not only the developer list',async({page})=>{
  const mock=await mockDashboard(page);await page.goto('/dashboard.html#AION-101');await page.locator('#d-note').click();
- await expect(page.locator('#pop')).toContainText('Dashboard people');
- await expect(page.locator('#pop').getByRole('button',{name:/Second Developer/})).toBeVisible();
+ await expect(page.locator('#panel-notes')).toContainText('Internal notes');
+ await page.locator('#ticket-note-text').fill('Hello @Second');
+ await expect(page.locator('#panel-notes .mention-picker').getByRole('option',{name:'Second Developer'})).toBeVisible();
  expect(mock.errors).toEqual([]);
 });
 

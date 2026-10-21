@@ -1,6 +1,10 @@
 import { createCommentMentions } from './comment-mentions.js';
 const element = (tag, text, className) => {const node = document.createElement(tag); if (text) node.textContent = text; if (className) node.className = className; return node;};
-export function createTicketNotes({api, isAdmin}) {
+const when = value => new Date(value).toLocaleString();
+
+// Internal notes on a ticket: a team thread inside AION (not email, not Jira). Type @ to mention someone; they get a
+// notification in the bell.
+export function createTicketNotes({api}) {
   const panel = document.getElementById('panel-notes');
   let currentKey, generation = 0;
   const drafts = new Map();
@@ -11,55 +15,48 @@ export function createTicketNotes({api, isAdmin}) {
     try {
       const result = await api('/ticket-notes?key='+encodeURIComponent(key));
       if (run !== generation) return;
-      panel.replaceChildren(element('h3', 'Internal notes'), element('p', isAdmin ? 'Private notes between the team. These are not Jira comments.' : 'Send a private note to admins or any developer. Type @ to mention someone. Only you, the people you send it to and admins can see it.', 'msg'));
+      panel.replaceChildren(element('h3', 'Internal notes'), element('p', 'Team notes on this ticket. Type @ to mention someone and they get a notification in AION. Nothing is emailed or posted to Jira.', 'msg'));
       const list = element('div');
       for (const note of result.notes.slice().reverse()) {
         const card = element('article', null, 'blk');
-        card.append(element('strong', note.author.name + (note.author.dev ? ' · '+note.author.dev : '')), element('p', new Date(note.createdAt).toLocaleString(), 'msg'));
+        card.append(element('strong', note.author.name + (note.author.dev ? ' · '+note.author.dev : '')), element('p', when(note.createdAt), 'msg'));
         const text = element('p', note.text); text.style.whiteSpace = 'pre-wrap'; text.style.overflowWrap = 'anywhere'; card.append(text);
-        if (note.recipients?.length) card.append(element('p','Sent to: '+note.recipients.map(r => r.name).join(', '),'msg'));
-        if (note.notification !== 'sent') card.append(element('p', 'Saved; email delivery was not confirmed.', 'msg'));
+        if (note.mentions?.length) card.append(element('p', 'Mentioned: ' + note.mentions.map(m => '@' + m.name).join(', '), 'msg'));
         list.append(card);
       }
-      if (!result.notes.length) list.append(element('p','No internal notes yet.','msg'));
-      const form = element('form'), label = element('label','Note'), input = element('textarea');
-      const recipientField = element('fieldset'), legend = element('legend','Send to'); recipientField.append(legend);
-      const choices = [];
-      for (const recipient of result.recipients || []) {
-        const row = element('label'), checkbox = element('input'); checkbox.type = 'checkbox'; checkbox.value = recipient.email;
-        checkbox.checked = drafts.get(key)?.recipients ? drafts.get(key).recipients.includes(recipient.email) : recipient.role !== 'user';
-        row.append(checkbox,document.createTextNode(' '+recipient.name)); row.style.display = 'block'; recipientField.append(row); choices.push(checkbox);
-      }
-      const remember = () => drafts.set(key,{text:input.value,recipients:choices.filter(c => c.checked).map(c => c.value),id:crypto.randomUUID()});
-      choices.forEach(c => c.addEventListener('change',remember));
+      if (!result.notes.length) list.append(element('p', 'No internal notes yet.', 'msg'));
+      const form = element('form'), label = element('label', 'Note'), input = element('textarea');
+      const button = element('button', 'Post note', 'btn primary'); button.type = 'submit';
+      const status = element('p', null, 'msg'); status.setAttribute('role', 'status');
       input.id = 'ticket-note-text'; input.maxLength = 5000; input.rows = 4; input.required = true; input.style.width = '100%'; label.htmlFor = input.id;
-      input.value = drafts.get(key)?.text || '';
-      input.addEventListener('input', remember);
-      const button = element('button','Send note','btn primary'); button.type = 'submit';
-      const status = element('p',null,'msg'); status.setAttribute('role','status');
-      if (!choices.length) {button.disabled = true;status.textContent = 'No one else is in the dashboard yet. Ask an administrator to check the Users page.';}
-      form.append(recipientField,label,input,button,status); panel.append(list,form);
-      // @name in the note also ticks that person in "Send to".
-      const people = (result.recipients || []).map(r => ({name:r.name, email:String(r.email).toLowerCase()}));
-      createCommentMentions({textarea:input, enabled:() => true, local:() => true, people:async () => people, onChoose:person => {const box = choices.find(c => c.value.toLowerCase() === person.accountId.toLowerCase()); if (box && !box.checked) {box.checked = true; remember();}}});
-      form.addEventListener('submit',async event => {
-        event.preventDefault(); if (!input.value.trim()) return;
-        const draft = drafts.get(key) || {text:input.value,recipients:choices.filter(c => c.checked).map(c => c.value),id:crypto.randomUUID()}; drafts.set(key,draft);
-        if (!draft.recipients.length) {status.textContent = 'Choose at least one person.';return;}
-        button.disabled = input.disabled = true; status.textContent = 'Sending…';
+      const draft = drafts.get(key) || {id: crypto.randomUUID(), text: ''};
+      drafts.set(key, draft);
+      input.value = draft.text;
+      input.addEventListener('input', () => { draft.text = input.value; });
+      // The shared @ picker lists everyone in the dashboard except yourself; mentioned() gives the emails still in the text.
+      const people = result.people || [];
+      form.append(label, input, button, status);
+      panel.append(list, form);
+      // The picker is inserted after the textarea, so the form must be in the panel first.
+      const mentions = createCommentMentions({textarea:input, enabled:() => true, local:() => true, people:async () => people, localHint:'Type @ to mention someone. They get a notification in AION.'});
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        const text = mentions.text(); if (!text) return;
+        const mentionEmails = mentions.mentioned();
+        button.disabled = input.disabled = true; status.textContent = 'Posting…';
         try {
-          const saved = await api('/ticket-notes',{method:'POST',body:{key,text:draft.text,id:draft.id,recipients:draft.recipients}});
+          await api('/ticket-notes', {method:'POST', body:{key, text, id: draft.id, mentions: mentionEmails}});
           drafts.delete(key);
           if (currentKey !== key || run !== generation) return;
           await load(key);
-          if (currentKey === key) panel.prepend(element('p',saved.note.notification === 'sent' ? 'Note saved and emailed.' : 'Note saved. Email delivery was not confirmed.','msg'));
-        } catch(error) {status.textContent = error.message || 'Could not send the note. Please retry.'; button.disabled = input.disabled = false;}
+          if (currentKey === key) panel.prepend(element('p', mentionEmails.length ? 'Note posted. ' + mentionEmails.length + ' ' + (mentionEmails.length === 1 ? 'person' : 'people') + ' notified.' : 'Note posted.', 'msg'));
+        } catch (error) { status.textContent = error.message || 'Could not post the note. Please retry.'; button.disabled = input.disabled = false; }
       });
-    } catch(error) {
+    } catch (error) {
       if (run !== generation) return;
-      const message = element('p',error.message || 'Could not load internal notes.','msg'); message.setAttribute('role','alert');
-      const retry = element('button','Retry','btn'); retry.type = 'button'; retry.onclick = () => load(key); panel.replaceChildren(message,retry);
+      const message = element('p', error.message || 'Could not load internal notes.', 'msg'); message.setAttribute('role', 'alert');
+      const retry = element('button', 'Retry', 'btn'); retry.type = 'button'; retry.onclick = () => load(key); panel.replaceChildren(message, retry);
     }
   }
-  return {load, dirty:key => !!drafts.get(key)?.text.trim(), reset:key => {drafts.delete(key); generation++; currentKey = null;}};
+  return {load, dirty: key => !!drafts.get(key)?.text.trim(), reset: key => { drafts.delete(key); generation++; currentKey = null; }};
 }

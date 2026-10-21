@@ -498,7 +498,7 @@ async function route(request, env, url) {
       if (result.data.key !== key || f?.project?.key !== env.JIRA_PROJECT || !Array.isArray(f.labels)) return null;
       return {title:f.summary, devs:f.labels.filter(l => /^ai1_/i.test(l)).map(l => l.slice(4).toLowerCase())};
     },
-    sendMail:(from,body) => sendMail(env,from,body)
+    sendMail:(from,body)=>sendMail(env,from,body)
   });
   if(path==="/date-requests"||path.startsWith("/date-requests/"))return dateRequestRoutes(request,env,url,me,{
     readTicket:async (key,{checkInitial=false}={})=>{

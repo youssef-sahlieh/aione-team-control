@@ -35,11 +35,12 @@ test('an @mention on an internal comment notifies and emails anyone in the dashb
   const items=(await f.inbox(f.other)).items;assert.equal(items.length,1);assert.equal(items[0].type,'mention');assert.equal(items[0].key,key);assert.equal(items[0].by,'Rami Dev');
 });
 
-test('internal notes reach any developer selected, in their notifications',async()=>{
+test('an internal note @mention lands in the mentioned person’s notifications and sends them an email',async()=>{
   const f=await fixture();
   const url=new URL('https://proxy.test/ticket-notes');
-  const res=await ticketNoteRoutes(new Request(url,{method:'POST',body:JSON.stringify({key:'AION-1',id:crypto.randomUUID(),text:'Please look',recipients:['other@aione.biz']})}),f.env,url,f.dev,{readTicket:async()=>({title:'Task',devs:['rami']}),sendMail:f.sendMail});
+  const res=await ticketNoteRoutes(new Request(url,{method:'POST',body:JSON.stringify({key:'AION-1',id:crypto.randomUUID(),text:'Please look',mentions:['other@aione.biz']})}),f.env,url,f.dev,{readTicket:async()=>({title:'Task',devs:['rami']}),sendMail:f.sendMail});
   assert.equal(res.status,201);
+  assert.equal(f.mails.length,1);assert.deepEqual(f.mails[0].to,['other@aione.biz']);
   const items=(await f.inbox(f.other)).items;assert.equal(items.length,1);assert.equal(items[0].type,'note');assert.equal(items[0].title,'Task');
 });
 
