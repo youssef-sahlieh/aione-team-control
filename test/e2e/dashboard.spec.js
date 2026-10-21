@@ -53,7 +53,8 @@ async function mockDashboard(page, { role = "admin", ticketLog = [], failure = f
       return json({config:timeSetup,odoo:true,statuses:STATUSES,fields:{line:[{name:'x_studio_users',label:'Users',type:'char',custom:true},{name:'x_aione_entry_uuid',label:'Work entry id',type:'char',custom:true},{name:'x_aione_user_uuid',label:'Dashboard user id',type:'char',custom:true},{name:'x_aione_ticket_ref',label:'Ticket',type:'char',custom:true}]},
         suggested:{users:'x_studio_users',usersCandidates:['x_studio_users']},defaults:{ok:true,user:{id:7,name:'Odoo Bot'},company:{id:1,name:'AION'},employee:{id:5,name:'Bot employee'}},lockDate:'2026-09-30',
         projects:[{id:10,name:'Synthetic Project',partner:'Synthetic Client'}],catalog:[{id:'client',name:'Synthetic Client',parentId:null,odooProject:null}],users:[{email:'test@example.invalid',name:'Test User'}]});}
-    if(path==='/ticket-notes'&&method==='GET')return json({notes:[],recipients:[{email:'karim@example.invalid',name:'Karim Example',role:'admin'},{email:'dev2@example.invalid',name:'Second Developer',role:'user'}]});
+    if(path==='/ticket-notes'&&method==='GET')return json({notes:[],people:[{email:'karim@example.invalid',name:'Karim Example',role:'admin'},{email:'dev2@example.invalid',name:'Second Developer',role:'user'}]});
+    if(path==='/ticket-notes/inbox'&&method==='GET')return json({items:[],unread:0});
     if(path==='/integrations')return json({checkedAt:'2026-10-11T09:00:00Z',keys:[{id:'jira',name:'Jira API token',status:'warning',message:'Expires in 5 days. Create a new key before then.',expiresAt:'2026-10-16T00:00:00.000Z',days:5}]});
     if(path==='/ticket-metadata/batch')return json({records:Object.fromEntries(body.keys.map(key=>[key,record(key)]))});
     if(path==='/ticket-metadata'&&method==='GET')return json({metadata:record(url.searchParams.get('key')),history:[],closed:false});
@@ -113,7 +114,7 @@ test('legacy Jira history cannot claim completeness when its expanded events are
 });
 
 for(const width of [320,1440])test(`internal note buttons open the email composer at ${width}px`,async({page})=>{
-  await page.setViewportSize({width,height:900});const mock=await mockDashboard(page);await page.goto('/dashboard.html#AION-101');await expect(page.locator('#d-note')).toBeInViewport();await page.locator('#d-note').click();await expect(page.locator('#pop')).toContainText('Internal note · AION-101');await expect(page.locator('#pop textarea')).toBeFocused();await page.keyboard.press('Escape');await page.getByRole('tab',{name:'Comments',exact:true}).click();await expect(page.locator('#d-comment-note')).toBeVisible();await page.locator('#d-comment-note').click();await expect(page.locator('#pop textarea')).toBeFocused();expect(mock.calls.some(c=>c.path==='/mail')).toBe(false);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+  await page.setViewportSize({width,height:900});const mock=await mockDashboard(page);await page.goto('/dashboard.html#AION-101');await expect(page.locator('#d-note')).toBeInViewport();await page.locator('#d-note').click();await expect(page.locator('#drawer')).toBeVisible();await expect(page.getByRole('tab',{name:'Internal notes',exact:true})).toHaveAttribute('aria-selected','true');await expect(page.locator('#panel-notes #ticket-note-text')).toBeVisible();await page.getByRole('tab',{name:'Comments',exact:true}).click();await expect(page.locator('#d-comment-note')).toBeVisible();await page.locator('#d-comment-note').click();await expect(page.locator('#panel-notes #ticket-note-text')).toBeVisible();expect(mock.calls.some(c=>c.path==='/mail')).toBe(false);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
 test('internal note buttons are available to users',async({page})=>{
   const mock=await mockDashboard(page,{role:'user'});await page.goto('/dashboard.html#AION-101');await expect(page.locator('#d-note')).toBeVisible();await page.getByRole('tab',{name:'Comments',exact:true}).click();await expect(page.locator('#d-comment-note')).toBeVisible();expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
@@ -122,7 +123,7 @@ test('internal note buttons are available to users',async({page})=>{
 for(const width of [320,1024,1440])test(`manager Internal note column opens a ticket composer at ${width}px`,async({page})=>{
   await page.setViewportSize({width,height:900});const mock=await mockDashboard(page);await page.goto('/dashboard.html');await expect(page.locator('#view .item')).toHaveCount(2);
   if(width===1440)await expect(page.locator('#view .gr.head .c-note')).toHaveText('Internal note');
-  for(const key of ['AION-101','INT-101']){const button=page.getByRole('button',{name:'Internal note for '+key,exact:true});await expect(button).toBeVisible();await expect(button).toHaveText('Internal note');await button.click();await expect(page.locator('#drawer')).toBeHidden();await expect(page.locator('#pop')).toContainText('Internal note · '+key);await expect(page.locator('#pop textarea')).toBeFocused();await page.keyboard.press('Escape');}
+  for(const key of ['AION-101','INT-101']){const button=page.getByRole('button',{name:'Internal note for '+key,exact:true});await expect(button).toBeVisible();await expect(button).toHaveText('Internal note');await button.click();await expect(page.locator('#drawer')).toBeVisible();await expect(page.locator('#panel-notes #ticket-note-text')).toBeVisible();await page.locator('#d-close').click();await expect(page.locator('#drawer')).toBeHidden();}
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:`test-results/email-column-${width}.png`,fullPage:true});expect(mock.calls.some(c=>c.path==='/mail')).toBe(false);expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
 test('regular users have the same Internal note column',async({page})=>{
@@ -766,8 +767,9 @@ test('the new internal ticket form is a large window that stays open while scrol
 });
 test('internal notes can go to anyone in the dashboard, not only the developer list',async({page})=>{
  const mock=await mockDashboard(page);await page.goto('/dashboard.html#AION-101');await page.locator('#d-note').click();
- await expect(page.locator('#pop')).toContainText('Dashboard people');
- await expect(page.locator('#pop').getByRole('button',{name:/Second Developer/})).toBeVisible();
+ await expect(page.locator('#panel-notes')).toContainText('Internal notes');
+ await page.locator('#ticket-note-text').fill('Hello @Second');
+ await expect(page.locator('#note-mention-picker').getByRole('option',{name:'Second Developer'})).toBeVisible();
  expect(mock.errors).toEqual([]);
 });
 

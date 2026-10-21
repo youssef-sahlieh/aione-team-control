@@ -20,7 +20,7 @@ import { BusinessError, businessResponse, catalogRoutes, metadataRoutes, readMet
 import {savedReportRoutes} from "./saved-reports.js";
 import { reportRoutes, buildReport } from "./reports.js";
 import { dateRequestRoutes } from "./date-requests.js";
-import { ticketNoteRoutes } from "./ticket-notes.js";
+import { ticketInboxRoutes, ticketNoteRoutes } from "./ticket-notes.js";
 import { internalRoutes } from "./internal.js";
 import { odooConfigured, odooRoutes, odooTicketInfo, odooTicketForTime } from "./odoo.js";
 import { timeRoutes, timeSyncCron } from "./time-entries.js";
@@ -482,6 +482,7 @@ async function route(request, env, url) {
   }
 
   if (path === "/users" || path.startsWith("/users/")) return accountRoutes(request, env, url, me);
+  if (path === "/ticket-notes/inbox") return ticketInboxRoutes(request, env, me);
   if (path === "/ticket-notes") return ticketNoteRoutes(request, env, url, me, {
     readTicket:async key => {
       if (key.startsWith("HD-")) return odooTicketInfo(env, key);
@@ -496,8 +497,7 @@ async function route(request, env, url) {
       const f = result.data.fields;
       if (result.data.key !== key || f?.project?.key !== env.JIRA_PROJECT || !Array.isArray(f.labels)) return null;
       return {title:f.summary, devs:f.labels.filter(l => /^ai1_/i.test(l)).map(l => l.slice(4).toLowerCase())};
-    },
-    sendMail:(from,body) => sendMail(env,from,body)
+    }
   });
   if(path==="/date-requests"||path.startsWith("/date-requests/"))return dateRequestRoutes(request,env,url,me,{
     readTicket:async (key,{checkInitial=false}={})=>{
