@@ -55,8 +55,9 @@ const WEIGHT = { company: 2.2, database: 1.6, url: 1.5, adlink: 1.1, version: 0.
 // Every column shows by default; phones swipe the table sideways to see them all.
 
 
-// Only a company name read from inside the database is shown (reports built earlier may carry Knowledge names).
-const companyOf = (r) => (r.companySource === "database" ? r.company || "" : "");
+// A company name read from inside the database is shown first. Otherwise the company is the id before the first
+// underscore of the database name (503t3_main -> 503t3). Reports built earlier may carry Knowledge names; those are ignored.
+const companyOf = (r) => (r.companySource === "database" ? r.company || "" : "") || String(r.database || "").split("_")[0] || "";
 function companyCell(r) {
   if (!companyOf(r)) return el("span", "db-muted", "—");
   const box = el("span", "db-company");

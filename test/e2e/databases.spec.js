@@ -35,6 +35,8 @@ test("Databases: POS version column, Actions preview, restart needs a confirm", 
   const ronit = page.locator("#rows tr", { hasText: "RonitYamProd" });
   await expect(ronit.locator("td.db-col-posver")).toContainText("19.0.3.97.2");
   await expect(page.locator("#rows tr", { hasText: "db101" }).locator("td.db-col-posver")).toHaveText("—");
+  // Without a company name from the database, the company is the id before the first underscore.
+  await expect(page.locator("#rows tr", { hasText: "db101" }).locator("td.db-col-company")).toContainText("db101");
   await expect(page.locator("#notice")).toBeHidden();
 
   // Actions opens the preview with all three actions.
