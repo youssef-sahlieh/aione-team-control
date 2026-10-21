@@ -217,7 +217,7 @@ for(const role of ["admin","user"])test(`${role} defaults to three assignees and
   await expect(page.locator("#view .item")).toHaveCount(3);
   await expect(page.locator("#view")).not.toContainText("Task for razan");
   await expect(page.locator("#view")).not.toContainText("Task for someone");
-  await expect(page.locator("#assignee-filter-trigger")).toHaveAttribute("title","Karim, Youssef, Rami, Internal Tickets (default)");
+  await expect(page.locator("#assignee-filter-trigger")).toHaveAttribute("title","Karim, Youssef, Rami, Ellen, Internal Tickets (default)");
   if(role==="user"){
     await expect(page.locator("#ftoggle")).toBeHidden();await expect(page.locator("#active")).toHaveText("Default team");
     await selectAssignees(page,["Karim","Youssef","Rami","Razan"]);await expect(page.locator("#view .item")).toHaveCount(4);await page.locator("#fclear").click();
@@ -238,12 +238,12 @@ for(const role of ["admin","user"])test(`${role} defaults to three assignees and
 });
 for(const width of [320,1440])test(`filter labels and selections remain clear at ${width}px`,async({page})=>{
   await page.setViewportSize({width,height:900});const mock=await mockDashboard(page,{role:"user",assigneeTeam:true});await page.goto("/dashboard.html");
-  await expect(page.locator("#filter-summary")).toHaveText("3 tickets match · 4 selected");await expect(page.locator(".quick-field > span").filter({hasText:"Assignee"})).toBeVisible();
+  await expect(page.locator("#filter-summary")).toHaveText("3 tickets match · 5 selected");await expect(page.locator(".quick-field > span").filter({hasText:"Assignee"})).toBeVisible();
   await expect(page.locator("#ftoggle")).toBeHidden();await expect(page.locator("#fgrid")).toBeHidden();
   for(const label of ["Reporter","Priority","Developer","Saved view"])await expect(page.getByRole("combobox",{name:label,exact:true})).toHaveCount(0);
   await expect(page.locator("#quick-filters select:visible")).toHaveCount(6);
   await selectAssignees(page,["Razan"]);await expect(page.locator("#view .item")).toHaveCount(1);await expect(page.locator("#filter-summary")).toHaveText("1 ticket match · 1 selected");
-  await page.getByRole("button",{name:"Reset filters",exact:true}).click();await expect(page.locator("#view .item")).toHaveCount(3);await expect(page.locator("#filter-summary")).toHaveText("3 tickets match · 4 selected");
+  await page.getByRole("button",{name:"Reset filters",exact:true}).click();await expect(page.locator("#view .item")).toHaveCount(3);await expect(page.locator("#filter-summary")).toHaveText("3 tickets match · 5 selected");
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.locator(".fpanel").screenshot({path:`test-results/filters-${width}.png`});expect(mock.errors).toEqual([]);
 });
 for(const role of ["admin"])for(const width of [320,1440])test(`${role} reporter, status and priority stay visible and filter together at ${width}px`,async({page})=>{

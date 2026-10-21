@@ -1,5 +1,5 @@
 import { INTERNAL_ASSIGNEE } from "./ticket-business.js";
-const names = ["karim", "youssef", "rami", "razan"];
+const names = ["karim", "youssef", "rami", "ellen", "razan"];
 const firstName = text => String(text || "").toLowerCase().trim().split(/[\s._@-]+/)[0].replace(/^yousef$|^yousif$/, "youssef");
 const personName = (key, person) => names.find(name => firstName(key) === name || firstName(person?.name) === name);
 
