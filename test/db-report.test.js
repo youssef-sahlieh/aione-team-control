@@ -37,18 +37,23 @@ test("isProductionName excludes test, dev, demo and similar", () => {
 
 function setup() {
   const STORE = memoryStore();
-  // Audit & Deploy data for three instances: two prod, one test (excluded).
+  // Audit & Deploy data: two prod (Main), one test (Tests), one development (Dev).
   const instances = {
     services: [
       { instance_name: "odoo503", domain: "503.ai1.host", server_zone: "prod", created: "2026-01-15T18:33:19Z" },
       { instance_name: "odoo100", domain: "100.ai1.host", server_zone: "prod", created: "2026-02-01T00:00:00Z" },
-      { instance_name: "odoo999", domain: "999.ai1.host", server_zone: "test", created: "2026-03-01T00:00:00Z" }
+      { instance_name: "odoo999", domain: "999.ai1.host", server_zone: "test", created: "2026-03-01T00:00:00Z" },
+      { instance_name: "odoo777", domain: "777.ai1.host", server_zone: "development", created: "2026-04-01T00:00:00Z" },
+      // Listed as production, but named like a test and a dev instance: kept apart from Main.
+      { instance_name: "odoo888_test", domain: "888.ai1.host", server_zone: "prod", created: "2026-04-02T00:00:00Z" },
+      { instance_name: "odoo555_dev", domain: "555.ai1.host", server_zone: "prod", created: "2026-04-03T00:00:00Z" }
     ]
   };
   const config = {
     odoo503: { databases: ["RonitYamProd"] },
     odoo100: { databases: ["100_hcc"], database_inventory_error: "" },
-    odoo999: { databases: ["test_db"] }
+    odoo999: { databases: ["test_db"] },
+    odoo777: { databases: ["dev_db"] }
   };
   const addons = {
     odoo503: { addons: [{ name: "PosDashboardOdooFlutter_Addon" }, { name: "flutter_pos_api", module_version: "19.0.3.97.2" }, { name: "sale" }] },
@@ -110,7 +115,15 @@ function setup() {
   return { env, call, customer, actions };
 }
 
-test("report covers production databases only, with inside numbers where a login is found", async () => {
+test("findPosModule finds flutter_pos_api's module_version in any shape", async () => {
+  const { findPosModule } = await import("../proxy/src/db-report.js");
+  assert.deepEqual(findPosModule({ addons: [{ name: "sale" }, { name: "flutter_pos_api", module_version: "19.0.3.97.2" }] }), { version: "19.0.3.97.2", date: "" });
+  assert.deepEqual(findPosModule({ pos_configurations: { flutter_pos_api: { module_version: "19.0.4.1.0", write_date: "2026-10-01" } } }), { version: "19.0.4.1.0", date: "2026-10-01" });
+  assert.deepEqual(findPosModule({ settings: { pos: [{ module: "flutter_pos_api", module_version: "18.0.1" }] } }), { version: "18.0.1", date: "" });
+  assert.equal(findPosModule({ addons: [{ name: "PosDashboardOdooFlutter_Addon" }] }), null, "a different Flutter add-on is not the POS version");
+});
+
+test("report covers main, test and development instances, each in its section, with inside numbers where a login is found", async () => {
   const { env, call, customer } = setup();
   const admin = { email: "admin@aione.biz", name: "Admin", role: "admin", dev: "", v: 1 };
   await saveUser(env.STORE, admin);
@@ -119,8 +132,13 @@ test("report covers production databases only, with inside numbers where a login
   let r; for (let i = 0; i < 5; i++) { r = await (await call("/db-report/refresh", { method: "POST", token })).json(); if (r.done) break; }
   assert.equal(r.done, true);
   const rows = r.report.rows;
-  assert.equal(rows.length, 2, "test instance excluded");
+  assert.equal(rows.length, 6);
+  assert.equal(rows.find((x) => x.instance === "odoo999").section, "tests");
+  assert.equal(rows.find((x) => x.instance === "odoo777").section, "dev");
+  assert.equal(rows.find((x) => x.instance === "odoo888_test").section, "tests", "test-named production-zone instance goes to Tests");
+  assert.equal(rows.find((x) => x.instance === "odoo555_dev").section, "dev", "dev-named production-zone instance goes to Dev");
   const ronit = rows.find((x) => x.database === "RonitYamProd");
+  assert.equal(ronit.section, "main");
   assert.equal(ronit.url, "https://503.ai1.host");
   assert.equal(ronit.flutter, true);
   assert.deepEqual(ronit.addons, ["PosDashboardOdooFlutter_Addon", "flutter_pos_api", "sale"]);

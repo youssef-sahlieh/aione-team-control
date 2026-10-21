@@ -29,6 +29,39 @@ const fail = (code, error, status = 400) => Response.json({ code, error }, { sta
 const NON_PROD = /(?:^|[^a-z])(test|dev|develop|development|staging|stage|demo|sandbox|copy|backup|bak|tmp|temp|trial|training|qa|poc)(?:[^a-z]|$)/i;
 export const isProductionName = (name) => !!name && !NON_PROD.test(String(name));
 
+// Audit & Deploy server zone -> the Databases page section.
+export const SECTIONS = { prod: "main", test: "tests", development: "dev" };
+const DEV_NAME = /(?:^|[^a-z])(dev|develop|development|sandbox)(?:[^a-z]|$)/i;
+// Test and dev instances are kept apart from Main even when Audit & Deploy lists them in the production zone.
+export const sectionOf = (zone, name) => {
+  if (zone !== "prod") return SECTIONS[zone] || null;
+  if (DEV_NAME.test(String(name))) return "dev";
+  return isProductionName(name) ? "main" : "tests";
+};
+
+// The POS add-on (flutter_pos_api) and its module_version, wherever the instance's data lists it: an add-on entry,
+// a POS Configurations entry, or an object keyed by the add-on name. Searches nested data, depth-limited.
+const POS_MODULE = /^flutter_pos_api$/i;
+export function findPosModule(node, depth = 0) {
+  if (!node || typeof node !== "object" || depth > 6) return null;
+  const pick = (o) => {
+    const v = o.module_version || o.installed_version || o.version;
+    return v ? { version: String(v), date: String(o.installed_date || o.installed_at || o.write_date || "") } : null;
+  };
+  if (Array.isArray(node)) {
+    for (const x of node) { const f = findPosModule(x, depth + 1); if (f) return f; }
+    return null;
+  }
+  for (const key of ["name", "module", "technical_name", "addon"]) {
+    if (POS_MODULE.test(String(node[key] || ""))) { const f = pick(node); if (f) return f; }
+  }
+  for (const [k, v] of Object.entries(node)) {
+    if (POS_MODULE.test(k) && v && typeof v === "object") { const f = pick(v); if (f) return f; }
+  }
+  for (const v of Object.values(node)) { const f = findPosModule(v, depth + 1); if (f) return f; }
+  return null;
+}
+
 // --- Credentials from the knowledge base (never logged, never returned) --------------------------
 // Customer articles are free-form: some label the login (User:/Password:), many just list the URL,
 // then the email, then the password on their own lines. So we gather EVERY plausible login from an
@@ -246,16 +279,18 @@ const unwrap = (r) => (r && r.payload) ? r.payload : r;
 
 // Instance numbers to leave out of the report entirely (down servers, non-customer instances).
 const excludedNums = (env) => new Set(String(env.DB_REPORT_EXCLUDE || "").split(",").map((s) => s.trim()).filter(Boolean));
-async function productionInstances(env) {
+// Every instance Audit & Deploy lists in a zone the Databases page shows (its section is set by sectionOf).
+async function reportInstances(env) {
   const snap = unwrap(await odoo(env, "monitor.data.snapshot", "get_instances", [false]));
   const services = (snap && snap.services) || [];
   const skip = excludedNums(env);
   const numOf = (s) => (String(s.domain || s.instance_name).match(/(\d{2,4})/) || [])[1] || "";
-  return services.filter((s) => s.server_zone === "prod" && isProductionName(s.instance_name) && !skip.has(numOf(s)) && !skip.has(s.instance_name));
+  return services.filter((s) => SECTIONS[s.server_zone] && !skip.has(numOf(s)) && !skip.has(s.instance_name));
 }
 
 async function instanceFacts(env, inst) {
   const name = inst.instance_name;
+  const section = sectionOf(inst.server_zone, name) || "main";
   const [cfg, add] = await Promise.all([
     odoo(env, "monitor.data.snapshot", "get_instance_config", [name, false]).then(unwrap).catch(() => ({})),
     odoo(env, "monitor.data.snapshot", "get_instance_addons", [name, null, false]).then(unwrap).catch(() => ({}))
@@ -264,14 +299,13 @@ async function instanceFacts(env, inst) {
   const f = cfg.fields || {};
   let dbFromFilter = typeof f.dbfilter === "string" ? f.dbfilter.replace(/[\^$]/g, "").trim() : "";
   if (!/^[\w-]+$/.test(dbFromFilter)) dbFromFilter = ""; // ignore wildcard filters like "119_.*"
-  const databases = [...new Set([...(cfg.databases || []), cfg.selected_database, f.db_name, dbFromFilter].filter(Boolean))].filter((d) => /^[\w-]+$/.test(d) && isProductionName(d));
+  const nameOk = (d) => /^[\w-]+$/.test(d) && (section !== "main" || isProductionName(d));
+  const databases = [...new Set([...(cfg.databases || []), cfg.selected_database, f.db_name, dbFromFilter].filter(Boolean))].filter(nameOk);
   const addons = (add.addons || []).map((a) => a.name).filter(Boolean).sort();
-  // The installed POS add-on's version (and its date when Odoo gives one).
-  // Several add-ons can mention Flutter; the POS add-on itself is flutter_pos_api, then any with a version.
-  const flutterAddons = (add.addons || []).filter((a) => /flutter/i.test(a.name || ""));
-  const posAddon = flutterAddons.find((a) => /^flutter_pos_api$/i.test(a.name)) || flutterAddons.find((a) => a.module_version) || flutterAddons[0] || null;
-  const posVersion = posAddon ? String(posAddon.module_version || posAddon.installed_version || posAddon.version || "") : "";
-  const posVersionDate = posAddon ? String(posAddon.installed_date || posAddon.installed_at || posAddon.write_date || "") : "";
+  // The POS add-on's module_version (AI1 Settings > POS Configurations > flutter_pos_api), and its date when given.
+  const pos = findPosModule(add) || findPosModule(cfg);
+  const posVersion = pos ? pos.version : "";
+  const posVersionDate = pos ? pos.date : "";
   // Odoo major version from the server's public version endpoint (works without a login).
   const base = inst.domain ? "https://" + inst.domain : "";
   let odooVersion = "";
@@ -289,6 +323,7 @@ async function instanceFacts(env, inst) {
     addonCount: addons.length,
     flutter: addons.some((a) => /flutter/i.test(a)),
     posVersion,
+    section,
     posVersionDate,
     configError: cfg.database_inventory_error || cfg.error || ""
   };
@@ -302,8 +337,9 @@ export function oneRowPerSite(rows) {
   const better = (a, b) => { const x = score(a), y = score(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false; };
   const bySite = new Map(), out = [];
   for (const r of rows) {
-    const site = String(r.url || "").toLowerCase().replace(/\/+$/, "");
-    if (!site) { out.push(r); continue; }
+    const web = String(r.url || "").toLowerCase().replace(/\/+$/, "");
+    if (!web) { out.push(r); continue; }
+    const site = (r.section || "main") + " " + web; // the same address can appear in two sections
     const kept = bySite.get(site);
     if (!kept) { bySite.set(site, r); out.push(r); continue; }
     const [keep, drop] = better(r, kept) ? [r, kept] : [kept, r];
@@ -327,8 +363,8 @@ export async function buildReport(env, { force = false } = {}) {
     try { progress = JSON.parse(await env.STORE.get(PROGRESS_KEY) || "null"); } catch {}
     // Start fresh when forced, when there is no in-flight build, or when the in-flight one is stale.
     if (force || !progress || Date.now() - (progress.startedAt || 0) > 10 * 60 * 1000) {
-      const instances = await productionInstances(env);
-      progress = { startedAt: Date.now(), rows: [], done: 0, total: instances.length, instances: instances.map((i) => ({ instance_name: i.instance_name, domain: i.domain, created: i.created })) };
+      const instances = await reportInstances(env);
+      progress = { startedAt: Date.now(), rows: [], done: 0, total: instances.length, instances: instances.map((i) => ({ instance_name: i.instance_name, domain: i.domain, created: i.created, server_zone: i.server_zone })) };
     }
     const creds = await readCredentialIndex(env);
     while (progress.done < progress.instances.length && Date.now() - started < BUILD_BUDGET_MS) {
@@ -370,7 +406,7 @@ export async function dbReportRoutes(request, env, url, me) {
     const report = await readReport(env);
     let building = false;
     // A report saved before a column existed is rebuilt, so every row carries the current fields.
-    const outdated = !!report && (report.rows || []).some((r) => !("posVersion" in r));
+    const outdated = !!report && (report.rows || []).some((r) => !("posVersion" in r) || !("section" in r));
     if (!report || outdated || Date.now() - report.builtAt > STALE_MS) { const r = await buildReport(env); building = !r.busy; }
     const after = await readReport(env);
     return json({ report: after || report || null, building: building && (!after || !report || after.builtAt === (report && report.builtAt)) });

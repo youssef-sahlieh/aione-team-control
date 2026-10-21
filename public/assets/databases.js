@@ -1,5 +1,5 @@
 // Databases report (administrators only). Reads the cached report from the proxy; the proxy builds it
-// from Audit & Deploy (production instances) plus one read-only login per database for the inside numbers.
+// from Audit & Deploy (Main, Tests and Dev instances) plus one read-only login per database for the inside numbers.
 // No credential ever reaches this page - only the numbers do.
 //
 // The table sorts by any column (click its header), filters by search and by access, Odoo version, expiry,
@@ -175,8 +175,12 @@ const FILTERS = [
 
 // What this person last chose (sort, filters, columns), kept in this browser.
 const PREFS_KEY = "aion.dbreport.view";
-const view = { sort: { key: "company", dir: 1 }, filters: {}, columns: null };
+const view = { sort: { key: "company", dir: 1 }, filters: {}, columns: null, section: "main" };
 try { Object.assign(view, JSON.parse(localStorage.getItem(PREFS_KEY) || "{}")); } catch {}
+// Main, Tests and Dev: the server's sections (Audit & Deploy's production, test and development zones).
+const SECTION_LIST = [["main", "Main"], ["tests", "Tests"], ["dev", "Dev"]];
+if (!SECTION_LIST.some(([id]) => id === view.section)) view.section = "main";
+const rowSection = (r) => r.section || "main"; // reports saved before sections were added are all Main
 const saveView = () => { try { localStorage.setItem(PREFS_KEY, JSON.stringify(view)); } catch {} };
 const shownColumns = () => { const keys = view.columns || COLUMNS.map((c) => c.key); return COLUMNS.filter((c) => keys.includes(c.key)); };
 
@@ -193,7 +197,7 @@ function filterOptions(id) {
 function visibleRows() {
   const q = $("search").value.trim().toLowerCase();
   const tests = FILTERS.map(([id]) => (filterOptions(id).find((o) => o[0] === (view.filters[id] || "")) || [])[2]).filter(Boolean);
-  const rows = (REPORT.rows || []).filter((r) => (!q || [companyOf(r), (r.companyNames || []).join(" "), r.url, r.database, r.instance, (r.addons || []).join(" ")].join(" ").toLowerCase().includes(q)) && tests.every((t) => t(r)));
+  const rows = (REPORT.rows || []).filter((r) => rowSection(r) === view.section && (!q ||[companyOf(r), (r.companyNames || []).join(" "), r.url, r.database, r.instance, (r.addons || []).join(" ")].join(" ").toLowerCase().includes(q)) && tests.every((t) => t(r)));
   const col = COLUMNS.find((c) => c.key === view.sort.key) || COLUMNS[0];
   return rows.sort((a, b) => {
     const x = col.sort(a), y = col.sort(b);
@@ -259,8 +263,23 @@ function render() {
     body.append(tr);
   }
   if (!rows.length) { const tr = el("tr"), td = el("td", "db-empty", "No databases match. Change the search or filters."); td.colSpan = cols.length; tr.append(td); body.append(tr); }
-  const working = (REPORT.rows || []).filter((r) => r.loginOk).length;
-  $("meta").textContent = rows.length + " of " + (REPORT.rows || []).length + " databases · " + working + " with data · built " + fmtDateTime(new Date(REPORT.builtAt).toISOString());
+  const inSection = (REPORT.rows || []).filter((r) => rowSection(r) === view.section);
+  const working = inSection.filter((r) => r.loginOk).length;
+  $("meta").textContent = rows.length + " of " + inSection.length + " databases · " + working + " with data · built " + fmtDateTime(new Date(REPORT.builtAt).toISOString());
+}
+
+// Main / Tests / Dev switch, with how many databases each holds.
+function renderSections() {
+  const box = $("sections"), rows = (REPORT && REPORT.rows) || [];
+  box.replaceChildren();
+  for (const [id, text] of SECTION_LIST) {
+    const active = view.section === id, count = rows.filter((r) => rowSection(r) === id).length;
+    const b = el("button", "btn" + (active ? " primary" : ""), text + " · " + count);
+    b.type = "button"; b.setAttribute("aria-pressed", String(active));
+    b.addEventListener("click", () => { view.section = id; saveView(); renderSections(); render(); });
+    box.append(b);
+  }
+  box.hidden = !REPORT;
 }
 
 // One row per web address: Audit & Deploy can list two production instances on the same domain (an old and a
@@ -271,8 +290,9 @@ function oneRowPerSite(rows) {
   const better = (a, b) => { const x = score(a), y = score(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false; };
   const bySite = new Map(), out = [];
   for (const r of rows) {
-    const site = String(r.url || "").toLowerCase().replace(/\/+$/, "");
-    if (!site) { out.push(r); continue; }
+    const web = String(r.url || "").toLowerCase().replace(/\/+$/, "");
+    if (!web) { out.push(r); continue; }
+    const site = rowSection(r) + " " + web;
     const kept = bySite.get(site);
     if (!kept) { bySite.set(site, r); out.push(r); continue; }
     const [keep, drop] = better(r, kept) ? [r, kept] : [kept, r];
@@ -283,7 +303,7 @@ function oneRowPerSite(rows) {
   return out;
 }
 
-function showReport(report) { REPORT = { ...report, rows: oneRowPerSite(report.rows || []) }; $("toolbar").hidden = false; $("tablewrap").hidden = false; showState(""); renderFilters(); render(); explainCompanies(); }
+function showReport(report) { REPORT = { ...report, rows: oneRowPerSite(report.rows || []) }; $("toolbar").hidden = false; $("tablewrap").hidden = false; showState(""); renderSections(); renderFilters(); render(); explainCompanies(); }
 
 // Says why company names are missing, instead of only showing empty cells.
 let serverHasCompanies = null, serverHasPosVersion = null;
