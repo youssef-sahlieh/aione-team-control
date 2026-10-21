@@ -15,7 +15,7 @@ export function createTicketNotes({api}) {
     try {
       const result = await api('/ticket-notes?key='+encodeURIComponent(key));
       if (run !== generation) return;
-      panel.replaceChildren(element('h3', 'Internal notes'), element('p', 'Team notes on this ticket. Type @ to mention someone and they get a notification in AION. Nothing is emailed or posted to Jira.', 'msg'));
+      panel.replaceChildren(element('h3', 'Internal notes'), element('p', 'Private notes between the team. Type @ to mention someone and they get an email and a notification. These are not Jira comments.', 'msg'));
       const list = element('div');
       for (const note of result.notes.slice().reverse()) {
         const card = element('article', null, 'blk');
@@ -25,20 +25,21 @@ export function createTicketNotes({api}) {
         list.append(card);
       }
       if (!result.notes.length) list.append(element('p', 'No internal notes yet.', 'msg'));
-      const form = element('form'), label = element('label', 'Note'), input = element('textarea');
-      const button = element('button', 'Post note', 'btn primary'); button.type = 'submit';
+      // Same composer as the Comments tab: a plain textarea and one button. No recipient list; @ mentions do the notifying.
+      const form = element('form'), input = element('textarea', null, 'inp');
+      const button = element('button', 'Add note', 'btn primary'); button.type = 'submit';
       const status = element('p', null, 'msg'); status.setAttribute('role', 'status');
-      input.id = 'ticket-note-text'; input.maxLength = 5000; input.rows = 4; input.required = true; input.style.width = '100%'; label.htmlFor = input.id;
+      input.id = 'ticket-note-text'; input.placeholder = 'Write an internal note…'; input.setAttribute('aria-label', 'New internal note'); input.dir = 'auto'; input.maxLength = 5000; input.rows = 3; input.required = true;
       const draft = drafts.get(key) || {id: crypto.randomUUID(), text: ''};
       drafts.set(key, draft);
       input.value = draft.text;
       input.addEventListener('input', () => { draft.text = input.value; });
       // The shared @ picker lists everyone in the dashboard except yourself; mentioned() gives the emails still in the text.
       const people = result.people || [];
-      form.append(label, input, button, status);
+      form.append(input, button, status);
       panel.append(list, form);
       // The picker is inserted after the textarea, so the form must be in the panel first.
-      const mentions = createCommentMentions({textarea:input, enabled:() => true, local:() => true, people:async () => people, localHint:'Type @ to mention someone. They get a notification in AION.'});
+      const mentions = createCommentMentions({textarea:input, enabled:() => true, local:() => true, people:async () => people, localHint:'Type @ to mention someone. They get an email and a notification.'});
       form.addEventListener('submit', async event => {
         event.preventDefault();
         const text = mentions.text(); if (!text) return;

@@ -11,7 +11,7 @@ test('developer posts an internal note that mentions an admin, and admins can re
   await input.press('Enter');
   await input.press('End');
   await input.pressSequentially('Please review the deployment blocker before tomorrow.');
-  await page.getByRole('button',{name:'Post note',exact:true}).click();
+  await page.getByRole('button',{name:'Add note',exact:true}).click();
   await expect(page.locator('#panel-notes')).toContainText('Note posted. 1 person notified.');
   await expect(page.locator('#panel-notes')).toContainText('Please review the deployment blocker before tomorrow.');
   await expect(page.locator('#panel-notes')).toContainText('Mentioned: @Preview Admin');
@@ -42,7 +42,7 @@ for (const width of [320,1440]) test(`user posts an internal note from the ticke
   await expect(page.locator('#drawer')).toBeVisible();
   await expect(page.getByRole('tab',{name:'Internal notes',exact:true})).toHaveAttribute('aria-selected','true');
   await page.locator('#ticket-note-text').fill('Please review my deployment question '+width);
-  await page.getByRole('button',{name:'Post note',exact:true}).click();
+  await page.getByRole('button',{name:'Add note',exact:true}).click();
   await expect(page.locator('#panel-notes')).toContainText('Please review my deployment question '+width);
   await expect(page.locator('#panel-notes')).toContainText('Note posted.');
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
