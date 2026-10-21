@@ -20,8 +20,9 @@ import { BusinessError, businessResponse, catalogRoutes, metadataRoutes, readMet
 import {savedReportRoutes} from "./saved-reports.js";
 import { reportRoutes, buildReport } from "./reports.js";
 import { dateRequestRoutes } from "./date-requests.js";
-import { ticketInboxRoutes, ticketNoteRoutes } from "./ticket-notes.js";
+import { ticketNoteRoutes } from "./ticket-notes.js";
 import { internalRoutes } from "./internal.js";
+import { inboxRoutes, notifyMentions, jiraMentionEmails, addToInbox } from "./inbox.js";
 import { odooConfigured, odooRoutes, odooTicketInfo, odooTicketForTime } from "./odoo.js";
 import { timeRoutes, timeSyncCron } from "./time-entries.js";
 import { monitorRoutes } from "./monitor.js";
@@ -31,7 +32,7 @@ import { cookieSessionRequest } from "./sessions.js";
 import { SESSION_MS } from "./session-policy.js";
 import { aiChat, aiBrief, aiConfigured, aiDescription, AIError } from "./ai.js";
 import { githubConfigured, syncPulls, prsByKey } from "./github.js";
-import { recordTicketEvent, ticketLogRoutes } from "./ticket-log.js";
+import { recordTicketEvent, ticketLogRoutes, readTicketLog } from "./ticket-log.js";
 import { integrationRoutes } from "./integrations.js";
 import { epicMapRoutes } from "./epic-map.js";
 import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
@@ -482,7 +483,6 @@ async function route(request, env, url) {
   }
 
   if (path === "/users" || path.startsWith("/users/")) return accountRoutes(request, env, url, me);
-  if (path === "/ticket-notes/inbox") return ticketInboxRoutes(request, env, me);
   if (path === "/ticket-notes") return ticketNoteRoutes(request, env, url, me, {
     readTicket:async key => {
       if (key.startsWith("HD-")) return odooTicketInfo(env, key);
@@ -497,7 +497,8 @@ async function route(request, env, url) {
       const f = result.data.fields;
       if (result.data.key !== key || f?.project?.key !== env.JIRA_PROJECT || !Array.isArray(f.labels)) return null;
       return {title:f.summary, devs:f.labels.filter(l => /^ai1_/i.test(l)).map(l => l.slice(4).toLowerCase())};
-    }
+    },
+    sendMail:(from,body)=>sendMail(env,from,body)
   });
   if(path==="/date-requests"||path.startsWith("/date-requests/"))return dateRequestRoutes(request,env,url,me,{
     readTicket:async (key,{checkInitial=false}={})=>{
@@ -525,7 +526,8 @@ async function route(request, env, url) {
     },
     sendMail:(from,body)=>sendMail(env,from,body)
   });
-  if (path === "/internal" || path.startsWith("/internal/")) return internalRoutes(request, env, url, me);
+  if (path === "/inbox" || path.startsWith("/inbox/")) return inboxRoutes(request, env, url, me);
+  if (path === "/internal" || path.startsWith("/internal/")) return internalRoutes(request, env, url, me, { sendMail: (from, body) => sendMail(env, from, body) });
   if (path === "/odoo/tickets" || path.startsWith("/odoo/tickets/")) return odooRoutes(request, env, url, me);
   if (path.startsWith("/monitor/odoo/")) return odooAppRoutes(request, env, url, me);
   if (path.startsWith("/monitor/")) return monitorRoutes(request, env, url, me);
@@ -544,7 +546,13 @@ async function route(request, env, url) {
 
   if (!isAdmin && (path === "/mail" || path === "/jira/users")) return fail("forbidden", "Only administrators can do that.", 403);
 
-  if (path === "/mail" && method === "POST") return sendMail(env, email, await readJson(request));
+  if (path === "/mail" && method === "POST") {
+    const b = await readJson(request), res = await sendMail(env, email, b);
+    // An internal note about a ticket also shows in the recipients' dashboard notifications.
+    if (res.ok && b?.note && typeof b.note.key === "string" && /^[A-Z][A-Z0-9_]*-\d+$/.test(b.note.key) && typeof b.note.text === "string")
+      await addToInbox(env.STORE, b.to, { type: "note", key: b.note.key, title: String(b.note.title || ""), by: me.name || email, text: b.note.text }, email);
+    return res;
+  }
 
   // Ticket lists only show each ticket's latest comment: slim results drop the rest (and the
   // description), which makes list loads several times smaller. One ticket's details are never slim.
@@ -649,7 +657,7 @@ async function route(request, env, url) {
     } });
   }
 
-  const m = /^\/jira\/issue\/([A-Z][A-Z0-9_]*-\d+)(\/changelog|\/history|\/transitions|\/comment|\/description)?$/.exec(path);
+  const m = /^\/jira\/issue\/([A-Z][A-Z0-9_]*-\d+)(\/changelog|\/history|\/transitions|\/comment(?:\/\d{1,20})?|\/description)?$/.exec(path);
   if (m && isOurKey(m[1])) {
     const key = m[1], sub = m[2] || "";
     if(sub==="/history"){
@@ -711,6 +719,20 @@ async function route(request, env, url) {
       if (result.ok) await recordTicketEvent(env, key, me, { action: "edit", changes: { description: { from: "(previous text)", to: "(new description)" } }, ...(b.source === "ai" ? { text: "Description suggested by AI" } : {}) });
       return pass(result);
     }
+    // Editing a comment: its writer (from the dashboard's own log, since Jira shows the proxy's account)
+    // or an administrator. A comment written here keeps its writer's name at the end.
+    const edit = /^\/comment\/(\d{1,20})$/.exec(sub);
+    if (edit && method === "PUT") {
+      const b = await readJson(request);
+      const text = b && typeof b.text === "string" ? b.text.trim() : "";
+      if (!text || text.length > 30000) return fail("bad_request", "Write a comment first.", 400);
+      const wrote = (await readTicketLog(env, key)).find((e) => e.action === "comment" && String(e.commentId) === edit[1]);
+      if (!isAdmin && String(wrote?.by?.email || "").toLowerCase() !== String(me.email || "").toLowerCase()) return fail("forbidden", "You can only edit your own comments.", 403);
+      const writer = wrote?.by, owner = !writer || String(env.JIRA_EMAIL || "").toLowerCase() === String(writer.email || "").toLowerCase();
+      const result = await jira(env, "/rest/api/2/issue/" + key + "/comment/" + edit[1], { method: "PUT", body: { body: owner ? text : text + "\n\n— " + (writer.name || writer.email) }, signal: AbortSignal.timeout(20000) });
+      if (result.ok) await recordTicketEvent(env, key, me, { action: "edit", changes: { comment: { from: "(previous text)", to: "(edited comment)" } }, text });
+      return pass(result);
+    }
     if (sub === "/comment" && method === "POST") {
       const b = await readJson(request);
       const text = b && typeof b.text === "string" ? b.text.trim() : "";
@@ -719,6 +741,22 @@ async function route(request, env, url) {
       const author = me.name || me.email, owner = String(env.JIRA_EMAIL || "").toLowerCase() === String(me.email || "").toLowerCase();
       const result = await jira(env, "/rest/api/2/issue/" + key + "/comment", { method: "POST", body: { body: owner ? text : text + "\n\n— " + author } });
       if (result.ok) await recordTicketEvent(env, key, me, { action: "comment", text, commentId: String(result.data?.id || "") });
+      // Jira emails the people mentioned itself; the dashboard bell shows it too (no second email).
+      // Dashboard people mentioned by name (b.mentions, emails) also get an email from the dashboard.
+      const named = Array.isArray(b.mentions) ? b.mentions.filter((e) => typeof e === "string").slice(0, 20) : [];
+      if (result.ok && (named.length || text.includes("[~accountid:"))) {
+        try {
+          if (named.length) {
+            const t = await jira(env, "/rest/api/2/issue/" + key + "?fields=summary", { signal: AbortSignal.timeout(10000) });
+            result.data = { ...(result.data || {}), notified: await notifyMentions(env, me, { emails: named, key, title: t.ok ? t.data?.fields?.summary : "", text, sendMail: (from, body) => sendMail(env, from, body) }) };
+          }
+          const emails = await jiraMentionEmails(env, text);
+          if (emails.length) {
+            const t = await jira(env, "/rest/api/2/issue/" + key + "?fields=summary", { signal: AbortSignal.timeout(10000) });
+            await notifyMentions(env, me, { emails, key, title: t.ok ? t.data?.fields?.summary : "", text: text.replace(/\[~accountid:[\w:-]+\]/g, "@") });
+          }
+        } catch { console.warn("jira_mention_inbox_failed"); }
+      }
       return pass(result);
     }
   }

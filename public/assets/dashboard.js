@@ -19,6 +19,7 @@ import { createTicketBriefs } from "./components/ticket-briefs.js";
 import { createTicketHistory } from "./components/ticket-history.js";
 import { createDueDateHistory } from "./components/due-date-history.js";
 import { createTicketNotes } from "./components/ticket-notes.js";
+import { createInboxBell } from "./components/inbox-bell.js";
 import { createDateRequests } from "./components/date-requests.js";
 import { createCommentMentions } from "./components/comment-mentions.js";
 
@@ -30,6 +31,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // Administrators see and change everything. Users see only the tickets labelled ai1_<MY_DEV> (the proxy
   // enforces this) and can move status, set due dates and comment.
   let IS_ADMIN=true, MY_DEV="", MY_EMAIL="";
+  let BELL=null; // notifications (set up with the drawer, see createInboxBell)
   let notifyOn=true; try{ notifyOn=localStorage.getItem("aion.notify")!=="0"; }catch(e){}
   const devK=d=>DEV_COLOR[d]||("k"+(1+[...d].reduce((a,c)=>a+c.charCodeAt(0),0)%8));
   const STATUS_ORDER=["open","pending approval","dev approved","in development","on hold","reopened","pending qa","in qa","done review","resolved","closed"];
@@ -77,7 +79,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     edit:(key,fields,extra)=>api("/jira/issue/"+key,{method:"PUT",body:{fields,...extra}}),
     transitions:key=>api("/jira/issue/"+key+"/transitions"),
     transition:(key,id)=>api("/jira/issue/"+key+"/transitions",{method:"POST",body:{id}}),
-    comment:(key,text)=>api("/jira/issue/"+key+"/comment",{method:"POST",body:{text}}),
+    comment:(key,text,mentions)=>api("/jira/issue/"+key+"/comment",{method:"POST",body:{text,...(mentions&&mentions.length?{mentions}:{})}}),
+    editComment:(key,id,text)=>api("/jira/issue/"+key+"/comment/"+id,{method:"PUT",body:{text}}),
     changelog:key=>api("/jira/issue/"+key+"/changelog"),
     users:q=>api("/jira/users?q="+encodeURIComponent(q))
   };
@@ -88,7 +91,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     list:()=>api("/internal"),
     create:b=>api("/internal",{method:"POST",body:b}),
     update:(key,b)=>api("/internal/"+key,{method:"PUT",body:b}),
-    comment:(key,text)=>api("/internal/"+key+"/comment",{method:"POST",body:{text}}),
+    comment:(key,text,mentions)=>api("/internal/"+key+"/comment",{method:"POST",body:{text,...(mentions&&mentions.length?{mentions}:{})}}),
+    editComment:(key,n,created,text)=>api("/internal/"+key+"/comment/"+n,{method:"PUT",body:{text,created}}),
     remove:key=>api("/internal/"+key,{method:"DELETE"})
   };
   const isInt=key=>/^INT-\d+$/.test(key);
@@ -104,7 +108,10 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const move=reason=>isInt(key)?internalApi.update(key,{status:id,...(reason?{overrideReason:reason}:{})}):api("/jira/issue/"+key+"/transitions",{method:"POST",body:{id,...(reason?{overrideReason:reason}:{})}});
     try{return await move();}catch(err){const reason=await business.overrideReason(err,key);if(reason)return move(reason);throw err;}
   };
-  const doComment=(key,text)=>isOdoo(key)?odooApi.note(key,text).then(r=>{delete ODOO_DETAIL[key];return r;}):isInt(key)?internalApi.comment(key,text):jira.comment(key,text);
+  const doComment=(key,text,mentions)=>isOdoo(key)?odooApi.note(key,text).then(r=>{delete ODOO_DETAIL[key];return r;}):isInt(key)?internalApi.comment(key,text,mentions):jira.comment(key,text,mentions);
+  // Everyone in the dashboard you can @mention or send a note to on a ticket (not you), kept per ticket.
+  const MENTION_PEOPLE={};
+  const mentionPeople=key=>(MENTION_PEOPLE[key]=MENTION_PEOPLE[key]||api("/ticket-notes?key="+encodeURIComponent(key)).then(r=>(r.people||[]).map(p=>({name:p.name,email:String(p.email).toLowerCase(),role:p.role}))).catch(err=>{delete MENTION_PEOPLE[key];throw err;}));
   // Same shape as a Jira ticket after norm(), so tiles, filters, boards and history all work unchanged.
   const normInternal=t=>normalizeInternalIssue(t,PEOPLE);
   // Odoo Helpdesk tickets (HD-…): read from Odoo through the proxy; stage, developer and notes are saved back to Odoo.
@@ -428,7 +435,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // Redraws keep your place on the page: a redraw that briefly makes the page shorter (lists emptied and
   // rebuilt) would otherwise send you back to the top while you scroll.
   function render(){
-    const y=window.scrollY; renderNow();
+    const y=window.scrollY; renderNow(); if(BELL) BELL.update();
     if(y&&Math.abs(window.scrollY-y)>1) window.scrollTo(0,Math.min(y,document.documentElement.scrollHeight-innerHeight));
   }
   // The list's width, measured before it is emptied (measuring an empty list makes the page jump up).
@@ -1066,11 +1073,15 @@ import { createCommentMentions } from "./components/comment-mentions.js";
         for(const k in PEOPLE) add(PEOPLE[k].id,PEOPLE[k].name,""); }
       const cm=(f.comment&&f.comment.comments)||[]; $("d-ccount").textContent="("+((f.comment&&f.comment.total)||cm.length)+")";
       const box=$("d-comments"); box.replaceChildren(); if(!cm.length) box.appendChild(el("div","msg","No comments yet."));
-      const writers=Object.fromEntries(((await logged).events||[]).filter(e=>e.commentId).map(e=>[String(e.commentId),e.by&&e.by.name])); if(dz.key!==key) return;
+      const events=((await logged).events||[]).filter(e=>e.commentId), writers=Object.fromEntries(events.map(e=>[String(e.commentId),e.by&&e.by.name])), writerMail=Object.fromEntries(events.map(e=>[String(e.commentId),String((e.by&&e.by.email)||"").toLowerCase()])); if(dz.key!==key) return;
       cm.forEach(c=>{ const aid=c.author&&c.author.accountId, name=writers[String(c.id)]||(c.author&&c.author.displayName)||"Someone";
-        const cd=el("div","cmt"+(BYID[aid]?" mine":" ext")); const meta=el("div","cmeta"); meta.appendChild(el("b",null,name)); meta.appendChild(el("span",null,ago(c.created)));
+        const cd=el("div","cmt"+(BYID[aid]?" mine":" ext")); const meta=el("div","cmeta"); meta.appendChild(el("b",null,name)); meta.appendChild(el("span",null,ago(c.created)+(c.created&&c.updated&&c.updated.slice(0,19)!==c.created.slice(0,19)?" · edited":"")));
         const rb=el("button","linkbtn sp","Reply"); rb.type="button"; rb.addEventListener("click",()=>{ const t=$("d-reply"); if(!t.value.trim()) t.value=name.split(" ")[0]+", "; t.focus(); t.scrollIntoView({block:"center",behavior:"smooth"}); });
-        meta.appendChild(rb); cd.appendChild(meta); const b=richNode(c.body,pictures); b.classList.add("rich"); b.dir="auto"; cd.appendChild(b); box.appendChild(cd); });
+        meta.appendChild(rb); cd.appendChild(meta); let b=richNode(c.body,pictures); b.classList.add("rich"); b.dir="auto"; cd.appendChild(b); box.appendChild(cd);
+        // Your own comments (any comment for administrators). Comments written here end with "— Name", which the proxy keeps.
+        if(IS_ADMIN||(writerMail[String(c.id)]&&writerMail[String(c.id)]===MY_EMAIL.toLowerCase())){
+          let text=String(c.body||""); if(writers[String(c.id)]) text=text.replace(/\n\n— [^\n]*$/,"");
+          addCommentEdit(meta,()=>b,()=>text,async next=>{ const r=await jira.editComment(key,c.id,next); text=next; const nb=richNode((r&&r.body)||next,pictures); nb.classList.add("rich"); nb.dir="auto"; b=nb; return nb; }); } });
     }catch(err){ if(dz.key===key) $("d-desc").replaceChildren(el("span","msg err",errorText(err))); }
   }
   // Drawer contents for an internal ticket (all data is already loaded).
@@ -1101,10 +1112,31 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     renderIntAttachments(key);
     const cm=t.comments||[]; $("d-ccount").textContent="("+cm.length+")";
     const box=$("d-comments"); box.replaceChildren(); if(!cm.length) box.appendChild(el("div","msg","No comments yet."));
-    cm.forEach(c=>{ const name=(c.author&&c.author.name)||"Someone";
-      const cd=el("div","cmt mine"); const meta=el("div","cmeta"); meta.appendChild(el("b",null,name)); meta.appendChild(el("span",null,ago(c.created)));
+    cm.forEach((c,n)=>{ const name=(c.author&&c.author.name)||"Someone";
+      const cd=el("div","cmt mine"); const meta=el("div","cmeta"); meta.appendChild(el("b",null,name)); meta.appendChild(el("span",null,ago(c.created)+(c.edited?" · edited":"")));
       const rb=el("button","linkbtn sp","Reply"); rb.type="button"; rb.addEventListener("click",()=>{ const ta=$("d-reply"); if(!ta.value.trim()) ta.value=name.split(" ")[0]+", "; ta.focus(); });
-      meta.appendChild(rb); cd.appendChild(meta); const b=commentWithPictures(key,c.body); b.dir="auto"; cd.appendChild(b); box.appendChild(cd); });
+      meta.appendChild(rb); cd.appendChild(meta); const b=commentWithPictures(key,c.body); b.dir="auto"; cd.appendChild(b); box.appendChild(cd);
+      // Your own comments (any comment for administrators).
+      if(IS_ADMIN||String((c.author&&c.author.email)||"").toLowerCase()===MY_EMAIL.toLowerCase())
+        addCommentEdit(meta,()=>b,()=>String(c.body||""),async next=>{ const r=await internalApi.editComment(key,n,c.created,next); if(r&&r.ticket) putInternal(r.ticket); if(dz.key===key) renderInternal(key); return null; }); });
+  }
+  // An Edit button in a comment's header: the text turns into a box with Save and Cancel. save(text) sends it
+  // and returns the comment's new text node (or null when the whole list was redrawn).
+  function addCommentEdit(meta,body,original,save){
+    const eb=el("button","linkbtn","Edit"); eb.type="button"; meta.appendChild(eb);
+    eb.addEventListener("click",()=>{
+      const old=body(); if(!old.isConnected) return;
+      const box=el("div","cedit"), ta=el("textarea","inp"); ta.value=original(); ta.dir="auto"; ta.style.width="100%"; ta.rows=Math.min(12,Math.max(3,ta.value.split("\n").length+1)); ta.setAttribute("aria-label","Edit comment");
+      const ok=el("button","btn primary","Save"), no=el("button","btn","Cancel"), msg=el("span","msg"), row=el("div","inline"); ok.type=no.type="button"; row.append(ok,no,msg); box.append(ta,row);
+      old.replaceWith(box); eb.hidden=true; ta.focus();
+      const done=node=>{ if(node) box.replaceWith(node); else if(box.isConnected) box.replaceWith(old); eb.hidden=false; };
+      no.addEventListener("click",()=>done(null));
+      ok.addEventListener("click",async()=>{ const text=ta.value.trim(); if(!text){ msg.textContent="Write something first."; msg.className="msg err"; return; }
+        if(text===original().trim()){ done(null); return; }
+        ok.disabled=no.disabled=ta.disabled=true; ok.textContent="Saving…"; msg.textContent="";
+        try{ done(await save(text)); toast("Comment updated"); }
+        catch(err){ ok.disabled=no.disabled=ta.disabled=false; ok.textContent="Save"; msg.textContent=errorText(err); msg.className="msg err"; } });
+    });
   }
   // Attachments on internal tickets: stored by the proxy; downloads go through it with your sign-in.
   function renderIntAttachments(key){
@@ -1272,7 +1304,9 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   $("d-adddev").addEventListener("click",()=>{ const v=$("d-newdev").value.trim().replace(/^ai1_/i,"").replace(/\s+/g,"").toLowerCase(); if(!v){ setMsg("d-devmsg","Type a name first.",false); return; } dz.devs.add(v); $("d-newdev").value=""; renderDevChips(); setMsg("d-devmsg","Added ai1_"+v+". Press Save developers.",true); });
   $("d-newdev").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("d-adddev").click(); } });
   $("d-savedevs").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const labels=labelsWith(dz.labels,new Set(dz.devs)); const prev=new Set(dz.labels.filter(isDevLabel).map(devOf)); const want=new Set(dz.devs); const r=await runBatch([{key,added:[...dz.devs].filter(d=>!prev.has(d)),run:()=>(isOdoo(key)?odooApi.update(key,{devs:[...want]}):isInt(key)?internalApi.update(key,{devs:[...want]}):jira.edit(key,{labels})),patch:devsPatch(want)}],"Developers saved"); setMsg("d-devmsg",r.fail?"Not saved.":"Saved.",!r.fail); });
-  const commentMentions=createCommentMentions({textarea:$("d-reply"),search:q=>jira.users(q),enabled:()=>!!dz.key&&!isInt(dz.key)&&!isOdoo(dz.key)});
+  // Administrators mention Jira accounts on Jira tickets (Jira notifies them). Internal tickets, and everyone
+  // who isn't an administrator, mention dashboard people: they get a dashboard notification and an email.
+  const commentMentions=createCommentMentions({textarea:$("d-reply"),search:q=>jira.users(q),enabled:()=>!!dz.key&&!isOdoo(dz.key),local:()=>isInt(dz.key)||!IS_ADMIN,people:()=>mentionPeople(dz.key)});
   // Pictures in a comment: uploaded to the ticket right away (Jira or internal) and put in the text the way
   // Jira does it (!name|thumbnail!), so they show inside the comment in Jira and here once it is sent.
   // Paste (Ctrl+V), drag onto the comment box, or the Add picture button.
@@ -1307,8 +1341,13 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     while((m=marker.exec(text))){ const a=atts.find(x=>x.filename===m[1]); if(!a||!isImage(a)) continue; box.append(text.slice(at,m.index), inlineImage(a,key)); at=m.index+m[0].length; }
     box.append(text.slice(at)); return box;
   }
-  $("d-send").addEventListener("click",async()=>{ const key=dz.key, text=(isInt(key)||isOdoo(key))?$("d-reply").value.trim():commentMentions.text(); if(!key) return; if(!text){ setMsg("d-cmsg","Write something first.",false); return; } const after=$("d-after").value; const r=await runBatch([{key,run:()=>doComment(key,text)}],"Comment added"); if(!r.fail){$("d-reply").value="";commentMentions.reset();} setMsg("d-cmsg",r.fail?"Not sent.":"Sent.",!r.fail);
-    if(!r.fail&&after){ const ix=after.indexOf("|"); const aid=after.slice(0,ix), aname=after.slice(ix+1); const r2=await doAssign([key],aid,aname); setMsg("d-cmsg",r2.fail?"Comment sent, but the assignee didn't change.":"Sent and assigned to "+aname+".",!r2.fail); } });
+  // One comment per click: the button stays off until the comment is sent (a second click sent it twice).
+  let sendingComment=false;
+  $("d-send").addEventListener("click",async()=>{ if(sendingComment) return; const key=dz.key, text=isOdoo(key)?$("d-reply").value.trim():commentMentions.text(), mentions=isOdoo(key)?[]:commentMentions.mentioned().filter(id=>id.includes("@")); if(!key) return; if(!text){ setMsg("d-cmsg","Write something first.",false); return; }
+    const btn=$("d-send"); sendingComment=true; btn.disabled=true; btn.textContent="Sending…";
+    try{ const after=$("d-after").value; let notified=[]; const r=await runBatch([{key,run:()=>doComment(key,text,mentions).then(res=>{notified=(res&&res.notified)||[];return res;})}],"Comment added"); if(!r.fail){$("d-reply").value="";commentMentions.reset();} setMsg("d-cmsg",r.fail?"Not sent.":notified.length?"Sent. Notified "+notified.join(", ")+".":"Sent.",!r.fail);
+      if(!r.fail&&after){ const ix=after.indexOf("|"); const aid=after.slice(0,ix), aname=after.slice(ix+1); const r2=await doAssign([key],aid,aname); setMsg("d-cmsg",r2.fail?"Comment sent, but the assignee didn't change.":"Sent and assigned to "+aname+".",!r2.fail); } }
+    finally{ sendingComment=false; btn.disabled=false; btn.textContent="Add comment"; } });
 
   setInterval(()=>{ const a=$("auto"); if(!a||!lastLoad) return; const left=Math.max(0,120-Math.round((Date.now()-lastLoad)/1000)); a.textContent="next refresh in "+(left>=60?Math.floor(left/60)+"m "+(left%60)+"s":left+"s");
     if(Date.now()-lastLoad>120000&&document.visibilityState==="visible"&&!batchBusy&&!reloading&&$("pop").hidden&&!drag){ lastLoad=Date.now(); reload(); } },1000);
@@ -1318,6 +1357,10 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const ticketHistory=createTicketHistory({api,getIssue:()=>issueByKey(dz.key),allowed:()=>IS_ADMIN&&!!dz.key&&!isOdoo(dz.key)&&!$("drawer").hidden,personName:k=>(PEOPLE[k]&&PEOPLE[k].name)||k,formatTime:value=>{const time=fmtWhen(value);return time.d+" "+time.t;}});
   const drawerUI=createIssueDrawer({canViewHistory:()=>IS_ADMIN,canViewFullHistory:()=>IS_ADMIN&&!!dz.key&&!isOdoo(dz.key),onSelect:id=>{if(id==="history")ticketHistory.load(dz.key);if(id==="notes")ticketNotes.load(dz.key);},isDirty:()=>{if(business.dirty(dz.key)||ticketNotes.dirty(dz.key))return true;const issue=issueByKey(dz.key);if(!issue)return !!$("d-reply").value.trim();return !!$("d-reply").value.trim()||!!$("d-newdev").value.trim()||dz.devs.size!==issue.devs.length||issue.devs.some(d=>!dz.devs.has(d));}});
   const ticketNotes=createTicketNotes({api,isAdmin:IS_ADMIN});
+  BELL=createInboxBell({api,button:$("inbox-btn"),count:$("inbox-count"),panel:$("inbox-panel"),issues:()=>state.issues,toast,
+    // New tickets that count: yours (all of them for administrators), not ones you opened yourself.
+    mine:i=>(IS_ADMIN||(i.devs||[]).includes(MY_DEV))&&!(isInt(i.key)&&INT[i.key]&&INT[i.key].createdBy&&String(INT[i.key].createdBy.email).toLowerCase()===MY_EMAIL.toLowerCase()),
+    open:key=>{ if(issueByKey(key)) openDrawer(key); else toast(key+" isn't in your ticket list.",["It may be closed for a while or not shared with you."],true); }});
   const dueDateHistory=createDueDateHistory({api,tickets:()=>state.issues||[],internal:key=>INT[key],openIssue:openDrawer});
   const dateRequests=createDateRequests({api,renderHistory:target=>dueDateHistory.render(target),context:()=>({admin:IS_ADMIN,email:MY_EMAIL,ticket:issueByKey}),openIssue:openDrawer,onApplied:(key,due)=>{patchIssue(key,matching(()=>({due:due||null}),"due"));mergeIssues();renderIfIdle();if(dz.key===key)$("d-due").value=due||"";},onChange:key=>{if(dz.key)dateRequests.renderDrawer(dz.key);return (key?refreshKeys([key]):reload()).then(()=>{if(dz.key){dateRequests.renderDrawer(dz.key);loadDetail(dz.key);}});}});
   state.businessFilter={};
@@ -1355,7 +1398,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     // A linked ticket opens once its fields are set up: from the saved copy if it has it, otherwise after loading.
     const openFromHash=()=>{ try{const h=decodeURIComponent(location.hash.slice(1));if(/^[A-Z][A-Z0-9_]*-\d+$/.test(h)&&issueByKey(h)&&dz.key!==h)openDrawer(h);}catch(_){} };
     const opened=cached&&(openFromHash(),dz.key!==null);
-    await reload();
+    await reload(); BELL.start();
     // Show how many changes failed (and, for administrators, API key problems) next to Sync errors.
     syncErrors.reload(); if(IS_ADMIN) syncErrors.loadKeys();
     if(!opened) openFromHash();

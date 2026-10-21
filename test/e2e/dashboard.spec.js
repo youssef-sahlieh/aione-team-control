@@ -5,10 +5,10 @@ import { jiraIssue, internalTicket, people } from "../fixtures/issues.js";
 // A synthetic Odoo Helpdesk ticket as the proxy returns it (developer "builder" from the Odoo assignee).
 const odooTicket = { key: "HD-300", id: 300, ref: "300", odoo: true, summary: "Synthetic Odoo request", status: "In Progress", statusCat: "indeterminate", devs: ["builder"], developerName: "Builder", customer: { name: "Ariel Amiri", email: "ariel@example.invalid" }, team: "ai1 | Support", priority: "Medium", created: "2026-10-09T08:00:00Z", updated: "2026-10-10T08:00:00Z", closed: "", due: null, url: "https://odoo.example.invalid/web#id=300&model=helpdesk.ticket&view_type=form" };
 
-async function mockDashboard(page, { role = "admin", ticketLog = [], failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1, odoo = false, github = false, billingRequired = false, missingEstimate = false, filtersVisible = true, workLog = false } = {}) {
+async function mockDashboard(page, { inbox = [], role = "admin", ticketLog = [], failure = false, expired = false, many = false, mutationFailure = false, assigneeTeam = false, aiDisabled = false, aiFailure = false, briefFailure = false, historyFailure = false, legacyHistory = false, legacyTotal = 1, odoo = false, github = false, billingRequired = false, missingEstimate = false, filtersVisible = true, workLog = false } = {}) {
   await page.clock.setFixedTime(new Date("2026-10-11T09:00:00Z"));
   const calls = [], unexpected = [], errors = [];
-  const internalTickets=[structuredClone(internalTicket)];
+  const internalTickets=[structuredClone(internalTicket)], inboxTickets=[];
   const catalog={revision:1,entries:[{id:"client",name:"Synthetic Client",parentId:null,archived:false,sources:[]}]},metadata={};
   const record=key=>metadata[key]||{revision:0,clientId:"client",subClientId:null,clientName:"Synthetic Client",subClientName:"",estimatedHours:missingEstimate?null:2,actualHours:null,workDone:"",...(role==="admin"?{billing:null}:{})};
   let historyFailures=historyFailure?1:0;
@@ -53,8 +53,9 @@ async function mockDashboard(page, { role = "admin", ticketLog = [], failure = f
       return json({config:timeSetup,odoo:true,statuses:STATUSES,fields:{line:[{name:'x_studio_users',label:'Users',type:'char',custom:true},{name:'x_aione_entry_uuid',label:'Work entry id',type:'char',custom:true},{name:'x_aione_user_uuid',label:'Dashboard user id',type:'char',custom:true},{name:'x_aione_ticket_ref',label:'Ticket',type:'char',custom:true}]},
         suggested:{users:'x_studio_users',usersCandidates:['x_studio_users']},defaults:{ok:true,user:{id:7,name:'Odoo Bot'},company:{id:1,name:'AION'},employee:{id:5,name:'Bot employee'}},lockDate:'2026-09-30',
         projects:[{id:10,name:'Synthetic Project',partner:'Synthetic Client'}],catalog:[{id:'client',name:'Synthetic Client',parentId:null,odooProject:null}],users:[{email:'test@example.invalid',name:'Test User'}]});}
+    if(path==='/inbox')return json({items:inbox,seenAt:'2026-10-11T08:00:00.000Z',readTickets:inboxTickets});
+    if(path==='/inbox/read'){inbox=inbox.map(x=>body.all||x.id===body.id?{...x,read:true}:x);inboxTickets.push(...(body.tickets||[]));return json({items:inbox,seenAt:'2026-10-11T08:00:00.000Z',readTickets:inboxTickets});}
     if(path==='/ticket-notes'&&method==='GET')return json({notes:[],people:[{email:'karim@example.invalid',name:'Karim Example',role:'admin'},{email:'dev2@example.invalid',name:'Second Developer',role:'user'}]});
-    if(path==='/ticket-notes/inbox'&&method==='GET')return json({items:[],unread:0});
     if(path==='/integrations')return json({checkedAt:'2026-10-11T09:00:00Z',keys:[{id:'jira',name:'Jira API token',status:'warning',message:'Expires in 5 days. Create a new key before then.',expiresAt:'2026-10-16T00:00:00.000Z',days:5}]});
     if(path==='/ticket-metadata/batch')return json({records:Object.fromEntries(body.keys.map(key=>[key,record(key)]))});
     if(path==='/ticket-metadata'&&method==='GET')return json({metadata:record(url.searchParams.get('key')),history:[],closed:false});
@@ -77,6 +78,9 @@ async function mockDashboard(page, { role = "admin", ticketLog = [], failure = f
       return json({ issues: body.jql.includes("statusCategory = Done") ? [] : issues, isLast: true });
     }
     if(path==="/jira/users")return json([{accountId:"synthetic-karim",displayName:"Karim Example",active:true},{accountId:"synthetic-youssef",displayName:"Youssef Example",active:true},{accountId:"synthetic-app",displayName:"App",accountType:"app"}]);
+    if(/^\/internal\/INT-\d+\/comment$/.test(path)&&method==="POST"){const t=internalTickets.find(x=>path.includes(x.key+"/"));t.comments=[...(t.comments||[]),{author:{name:"Test User",email:"test@example.invalid"},created:"2026-10-11T09:00:0"+t.comments.length+".000Z",body:body.text}];return json({ticket:t});}
+    if(/^\/internal\/INT-\d+\/comment\/\d+$/.test(path)&&method==="PUT"){const t=internalTickets.find(x=>path.includes(x.key+"/")),c=t.comments[Number(path.split("/").pop())];c.body=body.text;c.edited="2026-10-11T09:01:00.000Z";return json({ticket:t});}
+    if(/^\/jira\/issue\/AION-\d+\/comment\/\w+$/.test(path)&&method==="PUT")return json({id:path.split("/").pop(),body:body.text});
     if(path.endsWith("/comment")&&method==="POST")return json({id:"synthetic-comment"});
     if (path.endsWith("/changelog")) return json({ changelog: legacyHistory?{total:legacyTotal,histories:[{id:'legacy-1',created:'2026-10-09T10:00:00Z',author:{displayName:'Jira Manager'},items:[{field:'status',fromString:'Open',toString:'In Development'}]}]}:{ histories: [] } });
     if(path.endsWith("/history")){
@@ -93,7 +97,7 @@ async function mockDashboard(page, { role = "admin", ticketLog = [], failure = f
   return { calls, unexpected, errors };
 }
 
-for(const role of ['admin','user'])test(`${role} Jira mentions pick people and send account IDs`,async({page})=>{
+for(const role of ['admin'])test(`${role} Jira mentions pick people and send account IDs`,async({page})=>{
   const mock=await mockDashboard(page,{role});await page.goto('/dashboard.html#AION-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();
   const input=page.locator('#d-reply');await input.fill('Please check @ka');await expect(page.getByRole('option',{name:'Karim Example',exact:true})).toBeVisible();await input.press('Enter');await expect(input).toHaveValue('Please check @Karim Example ');
   await input.press('Home');await input.press('Home');await input.press('Control+Home');await input.press('ArrowRight');await input.press('Control+Home');await input.press('Q');
@@ -101,9 +105,44 @@ for(const role of ['admin','user'])test(`${role} Jira mentions pick people and s
   await page.locator('#d-send').click();await expect(page.locator('#d-cmsg')).toHaveText('Sent.');
   const sent=mock.calls.find(c=>c.path==='/jira/issue/AION-101/comment');expect(sent.body.text).toBe('QPlease check [~accountid:synthetic-karim]  [~accountid:synthetic-youssef]');expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
-test('editing a selected mention makes it plain text and internal tickets have no picker',async({page})=>{
+test('users mention dashboard people on Jira tickets; they are sent as emails to notify',async({page})=>{
+  const mock=await mockDashboard(page,{role:'user'});await page.goto('/dashboard.html#AION-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();
+  const input=page.locator('#d-reply');await input.fill('Please check @se');await expect(page.getByRole('option',{name:'Second Developer',exact:true})).toBeVisible();await input.press('Enter');await expect(input).toHaveValue('Please check @Second Developer ');
+  await page.locator('#d-send').click();await expect(page.locator('#d-cmsg')).toHaveText('Sent.');
+  const sent=mock.calls.find(c=>c.path==='/jira/issue/AION-101/comment');expect(sent.body).toEqual({text:'Please check @Second Developer',mentions:['dev2@example.invalid']});expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('editing a selected mention makes it plain text and internal tickets mention dashboard people',async({page})=>{
   const mock=await mockDashboard(page);await page.goto('/dashboard.html#AION-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();const input=page.locator('#d-reply');await input.fill('@ka');await expect(page.getByRole('option',{name:'Karim Example',exact:true})).toBeVisible();await input.press('Enter');await input.fill('@Karim Edited');await input.press('Escape');await page.locator('#d-send').click();await expect(page.locator('#d-cmsg')).toHaveText('Sent.');expect(mock.calls.find(c=>c.path.endsWith('/comment')).body.text).toBe('@Karim Edited');
-  await page.locator('#d-close').click();await page.goto('/dashboard.html#INT-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();await input.fill('@ka');await expect(page.locator('.mention-hint')).toBeHidden();await expect(page.locator('#comment-mention-picker')).toBeHidden();expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+  await page.locator('#d-close').click();await page.goto('/dashboard.html#INT-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();await input.fill('@ka');await expect(page.locator('.mention-hint').first()).toBeVisible();await expect(page.getByRole('option',{name:'Karim Example',exact:true})).toBeVisible();await input.press('Enter');await page.locator('#d-send').click();await expect(page.locator('#d-cmsg')).toHaveText('Sent.');
+  expect(mock.calls.find(c=>c.path==='/internal/INT-101/comment').body).toEqual({text:'@Karim Example',mentions:['karim@example.invalid']});expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('the bell keeps each notification unread until it is clicked, then opens the ticket',async({page})=>{
+  const mock=await mockDashboard(page,{inbox:[{id:'n1',at:'2026-10-11T08:30:00.000Z',type:'mention',key:'AION-101',title:'Synthetic Jira task',by:'Karim Example',text:'@Test can you check?',read:false},{id:'n2',at:'2026-10-11T08:20:00.000Z',type:'note',key:'INT-101',title:'Internal',by:'Second Developer',text:'note',read:false}]});await page.goto('/dashboard.html');
+  const bell=page.locator('#inbox-btn'),count=page.locator('#inbox-count');await expect(count).toBeVisible();const before=Number(await count.textContent());
+  await bell.click();await expect(page.locator('#inbox-panel')).toContainText('Karim Example mentioned you');
+  // Opening and closing the bell reads nothing.
+  await page.keyboard.press('Escape');await expect(count).toHaveText(String(before));
+  await bell.click();await page.locator('.inbox-item',{hasText:'Karim Example'}).click();await expect(page.locator('#drawer')).toBeVisible();
+  await expect(count).toHaveText(String(before-1));expect(mock.calls.find(c=>c.path==='/inbox/read').body).toEqual({id:'n1'});
+  await page.locator('#d-close').click();await bell.click();await expect(page.locator('.inbox-item.new',{hasText:'Second Developer'})).toBeVisible();await expect(page.locator('.inbox-item.new',{hasText:'Karim Example'})).toHaveCount(0);
+  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('a double click on Add comment sends one comment, and comments can be edited',async({page})=>{
+  const mock=await mockDashboard(page);await page.goto('/dashboard.html#INT-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();
+  await page.locator('#d-reply').fill('Only once');await page.locator('#d-send').dblclick();await expect(page.locator('#d-cmsg')).toHaveText('Sent.');
+  expect(mock.calls.filter(c=>c.path==='/internal/INT-101/comment'&&c.method==='POST').length).toBe(1);
+  const cmt=page.locator('#d-comments .cmt',{hasText:'Only once'});await cmt.getByRole('button',{name:'Edit'}).click();
+  await page.getByRole('textbox',{name:'Edit comment'}).fill('Only once, edited');await page.locator('.cedit').getByRole('button',{name:'Save'}).click();
+  await expect(page.locator('#d-comments')).toContainText('Only once, edited');await expect(page.locator('#d-comments')).toContainText('edited');
+  expect(mock.calls.find(c=>c.path==='/internal/INT-101/comment/0').body).toEqual({text:'Only once, edited',created:'2026-10-11T09:00:00.000Z'});
+  await page.locator('#d-close').click();await page.goto('/dashboard.html#AION-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();
+  const jc=page.locator('#d-comments .cmt',{hasText:'Please check'});await jc.getByRole('button',{name:'Edit'}).click();await page.getByRole('textbox',{name:'Edit comment'}).fill('Please check again');await page.locator('.cedit').getByRole('button',{name:'Save'}).click();
+  await expect(page.locator('#d-comments')).toContainText('Please check again');expect(mock.calls.find(c=>c.path==='/jira/issue/AION-101/comment/c1').body).toEqual({text:'Please check again'});
+  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('users can edit only their own comments',async({page})=>{
+  const mock=await mockDashboard(page,{role:'user'});await page.goto('/dashboard.html#AION-101');await page.getByRole('tab',{name:'Comments',exact:true}).click();
+  await expect(page.locator('#d-comments .cmt',{hasText:'Please check'})).toBeVisible();await expect(page.locator('#d-comments').getByRole('button',{name:'Edit'})).toHaveCount(0);expect(mock.errors).toEqual([]);
 });
 
 test('legacy Jira history route displays real field changes when all events are returned',async({page})=>{
@@ -769,7 +808,7 @@ test('internal notes can go to anyone in the dashboard, not only the developer l
  const mock=await mockDashboard(page);await page.goto('/dashboard.html#AION-101');await page.locator('#d-note').click();
  await expect(page.locator('#panel-notes')).toContainText('Internal notes');
  await page.locator('#ticket-note-text').fill('Hello @Second');
- await expect(page.locator('#note-mention-picker').getByRole('option',{name:'Second Developer'})).toBeVisible();
+ await expect(page.locator('#panel-notes .mention-picker').getByRole('option',{name:'Second Developer'})).toBeVisible();
  expect(mock.errors).toEqual([]);
 });
 

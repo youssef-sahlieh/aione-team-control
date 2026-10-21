@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {ticketInboxRoutes, ticketNoteRoutes} from '../proxy/src/ticket-notes.js';
+import {ticketNoteRoutes} from '../proxy/src/ticket-notes.js';
+import {inboxRoutes} from '../proxy/src/inbox.js';
 import {memoryStore,saveUser} from '../proxy/src/users.js';
 
 async function fixture() {
@@ -10,19 +11,22 @@ async function fixture() {
   const admin={email:'admin@aione.biz',name:'Admin',role:'admin'};
   const env={STORE:memoryStore(),JIRA_PROJECT:'AION'};
   for (const u of [builder,teammate,outsider,admin]) await saveUser(env.STORE,u);
-  const deps={readTicket:async key=>['AION-1','INT-1'].includes(key)?{title:'Ticket',devs:['builder']}:null};
+  const mails=[], sendMail=async(from,body)=>{mails.push({from,...body});return Response.json({ok:true});};
+  const deps={sendMail,readTicket:async key=>['AION-1','INT-1'].includes(key)?{title:'Ticket',devs:['builder']}:null};
   const call=async(me=builder,body=null,key='AION-1')=>{
     const url=new URL('https://proxy.test/ticket-notes?key='+key);
     const res=await ticketNoteRoutes(new Request(url,{method:body?'POST':'GET',...(body?{body:JSON.stringify(body)}:{})}),env,url,me,deps);
     return {status:res.status,data:await res.json()};
   };
+  // GET /inbox lists notifications; POST /inbox/read marks one ({id}) or all ({all:true}) as read.
   const inbox=async(me,body=null)=>{
-    const url=new URL('https://proxy.test/ticket-notes/inbox');
-    const res=await ticketInboxRoutes(new Request(url,{method:body?'POST':'GET',...(body?{body:JSON.stringify(body)}:{})}),env,me);
-    return {status:res.status,data:await res.json()};
+    const url=new URL('https://proxy.test/inbox'+(body?'/read':''));
+    const res=await inboxRoutes(new Request(url,{method:body?'POST':'GET',...(body?{body:JSON.stringify(body)}:{})}),env,url,me);
+    const data=await res.json();
+    return {status:res.status,data:{...data,unread:data.items.filter(i=>!i.read).length}};
   };
   const note=(text='Please review this blocker',key='AION-1',mentions=[])=>({id:crypto.randomUUID(),key,text,mentions});
-  return {builder,teammate,outsider,admin,env,call,inbox,note};
+  return {builder,teammate,outsider,admin,env,call,inbox,note,mails};
 }
 
 test('everyone who can open a ticket reads its notes; people outside the ticket get 404',async()=>{
@@ -59,6 +63,7 @@ test('mentions must be people in the dashboard, exclude yourself, and only notif
   assert.equal(teammateInbox.unread,1);
   assert.equal(teammateInbox.items[0].key,'AION-1');
   assert.equal(teammateInbox.items[0].by,'Developer');
+  assert.deepEqual(f.mails.map(m=>m.to),[[f.teammate.email]]);
   assert.equal((await f.inbox(f.admin)).data.items.length,0);
 });
 
@@ -68,12 +73,13 @@ test('marking mentions read works one at a time or all at once',async()=>{
   await f.call(f.builder,first);
   await f.call(f.builder,second);
   assert.equal((await f.inbox(f.teammate)).data.unread,2);
-  assert.equal((await f.inbox(f.teammate,{ids:[first.id]})).data.unread,1);
+  // Notification ids are their own (not the note ids), so find the 'First' item by its text.
+  const firstItem=(await f.inbox(f.teammate)).data.items.find(i=>i.text==='First @Teammate');
+  assert.equal((await f.inbox(f.teammate,{id:firstItem.id})).data.unread,1);
   const items=(await f.inbox(f.teammate)).data.items;
-  assert.equal(items.find(i=>i.id===first.id).readAt!==null,true);
-  assert.equal(items.find(i=>i.id===second.id).readAt,null);
-  assert.equal((await f.inbox(f.teammate,{})).data.unread,0);
-  assert.equal((await f.inbox(f.teammate,{ids:'nope'})).status,400);
+  assert.equal(items.find(i=>i.id===firstItem.id).read,true);
+  assert.equal(items.find(i=>i.text==='Second @Teammate').read,false);
+  assert.equal((await f.inbox(f.teammate,{all:true})).data.unread,0);
 });
 
 test('a retried submission does not duplicate notes or notifications, and an id used by someone else is refused',async()=>{

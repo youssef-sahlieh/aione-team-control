@@ -36,6 +36,7 @@ async function dropFile(store, a) {
 
 import { normDev, validDev } from "./users.js";
 import { recordTicketEvent } from "./ticket-log.js";
+import { notifyMentions } from "./inbox.js";
 
 export const STATUSES = [
   { name: "Open", cat: "new" },
@@ -120,7 +121,7 @@ function applyFields(t, b, me, creating, people = []) {
 // What the dashboard gets: the ticket with its status category for the existing views.
 const view = (t) => ({ ...t, statusCat: statusCat(t.status), internal: true });
 
-export async function internalRoutes(request, env, url, me) {
+export async function internalRoutes(request, env, url, me, deps = {}) {
   const store = env.STORE, path = url.pathname, method = request.method;
   if (!store) return fail("no_store", "Internal tickets need the database. See SETUP.md.", 501);
   if (me.role !== "admin" && !me.dev) return fail("forbidden", "Your account has no developer name.", 403);
@@ -204,18 +205,34 @@ export async function internalRoutes(request, env, url, me) {
     return fail("not_found", "Not found.", 404);
   }
 
-  const m = /^\/internal\/(INT-\d+)(\/comment)?$/.exec(path);
-  if (!m) return fail("not_found", "Not found.", 404);
+  const m = /^\/internal\/(INT-\d+)(\/comment)?(?:\/(\d{1,4}))?$/.exec(path);
+  if (!m || (m[3] !== undefined && !m[2])) return fail("not_found", "Not found.", 404);
   let t = await getTicket(store, m[1]);
   if (!t || !canSee(me, t)) return fail("not_found", "No such internal ticket.", 404);
 
-  if (m[2] && method === "POST") {
-    const text = String(((await readJson(request)) || {}).text || "").trim();
+  // Editing a comment: by its place in the list, checked against its time so a changed list is refused.
+  if (m[3] !== undefined && method === "PUT") {
+    const b = (await readJson(request)) || {};
+    const text = String(b.text || "").trim();
     if (!text || text.length > 20000) return fail("bad_request", "Write a comment first.", 400);
+    const c = (t.comments || [])[Number(m[3])];
+    if (!c || c.created !== b.created) return fail("conflict", "This comment changed. Refresh and try again.", 409);
+    if (me.role !== "admin" && String(c.author?.email || "").toLowerCase() !== String(me.email).toLowerCase()) return fail("forbidden", "You can only edit your own comments.", 403);
+    if (c.body !== text) { c.body = text; c.edited = now(); c.editedBy = by(me); t.updated = now(); await saveTicket(store, t); }
+    return json({ ticket: view(t) });
+  }
+
+  if (m[2] && m[3] === undefined && method === "POST") {
+    const b = (await readJson(request)) || {};
+    const text = String(b.text || "").trim();
+    if (!text || text.length > 20000) return fail("bad_request", "Write a comment first.", 400);
+    const mentions = Array.isArray(b.mentions) ? b.mentions.filter((e) => typeof e === "string").slice(0, 20) : [];
     t.comments = [...(t.comments || []), { author: by(me), created: now(), body: text }].slice(-500);
     t.updated = now();
     await saveTicket(store, t);
-    return json({ ticket: view(t) }, 201);
+    // @mentioned people get a notification and an email (see inbox.js).
+    const notified = mentions.length ? await notifyMentions(env, me, { emails: mentions, key: t.key, title: t.summary, text, sendMail: deps.sendMail }) : [];
+    return json({ ticket: view(t), notified }, 201);
   }
 
   if (!m[2] && method === "PUT") {
