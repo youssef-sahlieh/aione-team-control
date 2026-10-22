@@ -134,8 +134,12 @@ async function odooRows(env){
   const ids=[...new Set(projects.map(p=>Array.isArray(p.partner_id)?p.partner_id[0]:null).filter(Boolean))];
   const company={};
   if(ids.length)for(const c of await odoo(env,'res.partner','read',[ids],{fields:['commercial_partner_id']}))company[c.id]=Array.isArray(c.commercial_partner_id)?{id:c.commercial_partner_id[0],name:String(c.commercial_partner_id[1]||'').trim()}:null;
+  // The contacts the projects belong to that are archived in Odoo (reading by id also returns archived ones).
+  const owners=new Map();for(const p of projects)if(Array.isArray(p.partner_id)){const o=company[p.partner_id[0]]||{id:p.partner_id[0],name:String(p.partner_id[1]||'').trim()};owners.set(o.id,o.name);}
+  const archivedOwners=[];
+  if(owners.size)for(const c of await odoo(env,'res.partner','read',[[...owners.keys()]],{fields:['active']}))if(c.active===false&&owners.get(c.id))archivedOwners.push(owners.get(c.id));
   const fits=n=>n&&n.length<=300;
-  return {
+  return {archivedOwners,
     customers:customers.map(c=>({displayName:String(c.display_name||'').trim(),sourceRow:c.id})).filter(r=>fits(r.displayName)),
     projects:projects.map(p=>{const owner=Array.isArray(p.partner_id)?(company[p.partner_id[0]]||{id:p.partner_id[0],name:String(p.partner_id[1]||'').trim()}):null;
       return {displayName:String(p.display_name||'').trim(),customer:owner&&owner.name?owner.name:NO_CUSTOMER,sourceRow:p.id};}).filter(r=>fits(r.displayName)&&fits(r.customer))
@@ -148,7 +152,7 @@ export async function syncCatalogFromOdoo(env,{force=false}={}){
   const lock=odooSyncKey(env)+':lock',owner=crypto.randomUUID();
   if(!await store.setIfAbsent(lock,owner,120))return {odoo:true,changed:false,busy:true,syncedAt:last};
   try{
-    const {customers,projects}=await odooRows(env);let changed=false,added=0;
+    const {customers,projects,archivedOwners}=await odooRows(env);let changed=false,added=0;
     if(customers.length||projects.length)for(let attempt=0;;attempt++){
       const key=catalogKey(env),previous=await store.get(key),catalog=previous?JSON.parse(previous):{revision:0,entries:[]};
       // The group for projects without a contact was called "No customer": renamed in place (same id, same projects).
@@ -158,6 +162,20 @@ export async function syncCatalogFromOdoo(env,{force=false}={}){
       let next=catalog,count=0;
       if(customers.length){const r=await prepareImport(next,customers,'odoo-customer');next=r.next;count+=r.preview.added;}
       if(projects.length){const r=await prepareImport(next,projects,'odoo');next=r.next;count+=r.preview.added;}
+      // Contacts archived (or deleted) in Odoo are archived here too, so they aren't offered as clients; they
+      // come back when restored in Odoo. Tickets that use one keep it. Archives made in the dashboard stay.
+      if(customers.length){
+        if(next===catalog)next=structuredClone(catalog);
+        const active=new Set(customers.map(c=>c.sourceRow)),gone=new Set((archivedOwners||[]).map(nameKey));
+        for(const e of next.entries){
+          if(e.parentId||e.name===NO_CUSTOMER)continue;
+          const ids=(e.sources||[]).filter(s=>s.source==='odoo-customer').map(s=>s.row);
+          if(!ids.length&&!gone.has(nameKey(e.name))&&e.archivedBy!=='odoo')continue;
+          const inOdoo=ids.length?ids.some(id=>active.has(id)):!gone.has(nameKey(e.name));
+          if(!inOdoo&&!e.archived){e.archived=true;e.archivedBy='odoo';}
+          else if(inOdoo&&e.archived&&e.archivedBy==='odoo'){e.archived=false;delete e.archivedBy;}
+        }
+      }
       if(JSON.stringify(next.entries)===JSON.stringify(catalog.entries))break;
       next.revision=catalog.revision+1;
       if(previous===null?await store.setIfAbsent(key,JSON.stringify(next),315360000):await store.compareAndSet(key,previous,JSON.stringify(next))){changed=true;added=count;break;}

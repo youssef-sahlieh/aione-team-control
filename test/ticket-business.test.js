@@ -355,3 +355,35 @@ test('any project can be chosen for a ticket, also one listed under another clie
  const bad=await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:saved.revision,subClientId:s.parent.id}},{email:'admin@example.invalid',role:'admin'});
  assert.equal(bad.status,400);
 });
+test('contacts archived in Odoo are archived in the dashboard by the sync, and come back when restored',async()=>{
+ const {env,call:api}=await setup();const realFetch=globalThis.fetch;
+ Object.assign(env,{ODOO_URL:'https://odoo.invalid',ODOO_DB:'db',ODOO_LOGIN:'bot@example.invalid',ODOO_API_KEY:'k'});
+ // Odoo leaves archived contacts out of the contact list; reading by id still returns them with active=false.
+ const odooState={customers:[{id:1,display_name:'Acme'},{id:2,display_name:'Old Shop'}],inactive:new Set([7])};
+ globalThis.fetch=async(u,init)=>{const p=JSON.parse(init.body).params;if(p.service==='common')return Response.json({result:7});
+  const [model,method,args,kw]=[p.args[3],p.args[4],p.args[5],p.args[6]||{}];
+  if(model==='res.partner'&&method==='search_read')return Response.json({result:odooState.customers});
+  if(model==='res.partner'&&method==='read'){const ids=args[0];
+   if(kw.fields.includes('active'))return Response.json({result:ids.map(id=>({id,active:!odooState.inactive.has(id)}))});
+   return Response.json({result:ids.map(id=>({id,commercial_partner_id:[id,id===7?'Closed Ltd':'Acme']}))});}
+  return Response.json({result:[{id:20,display_name:'Branch',partner_id:[1,'Acme']},{id:21,display_name:'Legacy app',partner_id:[7,'Closed Ltd']}]});};
+ const top=(c,n)=>c.entries.find(e=>e.name===n&&!e.parentId),sync=()=>api('/clients/odoo-sync?force=1','POST',{},admin);
+ try{
+  assert.equal((await sync()).status,200);let c=await readCatalog(env);
+  assert.equal(top(c,'Old Shop').archived,false);assert.equal(top(c,'Acme').archived,false);
+  // A project whose customer is archived doesn't make an active client of it.
+  assert.equal(top(c,'Closed Ltd').archived,true);assert.equal(top(c,'Closed Ltd').archivedBy,'odoo');
+  // A client archived by hand stays archived.
+  const manual=top(c,'Standalone');assert.equal((await api('/clients','PUT',{revision:c.revision,id:manual.id,archived:true},admin)).status,200);
+  // Old Shop is archived in Odoo after the first sync.
+  odooState.customers=[{id:1,display_name:'Acme'}];
+  await sync();c=await readCatalog(env);
+  assert.equal(top(c,'Old Shop').archived,true);assert.equal(top(c,'Old Shop').archivedBy,'odoo');assert.equal(top(c,'Acme').archived,false);
+  assert.equal(top(c,'Standalone').archived,true);assert.equal(top(c,'Standalone').archivedBy,undefined);
+  // Restored in Odoo: active again.
+  odooState.customers=[{id:1,display_name:'Acme'},{id:2,display_name:'Old Shop'}];odooState.inactive=new Set();
+  await sync();c=await readCatalog(env);
+  assert.equal(top(c,'Old Shop').archived,false);assert.equal(top(c,'Old Shop').archivedBy,undefined);assert.equal(top(c,'Closed Ltd').archived,false);
+  assert.equal(top(c,'Standalone').archived,true);
+ }finally{globalThis.fetch=realFetch;}
+});
