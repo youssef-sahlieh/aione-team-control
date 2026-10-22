@@ -430,11 +430,12 @@ export async function dbReportRoutes(request, env, url, me) {
   return fail("not_found", "Not found.", 404);
 }
 
-// GET /cron/db-report?token=...  - daily rebuild from Vercel cron (no user session).
+// GET /cron/db-report - daily rebuild from Vercel cron (no user session). The secret comes only in the
+// Authorization header (Vercel cron sends "Bearer CRON_SECRET"), never in the address, which ends up in logs.
 export async function dbReportCron(request, env, url) {
   const token = env.CRON_SECRET || "";
   const auth = request.headers.get("Authorization") || "";
-  const ok = token && (auth === "Bearer " + token || url.searchParams.get("token") === token);
+  const ok = token && auth === "Bearer " + token;
   if (!ok) return fail("forbidden", "Invalid cron token.", 403);
   if (!odooConfigured(env) || !env.STORE) return json({ skipped: "not configured" });
   // Run slices to completion within this invocation (force a fresh build on the first slice, then continue).

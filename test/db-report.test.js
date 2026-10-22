@@ -165,8 +165,10 @@ test("GET /db-report is admin only and caches; cron needs the secret", async () 
   const adminTok = (await makeToken(env, admin.email, Date.now(), 1)).token;
   assert.equal((await call("/db-report", { token: userTok })).status, 403);
   // Cron: wrong token rejected, right token builds.
-  assert.equal((await call("/cron/db-report?token=wrong")).status, 403);
-  assert.equal((await call("/cron/db-report?token=cron-secret-123")).status, 200);
+  assert.equal((await call("/cron/db-report", { token: "wrong" })).status, 403);
+  // The secret in the address (it ends up in logs) is not accepted.
+  assert.equal((await call("/cron/db-report?token=cron-secret-123")).status, 403);
+  assert.equal((await call("/cron/db-report", { token: "cron-secret-123" })).status, 200);
   // Admin view returns the (now cached) report.
   const view = await (await call("/db-report", { token: adminTok })).json();
   assert.ok(view.report && Array.isArray(view.report.rows));

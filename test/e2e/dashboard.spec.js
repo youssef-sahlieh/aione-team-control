@@ -42,6 +42,7 @@ async function mockDashboard(page, { inbox = [], role = "admin", ticketLog = [],
     if(path==='/clients/import/preview')return json({revision:1,rows:body.rows.length,added:1,clients:2,subClients:0,entries:[{id:'new-client',name:body.rows[0].displayName,parentId:null}]});
     if(path==='/clients/import'){catalog.entries.push({id:'new-client',name:body.rows[0].displayName,parentId:null,archived:false});catalog.revision++;return json(catalog);}
     if(path==='/ticket-log')return json({events:ticketLog});
+    if(path==='/logout'&&method==='POST')return json({ok:true});
     if(path==='/time-entries'&&method==='GET'){const key=url.searchParams.get('ticket'),list=timeEntries.filter(e=>e.ticket===key),mins=list.reduce((n,e)=>n+e.minutes,0),hd=key.startsWith('HD-');
       return json({ticket:key,source:key.startsWith('INT-')?'internal':hd?'odoo':'jira',closed:false,logging:!!workLog,canLog:!!workLog,today:'2026-10-11',maxMinutes:1440,lockDate:workLog?'2026-09-30':null,entries:list,
         summary:{entries:list.length,loggedMinutes:mins,confirmedMinutes:mins,pendingMinutes:0,unsynced:0},baselineHours:hd?null:1,totalHours:Math.round((1+mins/60)*100)/100,
@@ -1082,5 +1083,13 @@ test('the Project list offers every project: the client\'s own first, then all t
  await panel.getByRole('button',{name:'Save ticket fields',exact:true}).click();
  await expect.poll(()=>mock.calls.find(c=>c.path==='/ticket-metadata'&&c.method==='PUT')?.body?.fields?.subClientId).toBe('p2');
  expect(mock.calls.find(c=>c.path==='/ticket-metadata'&&c.method==='PUT').body.fields.clientId).toBe('client');
+ expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+
+test('signing out cancels the sign-in on the server and clears it from the browser',async({page})=>{
+ const mock=await mockDashboard(page);await page.goto('/dashboard.html');await expect(page.locator('#view .item').first()).toBeVisible();
+ await page.locator('.account-menu summary').click();await page.locator('#signout').click();await page.waitForURL(/index\.html/);
+ expect(mock.calls.filter(c=>c.path==='/logout'&&c.method==='POST')).toHaveLength(1);
+ expect(await page.evaluate(()=>localStorage.getItem('aione-session'))).toBeNull();
  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });

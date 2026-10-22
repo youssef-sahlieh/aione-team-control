@@ -29,7 +29,7 @@ import { monitorRoutes } from "./monitor.js";
 import { dbReportRoutes, dbReportCron } from "./db-report.js";
 import { odooAppRoutes, odooTranslations } from "./odoo-app.js";
 import { cookieSessionRequest } from "./sessions.js";
-import { SESSION_MS } from "./session-policy.js";
+import { SESSION_MS, SESSION_SECONDS } from "./session-policy.js";
 import { aiChat, aiBrief, aiConfigured, aiDescription, AIError } from "./ai.js";
 import { githubConfigured, syncPulls, prsByKey } from "./github.js";
 import { recordTicketEvent, ticketLogRoutes, readTicketLog } from "./ticket-log.js";
@@ -100,7 +100,9 @@ const memoryLimit = {
 const teamEmails = (env) => String(env.TEAM_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
 
 // Sessions carry the account's version (v), so a password reset or removal ends them right away.
+// With the database, every token is registered ("sess:<id>"), so signing out (or an administrator) can cancel it.
 export async function makeToken(env, email, now = Date.now(), v = 0, sid = undefined) {
+  if (!sid && env.STORE && !env.COOKIE_SESSIONS) { sid = b64url(crypto.getRandomValues(new Uint8Array(18))); await env.STORE.set("sess:" + sid, JSON.stringify({ email, at: now }), SESSION_SECONDS); }
   const body = b64url(enc.encode(JSON.stringify({ email, v, exp: now + SESSION_MS, ...(sid?{sid}:{}) })));
   return { token: body + "." + b64url(await hmac(env.SESSION_SECRET, body)), expiresAt: now + SESSION_MS };
 }
@@ -120,11 +122,12 @@ export async function readToken(env, header, now = Date.now()) {
   const { email, exp, v } = claims;
   if (typeof exp !== "number" || exp < now || typeof email !== "string") return null;
   if(claims.sid&&(!env.STORE||!await env.STORE.get("sess:"+claims.sid)))return null;
-  if(env.COOKIE_SESSIONS&&!claims.sid)return null;
+  // Tokens from before registration (and anything else without one) are no longer accepted.
+  if((env.COOKIE_SESSIONS||env.STORE)&&!claims.sid)return null;
   if (env.STORE) {
     const u = await getUser(env.STORE, email);
     if (!u || u.v !== v) return null;
-    return { email: u.email, name: u.name, role: u.role, dev: u.dev || "" };
+    return { email: u.email, name: u.name, role: u.role, dev: u.dev || "", ...(claims.sid ? { sid: claims.sid } : {}) };
   }
   if (!teamEmails(env).includes(email)) return null;
   return { email, name: firstName(email), role: "admin", dev: "" };
@@ -403,6 +406,11 @@ async function route(request, env, url) {
   }
 
   const me = await readToken(env, request.headers.get("Authorization"));
+  // Signing out cancels this sign-in on the server, so a copy of the token stops working too.
+  if (path === "/logout" && method === "POST") {
+    if (me?.sid && env.STORE) await env.STORE.del("sess:" + me.sid);
+    return json({ ok: true });
+  }
   if (!me) return fail("session", "Please sign in again.", 401);
   const readBusinessTicket = async key => {
     if(typeof key!=="string" || !new RegExp("^(?:INT|"+env.JIRA_PROJECT+")-\\d+$").test(key))return null;

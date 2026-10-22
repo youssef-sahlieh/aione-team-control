@@ -24,7 +24,7 @@ test("reset token is consumed atomically and Redis uses GETDEL",async t=>{
 
 test("cookie login returns no bearer token and bootstrap exposes only session metadata",async()=>{
   const f=await fixture(),{response,data,cookie}=await f.login();
-  assert.equal(data.token,undefined);assert.equal(data.password,undefined);assert.ok(data.csrf);assert.match(response.headers.get("Set-Cookie"),/^__Host-aion-session=.*; Path=\/; HttpOnly; SameSite=Strict; Max-Age=31536000; Secure$/);
+  assert.equal(data.token,undefined);assert.equal(data.password,undefined);assert.ok(data.csrf);assert.match(response.headers.get("Set-Cookie"),/^__Host-aion-session=.*; Path=\/; HttpOnly; SameSite=Strict; Max-Age=2592000; Secure$/);
   const session=await f.request("/session",{cookie});assert.equal(session.status,200);assert.equal((await session.json()).token,undefined);
   assert.equal((await f.request("/config",{cookie})).status,200);
   const legacy=await makeToken(f.env,f.email,Date.now(),1);assert.equal(await readToken(f.env,"Bearer "+legacy.token),null);
@@ -42,8 +42,8 @@ test("saved sessions outlive 24 hours and keep matching token, cookie and databa
   const f=await fixture();const original=f.env.STORE.set;let sessionTTL;
   f.env.STORE.set=async(key,value,ttl)=>{if(key.startsWith('sess:'))sessionTTL=ttl;return original(key,value,ttl);};
   const started=Date.now(),login=await f.login(),token=login.cookie.slice(login.cookie.indexOf('=')+1);
-  assert.equal(sessionTTL,31536000);
-  assert.ok(login.data.expiresAt>=started+31536000000);
+  assert.equal(sessionTTL,2592000);
+  assert.ok(login.data.expiresAt>=started+2592000000);
   assert.ok(await readToken(f.env,'Bearer '+token,started+2*86400000));
   assert.equal(await readToken(f.env,'Bearer '+token,started+366*86400000),null);
   const user=await getUser(f.env.STORE,f.email);await saveUser(f.env.STORE,{...user,v:user.v+1});

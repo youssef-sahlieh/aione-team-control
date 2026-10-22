@@ -1,3 +1,3 @@
-// Persistent login shared by bearer tokens, session cookies and database expiry.
-export const SESSION_SECONDS = 365 * 24 * 60 * 60;
+// Sign-in lifetime shared by bearer tokens, session cookies and their database records: 30 days.
+export const SESSION_SECONDS = 30 * 24 * 60 * 60;
 export const SESSION_MS = SESSION_SECONDS * 1000;

@@ -121,8 +121,8 @@ test("bad input is refused before reaching Odoo", async () => {
 });
 
 test("without the user database, actions are refused (nothing could be logged)", async () => {
-  const saved = env.STORE; const t = await login("youssef@aione.biz");
-  env.STORE = undefined;
+  const saved = env.STORE;
+  env.STORE = undefined; const t = await login("youssef@aione.biz");
   const r = await req("/monitor/test-envs/171/extend", { method: "POST", token: t });
   env.STORE = saved;
   assert.equal(r.status, 501); assert.equal(r.data.code, "no_store");

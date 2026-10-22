@@ -245,6 +245,29 @@ const tests = [
     const r = await call("/users", { method: "POST", token: a.token, body: { email: "sondos@aione.biz", name: "Sondos", role: "user", dev: "sondos" } });
     assert.equal(r.data.invited, false); assert.match(r.data.link, /reset\.html#t=/);
   }],
+  ["sign-ins last 30 days and signing out cancels the token on the server", async () => {
+    env = makeEnv();
+    const a = await login("youssef@aione.biz", "Team-password-1");
+    const days = (a.expiresAt - Date.now()) / 86400000;
+    assert.ok(days > 29.9 && days <= 30, "30-day sign-in, got " + days);
+    const b = await login("youssef@aione.biz", "Team-password-1");
+    assert.equal((await call("/config", { token: a.token })).status, 200);
+    assert.equal((await call("/logout", { method: "POST", token: a.token })).status, 200);
+    // A copy of the signed-out token no longer works; another sign-in of the same person still does.
+    assert.equal((await call("/config", { token: a.token })).status, 401);
+    assert.equal((await call("/config", { token: b.token })).status, 200);
+    // Signing out without a valid token is harmless.
+    assert.equal((await call("/logout", { method: "POST" })).status, 200);
+  }],
+  ["tokens from before server registration are refused", async () => {
+    env = makeEnv();
+    await login("youssef@aione.biz", "Team-password-1");
+    const { makeToken } = await import("../proxy/src/handler.js");
+    const store = env.STORE; delete env.STORE;
+    const old = (await makeToken(env, "youssef@aione.biz", Date.now(), 0)).token;
+    env.STORE = store;
+    assert.equal((await call("/config", { token: old })).status, 401);
+  }],
   ["without the database: forgot password and users say so", async () => {
     env = makeEnv(); delete env.STORE;
     assert.equal((await call("/forgot", { method: "POST", body: { email: "youssef@aione.biz" } })).status, 501);

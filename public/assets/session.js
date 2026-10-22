@@ -1,6 +1,7 @@
 // Sign-in session and calls to the AION proxy, shared by the sign-in page and the dashboard.
 // The sign-in is remembered in this browser (all tabs, also after closing it) until the proxy's
-// saved token expires (up to one year) or the person signs out, so email links open the dashboard.
+// saved token expires (30 days) or the person signs out, so email links open the dashboard. Signing out
+// also cancels the sign-in on the server.
 
 const KEY = "aione-session";
 
@@ -24,9 +25,14 @@ export function saveSession(s) {
 
 // Back to the sign-in page. A ticket in the address (#AION-123) is kept, so it opens after signing in.
 export function signOut(keepTicket) {
+  let token = "";
+  try { token = (JSON.parse(store().getItem(KEY) || "null") || {}).token || ""; } catch {}
   try { Object.keys(localStorage).filter((k) => k.startsWith("aion.cache.")).forEach((k) => localStorage.removeItem(k)); } catch {}
   try { store().removeItem(KEY); } catch {}
-  location.replace("index.html" + (keepTicket ? location.search + location.hash : ""));
+  const leave = () => location.replace("index.html" + (keepTicket ? location.search + location.hash : ""));
+  if (!token || !proxyReady()) return leave();
+  // Cancel the token on the server too (at most 3 seconds, then leave anyway).
+  fetch(window.AIONE_API + "/logout", { method: "POST", headers: { Authorization: "Bearer " + token }, signal: AbortSignal.timeout(3000) }).catch(() => {}).finally(leave);
 }
 
 // Signing out in one tab signs out the others too.
