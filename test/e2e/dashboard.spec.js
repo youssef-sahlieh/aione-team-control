@@ -1124,3 +1124,26 @@ test('an up-to-date page does nothing',async({page})=>{
  expect(loads()).toBe(1);await expect(page.locator('#update-bar')).toHaveCount(0);
  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
+
+test('Work log setup: map a client to an Odoo project by searching; it stays until × is clicked',async({page})=>{
+ const mock=await mockDashboard(page,{workLog:true});await page.goto('/dashboard.html?page=worklog');const content=page.locator('#workspace-content');
+ await content.getByRole('tab',{name:'Setup'}).click();await expect(content).toContainText('Bot employee in AION');
+ await content.getByRole('searchbox',{name:'Search clients and projects'}).fill('synthetic');
+ const picker=content.getByRole('combobox',{name:'Odoo project for Synthetic Client'});await expect(picker).toHaveValue('');
+ await picker.click();await picker.fill('nothing like it');await expect(content.locator('.wl-pick-empty')).toHaveText('No Odoo project matches');
+ await picker.fill('synth proj');await content.getByRole('option',{name:'Synthetic Project · Synthetic Client (#10)'}).click();
+ await expect(picker).toHaveValue('Synthetic Project · Synthetic Client (#10)');
+ // Typing and leaving the box doesn't remove the choice.
+ await picker.fill('abc');await content.getByRole('searchbox',{name:'Search clients and projects'}).click();await expect(picker).toHaveValue('Synthetic Project · Synthetic Client (#10)');
+ // It stays while searching for other clients and projects.
+ await content.getByRole('searchbox',{name:'Search clients and projects'}).fill('zzz');await expect(picker).toHaveValue('Synthetic Project · Synthetic Client (#10)');
+ await content.getByRole('button',{name:'Save setup',exact:true}).click();
+ await expect.poll(()=>mock.calls.filter(c=>c.path==='/time-entries/setup'&&c.method==='PUT').at(-1)?.body?.mapping).toEqual({client:10});
+ // × removes it.
+ await content.getByRole('tab',{name:'Setup'}).click();await content.getByRole('searchbox',{name:'Search clients and projects'}).fill('synthetic');
+ await content.getByRole('button',{name:'Remove the Odoo project for Synthetic Client'}).click();
+ await content.getByRole('button',{name:'Save setup',exact:true}).click();
+ await expect.poll(()=>mock.calls.filter(c=>c.path==='/time-entries/setup'&&c.method==='PUT').length).toBe(2);
+ expect(mock.calls.filter(c=>c.path==='/time-entries/setup'&&c.method==='PUT').at(-1).body.mapping).toEqual({});
+ expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});

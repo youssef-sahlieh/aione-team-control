@@ -245,12 +245,38 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,onLogged
     // Projects.
     const map=section('Odoo projects');
     map.append(el('p','msg','Projects synced from Odoo already know their Odoo project. Map a client to send work on tickets that have a client but no project, or override a project.'));
-    const dl=el('datalist');dl.id='wl-projects';const label=p=>p.name+(p.partner?' · '+p.partner:'')+' (#'+p.id+')';
-    for(const p of s.projects||[])dl.append(new Option(label(p)));map.append(dl);
+    const label=p=>p.name+(p.partner?' · '+p.partner:'')+' (#'+p.id+')';
     const byId=new Map((s.projects||[]).map(p=>[p.id,p])),mapping={...cfg.mapping};
-    const hd=el('input','inp');hd.setAttribute('list','wl-projects');hd.value=mapping.helpdesk&&byId.get(mapping.helpdesk)?label(byId.get(mapping.helpdesk)):'';
-    const readId=v=>{const m=/\(#(\d+)\)\s*$/.exec(v||'');return m?Number(m[1]):null;};
-    hd.addEventListener('change',()=>{mapping.helpdesk=readId(hd.value);});field(map,'Odoo Helpdesk tickets without a project go to',hd,'Leave empty to require a project on the Helpdesk ticket.');
+    // An Odoo project picker: type to search, pick from the list. The choice stays until × is clicked.
+    const projectPicker=(name,value,onChange,placeholder)=>{
+      const wrap=el('div','wl-pick'),inp=el('input','inp'),list=el('ul','wl-pick-list'),id='wlp'+Math.random().toString(36).slice(2,9);
+      const clear=button('×',()=>{set(null);inp.focus();},'btn wl-pick-clear');clear.setAttribute('aria-label','Remove the Odoo project for '+name);clear.title='Remove';
+      inp.type='text';inp.autocomplete='off';inp.setAttribute('role','combobox');inp.setAttribute('aria-label','Odoo project for '+name);inp.setAttribute('aria-autocomplete','list');inp.setAttribute('aria-expanded','false');inp.setAttribute('aria-controls',id);
+      list.id=id;list.setAttribute('role','listbox');list.hidden=true;
+      let current=value||null,items=[],active=-1;
+      const show=()=>{inp.value=current?(byId.get(current)?label(byId.get(current)):'Project #'+current):'';inp.placeholder=placeholder||'Search Odoo projects…';clear.hidden=!current;};
+      const close=()=>{list.hidden=true;inp.setAttribute('aria-expanded','false');inp.removeAttribute('aria-activedescendant');};
+      const set=v=>{current=v;onChange(v);show();close();};
+      const mark=n=>{active=n;[...list.children].forEach((li,i)=>li.classList.toggle('active',i===n));const li=list.children[n];if(li&&li.id){inp.setAttribute('aria-activedescendant',li.id);li.scrollIntoView({block:'nearest'});}};
+      const open=q=>{
+        const words=String(q||'').trim().toLowerCase().split(/\s+/).filter(Boolean);
+        items=(s.projects||[]).filter(p=>{const t=label(p).toLowerCase();return words.every(w=>t.includes(w));}).slice(0,50);
+        list.replaceChildren(...(items.length?items.map((p,i)=>{const li=el('li','wl-pick-opt'+(p.id===current?' current':''),label(p));li.id=id+'-'+i;li.setAttribute('role','option');li.dir='auto';li.addEventListener('mousedown',e=>{e.preventDefault();set(p.id);});return li;}):[el('li','wl-pick-empty','No Odoo project matches')]));
+        list.hidden=false;inp.setAttribute('aria-expanded','true');mark(items.length?0:-1);
+      };
+      inp.addEventListener('focus',()=>{inp.select();open('');});
+      inp.addEventListener('click',()=>{if(list.hidden)open('');});
+      inp.addEventListener('input',()=>open(inp.value));
+      inp.addEventListener('keydown',e=>{
+        if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();if(list.hidden)open('');else if(items.length)mark((active+(e.key==='ArrowDown'?1:-1)+items.length)%items.length);}
+        else if(e.key==='Enter'){e.preventDefault();if(!list.hidden&&items[active])set(items[active].id);}
+        else if(e.key==='Escape'&&!list.hidden){e.preventDefault();e.stopPropagation();show();close();}
+      });
+      // Leaving the box without picking keeps the project chosen before.
+      inp.addEventListener('blur',()=>{show();close();});
+      wrap.append(inp,clear,list);show();return wrap;
+    };
+    const hdBox=el('div','wl-field');hdBox.append(el('span','','Odoo Helpdesk tickets without a project go to'),projectPicker('Odoo Helpdesk tickets',mapping.helpdesk,v=>{mapping.helpdesk=v;}),el('small','msg','Leave empty to require a project on the Helpdesk ticket.'));map.append(hdBox);
     const search=input('search','');search.className='inp catalog-search';search.placeholder='Search clients and projects…';search.setAttribute('aria-label','Search clients and projects');
     const list=el('div','wl-map');map.append(search,list);
     const parentName=id=>s.catalog.find(c=>c.id===id)?.name||'';
@@ -258,10 +284,9 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,onLogged
       list.replaceChildren();const q=search.value.trim().toLowerCase();
       const rows=s.catalog.filter(c=>mapping[c.id]||(q&&(c.name+' '+parentName(c.parentId)).toLowerCase().includes(q))||(!q&&c.parentId&&!c.odooProject));
       for(const c of rows.slice(0,60)){
-        const row=el('div','wl-map-row'),inp=el('input','inp');inp.setAttribute('list','wl-projects');inp.setAttribute('aria-label','Odoo project for '+c.name);
-        inp.value=mapping[c.id]&&byId.get(mapping[c.id])?label(byId.get(mapping[c.id])):'';inp.placeholder=c.odooProject?'From Odoo: '+(byId.get(c.odooProject)?label(byId.get(c.odooProject)):'#'+c.odooProject):'No Odoo project';
-        inp.addEventListener('change',()=>{const id=readId(inp.value);if(id)mapping[c.id]=id;else delete mapping[c.id];});
-        row.append(el('span','',c.parentId?parentName(c.parentId)+' › '+c.name:c.name+' (client)'),inp);list.append(row);
+        const row=el('div','wl-map-row');
+        const picker=projectPicker(c.name,mapping[c.id],v=>{if(v)mapping[c.id]=v;else delete mapping[c.id];},c.odooProject?'From Odoo: '+(byId.get(c.odooProject)?label(byId.get(c.odooProject)):'#'+c.odooProject):'Search Odoo projects…');
+        row.append(el('span','',c.parentId?parentName(c.parentId)+' › '+c.name:c.name+' (client)'),picker);list.append(row);
       }
       if(!rows.length)list.append(el('p','msg',q?'No client or project matches.':'Every project knows its Odoo project. Search to map a client or override one.'));
       else if(rows.length>60)list.append(el('p','msg','Showing 60 of '+rows.length+'. Search to narrow.'));

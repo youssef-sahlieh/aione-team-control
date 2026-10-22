@@ -72,3 +72,13 @@
   .wl-report-bar .inp,.wl-filters .fsel{flex:1 1 140px}
   .wl-dialog{width:calc(100% - 24px);padding:14px}
 }
+
+/* Odoo project picker (Work log setup): search list, × to remove. */
+.wl-pick{position:relative;display:flex;gap:6px;align-items:center;min-width:0}
+.wl-pick .inp{flex:1;min-width:0}
+.wl-pick-clear{padding:4px 10px;flex:none}
+.wl-pick-list{position:absolute;top:100%;left:0;right:0;z-index:30;max-height:260px;overflow:auto;list-style:none;margin:4px 0 0;padding:4px;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow)}
+.wl-pick-opt{padding:6px 8px;border-radius:6px;cursor:pointer;font-size:13px}
+.wl-pick-opt.active,.wl-pick-opt:hover{background:var(--accent-soft)}
+.wl-pick-opt.current{font-weight:600}
+.wl-pick-empty{padding:6px 8px;color:var(--muted);font-size:13px}
