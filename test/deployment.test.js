@@ -49,3 +49,19 @@ test('Groq integration health is administrator-only, checks model access and nev
  const r=await integrationRoutes(new Request('https://test/integrations'),env,{role:'admin'}),data=await r.json();assert.equal(data.keys.find(k=>k.id==='groq').status,'ok');assert.doesNotMatch(JSON.stringify(data),/synthetic/);
  env.AI_MODEL='unavailable';const missing=await (await integrationRoutes(new Request('https://test/integrations'),env,{role:'admin'})).json();assert.equal(missing.keys.find(k=>k.id==='groq').status,'error');
 });
+test('deploy stamps every script, style and import with the version, and publishes version.json',async()=>{
+ const {stampHtml,stampJs,stampDir}=await import('../scripts/stamp-assets.js');
+ const html=stampHtml('<html><head>\n<link rel="stylesheet" href="assets/dashboard.css">\n<link rel="stylesheet" href="https://fonts.googleapis.com/x.css">\n<script src="assets/config.js"></script><script type="module" src="assets/dashboard.js"></script></head></html>','abcdef1234567890');
+ assert.match(html,/<head>\n<meta name="aione-build" content="abcdef123456">/);
+ assert.match(html,/href="assets\/dashboard\.css\?v=abcdef123456"/);assert.match(html,/src="assets\/config\.js\?v=abcdef123456"/);assert.match(html,/src="assets\/dashboard\.js\?v=abcdef123456"/);
+ assert.match(html,/href="https:\/\/fonts\.googleapis\.com\/x\.css"/);
+ assert.equal(stampHtml(html,'abcdef1234567890').match(/aione-build/g).length,1);
+ const js=stampJs(`import { a } from "./session.js";\nimport {b} from '../models/x.js';\nimport "./side.js";\nconst m=await import("./lazy.js");\nexport { c } from "./c.js";\nconst s="from "+x;\nimport y from "https://cdn.example/y.js";`,'v1');
+ assert.equal(js,`import { a } from "./session.js?v=v1";\nimport {b} from '../models/x.js?v=v1';\nimport "./side.js?v=v1";\nconst m=await import("./lazy.js?v=v1");\nexport { c } from "./c.js?v=v1";\nconst s="from "+x;\nimport y from "https://cdn.example/y.js";`);
+ const fs=await import('node:fs'),os=await import('node:os'),path=await import('node:path');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'stamp-'));fs.mkdirSync(path.join(dir,'assets'));
+ fs.writeFileSync(path.join(dir,'index.html'),'<head><script type="module" src="assets/a.js"></script></head>');fs.writeFileSync(path.join(dir,'assets','a.js'),'import "./b.js";');
+ assert.equal(stampDir(dir,'build9'),2);assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir,'version.json'),'utf8')),{build:'build9'});
+ assert.equal(fs.readFileSync(path.join(dir,'assets','a.js'),'utf8'),'import "./b.js?v=build9";');
+ fs.rmSync(dir,{recursive:true,force:true});
+});

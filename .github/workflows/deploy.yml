@@ -36,6 +36,10 @@ jobs:
         with:
           name: browser-test-results
           path: test-results/
+      # Version tags on every script and style, so browsers fetch the new files after each deploy.
+      - name: Stamp files with this deploy's version
+        if: github.event_name != 'pull_request'
+        run: node scripts/stamp-assets.js public ${{ github.sha }}
       - uses: actions/configure-pages@v5
         if: github.event_name != 'pull_request'
       - uses: actions/upload-pages-artifact@v3

@@ -1093,3 +1093,34 @@ test('signing out cancels the sign-in on the server and clears it from the brows
  expect(await page.evaluate(()=>localStorage.getItem('aione-session'))).toBeNull();
  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
+
+// After a deploy: an out-of-date page reloads itself once right after loading; otherwise it offers Reload.
+async function stampedPage(page,{pageBuild,liveBuild}){
+ let loads=0;
+ await page.route('**/dashboard.html',async route=>{loads++;const r=await route.fetch();const body=(await r.text()).replace('<head>','<head><meta name="aione-build" content="'+pageBuild()+'">');return route.fulfill({response:r,body});});
+ await page.route('**/version.json*',route=>route.fulfill({json:{build:liveBuild()}}));
+ return ()=>loads;
+}
+test('an out-of-date page reloads itself once right after loading',async({page})=>{
+ const mock=await mockDashboard(page);let served='old';
+ const loads=await stampedPage(page,{pageBuild:()=>{const b=served;served='new';return b;},liveBuild:()=>'new'});
+ await page.goto('/dashboard.html#AION-101');await expect(page.locator('#d-desc')).toContainText('Rendered description');
+ await expect.poll(loads).toBe(2);await expect(page.locator('meta[name="aione-build"]')).toHaveAttribute('content','new');
+ await expect(page).toHaveURL(/#AION-101$/);await expect(page.locator('#update-bar')).toHaveCount(0);
+ expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('a page that is still out of date after its reload offers Reload instead of reloading again',async({page})=>{
+ const mock=await mockDashboard(page);
+ const loads=await stampedPage(page,{pageBuild:()=>'old',liveBuild:()=>'new'});
+ await page.goto('/dashboard.html');
+ await expect(page.locator('#update-bar')).toContainText('A new version of the dashboard is available.');
+ expect(loads()).toBe(2);
+ await page.locator('#update-bar').getByRole('button',{name:'Reload'}).click();await expect.poll(loads).toBe(3);
+ expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+test('an up-to-date page does nothing',async({page})=>{
+ const mock=await mockDashboard(page);const loads=await stampedPage(page,{pageBuild:()=>'same',liveBuild:()=>'same'});
+ await page.goto('/dashboard.html');await expect(page.locator('#view .item').first()).toBeVisible();
+ expect(loads()).toBe(1);await expect(page.locator('#update-bar')).toHaveCount(0);
+ expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});

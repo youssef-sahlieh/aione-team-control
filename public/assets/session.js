@@ -117,3 +117,36 @@ if (!/\/dashboard\.html$/.test(location.pathname)) {
     if (from && from.origin === location.origin && /\/dashboard\.html$/.test(from.pathname) && history.length > 1) { e.preventDefault(); history.back(); }
   });
 }
+
+// New versions: each deploy stamps the pages with their build (<meta name="aione-build">) and publishes
+// version.json. Right after a page loads, an out-of-date page reloads itself once; later (every 5 minutes, and
+// when the tab is shown again) a bar offers Reload, so nothing reloads while someone is typing.
+const PAGE_BUILD = document.querySelector('meta[name="aione-build"]')?.content || "";
+async function liveBuild() {
+  try { const r = await fetch("version.json?t=" + Date.now(), { cache: "no-store" }); return r.ok ? String((await r.json()).build || "") : ""; } catch { return ""; }
+}
+function offerReload() {
+  if (document.getElementById("update-bar")) return;
+  const bar = document.createElement("div"), text = document.createElement("span"), go = document.createElement("button");
+  bar.id = "update-bar"; bar.setAttribute("role", "status");
+  text.textContent = "A new version of the dashboard is available.";
+  go.type = "button"; go.textContent = "Reload"; go.addEventListener("click", () => location.reload());
+  Object.assign(bar.style, { position: "fixed", left: "50%", bottom: "16px", transform: "translateX(-50%)", zIndex: "1000", display: "flex", gap: "12px", alignItems: "center", padding: "10px 14px", borderRadius: "10px", background: "#172238", color: "#fff", boxShadow: "0 10px 30px rgba(16,24,40,.25)", font: "500 13px system-ui,sans-serif", maxWidth: "calc(100% - 32px)" });
+  Object.assign(go.style, { border: "0", borderRadius: "8px", padding: "6px 12px", background: "#8a97ff", color: "#0d1426", font: "600 13px system-ui,sans-serif", cursor: "pointer" });
+  bar.append(text, go); document.body.append(bar);
+}
+async function checkForUpdate(firstLoad) {
+  const live = await liveBuild();
+  if (!live || live === PAGE_BUILD) return;
+  let reloaded = "";
+  try { reloaded = sessionStorage.getItem("aione-reloaded-for") || ""; } catch {}
+  if (firstLoad && reloaded !== live) {
+    try { sessionStorage.setItem("aione-reloaded-for", live); } catch {}
+    location.reload();
+  } else offerReload();
+}
+if (PAGE_BUILD) {
+  checkForUpdate(true);
+  setInterval(() => checkForUpdate(false), 5 * 60 * 1000);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkForUpdate(false); });
+}

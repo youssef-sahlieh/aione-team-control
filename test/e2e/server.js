@@ -2,8 +2,9 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { resolve, extname, sep } from "node:path";
-const root = resolve("public");
-const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
+// E2E_PUBLIC: serve another copy (e.g. one stamped by scripts/stamp-assets.js, as deployed).
+const root = resolve(process.env.E2E_PUBLIC || "public");
+const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 createServer(async (req, res) => {
   try {
     const pathname = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
