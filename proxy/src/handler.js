@@ -28,6 +28,7 @@ import { timeRoutes, timeSyncCron } from "./time-entries.js";
 import { monitorRoutes } from "./monitor.js";
 import { dbReportRoutes, dbReportCron } from "./db-report.js";
 import { odooAppRoutes, odooTranslations } from "./odoo-app.js";
+import { SignInError, dashboardReturn, finishSignIn, microsoftSignInConfigured, startSignIn } from "./microsoft-sign-in.js";
 import { cookieSessionRequest } from "./sessions.js";
 import { SESSION_MS, SESSION_SECONDS } from "./session-policy.js";
 import { aiChat, aiBrief, aiConfigured, aiDescription, AIError } from "./ai.js";
@@ -45,6 +46,8 @@ const EDITABLE = new Set(["labels", "duedate", "assignee"]);
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
 const fail = (code, error, status) => json({ code, error }, status);
+// A plain redirect (Response.redirect has read-only headers, which the response wrapper below must add to).
+const redirectTo = (location) => new Response(null, { status: 302, headers: { Location: location } });
 
 function corsHeaders(env, request) {
   const origin = request.headers.get("Origin");
@@ -403,6 +406,40 @@ async function route(request, env, url) {
     if (!u) return fail("bad_link", "This link has expired or was already used. Ask for a new one.", 400);
     await saveUser(env.STORE, { ...u, pw: await hashPassword(b.password), v: (u.v || 0) + 1 });
     return json({ ok: true, email: u.email });
+  }
+
+  // Sign in with Microsoft. Microsoft sends the person back here; the dashboard then trades the one-time code
+  // for its own session token (see microsoft-sign-in.js). Nobody is created by signing in: the account must exist.
+  if (path.startsWith("/auth/microsoft/")) {
+    if (!microsoftSignInConfigured(env)) return fail("not_configured", "Sign in with Microsoft isn't set up.", 501);
+    if (path === "/auth/microsoft/start" && method === "GET") {
+      const back = dashboardReturn(env, url.searchParams.get("return"));
+      if (!back) return fail("bad_request", "Unknown dashboard address.", 400);
+      return redirectTo(await startSignIn(env, back));
+    }
+    if (path === "/auth/microsoft/callback" && method === "GET") {
+      const toDashboard = (hash) => redirectTo(String(env.APP_URL || String(env.ALLOWED_ORIGIN || "").split(",")[0]).trim().replace(/\/+$/, "") + "/index.html#" + hash, 302);
+      if (url.searchParams.get("error")) return toDashboard("ms_error=cancelled");
+      try {
+        const { email, returnUrl } = await finishSignIn(env, url.searchParams.get("code"), url.searchParams.get("state"));
+        const u = await getUser(env.STORE, email);
+        if (!u) return redirectTo(returnUrl + "#ms_error=no_account", 302);
+        const handoff = await createLinkToken(env.STORE, u.email, "sso", 120);
+        return redirectTo(returnUrl + "#ms=" + handoff);
+      } catch (err) {
+        return toDashboard("ms_error=" + (err instanceof SignInError ? err.code : "server"));
+      }
+    }
+    if (path === "/auth/microsoft/exchange" && method === "POST") {
+      if (await overLimit(env, "ms-ip:" + clientIp(request), 20, 900)) return fail("rate_limited", "Too many attempts. Wait a while and try again.", 429);
+      const code = ((await readJson(request)) || {}).code;
+      const peek = await peekLinkToken(env.STORE, code);
+      const u = peek && peek.purpose === "sso" && (await getUser(env.STORE, peek.email));
+      if (!u) return fail("bad_link", "That sign-in has expired. Sign in with Microsoft again.", 400);
+      await useLinkToken(env.STORE, code);
+      return json({ email: u.email, name: u.name, role: u.role, ...(await makeToken(env, u.email, Date.now(), u.v)) });
+    }
+    return fail("not_found", "Not found.", 404);
   }
 
   const me = await readToken(env, request.headers.get("Authorization"));

@@ -7,7 +7,8 @@ import { aiChat, aiBrief, aiConfigured } from "../proxy/src/ai.js";
 
 const root = resolve("public");
 const port = Number(process.env.PORT || 3000);
-const upstream = "https://aione-team-proxy.vercel.app";
+// AION_API_URL points the preview at scripts/local-api.js; by default it uses the deployed API.
+const upstream = process.env.AION_API_URL || "https://aione-team-proxy.vercel.app";
 const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
 
 createServer(async (req, res) => {
