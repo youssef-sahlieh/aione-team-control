@@ -73,7 +73,7 @@ function databaseCell(r) {
   return box;
 }
 function linkCell(url) { const a = el("a", "db-link", url.replace(/^https?:\/\//, "")); a.href = url; a.target = "_blank"; a.rel = "noopener"; return a; }
-function numCell(r, key) { if (!r.loginOk) return key === "users" ? el("span", "db-muted", "no access") : el("span", "db-muted", "—"); return el("span", "", num(r[key])); }
+function numCell(r, key) { if (!r.loginOk) return key === "users" ? el("span", "db-muted", r.offline ? "offline" : "no access") : el("span", "db-muted", "—"); return el("span", "", num(r[key])); }
 function branchCell(r) { if (!r.loginFound) return el("span", "db-muted", "—"); if (!r.loginOk) return el("span", "db-muted", "—"); if (!r.branches) return el("span", "db-muted", "none"); return el("span", "db-strong", String(r.branches)); }
 function timeCell(r, key) { if (!r.loginFound) return el("span", "db-muted", "—"); if (!r.loginOk) return el("span", "db-muted", "—"); if (!r[key]) return el("span", "db-muted", "never"); const s = el("span", "", fmtDateTime(r[key])); const a = ago(r[key]); if (a) s.append(el("small", "db-ago", " · " + a)); return s; }
 function expiryCell(r) { if (!r.loginFound || !r.loginOk) return el("span", "db-muted", "—"); if (r.expired === null) return el("span", "db-muted", "none"); return el("span", "db-pill " + (r.expired ? "bad" : "ok"), (r.expired ? "Expired " : "Valid ") + fmtDate(r.expires)); }
@@ -321,9 +321,10 @@ async function load() {
   try {
     api("/config").then((cfg) => { serverHasCompanies = (cfg.capabilities || []).includes("db-report-company-v1"); serverHasPosVersion = (cfg.capabilities || []).includes("db-report-pos-version-v1"); explainCompanies(); }).catch(() => {});
     const data = await api("/db-report");
+    // The saved report shows at once; when it's out of date it is updated in the background.
     if (data.report) showReport(data.report);
     else showState(data.building ? "Building the report for the first time… this can take a minute." : "No report yet.", false);
-    if (data.building) { showState("", false); scheduleContinue(); }
+    if (data.building) { if (data.report) $("meta").textContent = "Updating in the background…"; clearTimeout(pollTimer); pollTimer = setTimeout(() => continueBuild(false), 300); }
   } catch (err) {
     if (err && err.code === "session") { signOut(true); return; }
     if (err && err.code === "forbidden") { showState("This page is for administrators only.", true); return; }
@@ -338,7 +339,7 @@ async function continueBuild(force) {
     const r = await api("/db-report/refresh" + (force ? "" : "?continue=1"), { method: "POST" });
     if (r.report) showReport(r.report);
     if (r.busy) { scheduleContinue(); return; }
-    if (!r.done) { if (r.progress) $("meta").textContent = "Building… " + r.progress.done + " of " + r.progress.total + " databases"; scheduleContinue(); }
+    if (!r.done) { if (r.progress) $("meta").textContent = (REPORT ? "Updating in the background… " : "Building… ") + r.progress.done + " of " + r.progress.total + " databases"; scheduleContinue(); }
     else { toast("Report refreshed."); load(); }
   } catch (err) { showState(errText(err), true); }
 }

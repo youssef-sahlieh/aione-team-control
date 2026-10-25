@@ -67,3 +67,40 @@ test("Databases: POS version column, Actions preview, restart needs a confirm", 
   expect(posts.length).toBe(1);
   expect(errors).toEqual([]);
 });
+
+test("Databases: the saved report shows at once and updates in the background; offline servers say so", async ({ page }) => {
+  const errors = [], refreshes = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("aion-test-initialized")) return;
+    sessionStorage.setItem("aion-test-initialized", "1");
+    localStorage.clear();
+    localStorage.setItem("aione-session", JSON.stringify({ token: "synthetic-token", email: "boss@example.invalid", expiresAt: Date.now() + 3600000, role: "admin" }));
+  });
+  const fresh = { ...REPORT, builtAt: Date.now(), rows: [...REPORT.rows, row({ instance: "odoo600test", database: "", url: "https://600test.example.invalid", section: "tests", offline: true, loginFound: true })] };
+  let current = { ...REPORT, builtAt: Date.now() - 5 * 3600000 }, release;
+  const gate = new Promise((r) => { release = r; });
+  await page.route("**/*", async (route) => {
+    const req = route.request(), url = new URL(req.url());
+    if (url.origin === "http://127.0.0.1:4173") return route.continue();
+    if (url.hostname !== "aione-team-proxy.vercel.app") return route.abort();
+    if (url.pathname === "/config") return route.fulfill({ json: { role: "admin", odoo: true, email: "boss@example.invalid", people: {}, devs: [], capabilities: ["db-report-company-v1", "db-report-pos-version-v1"] } });
+    if (url.pathname === "/db-report") return route.fulfill({ json: { report: current, building: current !== fresh } });
+    if (url.pathname === "/db-report/refresh") {
+      refreshes.push(url.search);
+      if (refreshes.length === 1) return route.fulfill({ json: { done: false, progress: { done: 2, total: 3 }, report: current } });
+      await gate; current = fresh; return route.fulfill({ json: { done: true, report: fresh } });
+    }
+    return route.fulfill({ status: 403, json: { code: "forbidden", error: "Unconfigured test request" } });
+  });
+  await page.goto("http://127.0.0.1:4173/databases.html");
+  // The saved (old) report is there straight away, while the update runs.
+  await expect(page.locator("#rows tr", { hasText: "RonitYamProd" })).toBeVisible();
+  await expect(page.locator("#meta")).toContainText("Updating in the background… 2 of 3 databases");
+  expect(refreshes[0]).toBe("?continue=1");
+  release();
+  await page.getByRole("button", { name: "Tests" }).click().catch(() => {});
+  await expect.poll(() => refreshes.length).toBe(2);
+  await expect(page.locator("#rows")).toContainText("offline");
+  expect(errors).toEqual([]);
+});

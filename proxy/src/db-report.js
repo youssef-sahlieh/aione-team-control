@@ -185,31 +185,49 @@ async function readCredentialIndex(env) {
 }
 
 // --- Per-database read-only queries (standard Odoo models) ---------------------------------------
+// A server that doesn't answer (switched off, unreachable) throws an error marked offline.
+const offline = (e) => Object.assign(new Error("offline"), { offline: true, cause: e });
 async function customerRpc(base, service, method, args, signal) {
-  const r = await fetch(base.replace(/\/+$/, "") + "/jsonrpc", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", method: "call", params: { service, method, args } }), signal
-  });
+  let r;
+  try {
+    r = await fetch(base.replace(/\/+$/, "") + "/jsonrpc", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "call", params: { service, method, args } }), signal
+    });
+  } catch (e) { throw offline(e); }
+  if ([502, 503, 504].includes(r.status)) throw offline(new Error("HTTP " + r.status));
   const d = await r.json();
   if (d.error) throw new Error(((d.error.data && d.error.data.message) || d.error.message || "rpc error").slice(0, 120));
   return d.result;
 }
 
-async function readInsideDatabase(slot, dbHint) {
+// section: "main", "tests" or "dev". Test and dev servers use their production instance's logins, and their own
+// database names (from Audit & Deploy, or the server's list) are tried before the production ones.
+async function readInsideDatabase(slot, dbHint, section = "main") {
   const base = (slot.url.match(/^https?:\/\/[^/]+/) || [])[0];
   if (!base) return { loginOk: false, error: "no url" };
   // Short per-request timeout so one slow/unreachable server can't stall the whole build.
   const signal = () => AbortSignal.timeout(7000);
-  const num = (base.match(/(\d{2,4})\.ai1\.host/i) || [])[1] || "";
+  // The instance number anywhere in the host: 503.ai1.host, 503test.ai1.host, 503.test.ai1.host, 503dev1.ai1.host.
+  const num = (base.match(/(\d{2,4})[\w.-]*\.ai1\.host/i) || [])[1] || "";
+  const nonProd = section !== "main";
   const label = (base.match(/([a-z0-9][\w-]*)\.ai1\.host/i) || [])[1]?.toLowerCase() || num;
   // Database names to try, best first: the one(s) Audit & Deploy reported, then what the server lists.
   const dbNames = [];
   const push = (d) => { if (d && /^[\w-]+$/.test(d) && !dbNames.includes(d)) dbNames.push(d); };
   // Database names written in the article come first, then Audit & Deploy's, then the server list.
-  for (const d of (slot.dbs || [])) push(d);
+  if (!nonProd) for (const d of (slot.dbs || [])) push(d);
   for (const d of (Array.isArray(dbHint) ? dbHint : [dbHint]).filter(Boolean)) push(d);
-  const list = await customerRpc(base, "db", "list", [], signal()).catch(() => null);
+  let down = false;
+  const list = await customerRpc(base, "db", "list", [], signal()).catch((e) => { if (e.offline) down = true; return null; });
+  if (down) return { loginOk: false, loginFound: true, offline: true };
   if (Array.isArray(list)) for (const d of list) push(d);
+  // Test and dev copies of the production database: its name, and the name with _test / _dev and similar.
+  if (nonProd) {
+    const ends = section === "dev" ? ["dev", "develop", "development", "test"] : ["test", "staging", "dev"];
+    for (const d of (slot.dbs || [])) { for (const e of ends) push(d + "_" + e); push(d); }
+    if (num) for (const e of ends) push(num + "_" + e);
+  }
   // Derive <num>_<client> from the article title(s) when config gave no usable name (db listing is off):
   // whole name (joined, lower, underscored) AND the first word alone (e.g. "Merchandise Shop" -> 536_merchandise).
   for (const t of (slot.titles || [])) {
@@ -224,13 +242,15 @@ async function readInsideDatabase(slot, dbHint) {
   // Named hosts (e.g. paytag): the database is often <label> or <label>_prod.
   if (label) { push(label); push(label + "_prod"); push(label + "_odoo"); }
   if (num) { push(num); push(num + "_prod"); }
-  const tryDbs = dbNames.slice(0, 8);
+  const tryDbs = dbNames.slice(0, nonProd ? 14 : 8);
   // Try the best credential against each database first (finds the right database fast), then the next.
   let db = "", uid = 0, password = "", attempts = 0;
   outer: for (const c of slot.candidates) {
     for (const d of tryDbs) {
       if (++attempts > 60) break outer;
-      const id = await customerRpc(base, "common", "authenticate", [d, c.user, c.password, {}], signal()).catch(() => 0);
+      const id = await customerRpc(base, "common", "authenticate", [d, c.user, c.password, {}], signal()).catch((e) => (e.offline ? -1 : 0));
+      // The server stopped answering: no point trying more logins (each would wait for the timeout).
+      if (id === -1) return { loginOk: false, loginFound: true, offline: true };
       if (id) { db = d; uid = id; password = c.password; break outer; }
     }
   }
@@ -308,8 +328,8 @@ async function instanceFacts(env, inst) {
   const posVersionDate = pos ? pos.date : "";
   // Odoo major version from the server's public version endpoint (works without a login).
   const base = inst.domain ? "https://" + inst.domain : "";
-  let odooVersion = "";
-  if (base) { const v = await customerRpc(base, "common", "version", [], AbortSignal.timeout(7000)).catch(() => null); const s = v && (v.server_serie || v.server_version); if (s) odooVersion = String(s).split(/[-.]/)[0]; }
+  let odooVersion = "", online = !!base;
+  if (base) { const v = await customerRpc(base, "common", "version", [], AbortSignal.timeout(7000)).catch((e) => { if (e.offline) online = false; return null; }); const s = v && (v.server_serie || v.server_version); if (s) odooVersion = String(s).split(/[-.]/)[0]; }
   return {
     instance: name,
     url: base,
@@ -325,7 +345,8 @@ async function instanceFacts(env, inst) {
     posVersion,
     section,
     posVersionDate,
-    configError: cfg.database_inventory_error || cfg.error || ""
+    configError: cfg.database_inventory_error || cfg.error || "",
+    online
   };
 }
 
@@ -363,17 +384,28 @@ export async function buildReport(env, { force = false } = {}) {
     try { progress = JSON.parse(await env.STORE.get(PROGRESS_KEY) || "null"); } catch {}
     // Start fresh when forced, when there is no in-flight build, or when the in-flight one is stale.
     if (force || !progress || Date.now() - (progress.startedAt || 0) > 10 * 60 * 1000) {
-      const instances = await reportInstances(env);
+      // Production instances first, so their database names are known when their test and dev copies are checked.
+      const instances = (await reportInstances(env)).sort((a, b) => (sectionOf(a.server_zone, a.instance_name) === "main" ? 0 : 1) - (sectionOf(b.server_zone, b.instance_name) === "main" ? 0 : 1));
       progress = { startedAt: Date.now(), rows: [], done: 0, total: instances.length, instances: instances.map((i) => ({ instance_name: i.instance_name, domain: i.domain, created: i.created, server_zone: i.server_zone })) };
     }
     const creds = await readCredentialIndex(env);
+    // The production database names per instance number (this build, then the last report), for test and dev copies.
+    const previous = await readReport(env);
+    const prodDbs = (num) => [...new Set([...progress.rows, ...((previous && previous.rows) || [])].filter((r) => (r.section || "main") === "main" && r.num === num).flatMap((r) => [r.db, ...(r.databases || [])]).filter(Boolean))];
     while (progress.done < progress.instances.length && Date.now() - started < BUILD_BUDGET_MS) {
-      const batch = progress.instances.slice(progress.done, progress.done + POOL);
+      // A batch never mixes production with test/dev, so production database names are known first.
+      const isMain = (i) => sectionOf(i.server_zone, i.instance_name) === "main";
+      let batch = progress.instances.slice(progress.done, progress.done + POOL);
+      const cut = batch.findIndex((i) => isMain(i) !== isMain(batch[0]));
+      if (cut > 0) batch = batch.slice(0, cut);
       const rows = await pool(batch, POOL, async (inst) => {
         const facts = await instanceFacts(env, inst);
-        const slot = creds[facts.label] || creds[facts.num];
+        // Test and dev instances (503test, 503t, 503.test, 503dev1, …) use the logins of production instance 503.
+        const slot = facts.section === "main" ? (creds[facts.label] || creds[facts.num]) : (creds[facts.num] || creds[facts.label]);
         let inside = { loginOk: false, loginFound: !!(slot && slot.candidates.length) };
-        if (inside.loginFound) { try { inside = await readInsideDatabase({ url: slot.url || facts.url, candidates: slot.candidates, titles: slot.titles, dbs: slot.dbs }, facts.databases); } catch (e) { inside = { loginFound: true, loginOk: false, error: String(e.message || e).slice(0, 80) }; } }
+        // A server that didn't answer is shown as offline, without waiting on login attempts.
+        if (!facts.online) inside = { ...inside, offline: true };
+        else if (inside.loginFound) { try { inside = await readInsideDatabase({ url: facts.section === "main" ? (slot.url || facts.url) : (facts.url || slot.url), candidates: slot.candidates, titles: slot.titles, dbs: facts.section === "main" ? slot.dbs : [...prodDbs(facts.num), ...(slot.dbs || [])] }, facts.databases, facts.section); } catch (e) { inside = { loginFound: true, loginOk: false, error: String(e.message || e).slice(0, 80) }; } }
         // The company name only ever comes from inside the database (never from Knowledge text).
         return { ...facts, ...inside, company: inside.company || "", companySource: inside.company ? "database" : "" };
       });
@@ -402,14 +434,12 @@ export async function dbReportRoutes(request, env, url, me) {
   if (!env.STORE) return fail("no_store", "The database report needs the database.", 501);
   const path = url.pathname;
 
+  // Answers at once with the saved report. When it's missing, out of date (over an hour), or saved before a
+  // column existed, "building" tells the page to update it in the background (POST /db-report/refresh).
   if (path === "/db-report" && request.method === "GET") {
     const report = await readReport(env);
-    let building = false;
-    // A report saved before a column existed is rebuilt, so every row carries the current fields.
-    const outdated = !!report && (report.rows || []).some((r) => !("posVersion" in r) || !("section" in r));
-    if (!report || outdated || Date.now() - report.builtAt > STALE_MS) { const r = await buildReport(env); building = !r.busy; }
-    const after = await readReport(env);
-    return json({ report: after || report || null, building: building && (!after || !report || after.builtAt === (report && report.builtAt)) });
+    const outdated = !!report && (report.rows || []).some((r) => !("posVersion" in r) || !("section" in r) || !("online" in r));
+    return json({ report: report || null, building: !report || outdated || Date.now() - report.builtAt > STALE_MS });
   }
   if (path === "/db-report/refresh" && request.method === "POST") {
     const first = url.searchParams.get("continue") !== "1";

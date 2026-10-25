@@ -223,3 +223,67 @@ test("a report saved before the POS version existed is rebuilt when viewed", asy
   const ronit = rows.find((x) => x.instance === "odoo503");
   assert.equal(ronit.posVersion, "19.0.3.97.2");
 });
+
+test("the page gets the saved report at once; an out-of-date one is updated in the background", async () => {
+  const { env, call } = setup();
+  const admin = { email: "boss@aione.biz", name: "Boss", role: "admin", dev: "", v: 1 };
+  await saveUser(env.STORE, admin);
+  const token = (await makeToken(env, admin.email, Date.now(), 1)).token;
+  const old = { builtAt: Date.now() - 3 * 3600 * 1000, count: 1, rows: [{ instance: "odoo503", database: "RonitYamProd", posVersion: "", section: "main", online: true }] };
+  await env.STORE.set("dbreport:v1", JSON.stringify(old), 3600);
+  const seen = []; const inner = globalThis.fetch;
+  globalThis.fetch = (url, init) => { seen.push(String(url)); return inner(url, init); };
+  try {
+    const r = await (await call("/db-report", { token })).json();
+    assert.equal(r.building, true); assert.equal(r.report.builtAt, old.builtAt);
+    assert.equal(seen.length, 0, "no Odoo or customer calls before answering");
+    // A fresh report needs no update.
+    await env.STORE.set("dbreport:v1", JSON.stringify({ ...old, builtAt: Date.now() }), 3600);
+    assert.equal((await (await call("/db-report", { token })).json()).building, false);
+  } finally { globalThis.fetch = inner; }
+});
+
+test("test and dev instances sign in with their production instance's login; offline servers are skipped", async () => {
+  const { env, call } = setup();
+  const admin = { email: "boss@aione.biz", name: "Boss", role: "admin", dev: "", v: 1 };
+  await saveUser(env.STORE, admin);
+  const token = (await makeToken(env, admin.email, Date.now(), 1)).token;
+  const inner = globalThis.fetch, logins = [];
+  // Audit & Deploy lists 503's test copies and a dev copy, and a test server that is switched off.
+  const extra = [
+    { instance_name: "odoo503test", domain: "503test.ai1.host", server_zone: "test" },
+    { instance_name: "odoo503dev1", domain: "503dev1.ai1.host", server_zone: "development" },
+    { instance_name: "odoo503t", domain: "503.test.ai1.host", server_zone: "test" },
+    { instance_name: "odoo600test", domain: "600test.ai1.host", server_zone: "test" }
+  ];
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url), p = (JSON.parse(init.body || "{}").params) || {};
+    if (u.includes("kadis.odoo.test") && p.args && p.args[3] === "monitor.data.snapshot" && p.args[4] === "get_instances") {
+      const r = await (await inner(url, init)).json(); r.result.payload.services.push(...extra); return Response.json(r.result ? { result: r.result } : r);
+    }
+    if (u.includes("kadis.odoo.test") && p.args && p.args[3] === "knowledge.article") {
+      return Response.json({ result: [{ name: "Ronit Yam", body: "URL: https://503.ai1.host/web User: admin Password: pw123" }, { name: "Six hundred", body: "URL: https://600.ai1.host User: boss Password: six" }] });
+    }
+    if (u.includes("600test.ai1.host")) { logins.push(u); throw new TypeError("fetch failed"); }
+    // The test and dev servers: no database list; the production login works on <prod db>_test / _dev.
+    const m = /\/\/(503test|503dev1|503\.test)\.ai1\.host/.exec(u);
+    if (m) {
+      if (p.service === "db") return Response.json({ error: { message: "Access denied" } });
+      if (p.service === "common" && p.method === "version") return Response.json({ result: { server_serie: "18.0" } });
+      if (p.service === "common" && p.method === "authenticate") { logins.push(m[1] + " " + p.args.slice(0, 3).join(" ")); const ok = p.args[1] === "admin" && p.args[2] === "pw123" && (p.args[0] === "RonitYamProd_test" || p.args[0] === "RonitYamProd_dev"); return Response.json({ result: ok ? 9 : false }); }
+      return Response.json({ result: p.args && p.args[4] === "search_count" ? 4 : [] });
+    }
+    return inner(url, init);
+  };
+  try {
+    let r; for (let i = 0; i < 5; i++) { r = await (await call("/db-report/refresh", { method: "POST", token })).json(); if (r.done) break; }
+    const row = (n) => r.report.rows.find((x) => x.instance === n);
+
+    for (const n of ["odoo503test", "odoo503dev1", "odoo503t"]) { assert.equal(row(n).loginOk, true, n); assert.equal(row(n).users, 4, n); }
+    assert.equal(row("odoo503test").db, "RonitYamProd_test"); assert.equal(row("odoo503dev1").db, "RonitYamProd_dev");
+    assert.equal(row("odoo503test").section, "tests"); assert.equal(row("odoo503dev1").section, "dev");
+    // Switched off: shown as offline, after one failed connection (no login attempts).
+    assert.equal(row("odoo600test").offline, true); assert.equal(row("odoo600test").loginOk, false);
+    assert.equal(logins.filter((l) => l.includes("600test")).length, 1);
+  } finally { globalThis.fetch = inner; }
+});
