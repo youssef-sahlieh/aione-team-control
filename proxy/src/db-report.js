@@ -32,11 +32,16 @@ export const isProductionName = (name) => !!name && !NON_PROD.test(String(name))
 // Audit & Deploy server zone -> the Databases page section.
 export const SECTIONS = { prod: "main", test: "tests", development: "dev" };
 const DEV_NAME = /(?:^|[^a-z])(dev|develop|development|sandbox)(?:[^a-z]|$)/i;
+// A test copy named by a "t" after the instance number: 503t, 503t2, odoo503t.
+const SHORT_TEST = /\d{2,4}t\d*(?:[^a-z]|$)/i;
 // Test and dev instances are kept apart from Main even when Audit & Deploy lists them in the production zone.
-export const sectionOf = (zone, name) => {
+// The instance name and the web address (without .ai1.host) both count: 503.dev, 503dev1, 503.test, 503t.
+export const sectionOf = (zone, name, domain = "") => {
   if (zone !== "prod") return SECTIONS[zone] || null;
-  if (DEV_NAME.test(String(name))) return "dev";
-  return isProductionName(name) ? "main" : "tests";
+  const site = String(domain || "").toLowerCase().replace(/\.ai1\.host.*$/, "");
+  const names = [String(name || ""), site].filter(Boolean);
+  if (names.some((n) => DEV_NAME.test(n))) return "dev";
+  return names.every((n) => isProductionName(n) && !SHORT_TEST.test(n)) ? "main" : "tests";
 };
 
 // The POS add-on (flutter_pos_api) and its module_version, wherever the instance's data lists it: an add-on entry,
@@ -251,7 +256,7 @@ async function readInsideDatabase(slot, dbHint, section = "main") {
       const id = await customerRpc(base, "common", "authenticate", [d, c.user, c.password, {}], signal()).catch((e) => (e.offline ? -1 : 0));
       // The server stopped answering: no point trying more logins (each would wait for the timeout).
       if (id === -1) return { loginOk: false, loginFound: true, offline: true };
-      if (id) { db = d; uid = id; password = c.password; break outer; }
+      if (Number.isInteger(id) && id > 0) { db = d; uid = id; password = c.password; break outer; }
     }
   }
   if (!uid) return { loginOk: false, loginFound: true };
@@ -310,7 +315,7 @@ async function reportInstances(env) {
 
 async function instanceFacts(env, inst) {
   const name = inst.instance_name;
-  const section = sectionOf(inst.server_zone, name) || "main";
+  const section = sectionOf(inst.server_zone, name, inst.domain) || "main";
   const [cfg, add] = await Promise.all([
     odoo(env, "monitor.data.snapshot", "get_instance_config", [name, false]).then(unwrap).catch(() => ({})),
     odoo(env, "monitor.data.snapshot", "get_instance_addons", [name, null, false]).then(unwrap).catch(() => ({}))
@@ -385,7 +390,7 @@ export async function buildReport(env, { force = false } = {}) {
     // Start fresh when forced, when there is no in-flight build, or when the in-flight one is stale.
     if (force || !progress || Date.now() - (progress.startedAt || 0) > 10 * 60 * 1000) {
       // Production instances first, so their database names are known when their test and dev copies are checked.
-      const instances = (await reportInstances(env)).sort((a, b) => (sectionOf(a.server_zone, a.instance_name) === "main" ? 0 : 1) - (sectionOf(b.server_zone, b.instance_name) === "main" ? 0 : 1));
+      const instances = (await reportInstances(env)).sort((a, b) => (sectionOf(a.server_zone, a.instance_name, a.domain) === "main" ? 0 : 1) - (sectionOf(b.server_zone, b.instance_name, b.domain) === "main" ? 0 : 1));
       progress = { startedAt: Date.now(), rows: [], done: 0, total: instances.length, instances: instances.map((i) => ({ instance_name: i.instance_name, domain: i.domain, created: i.created, server_zone: i.server_zone })) };
     }
     const creds = await readCredentialIndex(env);
@@ -394,7 +399,7 @@ export async function buildReport(env, { force = false } = {}) {
     const prodDbs = (num) => [...new Set([...progress.rows, ...((previous && previous.rows) || [])].filter((r) => (r.section || "main") === "main" && r.num === num).flatMap((r) => [r.db, ...(r.databases || [])]).filter(Boolean))];
     while (progress.done < progress.instances.length && Date.now() - started < BUILD_BUDGET_MS) {
       // A batch never mixes production with test/dev, so production database names are known first.
-      const isMain = (i) => sectionOf(i.server_zone, i.instance_name) === "main";
+      const isMain = (i) => sectionOf(i.server_zone, i.instance_name, i.domain) === "main";
       let batch = progress.instances.slice(progress.done, progress.done + POOL);
       const cut = batch.findIndex((i) => isMain(i) !== isMain(batch[0]));
       if (cut > 0) batch = batch.slice(0, cut);

@@ -254,6 +254,7 @@ test("test and dev instances sign in with their production instance's login; off
     { instance_name: "odoo503test", domain: "503test.ai1.host", server_zone: "test" },
     { instance_name: "odoo503dev1", domain: "503dev1.ai1.host", server_zone: "development" },
     { instance_name: "odoo503t", domain: "503.test.ai1.host", server_zone: "test" },
+    { instance_name: "odoo503d", domain: "503.dev.ai1.host", server_zone: "prod" },
     { instance_name: "odoo600test", domain: "600test.ai1.host", server_zone: "test" }
   ];
   globalThis.fetch = async (url, init = {}) => {
@@ -266,7 +267,7 @@ test("test and dev instances sign in with their production instance's login; off
     }
     if (u.includes("600test.ai1.host")) { logins.push(u); throw new TypeError("fetch failed"); }
     // The test and dev servers: no database list; the production login works on <prod db>_test / _dev.
-    const m = /\/\/(503test|503dev1|503\.test)\.ai1\.host/.exec(u);
+    const m = /\/\/(503test|503dev1|503\.test|503\.dev)\.ai1\.host/.exec(u);
     if (m) {
       if (p.service === "db") return Response.json({ error: { message: "Access denied" } });
       if (p.service === "common" && p.method === "version") return Response.json({ result: { server_serie: "18.0" } });
@@ -279,11 +280,22 @@ test("test and dev instances sign in with their production instance's login; off
     let r; for (let i = 0; i < 5; i++) { r = await (await call("/db-report/refresh", { method: "POST", token })).json(); if (r.done) break; }
     const row = (n) => r.report.rows.find((x) => x.instance === n);
 
-    for (const n of ["odoo503test", "odoo503dev1", "odoo503t"]) { assert.equal(row(n).loginOk, true, n); assert.equal(row(n).users, 4, n); }
+    assert.equal(row("odoo503d").section, "dev"); assert.equal(row("odoo503d").db, "RonitYamProd_dev");
+    for (const n of ["odoo503test", "odoo503dev1", "odoo503t", "odoo503d"]) { assert.equal(row(n).loginOk, true, n); assert.equal(row(n).users, 4, n); }
     assert.equal(row("odoo503test").db, "RonitYamProd_test"); assert.equal(row("odoo503dev1").db, "RonitYamProd_dev");
     assert.equal(row("odoo503test").section, "tests"); assert.equal(row("odoo503dev1").section, "dev");
     // Switched off: shown as offline, after one failed connection (no login attempts).
     assert.equal(row("odoo600test").offline, true); assert.equal(row("odoo600test").loginOk, false);
     assert.equal(logins.filter((l) => l.includes("600test")).length, 1);
   } finally { globalThis.fetch = inner; }
+});
+
+test("the section follows the instance name and the web address: 503.dev, 503dev1, 503.test, 503test, 503t", async () => {
+  const { sectionOf } = await import("../proxy/src/db-report.js");
+  const cases = [["odoo503", "503.ai1.host", "main"], ["odoo503b", "503.dev.ai1.host", "dev"], ["odoo503b", "503dev.ai1.host", "dev"], ["odoo503c", "503dev1.ai1.host", "dev"],
+    ["odoo503x", "503dev3.ai1.host", "dev"], ["odoo503b", "503.test.ai1.host", "tests"], ["odoo503b", "503test.ai1.host", "tests"], ["odoo503b", "503t.ai1.host", "tests"],
+    ["odoo503t", "503x.ai1.host", "tests"], ["odoo503_dev", "503.ai1.host", "dev"], ["paytag", "paytag.ai1.host", "main"], ["odoo540", "540.ai1.host", "main"]];
+  for (const [name, domain, want] of cases) assert.equal(sectionOf("prod", name, domain), want, name + " " + domain);
+  // Audit & Deploy's own test and development zones still decide first.
+  assert.equal(sectionOf("test", "odoo503", "503.ai1.host"), "tests"); assert.equal(sectionOf("development", "odoo503", "503.ai1.host"), "dev");
 });
