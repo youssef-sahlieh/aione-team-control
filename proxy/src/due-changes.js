@@ -19,48 +19,41 @@ export async function dueChangesReport(env, { jira }, { days = 30, now = Date.no
   const dashboardAccount = me.ok ? { id: me.data.accountId || '', name: me.data.displayName || '' } : { id: '', name: '' };
   if (!me.ok) warnings.push("Couldn't identify the dashboard's Jira account: every change is shown as made in Jira.");
 
-  // The project's tickets changed in the period.
-  const issues = [];
+  // The project's tickets changed in the period, each with its recent history (newest first), 100 per page.
+  // A ticket whose history in the period didn't fully fit is read on its own afterwards.
+  const issues = [], histories = [], fullRead = [];
   let token;
-  for (let page = 0; page < 20; page++) {
-    const r = await jira(env, '/rest/api/3/search/jql', { method: 'POST', body: { jql: 'project = "' + env.JIRA_PROJECT + '" AND updated >= -' + days + 'd ORDER BY updated DESC', fields: ['summary', 'labels', 'status'], maxResults: 100, ...(token ? { nextPageToken: token } : {}) }, signal: AbortSignal.timeout(20000) });
+  for (let page = 0; page < 30; page++) {
+    const r = await jira(env, '/rest/api/3/search/jql', { method: 'POST', body: { jql: 'project = "' + env.JIRA_PROJECT + '" AND updated >= -' + days + 'd ORDER BY updated DESC', fields: ['summary', 'labels', 'status'], expand: 'changelog', maxResults: 100, ...(token ? { nextPageToken: token } : {}) }, signal: AbortSignal.timeout(25000) });
     if (!r.ok) throw new Error('Jira search failed');
-    for (const i of r.data.issues || []) issues.push({ id: String(i.id), key: i.key, title: i.fields?.summary || '', status: i.fields?.status?.name || '', developers: (i.fields?.labels || []).filter((l) => /^ai1_/i.test(l)).map((l) => l.slice(4).toLowerCase()) });
+    for (const i of r.data.issues || []) {
+      const issue = { key: i.key, title: i.fields?.summary || '', status: i.fields?.status?.name || '', developers: (i.fields?.labels || []).filter((l) => /^ai1_/i.test(l)).map((l) => l.slice(4).toLowerCase()) };
+      issues.push(issue);
+      const log = i.changelog, list = Array.isArray(log?.histories) ? log.histories : null;
+      // Complete when every entry came back, or the oldest one returned is already before the period.
+      const oldest = list && list.length ? Math.min(...list.map((h) => Date.parse(h.created)).filter(Number.isFinite)) : Infinity;
+      const complete = list && (list.length >= (Number.isInteger(log.total) ? log.total : list.length) || oldest < since);
+      if (complete) { for (const h of list) if ((h.items || []).some(isDue)) histories.push({ issue, ...h }); }
+      else fullRead.push(issue);
+    }
     if (r.data.isLast !== false || !r.data.nextPageToken) break;
     token = r.data.nextPageToken;
   }
-  const byId = new Map(issues.map((i) => [i.id, i])), byKey = new Map(issues.map((i) => [i.key, i]));
-
-  // Their due date history: one bulk read of the due date field only; per ticket when that isn't available.
-  const histories = []; // {issue, created, author, items}
-  let bulk = issues.length > 0;
-  for (let n = 0; bulk && n < issues.length; n += 1000) {
-    let next;
-    for (let page = 0; page < 20; page++) {
-      const r = await jira(env, '/rest/api/3/changelog/bulkfetch', { method: 'POST', body: { issueIdsOrKeys: issues.slice(n, n + 1000).map((i) => i.id), fieldIds: ['duedate'], maxResults: 1000, ...(next ? { nextPageToken: next } : {}) }, signal: AbortSignal.timeout(25000) });
-      if (!r.ok) { bulk = false; histories.length = 0; break; }
-      for (const log of r.data.issueChangeLogs || []) { const issue = byId.get(String(log.issueId)) || byKey.get(log.issueId); if (issue) for (const h of log.changeHistories || []) histories.push({ issue, ...h }); }
-      if (!r.data.nextPageToken) break;
-      next = r.data.nextPageToken;
-    }
-  }
   let partial = false;
-  if (!bulk && issues.length) {
-    const queue = [...issues];
-    await Promise.all(Array.from({ length: 6 }, async () => {
-      while (queue.length) {
-        if (Date.now() - started > BUDGET_MS) { partial = true; return; }
-        const issue = queue.shift();
-        for (let start = 0, page = 0; page < 5; page++) {
-          const r = await jira(env, '/rest/api/3/issue/' + issue.key + '/changelog?startAt=' + start + '&maxResults=100', { signal: AbortSignal.timeout(10000) });
-          if (!r.ok || !Array.isArray(r.data.values)) { partial = true; break; }
-          for (const h of r.data.values) if ((h.items || []).some(isDue)) histories.push({ issue, ...h });
-          if (r.data.isLast === true || r.data.values.length < 100) break;
-          start += 100;
-        }
+  const queue = [...fullRead];
+  await Promise.all(Array.from({ length: 6 }, async () => {
+    while (queue.length) {
+      if (Date.now() - started > BUDGET_MS) { partial = true; return; }
+      const issue = queue.shift();
+      for (let from = 0, page = 0; page < 10; page++) {
+        const r = await jira(env, '/rest/api/3/issue/' + issue.key + '/changelog?startAt=' + from + '&maxResults=100', { signal: AbortSignal.timeout(10000) });
+        if (!r.ok || !Array.isArray(r.data.values)) { partial = true; break; }
+        for (const h of r.data.values) if ((h.items || []).some(isDue)) histories.push({ issue, ...h });
+        if (r.data.isLast === true || r.data.values.length < 100) break;
+        from += 100;
       }
-    }));
-  }
+    }
+  }));
   if (partial) warnings.push('Some tickets could not be read in time: the list may be incomplete. Try a shorter period.');
 
   // Each due date change in the period, and whether the dashboard applied it.
@@ -85,7 +78,7 @@ export async function dueChangesReport(env, { jira }, { days = 30, now = Date.no
     }
   }
   rows.sort((a, b) => b.at.localeCompare(a.at));
-  return { days, generatedAt: new Date(now).toISOString(), dashboardAccount, ticketsChecked: issues.length, rows, partial, warnings };
+  return { days, generatedAt: new Date(now).toISOString(), dashboardAccount, ticketsChecked: issues.length, historiesReadSeparately: fullRead.length, rows, partial, warnings };
 }
 
 // GET /reports/due-changes?days=7|30|90 (administrators). Kept 2 minutes, so reopening the page is instant.
