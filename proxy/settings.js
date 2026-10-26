@@ -1,8 +1,9 @@
 // Public proxy settings. Secrets (password, tokens, team details) are Vercel environment variables.
 export default {
   // The dashboard's addresses (comma separated). Browsers on any other site can't call the proxy.
-  // The GitHub Pages address stays allowed while people switch to dashboard.ai1.host; remove it later.
-  ALLOWED_ORIGIN: "https://dashboard.ai1.host,https://youssef-sahlieh.github.io",
+  // Only dashboard.ai1.host: the old youssef-sahlieh.github.io address is shared by every GitHub Pages site
+  // on that account, so it is no longer trusted.
+  ALLOWED_ORIGIN: "https://dashboard.ai1.host",
   // Before the user database is added: who may sign in, with the team password. When the database is
   // added, the first sign-in creates administrator accounts for these people.
   TEAM_EMAILS: "youssef@aione.biz,ellen@aione.biz",

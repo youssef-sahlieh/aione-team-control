@@ -65,3 +65,12 @@ test('deploy stamps every script, style and import with the version, and publish
  assert.equal(fs.readFileSync(path.join(dir,'assets','a.js'),'utf8'),'import "./b.js?v=build9";');
  fs.rmSync(dir,{recursive:true,force:true});
 });
+test('the live proxy only trusts dashboard.ai1.host (not the shared github.io address)',async()=>{
+ const {default:settings}=await import('../proxy/settings.js');
+ assert.equal(settings.ALLOWED_ORIGIN,'https://dashboard.ai1.host');
+ const env={...settings,SESSION_SECRET:'s'};
+ for(const [origin,allowed] of [['https://dashboard.ai1.host',true],['https://youssef-sahlieh.github.io',false]]){
+  const r=await handler.fetch(new Request('https://p/health',{method:'OPTIONS',headers:{Origin:origin}}),env);
+  assert.equal(r.headers.get('Access-Control-Allow-Origin'),allowed?origin:null,origin);
+ }
+});

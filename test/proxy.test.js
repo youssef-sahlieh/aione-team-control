@@ -140,8 +140,8 @@ const tests = [
 
   ["Vercel entry restores the path and reads secrets from the environment", async () => {
     Object.assign(process.env, { TEAM_PASSWORD: "vercel-pass", SESSION_SECRET: "s", TEAM_CONFIG: "{}", JIRA_SITE: "https://example.atlassian.net" });
-    const r = await vercelPost(new Request("https://p.vercel.app/api/proxy?__path=login", { method: "POST", headers: { Origin: ORIGIN, "x-forwarded-for": "1.2.3.4" }, body: JSON.stringify({ email: "ellen@aione.biz", password: "vercel-pass" }) }));
-    assert.equal(r.status, 200); assert.equal(r.headers.get("Access-Control-Allow-Origin"), ORIGIN);
+    const r = await vercelPost(new Request("https://p.vercel.app/api/proxy?__path=login", { method: "POST", headers: { Origin: "https://dashboard.ai1.host", "x-forwarded-for": "1.2.3.4" }, body: JSON.stringify({ email: "ellen@aione.biz", password: "vercel-pass" }) }));
+    assert.equal(r.status, 200); assert.equal(r.headers.get("Access-Control-Allow-Origin"), "https://dashboard.ai1.host");
     const bad = await vercelPost(new Request("https://p.vercel.app/api/proxy?__path=login", { method: "POST", body: JSON.stringify({ email: "ellen@aione.biz", password: "right-password" }) }));
     assert.equal(bad.status, 401, "uses Vercel's password, not another one");
   }],
