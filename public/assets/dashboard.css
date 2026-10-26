@@ -298,6 +298,7 @@ a.btn{text-decoration:none;display:inline-block}
 .uview{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .ustatus{font-size:12px;color:var(--ok)}
 .ustatus.pending{color:var(--warn)}
+.ulast{font-size:12px;color:var(--muted)}
 .uacts{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center}
 @media (max-width:820px){ .urow{grid-template-columns:1fr} .uacts{justify-content:flex-start} }
 .role-user .admin-only{display:none!important}

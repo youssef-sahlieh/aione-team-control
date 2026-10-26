@@ -6,12 +6,13 @@ import { memoryStore } from "../proxy/src/users.js";
 
 const ORIGIN = "https://youssef-sahlieh.github.io";
 const mails = [];
-let jiraCalls = [];
+let jiraCalls = [], labelCalls = 0;
 // Fake Jira: AION-1 belongs to developer "bashar", AION-2 to "ellen".
 const LABELS = { "AION-1": ["ai1_bashar"], "AION-2": ["ai1_ellen"] };
 globalThis.fetch = async (url, init = {}) => {
   const u = new URL(url), body = init.body ? JSON.parse(init.body) : undefined;
   jiraCalls.push({ path: u.pathname + u.search, method: init.method || "GET", body });
+  if (u.pathname === "/rest/api/3/label") { labelCalls++; const start = Number(u.searchParams.get("startAt")); return Response.json(start === 0 ? { values: ["urgent", "ai1_bashar", "AI1_Newdev"], isLast: false } : { values: ["ai1_ellen", "ai1_bad name!", "backend"], isLast: true }); }
   if (u.pathname === "/rest/api/3/search/jql") return Response.json({ issues: Object.entries(LABELS).map(([key, labels]) => ({ key, fields: { labels } })), isLast: true });
   const m = /\/issue\/(AION-\d+)$/.exec(u.pathname);
   if (m && (init.method || "GET") === "GET") return Response.json({ key: m[1], fields: { labels: LABELS[m[1]] || [], project:{key:"AION"},status:{name:"Open",statusCategory:{key:"new"}} } });
@@ -60,7 +61,7 @@ const tests = [
     mails.length = 0;
     const r = await call("/users", { method: "POST", token: admin.token, body: { email: "Bashar.B@aione.biz", name: "Bashar", role: "user", dev: "ai1_bashar" } });
     assert.equal(r.status, 201);
-    assert.deepEqual(r.data.user, { email: "bashar.b@aione.biz", name: "Bashar", role: "user", dev: "bashar", hasPassword: false, createdAt: r.data.user.createdAt });
+    assert.deepEqual(r.data.user, { email: "bashar.b@aione.biz", name: "Bashar", role: "user", dev: "bashar", hasPassword: false, createdAt: r.data.user.createdAt, lastLoginAt: null, lastLoginIp: "" });
     assert.equal(r.data.invited, true); assert.equal(r.data.link, undefined);
     assert.equal(mails.length, 1); assert.deepEqual(mails[0].to, ["bashar.b@aione.biz"]);
     assert.match(mails[0].html, /Youssef added you/); assert.match(mails[0].html, /developer \(ai1_bashar\)/);
@@ -267,6 +268,30 @@ const tests = [
     const old = (await makeToken(env, "youssef@aione.biz", Date.now(), 0)).token;
     env.STORE = store;
     assert.equal((await call("/config", { token: old })).status, 401);
+  }],
+  ["the last login and its IP address show on Manage users", async () => {
+    env = makeEnv();
+    const a = await login("youssef@aione.biz", "Team-password-1", "203.0.113.7");
+    const me = (await call("/users", { token: a.token })).data.users.find((u) => u.email === "youssef@aione.biz");
+    assert.equal(me.lastLoginIp, "203.0.113.7");
+    assert.ok(Date.now() - Date.parse(me.lastLoginAt) < 60000);
+    // Someone who never signed in.
+    const other = (await call("/users", { token: a.token })).data.users.find((u) => u.email !== "youssef@aione.biz");
+    if (other) assert.equal(other.lastLoginAt, null);
+    // A wrong password doesn't count as a login.
+    await login("youssef@aione.biz", "wrong-password", "198.51.100.9");
+    assert.equal((await call("/users", { token: a.token })).data.users.find((u) => u.email === "youssef@aione.biz").lastLoginIp, "203.0.113.7");
+  }],
+  ["every ai1_ label in Jira is offered as a developer, also new ones", async () => {
+    env = makeEnv();
+    const a = await login("youssef@aione.biz", "Team-password-1");
+    const before = labelCalls, devs = (await call("/config", { token: a.token })).data.devs;
+    for (const d of ["bashar", "ellen", "newdev"]) assert.ok(devs.includes(d), d);
+    assert.ok(!devs.includes("urgent") && !devs.includes("backend") && !devs.some((d) => /\s|!/.test(d)));
+    // Both pages of labels were read (by this or an earlier page load; the list is then kept).
+    assert.ok(labelCalls >= 2, "both pages of labels read");
+    // Kept for 10 minutes: the next page load doesn't ask Jira again.
+    const after = labelCalls; await call("/config", { token: a.token }); assert.equal(labelCalls, after);
   }],
   ["without the database: forgot password and users say so", async () => {
     env = makeEnv(); delete env.STORE;

@@ -36,6 +36,7 @@ import { recordTicketEvent, ticketLogRoutes, readTicketLog } from "./ticket-log.
 import { integrationRoutes } from "./integrations.js";
 import { epicMapRoutes } from "./epic-map.js";
 import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
+import { recordLogin } from "./users.js";
 import { ROLES, checkPassword, createLinkToken, deleteUser, getUser, hashPassword, listUsers, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, useLinkToken, validDev, validEmail } from "./users.js";
 
 const enc = new TextEncoder();
@@ -328,6 +329,28 @@ function validFields(fields) {
   return true;
 }
 
+// Every ai1_<name> label in Jira, as developer names. Kept 10 minutes (database, and this copy of the proxy).
+let devLabels = { key: "", at: 0, devs: [] };
+async function jiraDevs(env) {
+  const key = String(env.JIRA_SITE || "");
+  if (devLabels.key === key && Date.now() - devLabels.at < 600000) return devLabels.devs;
+  const cached = env.STORE ? await env.STORE.get("jira:ai1-devs").catch(() => null) : null;
+  if (cached) { devLabels = { key, at: Date.now(), devs: JSON.parse(cached) }; return devLabels.devs; }
+  const found = new Set();
+  for (let start = 0, page = 0; page < 10; page++) {
+    const r = await jira(env, "/rest/api/3/label?startAt=" + start + "&maxResults=1000", { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error("Jira labels unavailable");
+    const values = Array.isArray(r.data && r.data.values) ? r.data.values : [];
+    for (const l of values) if (/^ai1_/i.test(l)) { const d = normDev(l); if (validDev(d)) found.add(d); }
+    if (r.data.isLast !== false || !values.length) break;
+    start += values.length;
+  }
+  const devs = [...found].sort();
+  devLabels = { key, at: Date.now(), devs };
+  if (env.STORE) await env.STORE.set("jira:ai1-devs", JSON.stringify(devs), 600).catch(() => {});
+  return devs;
+}
+
 async function route(request, env, url) {
   const path = url.pathname;
   const method = request.method;
@@ -364,6 +387,7 @@ async function route(request, env, url) {
         if(await env.STORE.compareAndSet("u:"+u.email,JSON.stringify(u),JSON.stringify(upgraded)))u=upgraded;
         else{u=await getUser(env.STORE,email);if(!u||!await checkPassword(password,u.pw))return fail("login","That email and password don't match.",401);}
       }
+      await recordLogin(env.STORE, u.email, ip);
       return json({ email: u.email, name: u.name, role: u.role, ...(await makeToken(env, u.email, Date.now(), u.v)) });
     }
     const { success } = await (env.LOGIN_LIMIT || memoryLimit).limit({ key: ip });
@@ -549,6 +573,10 @@ async function route(request, env, url) {
   if (path === "/config" && method === "GET") {
     let team = {};
     try { team = JSON.parse(env.TEAM_CONFIG || "{}"); } catch {}
+    // Developers: the team setting's, then every ai1_ label in Jira (a new developer label shows up by itself).
+    // At most a short wait for Jira; when it's slow or down, the team setting's list is used.
+    const fromJira = await Promise.race([jiraDevs(env).catch(() => []), new Promise((r) => setTimeout(() => r([]), 3000))]);
+    team.devs = [...new Set([...(Array.isArray(team.devs) ? team.devs : []), ...fromJira])];
     return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE, capabilities:["ticket-business-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1","db-report-pos-version-v1","epic-map-v1"] });
   }
 

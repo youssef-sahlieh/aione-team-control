@@ -82,6 +82,10 @@ function row(u) {
   view.appendChild(el("span", "flag " + (u.role === "admin" ? "k1" : "k6"), u.role === "admin" ? "Administrator" : "User"));
   if (u.dev) view.appendChild(el("span", "dev " + devK(u.dev), "ai1_" + u.dev));
   view.appendChild(el("span", "ustatus" + (u.hasPassword ? "" : " pending"), u.hasPassword ? "Active" : "Invited, no password yet"));
+  // Last sign-in (Israel time) and the IP address it came from.
+  const last = el("span", "ulast");
+  last.textContent = u.lastLoginAt ? "Last login " + new Date(u.lastLoginAt).toLocaleString("en-GB", { timeZone: "Asia/Jerusalem", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) + (u.lastLoginIp ? " · IP " + u.lastLoginIp : "") : "Never logged in";
+  view.appendChild(last);
   r.appendChild(view);
 
   const acts = el("div", "uacts");

@@ -64,7 +64,19 @@ export async function listUsers(store) {
 }
 
 // What the dashboard may see about a user (never the password hash).
-export const publicUser = (u) => ({ email: u.email, name: u.name, role: u.role, dev: u.dev || "", hasPassword: !!u.pw, createdAt: u.createdAt });
+export const publicUser = (u) => ({ email: u.email, name: u.name, role: u.role, dev: u.dev || "", hasPassword: !!u.pw, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null, lastLoginIp: u.lastLoginIp || "" });
+
+// The last successful sign-in (time and IP address), shown on Manage users. Never blocks or fails a sign-in.
+export async function recordLogin(store, email, ip, at = new Date().toISOString()) {
+  try {
+    const k = "u:" + normEmail(email);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const raw = await store.get(k); if (!raw) return;
+      const next = { ...JSON.parse(raw), lastLoginAt: at, lastLoginIp: ip && ip !== "unknown" ? String(ip).slice(0, 64) : "" };
+      if (await store.compareAndSet(k, raw, JSON.stringify(next))) return;
+    }
+  } catch { /* the sign-in itself already succeeded */ }
+}
 
 async function sha256hex(s) {
   const h = new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(s)));
