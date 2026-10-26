@@ -229,7 +229,7 @@ test("the page gets the saved report at once; an out-of-date one is updated in t
   const admin = { email: "boss@aione.biz", name: "Boss", role: "admin", dev: "", v: 1 };
   await saveUser(env.STORE, admin);
   const token = (await makeToken(env, admin.email, Date.now(), 1)).token;
-  const old = { builtAt: Date.now() - 3 * 3600 * 1000, count: 1, rows: [{ instance: "odoo503", database: "RonitYamProd", posVersion: "", section: "main", online: true }] };
+  const old = { builtAt: Date.now() - 3 * 3600 * 1000, count: 1, format: 2, rows: [{ instance: "odoo503", database: "RonitYamProd", posVersion: "", section: "main", online: true }] };
   await env.STORE.set("dbreport:v1", JSON.stringify(old), 3600);
   const seen = []; const inner = globalThis.fetch;
   globalThis.fetch = (url, init) => { seen.push(String(url)); return inner(url, init); };
@@ -298,4 +298,42 @@ test("the section follows the instance name and the web address: 503.dev, 503dev
   for (const [name, domain, want] of cases) assert.equal(sectionOf("prod", name, domain), want, name + " " + domain);
   // Audit & Deploy's own test and development zones still decide first.
   assert.equal(sectionOf("test", "odoo503", "503.ai1.host"), "tests"); assert.equal(sectionOf("development", "odoo503", "503.ai1.host"), "dev");
+});
+
+test("a password with @ under the email is read as the password (554 layout); a capitalised email is also tried in lower case", () => {
+  const c = parseCreds('<h1>554.ai1.host</h1><p><a href="https://554.ai1.host">554.ai1.host</a></p><p><a href="mailto:Shopowner42@example.invalid">Shopowner42@example.invalid</a></p><p>Shop@2026</p>');
+  assert.equal(c.num, "554");
+  assert.deepEqual(c.candidates[0], { user: "Shopowner42@example.invalid", password: "Shop@2026" });
+  assert.deepEqual(c.candidates[1], { user: "shopowner42@example.invalid", password: "Shop@2026" });
+  // Still: two emails on two lines are two users, not a user and a password.
+  const two = parseCreds("<p>https://560.ai1.host</p><p>first@shop.co</p><p>second@shop.co</p><p>Pw12345!</p>");
+  assert.deepEqual(two.candidates[0], { user: "second@shop.co", password: "Pw12345!" });
+  // Any capitalised login (labelled, or anywhere in the article) is also tried in lower case.
+  const labelled = parseCreds("<p>https://561.ai1.host</p><p>User: Manager</p><p>Password: Shop2026</p>");
+  assert.ok(labelled.candidates.some((x) => x.user === "Manager" && x.password === "Shop2026"));
+  assert.ok(labelled.candidates.some((x) => x.user === "manager" && x.password === "Shop2026"));
+});
+
+test("the POS version comes from Audit & Deploy's AI1 Settings (flutter_pos_api module_version)", async () => {
+  const { env, call } = setup();
+  const admin = { email: "boss@aione.biz", name: "Boss", role: "admin", dev: "", v: 1 };
+  await saveUser(env.STORE, admin);
+  const token = (await makeToken(env, admin.email, Date.now(), 1)).token;
+  const inner = globalThis.fetch, asked = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const p = (JSON.parse(init.body || "{}").params) || {};
+    if (String(url).includes("kadis.odoo.test") && p.args && p.args[4] === "get_ai1_overview") {
+      asked.push(p.args[5]);
+      return Response.json({ result: { payload: p.args[5][0] === "odoo100" ? { installed: true, module_version: "19.0.4.2.0", databases: [] } : {} } });
+    }
+    return inner(url, init);
+  };
+  try {
+    let r; for (let i = 0; i < 5; i++) { r = await (await call("/db-report/refresh", { method: "POST", token })).json(); if (r.done) break; }
+    const row = (n) => r.report.rows.find((x) => x.instance === n);
+    assert.equal(row("odoo100").posVersion, "19.0.4.2.0", "from AI1 Settings");
+    assert.equal(row("odoo503").posVersion, "19.0.3.97.2", "falls back to the add-on list");
+    assert.deepEqual(asked.find((a) => a[0] === "odoo100"), ["odoo100", false], "the saved snapshot, not a forced refresh");
+    assert.equal(r.report.format, 2);
+  } finally { globalThis.fetch = inner; }
 });

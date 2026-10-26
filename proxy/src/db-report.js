@@ -16,6 +16,8 @@ import { act } from "./monitor.js";
 const REPORT_KEY = "dbreport:v1";          // the finished/most-recent report
 const PROGRESS_KEY = "dbreport:progress";  // an in-flight incremental build
 const LOCK_KEY = "dbreport:lock";
+// Raised when the report gains data that saved reports lack (2: POS version from AI1 Settings), so they rebuild.
+const REPORT_FORMAT = 2;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STALE_MS = 60 * 60 * 1000;           // rebuild on view when the cached report is older than an hour
 const BUILD_BUDGET_MS = 45000;             // leave headroom under the 60s function limit
@@ -115,11 +117,16 @@ export function parseCreds(html) {
   // The exact pairs the stated layout produces (url-in-title / email / password), tried FIRST so the cap
   // never drops them. Pair any username-or-email line with the password on the line right below it.
   const priority = [];
-  const addUser = (u) => { if (trusted(u)) { users.add(u); if (/@/.test(u)) users.add(u.split("@")[0]); } }; // Odoo login is often the email's local part
+  // Odoo login is often the email's local part. Logins are case-sensitive and editors capitalise the first
+  // letter, so a capitalised login is also tried in lower case.
+  const addUser = (u) => { if (!trusted(u)) return; for (const v of new Set([u, u.toLowerCase()])) { users.add(v); if (/@/.test(v)) users.add(v.split("@")[0]); } };
   // Every email anywhere is a possible username (the article always has an email + password).
   for (const e of mailtoEmails) addUser(e);
   for (const m of text.matchAll(/[^\s:：,<>()"']+@[^\s:：,<>()"']+\.[A-Za-z]{2,}/g)) addUser(m[0]);
-  const isUserLine = (l) => /@/.test(l) || firstTok(labeled(LABEL.user, l)) || labelOnly(LABEL.user, l);
+  // A user line has an email address (name@domain.tld) or a user label. "Shop@2026" is a password, not a user.
+  const isUserLine = (l) => /[^\s:：]+@[^\s:：]+\.[A-Za-z]{2,}/.test(l) || firstTok(labeled(LABEL.user, l)) || labelOnly(LABEL.user, l);
+  // An address line, with or without https:// (554.ai1.host).
+  const isUrlLine = (l) => /^https?:\/\//i.test(l) || /^[\w.-]+\.ai1\.host(?:[/\s]|$)/i.test(l);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i], next = lines[i + 1] || "", next2 = lines[i + 2] || "";
     const u = firstTok(labeled(LABEL.user, line)); if (trusted(u)) addUser(u);
@@ -133,7 +140,13 @@ export function parseCreds(html) {
     if (lineUser && next && !/^https?:/i.test(next) && !isUserLine(next)) {
       const pwLabeled = firstTok(labeled(LABEL.pass, next));
       const pw = pwLabeled || next.trim();
-      if (trusted(pw.slice(0, 64))) { passwords.add(pw.slice(0, 64)); priority.push({ user: lineUser, password: pw.slice(0, 64) }); if (/@/.test(lineUser)) priority.push({ user: lineUser.split("@")[0], password: pw.slice(0, 64) }); }
+      if (trusted(pw.slice(0, 64))) {
+        const p = pw.slice(0, 64);
+        passwords.add(p); priority.push({ user: lineUser, password: p });
+        // Odoo logins are case-sensitive; an editor often capitalises the first letter of an email.
+        if (lineUser !== lineUser.toLowerCase()) priority.push({ user: lineUser.toLowerCase(), password: p });
+        if (/@/.test(lineUser)) priority.push({ user: lineUser.split("@")[0], password: p });
+      }
     }
     // Also tokens after an email on the SAME line, and the second line down.
     if (emailOnLine) {
@@ -142,7 +155,7 @@ export function parseCreds(html) {
       if (trusted(firstTok(next2)) && !/^https?:/i.test(next2)) passwords.add(firstTok(next2));
     }
     // url line -> next line is the username, the one after is the password (url-in-body layout).
-    if (/^https?:\/\//i.test(line)) { if (next && !/^https?:/i.test(next)) addUser(firstTok(next)); if (next2 && !/^https?:/i.test(next2) && trusted(firstTok(next2))) passwords.add(firstTok(next2)); }
+    if (isUrlLine(line)) { if (next && !isUrlLine(next)) addUser(firstTok(next)); if (next2 && !isUrlLine(next2) && trusted(firstTok(next2))) passwords.add(firstTok(next2)); }
   }
   // High recall: any password-like token anywhere (printable, 4-40 chars, not a plain word/email/url).
   for (const line of lines) for (const tok of line.split(/\s|[|,;]+/)) {
@@ -316,9 +329,11 @@ async function reportInstances(env) {
 async function instanceFacts(env, inst) {
   const name = inst.instance_name;
   const section = sectionOf(inst.server_zone, name, inst.domain) || "main";
-  const [cfg, add] = await Promise.all([
+  const [cfg, add, ai1] = await Promise.all([
     odoo(env, "monitor.data.snapshot", "get_instance_config", [name, false]).then(unwrap).catch(() => ({})),
-    odoo(env, "monitor.data.snapshot", "get_instance_addons", [name, null, false]).then(unwrap).catch(() => ({}))
+    odoo(env, "monitor.data.snapshot", "get_instance_addons", [name, null, false]).then(unwrap).catch(() => ({})),
+    // What Audit & Deploy's AI1 Settings tab shows: "flutter_pos_api <module_version>" (its saved snapshot).
+    odoo(env, "monitor.data.snapshot", "get_ai1_overview", [name, false]).then(unwrap).catch(() => ({}))
   ]);
   // Database name can come from several config fields; db listing is usually disabled on these servers.
   const f = cfg.fields || {};
@@ -329,7 +344,8 @@ async function instanceFacts(env, inst) {
   const addons = (add.addons || []).map((a) => a.name).filter(Boolean).sort();
   // The POS add-on's module_version (AI1 Settings > POS Configurations > flutter_pos_api), and its date when given.
   const pos = findPosModule(add) || findPosModule(cfg);
-  const posVersion = pos ? pos.version : "";
+  const ai1Version = ai1 && typeof ai1.module_version === "string" ? ai1.module_version.trim() : "";
+  const posVersion = ai1Version || (pos ? pos.version : "");
   const posVersionDate = pos ? pos.date : "";
   // Odoo major version from the server's public version endpoint (works without a login).
   const base = inst.domain ? "https://" + inst.domain : "";
@@ -420,7 +436,7 @@ export async function buildReport(env, { force = false } = {}) {
     }
     if (progress.done >= progress.instances.length) {
       const rows = oneRowPerSite(progress.rows);
-      const report = { builtAt: Date.now(), count: rows.length, rows };
+      const report = { builtAt: Date.now(), count: rows.length, format: REPORT_FORMAT, rows };
       await env.STORE.set(REPORT_KEY, JSON.stringify(report), 30 * DAY_MS / 1000);
       await env.STORE.del(PROGRESS_KEY);
       return { done: true, report };
@@ -443,7 +459,7 @@ export async function dbReportRoutes(request, env, url, me) {
   // column existed, "building" tells the page to update it in the background (POST /db-report/refresh).
   if (path === "/db-report" && request.method === "GET") {
     const report = await readReport(env);
-    const outdated = !!report && (report.rows || []).some((r) => !("posVersion" in r) || !("section" in r) || !("online" in r));
+    const outdated = !!report && (report.format !== REPORT_FORMAT || (report.rows || []).some((r) => !("posVersion" in r) || !("section" in r) || !("online" in r)));
     return json({ report: report || null, building: !report || outdated || Date.now() - report.builtAt > STALE_MS });
   }
   if (path === "/db-report/refresh" && request.method === "POST") {
