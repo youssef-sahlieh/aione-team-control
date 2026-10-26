@@ -306,7 +306,7 @@ for(const role of ["admin"])for(const width of [320,1440])test(`${role} reporter
 for(const width of [320,1024,1440])test(`manager workspace keeps secondary tools accessible at ${width}px`,async({page})=>{
   await page.setViewportSize({width,height:1000});const mock=await mockDashboard(page);await page.goto("/dashboard.html");
   if(width<=820)await page.locator("#mobile-menu").click();
-  await expect(page.locator('#main-nav > a:not([hidden])')).toHaveCount(11);await expect(page.locator('[data-page="history"]')).toHaveCount(0);
+  await expect(page.locator('#main-nav > a:not([hidden])')).toHaveCount(12);await expect(page.locator('#ai1-monitor-link')).toBeVisible();await expect(page.locator('[data-page="history"]')).toHaveCount(0);
   await expect(page.locator('[data-page="requests"]')).toBeVisible();await page.locator('[data-page="requests"]').click();await expect(page.locator("#page-heading")).toHaveText("Date requests");
   if(width<=820)await page.locator("#mobile-menu").click();await page.locator('[data-page="tickets"]').click();
   await expect(page.locator("#quick-filters select")).toHaveCount(10);await expect(page.getByRole("combobox",{name:"Saved view",exact:true})).toBeHidden();await expect(page.locator("#bulk")).toBeHidden();
