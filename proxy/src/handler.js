@@ -28,6 +28,7 @@ import { timeRoutes, timeSyncCron } from "./time-entries.js";
 import { monitorRoutes } from "./monitor.js";
 import { dbReportRoutes, dbReportCron } from "./db-report.js";
 import { odooAppRoutes, odooTranslations } from "./odoo-app.js";
+import { monitorPublicKeys, monitorToken } from "./monitor-sso.js";
 import { cookieSessionRequest } from "./sessions.js";
 import { SESSION_MS, SESSION_SECONDS } from "./session-policy.js";
 import { aiChat, aiBrief, aiConfigured, aiDescription, AIError } from "./ai.js";
@@ -360,6 +361,10 @@ async function route(request, env, url) {
   if (path === "/cron/db-report") return dbReportCron(request, env, url);
   // The work log's background sync to Odoo (secret in the Authorization header, never a user session).
   if (path === "/cron/time-sync") return timeSyncCron(request, env);
+  // AI1 Monitor checks its tokens with this public key. It holds no private key.
+  if (path === "/sso/monitor/keys" && method === "GET") {
+    try { return json(monitorPublicKeys(env)); } catch { return fail("not_configured", "AI1 Monitor sign-in isn't set up.", 503); }
+  }
   if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1","reports-all-v1","reports-saved-v1", "db-report-v1", "db-report-company-v1", "db-report-pos-version-v1", "time-entries-v1","epic-map-v1"], build: String(env.BUILD || "").slice(0, 7)});
 
   // Jira Automation uses its own secret, never a team password or a user's browser session.
@@ -436,6 +441,10 @@ async function route(request, env, url) {
     return json({ ok: true });
   }
   if (!me) return fail("session", "Please sign in again.", 401);
+  // The signed-in person asks for a token to open AI1 Monitor as themselves.
+  if (path === "/sso/monitor" && method === "POST") {
+    try { return json(await monitorToken(env, me)); } catch { return fail("not_configured", "AI1 Monitor sign-in isn't set up.", 503); }
+  }
   const readBusinessTicket = async key => {
     if(typeof key!=="string" || !new RegExp("^(?:INT|"+env.JIRA_PROJECT+")-\\d+$").test(key))return null;
     if(/^INT-/.test(key)){const raw=await env.STORE?.get("it:"+key);if(!raw)return null;const t=JSON.parse(raw);if(me.role!=="admin"&&(!me.dev||!t.devs?.includes(me.dev)))return null;return {key,title:t.summary,description:t.description,comments:t.comments||[],devs:t.devs||[],closed:t.status==="Closed",status:t.status,cat:t.status==="Closed"?"done":"new",created:t.created,updated:t.updated,completedAt:t.closedAt||null,due:t.due,assignee:t.assignee,internal:true};}

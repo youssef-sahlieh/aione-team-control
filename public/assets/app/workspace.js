@@ -2,6 +2,7 @@ import { readRoute, routeUrl } from "./router.js";
 import { calculateWorkload } from "../models/workload.js";
 import { assigneeOptions } from "../models/assignees.js";
 import { isInternalTicket } from "../models/filters.js";
+import { api } from "../session.js";
 const $ = id => document.getElementById(id);
 const node = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const button = (text, cls, action) => { const b = node("button", cls, text); b.type = "button"; b.addEventListener("click", action); return b; };
@@ -30,8 +31,23 @@ const pages = [
   ["reports", "Checks & Reports", "Run ticket checks and review management reports."],
   ["clients", "Clients", "Manage clients (Odoo contacts) and their projects."],
   ["worklog", "Work log", "Time logged on tickets and sent to Odoo timesheets."],
-  ["errors", "Sync errors", "Changes that didn't reach Jira, Odoo or the dashboard, ready to retry, and the state of the API keys."]
+  ["monitor", "AI1 Monitor", "AI1 Monitor, shown inside the dashboard."],
+  ["errors", "Sync errors","Changes that didn't reach Jira, Odoo or the dashboard, ready to retry, and the state of the API keys."]
 ];
+const MONITOR_URL = "https://monitor.ai1.host/dashboard#admin";
+const MONITOR_ORIGIN = new URL(MONITOR_URL).origin;
+// The monitor frame asks for a sign-in token when it loads and again when its token runs out. Only the monitor's
+// own origin, and only the frame this page opened, gets one: the token is for the person signed in here.
+let monitorFrame = null;
+window.addEventListener("message", async e => {
+  if (e.origin !== MONITOR_ORIGIN || !monitorFrame || e.source !== monitorFrame.contentWindow || e.data?.type !== "ai1-monitor:need-token") return;
+  try {
+    const r = await api("/sso/monitor", { method: "POST" });
+    e.source.postMessage({ type: "ai1-monitor:token", token: r.token, expiresAt: r.expiresAt }, MONITOR_ORIGIN);
+  } catch (err) {
+    e.source.postMessage({ type: "ai1-monitor:error", code: err.code || "error" }, MONITOR_ORIGIN);
+  }
+});
 function icon(name) {
   const box = node("span", "nav-icon");
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -97,6 +113,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
   window.addEventListener("popstate", () => { const next = readRoute(new URL(location.href), context().admin); if (next.page === route.page && next.mode === route.mode) return; route = next; synchronize(); render(); });
   const nav = $("main-nav");
   for (const [id, label] of pages) {
+    if (id === "monitor") continue; // its link is built below, shown to managers only
     const a = node("a", "nav-link"); a.href = `dashboard.html?page=${id}`; a.dataset.page = id; a.title = label;
     a.append(icon(id), node("span", "", label));
     if (id === "tickets") { const count = node("span", "nav-count", "—"); count.id = "nav-ticket-count"; a.appendChild(count); }
@@ -114,8 +131,13 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
   const dbReport = node("a", "nav-link"); dbReport.id = "dbreport-link"; dbReport.href = "databases.html"; dbReport.dataset.link = "databases"; dbReport.title = "Databases"; dbReport.hidden = true;
   dbReport.append(icon("audit"), node("span", "", "Databases"));
   nav.insertBefore(dbReport, audit.nextSibling);
-  const navOrder = ["overview", "tickets", "audit", "databases", "requests", "internal", "workload", "boards", "calendar", "reports", "clients", "worklog", "errors"];
-  const navItem = id => nav.querySelector(id === "audit" ? "#monitor-link" : id === "databases" ? "#dbreport-link" : `[data-page="${id}"]`);
+  // AI1 Monitor is a dashboard page that shows the monitor inside this page; managers only.
+  const monitor = node("a", "nav-link"); monitor.id = "ai1-monitor-link"; monitor.href = "dashboard.html?page=monitor"; monitor.dataset.page = "monitor"; monitor.title = "AI1 Monitor"; monitor.hidden = true;
+  monitor.append(icon("audit"), node("span", "", "AI1 Monitor"));
+  monitor.addEventListener("click", e => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate("monitor"); });
+  nav.insertBefore(monitor, dbReport.nextSibling);
+  const navOrder = ["overview", "tickets", "audit", "databases", "monitor", "requests", "internal", "workload", "boards", "calendar", "reports", "clients", "worklog", "errors"];
+  const navItem = id => nav.querySelector(id === "audit" ? "#monitor-link" : id === "databases" ? "#dbreport-link" : id === "monitor" ? "#ai1-monitor-link" : `[data-page="${id}"]`);
   function configure() {
     route = readRoute(new URL(location.href), context().admin);
     document.body.dataset.workspaceRole=context().admin?"manager":"user";
@@ -123,6 +145,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     nav.querySelector('[data-page="reports"]').hidden=!context().admin;
     nav.querySelector('[data-page="clients"]').hidden=!context().admin;
     nav.querySelector('[data-page="requests"]').hidden = false;
+    nav.querySelector("#ai1-monitor-link").hidden = !context().admin;
     nav.querySelector('[data-page="workload"]').hidden = !context().admin;
     nav.querySelector('[data-page="internal"]').hidden = !context().admin;
     const current = new URL(location.href);
@@ -174,6 +197,14 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     for (const [name, count] of counts) { const row = node("div", "status-line"); row.append(node("span", "", name), node("strong", "", String(count))); status.appendChild(row); }
     if (!counts.size) status.appendChild(node("div", "empty-copy", "No open work to display."));
     grid.append(priorities, status); target.appendChild(grid);
+  }
+  // The monitor in a frame. It must allow framing (X-Frame-Options / frame-ancestors) and its sign-in cookie must
+  // work in a frame; until its owners set that, the frame stays blank.
+  function embedMonitor(target) {
+    const p = panel("AI1 Monitor", "Opens with your AION sign-in. If the frame stays blank, the monitor doesn't accept it yet.");
+    const frame = node("iframe", "monitor-frame"); frame.src = MONITOR_URL; frame.title = "AI1 Monitor";
+    monitorFrame = frame;
+    p.append(frame); target.appendChild(p);
   }
   function workload(items, target) {
     const ctx = context();
@@ -241,11 +272,11 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     $("nav-date-count").textContent=String(context().pendingDates||0);
     $("nav-ticket-count").textContent = String(state.issues?.length || 0);
     $("nav-internal-count").textContent = String((state.issues||[]).filter(isInternalTicket).length);
-    const custom = ["overview", "requests", "workload", "calendar", "reports", "clients", "worklog", "errors"].includes(route.page);
+    const custom = ["overview", "requests", "workload", "calendar", "reports", "clients", "worklog", "errors", "monitor"].includes(route.page);
     $("tickets-area").hidden = custom; $("workspace-content").hidden = !custom;
     if (!custom) return false;
     const target = $("workspace-content"); target.replaceChildren();
-    if(context().filterCount&&!["requests","reports","clients","worklog","errors"].includes(route.page)){const info=node("div","summary-filter-info");info.append(node("span","","Using your current ticket filters"),button("Adjust filters →","linkbtn",()=>navigate("tickets")));target.appendChild(info);}
+    if(context().filterCount&&!["requests","reports","clients","worklog","errors","monitor"].includes(route.page)){const info=node("div","summary-filter-info");info.append(node("span","","Using your current ticket filters"),button("Adjust filters →","linkbtn",()=>navigate("tickets")));target.appendChild(info);}
     // Respect all active filters but include closed tickets for summary metrics.
     const data = allowedItems();
     if(route.page==="reports"&&context().admin)context().renderReports(target);
@@ -255,6 +286,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     if (route.page === "requests") context().renderRequests(target);
     if (route.page === "overview") {overview(data, target);const p=panel(context().admin?"Date requests awaiting review":"My date requests and decisions");p.classList.add("date-summary");const list=node("div");context().renderRequests(list,{summary:true});p.append(list,button("View all date requests →","linkbtn",()=>navigate("requests")));target.append(p);}
     if (route.page === "workload" && context().admin) workload(data, target);
+    if (route.page === "monitor" && context().admin) embedMonitor(target);
     if (route.page === "calendar") calendar(data, target);
     return true;
   }
