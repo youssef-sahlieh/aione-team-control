@@ -1,0 +1,116 @@
+// Run with: npm test. Checks the sign-in tokens for AI1 Monitor: the public key it checks with, who needs
+// to be signed in to get a token, and that a token verifies only with the key that made it.
+import test from "node:test";
+import assert from "node:assert/strict";
+import { webcrypto } from "node:crypto";
+import handler, { makeToken } from "../proxy/src/handler.js";
+
+const { subtle } = webcrypto;
+const b64urlDecode = (s) => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+const { privateKey } = await subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+const privateJwk = await subtle.exportKey("jwk", privateKey);
+const env = {
+  ALLOWED_ORIGIN: "https://dashboard.ai1.host", TEAM_EMAILS: "youssef@aione.biz,ellen@aione.biz", JIRA_PROJECT: "AION",
+  SESSION_SECRET: "test-session-secret", TEAM_CONFIG: "{}", MONITOR_SIGNING_KEY: JSON.stringify({ ...privateJwk, kid: "ai1-monitor-test" })
+};
+const get = (path, init, e = env) => handler.fetch(new Request("https://proxy.test" + path, init), e);
+const signedIn = async (email = "youssef@aione.biz") => (await makeToken(env, email)).token;
+
+test("the public key lets AI1 Monitor check tokens, without any private part", async () => {
+  const r = await get("/sso/monitor/keys");
+  assert.equal(r.status, 200);
+  const { keys } = await r.json();
+  assert.equal(keys.length, 1);
+  assert.equal(keys[0].kid, "ai1-monitor-test");
+  assert.equal(keys[0].alg, "EdDSA");
+  assert.equal(keys[0].x, privateJwk.x);
+  assert.equal(keys[0].d, undefined);
+});
+
+test("a token is issued only to a signed-in dashboard person", async () => {
+  const r = await get("/sso/monitor", { method: "POST" });
+  assert.equal(r.status, 401);
+});
+
+test("the token names the person, carries their role, and verifies with the published key only", async () => {
+  const r = await get("/sso/monitor", { method: "POST", headers: { Authorization: "Bearer " + await signedIn() } });
+  assert.equal(r.status, 200);
+  const { token, expiresAt } = await r.json();
+  const [head, body, sig] = token.split(".");
+  const header = JSON.parse(b64urlDecode(head).toString());
+  const claims = JSON.parse(b64urlDecode(body).toString());
+  assert.equal(header.alg, "EdDSA");
+  assert.equal(header.kid, "ai1-monitor-test");
+  assert.equal(claims.iss, "aione-team-control");
+  assert.equal(claims.aud, "ai1-monitor");
+  assert.equal(claims.email, "youssef@aione.biz");
+  assert.equal(claims.sub, "youssef@aione.biz");
+  assert.equal(claims.role, "admin");
+  assert.equal(claims.exp - claims.iat, 60);
+  assert.equal(expiresAt, claims.exp * 1000);
+
+  const publicKey = await subtle.importKey("jwk", { kty: "OKP", crv: "Ed25519", x: privateJwk.x }, { name: "Ed25519" }, false, ["verify"]);
+  const data = new TextEncoder().encode(head + "." + body);
+  assert.equal(await subtle.verify("Ed25519", publicKey, b64urlDecode(sig), data), true);
+  // Changing the claims breaks the signature.
+  const forged = Buffer.from(JSON.stringify({ ...claims, role: "admin", email: "someone@aione.biz" })).toString("base64url");
+  assert.equal(await subtle.verify("Ed25519", publicKey, b64urlDecode(sig), new TextEncoder().encode(head + "." + forged)), false);
+});
+
+test("without a valid signing key, sign-in for AI1 Monitor is switched off (no crash, no token)", async () => {
+  const off = { ...env, MONITOR_SIGNING_KEY: "" };
+  assert.equal((await get("/sso/monitor/keys", {}, off)).status, 503);
+  const r = await get("/sso/monitor", { method: "POST", headers: { Authorization: "Bearer " + await signedIn() } }, off);
+  assert.equal(r.status, 503);
+});
+
+const { createPublicKey, verify: nodeVerify } = await import("node:crypto");
+const { checkMonitorToken, monitorToken } = await import("../proxy/src/monitor-sso.js");
+const publicKeys = async () => (await get("/sso/monitor/keys")).json();
+const person = { email: "youssef@aione.biz", name: "Youssef", role: "admin", dev: "" };
+// Signs claims the way AI1 Monitor's tests need: with the real private key, so only the claims differ.
+async function signed(header, claims) {
+  const head = Buffer.from(JSON.stringify(header)).toString("base64url");
+  const body = Buffer.from(JSON.stringify(claims)).toString("base64url");
+  const sig = await subtle.sign("Ed25519", privateKey, new TextEncoder().encode(head + "." + body));
+  return head + "." + body + "." + Buffer.from(sig).toString("base64url");
+}
+const now = Math.floor(Date.now() / 1000);
+const claimsFor = over => ({ iss: "aione-team-control", aud: "ai1-monitor", sub: person.email, email: person.email, role: "admin", iat: now, exp: now + 60, jti: "abc", ...over });
+const header = { alg: "EdDSA", typ: "JWT", kid: "ai1-monitor-test" };
+
+test("the PEM key is the same public key, readable by a standard loader", async () => {
+  const { keys } = await publicKeys();
+  const pub = createPublicKey(keys[0].pem);
+  const token = (await monitorToken(env, person)).token;
+  const [head, body, sig] = token.split(".");
+  assert.equal(nodeVerify(null, Buffer.from(head + "." + body), pub, Buffer.from(sig, "base64url")), true);
+});
+
+test("the verifier accepts a fresh token and returns who it is for", async () => {
+  const token = (await monitorToken(env, person)).token;
+  const claims = await checkMonitorToken(token, await publicKeys());
+  assert.equal(claims.email, "youssef@aione.biz");
+  assert.equal(claims.role, "admin");
+});
+
+test("the verifier rejects tokens that are tampered with, expired, for another audience, or from another issuer", async () => {
+  const keys = await publicKeys();
+  const good = (await monitorToken(env, person)).token;
+  const [head, body, sig] = good.split(".");
+  const swapped = JSON.parse(Buffer.from(body, "base64url").toString());
+  const tampered = head + "." + Buffer.from(JSON.stringify({ ...swapped, role: "admin", email: "other@aione.biz" })).toString("base64url") + "." + sig;
+  await assert.rejects(checkMonitorToken(tampered, keys), /token_signature/);
+  await assert.rejects(checkMonitorToken(await signed(header, claimsFor({ exp: now - 10, iat: now - 310 })), keys), /token_expired/);
+  await assert.rejects(checkMonitorToken(await signed(header, claimsFor({ exp: now + 3600 })), keys), /token_expired/);
+  await assert.rejects(checkMonitorToken(await signed(header, claimsFor({ exp: now + 120, iat: now })), keys), /token_expired/);
+  await assert.rejects(checkMonitorToken(await signed(header, claimsFor({ aud: "filehostingservice" })), keys), /token_audience/);
+  await assert.rejects(checkMonitorToken(await signed(header, claimsFor({ iss: "kad-odoo-monitor" })), keys), /token_audience/);
+});
+
+test("the verifier rejects unknown keys and the 'none' algorithm", async () => {
+  const keys = await publicKeys();
+  await assert.rejects(checkMonitorToken(await signed({ ...header, kid: "other" }, claimsFor({})), keys), /token_unknown_key/);
+  const none = Buffer.from(JSON.stringify({ alg: "none", kid: "ai1-monitor-test" })).toString("base64url") + "." + Buffer.from(JSON.stringify(claimsFor({}))).toString("base64url") + ".";
+  await assert.rejects(checkMonitorToken(none, keys), /token_alg/);
+});
