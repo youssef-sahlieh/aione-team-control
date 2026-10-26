@@ -1,5 +1,4 @@
 import {createReportBrowser} from './report-browser.js';
-import {createDueChanges} from './due-changes.js';
 import { createdDate } from '../models/ticket-business.js';
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
 const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.addEventListener('click',fn);return b;};
@@ -39,7 +38,7 @@ const input=(type,value)=>{const n=el('input','inp');n.type=type;n.value=value??
 const message=(target,e)=>{target.textContent=e.message||String(e);target.className='msg err';};
 export function createTicketBusiness({api,context,onChange,openIssue}){
   let billingNeeded=false,enabled=false,epicMapping=false,catalog={revision:0,entries:[]},records={},editor=null;
-  const reportBrowser=createReportBrowser({api,openIssue}),dueChanges=createDueChanges({api,openIssue});
+  const reportBrowser=createReportBrowser({api,openIssue});
   const admin=()=>context().admin;
   let odooOn=false,catalogQuery='';
   const clients=()=>catalog.entries.filter(e=>!e.parentId&&!e.archived);
@@ -165,7 +164,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     if(admin()){const billing=el('select','fsel');billing.setAttribute('aria-label','Filter by billing');for(const [v,l]of [['','All billing'],['__none','Billing not set'],['billable','Billable'],['not_billable','Not billable']])option(billing,l,v);billing.value=filter.billing||'';billing.addEventListener('change',()=>{filter.billing=billing.value;onFilter();});parent.append(billing);}
   }
   function matches(i,f={}){return (!f.clientId||(f.clientId==='__none'?!i.clientId:i.clientId===f.clientId))&&(!f.subClientId||i.subClientId===f.subClientId)&&(!f.missing||!i[f.missing])&&(!admin()||!f.billing||(f.billing==='__none'?!i.billing:i.billing===f.billing));}
-  function renderReports(target){reportBrowser.render(target);dueChanges.render(target);}
+  function renderReports(target){reportBrowser.render(target);}
   let catalogNote={text:'',at:0};
   function renderCatalog(target,note){
     const panel=el('section','panel business-panel');target.append(panel);panel.append(el('h2','','Clients & Projects'));

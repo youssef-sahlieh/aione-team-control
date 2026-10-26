@@ -43,10 +43,6 @@ async function mockDashboard(page, { inbox = [], role = "admin", ticketLog = [],
     if(path==='/clients/import'){catalog.entries.push({id:'new-client',name:body.rows[0].displayName,parentId:null,archived:false});catalog.revision++;return json(catalog);}
     if(path==='/ticket-log')return json({events:ticketLog});
     if(path==='/logout'&&method==='POST')return json({ok:true});
-    if(path==='/reports/due-changes')return json({days:Number(url.searchParams.get('days')||30),generatedAt:'2026-10-11T09:00:00Z',dashboardAccount:{id:'acc-dash',name:'Youssef Example'},ticketsChecked:12,partial:false,warnings:[],rows:[
-      {key:'AION-101',title:'Synthetic Jira task',status:'Open',developers:['builder'],at:'2026-10-10T08:15:00.000+0000',by:{id:'acc-karim',name:'Karim Example'},from:'2026-10-12',to:'2026-10-30',via:'jira'},
-      {key:'AION-101',title:'Synthetic Jira task',status:'Open',developers:['builder'],at:'2026-10-09T08:15:00.000+0000',by:{id:'acc-karim',name:'Karim Example'},from:null,to:'2026-10-12',via:'jira'},
-      {key:'AION-102',title:'Second task',status:'Open',developers:['reviewer'],at:'2026-10-08T10:00:00.000+0000',by:{id:'acc-dash',name:'Youssef Example'},from:'2026-10-01',to:'2026-10-05',via:'dashboard',dashboardBy:'Test Admin'}]});
     if(path==='/time-entries'&&method==='GET'){const key=url.searchParams.get('ticket'),list=timeEntries.filter(e=>e.ticket===key),mins=list.reduce((n,e)=>n+e.minutes,0),hd=key.startsWith('HD-');
       return json({ticket:key,source:key.startsWith('INT-')?'internal':hd?'odoo':'jira',closed:false,logging:!!workLog,canLog:!!workLog,today:'2026-10-11',maxMinutes:1440,lockDate:workLog?'2026-09-30':null,entries:list,
         summary:{entries:list.length,loggedMinutes:mins,confirmedMinutes:mins,pendingMinutes:0,unsynced:0},baselineHours:hd?null:1,totalHours:Math.round((1+mins/60)*100)/100,
@@ -1149,19 +1145,5 @@ test('Work log setup: map a client to an Odoo project by searching; it stays unt
  await content.getByRole('button',{name:'Save setup',exact:true}).click();
  await expect.poll(()=>mock.calls.filter(c=>c.path==='/time-entries/setup'&&c.method==='PUT').length).toBe(2);
  expect(mock.calls.filter(c=>c.path==='/time-entries/setup'&&c.method==='PUT').at(-1).body.mapping).toEqual({});
- expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
-});
-
-test('Checks & Reports: due dates changed directly in Jira, with the Jira account and the ticket developers',async({page})=>{
- const mock=await mockDashboard(page);await page.goto('/dashboard.html?page=reports');
- const section=page.locator('.dc-section');await expect(section).toContainText('Due dates changed directly in Jira');
- await expect(section).toContainText('2 due date changes made directly in Jira, 1 through the dashboard');
- await expect(section.locator('.dc-chip')).toHaveText(['Karim Example: 2']);
- await expect(section.locator('tbody tr')).toHaveCount(2);
- const first=section.locator('tbody tr').first();await expect(first).toContainText('AION-101');await expect(first).toContainText('Karim Example');await expect(first).toContainText('ai1_builder');await expect(first).toContainText('Directly in Jira');
- await expect(first.locator('.dc-change')).toContainText('12 Oct 2026 → 30 Oct 2026');
- await section.getByText('Also show changes made through the dashboard').click();await expect(section.locator('tbody tr')).toHaveCount(3);await expect(section).toContainText('Dashboard approval (Test Admin)');
- await section.getByLabel('Period').selectOption('90');await expect.poll(()=>mock.calls.some(c=>c.path==='/reports/due-changes'&&c.query==='?days=90')).toBe(true);
- await section.getByRole('button',{name:'AION-101'}).first().click();await expect(page.locator('#d-title')).toBeVisible();
  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
