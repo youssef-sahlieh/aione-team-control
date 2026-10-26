@@ -18,6 +18,7 @@
 //   after the database is added creates admin accounts for everyone in TEAM_EMAILS.
 import { BusinessError, businessResponse, catalogRoutes, metadataRoutes, readMetadata, readCatalog, publicMetadata, requireBilling, billingRequired, withTicketLock, guardedTransition } from "./ticket-metadata.js";
 import {savedReportRoutes} from "./saved-reports.js";
+import { dueChangesRoutes } from "./due-changes.js";
 import { reportRoutes, buildReport } from "./reports.js";
 import { dateRequestRoutes } from "./date-requests.js";
 import { ticketNoteRoutes } from "./ticket-notes.js";
@@ -503,6 +504,8 @@ async function route(request, env, url) {
   }};
   if(path==="/reports/latest"||path==="/reports/refresh")return savedReportRoutes(request,env,me,reportDeps,path);
   if(path==="/reports/run")return reportRoutes(request,env,me,reportDeps);
+  // Due dates changed directly in Jira (administrators).
+  if(path==="/reports/due-changes")return dueChangesRoutes(request,env,url,me,{jira});
   const email = me.email;
   const isAdmin = me.role === "admin";
   const devLabel = "ai1_" + me.dev;

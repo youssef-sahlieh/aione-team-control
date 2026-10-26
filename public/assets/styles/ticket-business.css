@@ -111,3 +111,22 @@
 .client-project>b{display:block;margin-bottom:4px}
 .client-card>.client-section:last-child{grid-column:1/-1}
 .catalog-search{width:100%;max-width:420px;margin:12px 0 4px}.catalog-found{margin:0 0 8px;font-size:13px;color:var(--muted)}
+
+/* Checks & Reports: due dates changed directly in Jira. */
+.dc-section{margin-top:28px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.dc-section h2{margin:0;font-size:18px}
+.dc-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.dc-body{display:flex;flex-direction:column;gap:10px;min-width:0}
+.dc-chips{display:flex;flex-wrap:wrap;gap:6px}
+.dc-chip{border:1px solid var(--line);border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600;background:var(--surface)}
+.dc-scroll{overflow-x:auto;max-width:100%}
+.dc-table{border-collapse:collapse;width:100%;font-size:13px}
+.dc-table th,.dc-table td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+.dc-table th{font-size:12px;color:var(--muted);white-space:nowrap}
+.dc-when{white-space:nowrap}
+.dc-title{color:var(--muted);font-size:12px;max-width:320px;overflow-wrap:anywhere}
+.dc-change{white-space:nowrap}
+.dc-from{color:var(--muted);text-decoration:line-through}
+.dc-via{display:inline-block;border-radius:999px;padding:1px 9px;font-size:12px;font-weight:600;white-space:nowrap}
+.dc-via.jira{background:var(--warn-soft);color:var(--warn)}
+.dc-via.dash{background:var(--ok-soft);color:var(--ok)}
