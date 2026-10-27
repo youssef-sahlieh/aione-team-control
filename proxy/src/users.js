@@ -58,12 +58,26 @@ export function newAccountId() {
   return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-// Accounts saved before IDs existed get one the first time they're needed.
+// Changes a stored user only if the record is still the one that was read (compare-and-set), so a concurrent
+// password, role or ID change is never overwritten by a stale copy. Returns the saved record, or null when the
+// account no longer exists. A deleted account is never written back.
+export async function updateUser(store, email, change) {
+  const k = "u:" + normEmail(email);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const raw = await store.get(k);
+    if (!raw) return null;
+    const next = change(JSON.parse(raw));
+    if (await store.compareAndSet(k, raw, JSON.stringify(next))) return next;
+  }
+  throw new Error("The account changed while it was being saved. Try again.");
+}
+
+// Accounts saved before IDs existed get one the first time they're needed. Two requests at once both see no ID,
+// but only one write succeeds; the other re-reads and returns the ID that was saved. Returns null if the account
+// was deleted.
 export async function ensureAccountId(store, user) {
   if (user.id) return user;
-  const next = { ...user, id: newAccountId() };
-  await saveUser(store, next);
-  return next;
+  return updateUser(store, user.email, (cur) => (cur.id ? cur : { ...cur, id: newAccountId() }));
 }
 
 export async function deleteUser(store, email) {
