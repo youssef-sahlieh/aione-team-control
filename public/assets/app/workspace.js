@@ -275,7 +275,11 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     const custom = ["overview", "requests", "workload", "calendar", "reports", "clients", "worklog", "errors", "monitor"].includes(route.page);
     $("tickets-area").hidden = custom; $("workspace-content").hidden = !custom;
     if (!custom) return false;
-    const target = $("workspace-content"); target.replaceChildren();
+    const target = $("workspace-content");
+    // Ticket refreshes re-render this page. While the monitor frame is on screen, keep it as it is: rebuilding
+    // would reload it, which signs the person in again and drops where they were in the monitor.
+    if (route.page === "monitor" && context().admin && monitorFrame && target.contains(monitorFrame)) return true;
+    target.replaceChildren();
     if(context().filterCount&&!["requests","reports","clients","worklog","errors","monitor"].includes(route.page)){const info=node("div","summary-filter-info");info.append(node("span","","Using your current ticket filters"),button("Adjust filters →","linkbtn",()=>navigate("tickets")));target.appendChild(info);}
     // Respect all active filters but include closed tickets for summary metrics.
     const data = allowedItems();

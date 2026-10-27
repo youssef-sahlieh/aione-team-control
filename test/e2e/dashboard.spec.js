@@ -1147,3 +1147,20 @@ test('Work log setup: map a client to an Odoo project by searching; it stays unt
  expect(mock.calls.filter(c=>c.path==='/time-entries/setup'&&c.method==='PUT').at(-1).body.mapping).toEqual({});
  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
+
+// A re-render of the AI1 Monitor page (what a ticket refresh does) must keep the frame that is already loaded.
+// The monitor is a synthetic page here: the real monitor's sign-in is covered by its own tests.
+test("re-rendering the AI1 Monitor page keeps its frame loaded",async({page})=>{
+  const mock=await mockDashboard(page,{role:"admin"});
+  const frameLoads=[];
+  await page.route("https://monitor.ai1.host/**",route=>{frameLoads.push(route.request().url());return route.fulfill({contentType:"text/html",body:"<!doctype html><title>AI1 Monitor</title><p>Synthetic monitor</p>"});});
+  await page.route("**/sso/monitor",r=>r.fulfill({json:{token:"synthetic.token.value",expiresAt:Date.now()+60000}}));
+  await page.goto("/dashboard.html");
+  await page.locator("#ai1-monitor-link").click();
+  await expect(page.locator("iframe.monitor-frame")).toHaveCount(1);
+  await page.evaluate(()=>{document.querySelector("iframe.monitor-frame").dataset.probe="kept";});
+  await page.locator("#ai1-monitor-link").click();
+  await expect(page.locator("iframe.monitor-frame")).toHaveAttribute("data-probe","kept");
+  expect(frameLoads.length).toBe(1);
+  expect(mock.unexpected.filter(c=>c.path!=="/sso/monitor")).toEqual([]);
+});
