@@ -151,3 +151,56 @@ test("the verifier rejects unknown keys and the 'none' algorithm", async () => {
   const none = Buffer.from(JSON.stringify({ alg: "none", kid: "ai1-monitor-test" })).toString("base64url") + "." + Buffer.from(JSON.stringify(claimsFor({}))).toString("base64url") + ".";
   await assert.rejects(checkMonitorToken(none, keys), /token_alg/);
 });
+
+// Same-tab sign-in: the dashboard gets a one-time code for a state, and AI1 Monitor's server trades it for a token.
+const STATE = "monitor-state-0000000000001";
+const redeem = (body) => get("/sso/monitor/redeem", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+async function codeFor(state = STATE, email = "youssef@aione.biz") {
+  return get("/sso/monitor/code", { method: "POST", headers: { Authorization: "Bearer " + await signedIn(email), "Content-Type": "application/json" }, body: JSON.stringify({ state }) });
+}
+
+test("a one-time code needs a signed-in person and a valid state", async () => {
+  const anon = await get("/sso/monitor/code", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state: STATE }) });
+  assert.equal(anon.status, 401);
+  const bad = await get("/sso/monitor/code", { method: "POST", headers: { Authorization: "Bearer " + await signedIn(), "Content-Type": "application/json" }, body: JSON.stringify({ state: "short" }) });
+  assert.equal(bad.status, 400);
+});
+
+test("the code response points at the AI1 Monitor callback", async () => {
+  const r = await codeFor();
+  assert.equal(r.status, 200);
+  const { code, callback } = await r.json();
+  assert.match(code, /^[\w-]{20,100}$/);
+  assert.equal(callback, "https://monitor.ai1.host/auth/aione/callback");
+});
+
+test("redeeming the code with its state gives a token that verifies, once", async () => {
+  const { code } = await (await codeFor()).json();
+  const r = await redeem({ code, state: STATE });
+  assert.equal(r.status, 200);
+  const { token } = await r.json();
+  const claims = await checkMonitorToken(token, await publicKeys());
+  assert.equal(claims.sub, ACCOUNT_ID);
+  assert.equal(claims.email, "youssef@aione.biz");
+  assert.equal((await redeem({ code, state: STATE })).status, 400);
+});
+
+test("a code redeemed with the wrong state is refused and burned", async () => {
+  const { code } = await (await codeFor()).json();
+  assert.equal((await redeem({ code, state: "some-other-state-0000000001" })).status, 400);
+  assert.equal((await redeem({ code, state: STATE })).status, 400);
+});
+
+test("a missing or unknown code is refused", async () => {
+  assert.equal((await redeem({ state: STATE })).status, 400);
+  assert.equal((await redeem({ code: "x".repeat(30), state: STATE })).status, 400);
+});
+
+test("a code for an account deleted in the meantime gives no token", async () => {
+  await saveUser(STORE, { id: "acct-gone-0000000000001", email: "gone@aione.biz", name: "Gone", role: "admin", dev: "", pw: null, v: 0 });
+  const { code } = await (await codeFor(STATE, "gone@aione.biz")).json();
+  await deleteUser(STORE, "gone@aione.biz");
+  const r = await redeem({ code, state: STATE });
+  assert.equal(r.status, 403);
+  assert.equal((await getUser(STORE, "gone@aione.biz")), null);
+});

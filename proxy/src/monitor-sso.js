@@ -35,6 +35,11 @@ function publicPem(x) {
   return "-----BEGIN PUBLIC KEY-----\n" + base64 + "\n-----END PUBLIC KEY-----\n";
 }
 
+// Where AI1 Monitor receives the one-time code for a same-tab sign-in. MONITOR_PUBLIC_ORIGIN overrides the default.
+export function monitorCallbackUrl(env) {
+  return String(env.MONITOR_PUBLIC_ORIGIN || "https://monitor.ai1.host").replace(/\/+$/, "") + "/auth/aione/callback";
+}
+
 // The public half only, for AI1 Monitor to check tokens with.
 export function monitorPublicKeys(env) {
   const jwk = signingKey(env);
