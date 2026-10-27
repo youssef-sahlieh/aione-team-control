@@ -41,14 +41,16 @@ export function monitorPublicKeys(env) {
   return { keys: [{ kty: jwk.kty, crv: jwk.crv, x: jwk.x, use: "sig", alg: "EdDSA", kid: jwk.kid || "ai1-monitor-1", pem: publicPem(jwk.x) }] };
 }
 
-// A token for the signed-in person (me comes from readToken in handler.js).
+// A token for the signed-in person. me.id is the immutable account ID that AI1 Monitor links to. Without it,
+// no token is issued, so a legacy record can't produce an email-based subject.
 export async function monitorToken(env, me, now = Date.now()) {
   const jwk = signingKey(env);
+  if (!me.id) throw new Error("AI1 Monitor sign-in needs an account ID.");
   const key = await crypto.subtle.importKey("jwk", jwk, { name: "Ed25519" }, false, ["sign"]);
   const iat = Math.floor(now / 1000), exp = iat + MONITOR_TOKEN_SECONDS;
   const head = jsonPart({ alg: "EdDSA", typ: "JWT", kid: jwk.kid || "ai1-monitor-1" });
   const body = jsonPart({
-    iss: MONITOR_ISSUER, aud: MONITOR_AUDIENCE, sub: me.email, email: me.email, name: me.name || me.email,
+    iss: MONITOR_ISSUER, aud: MONITOR_AUDIENCE, sub: me.id, email: me.email, name: me.name || me.email,
     role: me.role, dev: me.dev || "", iat, exp, jti: b64url(crypto.getRandomValues(new Uint8Array(12)))
   });
   const sig = await crypto.subtle.sign("Ed25519", key, enc.encode(head + "." + body));

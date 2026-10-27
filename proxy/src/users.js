@@ -52,6 +52,20 @@ export async function saveUser(store, user) {
   await store.sadd("users", user.email);
 }
 
+// The account ID AI1 Monitor links to. It is random and never reused, so it doesn't change with the email
+// and a deleted-then-recreated person gets a new one.
+export function newAccountId() {
+  return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// Accounts saved before IDs existed get one the first time they're needed.
+export async function ensureAccountId(store, user) {
+  if (user.id) return user;
+  const next = { ...user, id: newAccountId() };
+  await saveUser(store, next);
+  return next;
+}
+
 export async function deleteUser(store, email) {
   await store.del("u:" + normEmail(email));
   await store.srem("users", normEmail(email));
@@ -64,7 +78,7 @@ export async function listUsers(store) {
 }
 
 // What the dashboard may see about a user (never the password hash).
-export const publicUser = (u) => ({ email: u.email, name: u.name, role: u.role, dev: u.dev || "", hasPassword: !!u.pw, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null, lastLoginIp: u.lastLoginIp || "" });
+export const publicUser = (u) => ({ email: u.email, accountId: u.id || "", name: u.name, role: u.role, dev: u.dev || "", hasPassword: !!u.pw, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null, lastLoginIp: u.lastLoginIp || "" });
 
 // The last successful sign-in (time and IP address), shown on Manage users. Never blocks or fails a sign-in.
 export async function recordLogin(store, email, ip, at = new Date().toISOString()) {

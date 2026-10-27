@@ -38,7 +38,7 @@ import { integrationRoutes } from "./integrations.js";
 import { epicMapRoutes } from "./epic-map.js";
 import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
 import { recordLogin } from "./users.js";
-import { ROLES, checkPassword, createLinkToken, deleteUser, getUser, hashPassword, listUsers, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, useLinkToken, validDev, validEmail } from "./users.js";
+import { ROLES, checkPassword, createLinkToken, deleteUser, ensureAccountId, getUser, hashPassword, listUsers, newAccountId, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, useLinkToken, validDev, validEmail } from "./users.js";
 
 const enc = new TextEncoder();
 // Saved sign-ins last up to one year; account version changes still revoke tokens.
@@ -277,7 +277,7 @@ async function accountRoutes(request, env, url, me) {
     if (role === "user" && !validDev(dev)) return fail("bad_request", "Choose the developer this user sees.", 400);
     if (dev && !validDev(dev)) return fail("bad_request", "Developer names use letters, numbers, dots and dashes.", 400);
     if (await getUser(store, email)) return fail("exists", "There's already an account for " + email + ".", 409);
-    const user = { email, name, role, dev: dev || "", pw: null, v: 1, createdAt: new Date().toISOString(), createdBy: me.email };
+    const user = { id: newAccountId(), email, name, role, dev: dev || "", pw: null, v: 1, createdAt: new Date().toISOString(), createdBy: me.email };
     await saveUser(store, user);
     const { sent, link } = await sendPasswordLink(env, user, "invite", me.name);
     return json({ user: publicUser(user), invited: sent, ...(sent ? {} : { link }) }, 201);
@@ -443,7 +443,11 @@ async function route(request, env, url) {
   if (!me) return fail("session", "Please sign in again.", 401);
   // The signed-in person asks for a token to open AI1 Monitor as themselves.
   if (path === "/sso/monitor" && method === "POST") {
-    try { return json(await monitorToken(env, me)); } catch { return fail("not_configured", "AI1 Monitor sign-in isn't set up.", 503); }
+    // The token names the account by its ID. The email is sent only as a display and audit claim.
+    const stored = env.STORE ? await getUser(env.STORE, me.email) : null;
+    if (!stored) return fail("forbidden", "This account can't use AI1 Monitor.", 403);
+    const account = await ensureAccountId(env.STORE, stored);
+    try { return json(await monitorToken(env, { ...me, id: account.id })); } catch { return fail("not_configured", "AI1 Monitor sign-in isn't set up.", 503); }
   }
   const readBusinessTicket = async key => {
     if(typeof key!=="string" || !new RegExp("^(?:INT|"+env.JIRA_PROJECT+")-\\d+$").test(key))return null;

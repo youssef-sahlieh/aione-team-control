@@ -4,14 +4,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import handler, { makeToken } from "../proxy/src/handler.js";
+import { getUser, memoryStore, saveUser, deleteUser } from "../proxy/src/users.js";
 
 const { subtle } = webcrypto;
 const b64urlDecode = (s) => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
 const { privateKey } = await subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
 const privateJwk = await subtle.exportKey("jwk", privateKey);
+const ACCOUNT_ID = "acct-youssef-0000000001";
+const STORE = memoryStore();
+await saveUser(STORE, { id: ACCOUNT_ID, email: "youssef@aione.biz", name: "Youssef", role: "admin", dev: "", pw: null, v: 0 });
 const env = {
   ALLOWED_ORIGIN: "https://dashboard.ai1.host", TEAM_EMAILS: "youssef@aione.biz,ellen@aione.biz", JIRA_PROJECT: "AION",
-  SESSION_SECRET: "test-session-secret", TEAM_CONFIG: "{}", MONITOR_SIGNING_KEY: JSON.stringify({ ...privateJwk, kid: "ai1-monitor-test" })
+  SESSION_SECRET: "test-session-secret", TEAM_CONFIG: "{}", MONITOR_SIGNING_KEY: JSON.stringify({ ...privateJwk, kid: "ai1-monitor-test" }),
+  STORE
 };
 const get = (path, init, e = env) => handler.fetch(new Request("https://proxy.test" + path, init), e);
 const signedIn = async (email = "youssef@aione.biz") => (await makeToken(env, email)).token;
@@ -44,7 +49,8 @@ test("the token names the person, carries their role, and verifies with the publ
   assert.equal(claims.iss, "aione-team-control");
   assert.equal(claims.aud, "ai1-monitor");
   assert.equal(claims.email, "youssef@aione.biz");
-  assert.equal(claims.sub, "youssef@aione.biz");
+  // The subject is the immutable account ID. The email is only a display and audit claim.
+  assert.equal(claims.sub, ACCOUNT_ID);
   assert.equal(claims.role, "admin");
   assert.equal(claims.exp - claims.iat, 60);
   assert.equal(expiresAt, claims.exp * 1000);
@@ -57,6 +63,33 @@ test("the token names the person, carries their role, and verifies with the publ
   assert.equal(await subtle.verify("Ed25519", publicKey, b64urlDecode(sig), new TextEncoder().encode(head + "." + forged)), false);
 });
 
+test("a person with no stored account can't get a token, even with a valid session", async () => {
+  // With a store, a session only counts while the account is saved, so ellen (not saved) gets nothing.
+  const r = await get("/sso/monitor", { method: "POST", headers: { Authorization: "Bearer " + await signedIn("ellen@aione.biz") } });
+  assert.equal(r.status, 401);
+});
+
+test("an account saved before IDs existed gets one, kept for later tokens", async () => {
+  await saveUser(STORE, { email: "legacy@aione.biz", name: "Legacy", role: "user", dev: "web", pw: null, v: 0 });
+  const first = await getUser(STORE, "legacy@aione.biz");
+  assert.equal(first.id, undefined);
+  const headers = { Authorization: "Bearer " + (await makeToken(env, "legacy@aione.biz")).token };
+  const { token } = await (await get("/sso/monitor", { method: "POST", headers })).json();
+  const again = await (await get("/sso/monitor", { method: "POST", headers })).json();
+  const saved = await getUser(STORE, "legacy@aione.biz");
+  assert.match(saved.id, /^[A-Za-z0-9_-]{16,128}$/);
+  assert.equal(JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString()).sub, saved.id);
+  assert.equal(JSON.parse(Buffer.from(again.token.split(".")[1], "base64url").toString()).sub, saved.id);
+});
+
+test("a deleted and recreated account gets a new ID, so it never inherits the old one", async () => {
+  await saveUser(STORE, { email: "rehired@aione.biz", name: "Rehired", role: "user", dev: "web", id: "acct-rehired-000000001", pw: null, v: 0 });
+  await deleteUser(STORE, "rehired@aione.biz");
+  await saveUser(STORE, { id: "acct-rehired-000000002", email: "rehired@aione.biz", name: "Rehired", role: "user", dev: "web", pw: null, v: 0 });
+  const recreated = await getUser(STORE, "rehired@aione.biz");
+  assert.notEqual(recreated.id, "acct-rehired-000000001");
+});
+
 test("without a valid signing key, sign-in for AI1 Monitor is switched off (no crash, no token)", async () => {
   const off = { ...env, MONITOR_SIGNING_KEY: "" };
   assert.equal((await get("/sso/monitor/keys", {}, off)).status, 503);
@@ -67,7 +100,7 @@ test("without a valid signing key, sign-in for AI1 Monitor is switched off (no c
 const { createPublicKey, verify: nodeVerify } = await import("node:crypto");
 const { checkMonitorToken, monitorToken } = await import("../proxy/src/monitor-sso.js");
 const publicKeys = async () => (await get("/sso/monitor/keys")).json();
-const person = { email: "youssef@aione.biz", name: "Youssef", role: "admin", dev: "" };
+const person = { id: ACCOUNT_ID, email: "youssef@aione.biz", name: "Youssef", role: "admin", dev: "" };
 // Signs claims the way AI1 Monitor's tests need: with the real private key, so only the claims differ.
 async function signed(header, claims) {
   const head = Buffer.from(JSON.stringify(header)).toString("base64url");
@@ -76,7 +109,7 @@ async function signed(header, claims) {
   return head + "." + body + "." + Buffer.from(sig).toString("base64url");
 }
 const now = Math.floor(Date.now() / 1000);
-const claimsFor = over => ({ iss: "aione-team-control", aud: "ai1-monitor", sub: person.email, email: person.email, role: "admin", iat: now, exp: now + 60, jti: "abc", ...over });
+const claimsFor = over => ({ iss: "aione-team-control", aud: "ai1-monitor", sub: person.id, email: person.email, role: "admin", iat: now, exp: now + 60, jti: "abc", ...over });
 const header = { alg: "EdDSA", typ: "JWT", kid: "ai1-monitor-test" };
 
 test("the PEM key is the same public key, readable by a standard loader", async () => {
@@ -106,6 +139,10 @@ test("the verifier rejects tokens that are tampered with, expired, for another a
   await assert.rejects(checkMonitorToken(await signed(header, claimsFor({ exp: now + 120, iat: now })), keys), /token_expired/);
   await assert.rejects(checkMonitorToken(await signed(header, claimsFor({ aud: "filehostingservice" })), keys), /token_audience/);
   await assert.rejects(checkMonitorToken(await signed(header, claimsFor({ iss: "kad-odoo-monitor" })), keys), /token_audience/);
+});
+
+test("a token is never issued without an account ID, so no email subject can be produced", async () => {
+  await assert.rejects(monitorToken(env, { email: person.email, name: "x", role: "admin", dev: "" }), /account ID/);
 });
 
 test("the verifier rejects unknown keys and the 'none' algorithm", async () => {
