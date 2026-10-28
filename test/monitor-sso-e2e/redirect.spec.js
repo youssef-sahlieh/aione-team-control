@@ -232,15 +232,17 @@ test('a person with no AION link is refused, and the earlier Monitor session doe
   expect((await monitorSession(page)).status).toBe(401);
 });
 
-test('a sign-in callback that is used again is refused and ends the session it would have replaced', async ({ page, request }) => {
+test('a sign-in callback that is used again is refused and the existing Monitor session stays signed in', async ({ page, request }) => {
   const s = await setup(page, request, { person: 'alice' });
   await s.open();
   await waitForMonitorHome(page);
+  expect((await monitorSession(page)).body.user.name).toBe('Alice');
 
   // The first use consumed the state cookie, so the same callback link no longer matches this browser.
   const callback = s.requests.find(url => url.startsWith(MONITOR + '/auth/aione/callback?code='));
   expect(callback).toBeTruthy();
   await page.goto(callback);
   await expect(page.locator('body')).toContainText("AION sign-in didn't match this browser");
-  expect((await monitorSession(page)).status).toBe(401);
+  // The rejected callback changes nothing: the original identity is still the one signed in.
+  expect((await monitorSession(page)).body.user.name).toBe('Alice');
 });

@@ -112,9 +112,10 @@ async function sha256hex(s) {
 }
 
 // One-time link token. Only its hash is stored, so a copy of the database can't be used to reset passwords.
-export async function createLinkToken(store, email, purpose, ttlSeconds) {
+// extra can bind the token to more than the email (for example the immutable account ID).
+export async function createLinkToken(store, email, purpose, ttlSeconds, extra = {}) {
   const token = b64url(crypto.getRandomValues(new Uint8Array(32)));
-  await store.set("rt:" + (await sha256hex(token)), JSON.stringify({ email: normEmail(email), purpose }), ttlSeconds);
+  await store.set("rt:" + (await sha256hex(token)), JSON.stringify({ ...extra, email: normEmail(email), purpose }), ttlSeconds);
   return token;
 }
 

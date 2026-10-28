@@ -205,6 +205,22 @@ test("a code for an account deleted in the meantime gives no token", async () =>
   assert.equal((await getUser(STORE, "gone@aione.biz")), null);
 });
 
+test("a code issued before an account was deleted doesn't sign in a recreated account with the same email", async () => {
+  await saveUser(STORE, { id: "acct-old-0000000000000001", email: "recreated@aione.biz", name: "Old", role: "admin", dev: "", pw: null, v: 0 });
+  const { code } = await (await codeFor(STATE, "recreated@aione.biz")).json();
+  await deleteUser(STORE, "recreated@aione.biz");
+  await saveUser(STORE, { id: "acct-new-0000000000000002", email: "recreated@aione.biz", name: "New", role: "admin", dev: "", pw: null, v: 0 });
+  assert.equal((await redeem({ code, state: STATE })).status, 403);
+});
+
+test("a Monitor sign-in code can't be used to reset a password", async () => {
+  await saveUser(STORE, { id: "acct-reset-0000000000000001", email: "resetme@aione.biz", name: "Reset", role: "admin", dev: "", pw: null, v: 0 });
+  const { code } = await (await codeFor(STATE, "resetme@aione.biz")).json();
+  const r = await get("/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: code, password: "Strong-pass-1234" }) });
+  assert.equal(r.status, 400);
+  assert.equal((await getUser(STORE, "resetme@aione.biz")).pw, null, "password unchanged");
+});
+
 test("a second person in the same browser gets their own token, never the first person's", async () => {
   const BOB_STATE = "bob-state-0000000000000001";
   await saveUser(STORE, { id: "acct-bob-0000000000000001", email: "bob@aione.biz", name: "Bob", role: "admin", dev: "", pw: null, v: 0 });

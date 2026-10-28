@@ -380,7 +380,8 @@ async function route(request, env, url) {
     if (!grant || grant.purpose !== "monitor-sso:" + state) return fail("bad_code", "AI1 Monitor sign-in expired. Open AI1 Monitor again.", 400);
     const stored = await getUser(env.STORE, grant.email);
     const account = stored && (await ensureAccountId(env.STORE, stored));
-    if (!account) return fail("forbidden", "This account can't use AI1 Monitor.", 403);
+    // A deleted and recreated account has the same email but a new ID, so the old code must not sign it in.
+    if (!account || account.id !== grant.accountId) return fail("forbidden", "This account can't use AI1 Monitor.", 403);
     try { return json(await monitorToken(env, account)); } catch { return fail("not_configured", "AI1 Monitor sign-in isn't set up.", 503); }
   }
   if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1","reports-all-v1","reports-saved-v1", "db-report-v1", "db-report-company-v1", "db-report-pos-version-v1", "time-entries-v1","epic-map-v1"], build: String(env.BUILD || "").slice(0, 7)});
@@ -446,7 +447,9 @@ async function route(request, env, url) {
     if (problem) return fail("bad_request", problem, 400);
     if (await overLimit(env, "reset-ip:" + clientIp(request), 20, 900)) return fail("rate_limited", "Too many attempts. Wait a while and try again.", 429);
     const t = await useLinkToken(env.STORE, b.token);
-    const u = t && (await getUser(env.STORE, t.email));
+    // Only password links may set a password. A sign-in code for AI1 Monitor is refused even though it was issued by us.
+    if (!t || !["reset", "invite"].includes(t.purpose)) return fail("bad_link", "This link has expired or was already used. Ask for a new one.", 400);
+    const u = await getUser(env.STORE, t.email);
     if (!u) return fail("bad_link", "This link has expired or was already used. Ask for a new one.", 400);
     const pw = await hashPassword(b.password);
     const saved = await updateUser(env.STORE, u.email, (cur) => ({ ...cur, pw, v: (cur.v || 0) + 1 }));
@@ -470,7 +473,7 @@ async function route(request, env, url) {
     const stored = env.STORE ? await getUser(env.STORE, me.email) : null;
     const account = stored && (await ensureAccountId(env.STORE, stored));
     if (!account) return fail("forbidden", "This account can't use AI1 Monitor.", 403);
-    const code = await createLinkToken(env.STORE, account.email, "monitor-sso:" + state, 60);
+    const code = await createLinkToken(env.STORE, account.email, "monitor-sso:" + state, 60, { accountId: account.id });
     return json({ code, callback: monitorCallbackUrl(env) });
   }
   // The signed-in person asks for a token to open AI1 Monitor as themselves.
