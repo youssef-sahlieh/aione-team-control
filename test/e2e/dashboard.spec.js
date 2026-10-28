@@ -1148,16 +1148,34 @@ test('Work log setup: map a client to an Odoo project by searching; it stays unt
  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
 });
 
-// AI1 Monitor is a full page on its own site, opened in this tab. The dashboard never embeds it.
-test("the AI1 Monitor link opens the Monitor in the same tab, with no frame",async({page})=>{
+// AI1 Monitor is a full page on its own site, opened in a new tab so the dashboard stays open. Never embedded.
+test("the AI1 Monitor link opens the Monitor in a new tab and the dashboard stays open, with no frame",async({page,context})=>{
   const mock=await mockDashboard(page,{role:"admin"});
-  await page.route("https://monitor.ai1.host/**",route=>route.fulfill({contentType:"text/html",body:"<!doctype html><title>AI1 Monitor</title><p>Synthetic monitor</p>"}));
+  await context.route("https://monitor.ai1.host/**",route=>route.fulfill({contentType:"text/html",body:"<!doctype html><title>AI1 Monitor</title><p>Synthetic monitor</p>"}));
   await page.goto("/dashboard.html");
-  await expect(page.locator("#ai1-monitor-link")).toHaveAttribute("href","https://monitor.ai1.host/auth/aione/start");
+  const link=page.locator("#ai1-monitor-link");
+  await expect(link).toHaveAttribute("href","https://monitor.ai1.host/auth/aione/start");
+  await expect(link).toHaveAttribute("target","_blank");await expect(link).toHaveAttribute("rel","noopener");
   await expect(page.locator("iframe")).toHaveCount(0);
-  await page.locator("#ai1-monitor-link").click();
-  await expect(page).toHaveURL("https://monitor.ai1.host/auth/aione/start");
+  const [monitorTab]=await Promise.all([context.waitForEvent("page"),link.click()]);
+  await expect(monitorTab).toHaveURL("https://monitor.ai1.host/auth/aione/start");
+  await expect(page).toHaveURL(/\/dashboard\.html$/);await expect(page.locator("#main-nav")).toBeVisible();
   expect(mock.unexpected).toEqual([]);
+});
+
+// Back from the Monitor returns to the dashboard and never starts another Monitor sign-in. (If a browser keeps
+// the sign-in hop in its history, Back shows the dashboard instead of forwarding to the Monitor again.)
+test("pressing Back from the Monitor returns to the dashboard without signing in to the Monitor again",async({page})=>{
+  const mock=await mockDashboard(page,{role:"admin"});const state="synthetic-state-0000000003";let codes=0;
+  await page.route("**/sso/monitor/code",r=>{codes++;return r.fulfill({json:{code:"synthetic-code-000000000003",callback:"https://monitor.ai1.host/auth/aione/callback"}});});
+  await page.route("https://monitor.ai1.host/**",route=>route.fulfill({contentType:"text/html",body:"<!doctype html><title>AI1 Monitor</title><p>Monitor</p>"}));
+  await page.goto("/dashboard.html");await expect(page.locator("#main-nav")).toBeVisible();
+  // The sign-in hop as the Monitor makes it: dashboard with a state, forwarded to the Monitor.
+  await page.goto("/dashboard.html?ai1-monitor="+state);await expect(page).toHaveURL(/monitor\.ai1\.host\/auth\/aione\/callback/);
+  await page.goBack();
+  await expect(page).toHaveURL(/\/dashboard\.html$/);await expect(page.locator("#view .item").first()).toBeVisible();
+  expect(codes).toBe(1);
+  expect(mock.unexpected.filter(c=>c.path!=="/sso/monitor/code")).toEqual([]);
 });
 
 test("every dashboard role sees the AI1 Monitor link",async({page})=>{

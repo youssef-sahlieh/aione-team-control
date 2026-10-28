@@ -94,6 +94,14 @@ test.afterEach(async ({ page }) => {
   expect(page.__ssoUnexpected || []).toEqual([]);
 });
 
+// The dashboard opens AI1 Monitor in a new tab. These tests check the sign-in exchange, not tabs, and their fake
+// servers are set up on this page, so the link is followed in this same tab.
+async function clickMonitorLink(page) {
+  const link = page.locator('#ai1-monitor-link');
+  await link.evaluate(a => a.removeAttribute('target'));
+  await link.click();
+}
+
 async function setup(page, request, { person = 'alice' } = {}) {
   const requests = [], codes = [], unexpected = [];
   page.__ssoUnexpected = unexpected;
@@ -165,7 +173,7 @@ async function setup(page, request, { person = 'alice' } = {}) {
   });
   const open = async () => {
     await page.goto(DASHBOARD + '/dashboard.html');
-    await page.locator('#ai1-monitor-link').click();
+    await clickMonitorLink(page);
   };
   return { open, requests, codes, sessionFor };
 }
@@ -215,7 +223,7 @@ test('Bob signs in on a browser where Alice is still signed in to AI1 Monitor, a
   expect((await monitorSession(page)).body.user.name).toBe('Alice');
 
   await useSessionFor(page, s.sessionFor, 'bob');
-  await page.locator('#ai1-monitor-link').click();
+  await clickMonitorLink(page);
   await waitForMonitorHome(page);
   expect((await monitorSession(page)).body.user.name).toBe('Bob');
 });
@@ -227,7 +235,7 @@ test('a person with no AION link is refused, and the earlier Monitor session doe
   expect((await monitorSession(page)).status).toBe(200);
 
   await useSessionFor(page, s.sessionFor, 'carol');
-  await page.locator('#ai1-monitor-link').click();
+  await clickMonitorLink(page);
   await expect(page.locator('body')).toContainText('This account cannot use AI1 Monitor.');
   expect((await monitorSession(page)).status).toBe(401);
 });

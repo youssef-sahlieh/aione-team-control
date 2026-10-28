@@ -6,6 +6,15 @@ import { api } from "../session.js";
 const MONITOR_CALLBACK_ORIGIN = "https://monitor.ai1.host";
 const STATE_PATTERN = /^[A-Za-z0-9_-]{20,100}$/;
 
+// True when this page was reached with the browser's Back or Forward button (not a fresh visit).
+export const reachedWithBackOrForward = () => { try { return performance.getEntriesByType("navigation")[0]?.type === "back_forward"; } catch { return false; } };
+
+// The address without the Monitor sign-in state (to show the dashboard normally).
+export function withoutMonitorState(href = location.href) {
+  const url = new URL(href); url.searchParams.delete("ai1-monitor");
+  return url.pathname + url.search + url.hash;
+}
+
 // The state from the address bar, or null when this isn't a Monitor sign-in.
 export function monitorStateFromUrl(href = location.href) {
   const state = new URL(href).searchParams.get("ai1-monitor");

@@ -5,7 +5,7 @@ import { createTicketBusiness } from "./components/ticket-business.js";
 import { previewFile, canPreview } from "./components/file-preview.js";
 import { INTERNAL_ASSIGNEE, sortTickets, validSort, createdDate } from "./models/ticket-business.js";
 import { api, apiFile, getSession, signOut, onApiWrite } from "./session.js";
-import { monitorStateFromUrl, completeMonitorSignIn } from "./app/monitor-sign-in.js";
+import { monitorStateFromUrl, completeMonitorSignIn, reachedWithBackOrForward, withoutMonitorState } from "./app/monitor-sign-in.js";
 import { createSyncErrors } from "./components/sync-errors.js";
 import { createWorkLog } from "./components/work-log.js";
 import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normalizeInternalIssue, normalizeOdooIssue } from "./models/issue.js";
@@ -1384,7 +1384,9 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   async function start(){
     const s=getSession(); if(!s){ signOut(true); return; }
     // Opened from AI1 Monitor: hand the browser on to the Monitor with a one-time code, instead of loading the dashboard.
-    const monitorState=monitorStateFromUrl();
+    // Reached again with Back or Forward: show the dashboard, never send the person on to the Monitor again.
+    let monitorState=monitorStateFromUrl();
+    if(monitorState&&reachedWithBackOrForward()){ history.replaceState(history.state,"",withoutMonitorState()); monitorState=null; }
     if(monitorState){ try{ await completeMonitorSignIn(monitorState); }catch(err){ showState(errorText(err),true); $("updated").textContent="not connected"; } return; }
     $("me").textContent=s.email; ME=s.email.split("@")[0].replace(/^./,c=>c.toUpperCase());
     $("today").textContent=fmtDate(todayStr())+" "+todayStr().slice(0,4);

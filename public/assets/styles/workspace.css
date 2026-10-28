@@ -87,3 +87,6 @@ body.sidebar-collapsed .app-sidebar{width:76px;padding-inline:10px}body.sidebar-
 
 /* Short windows: the sidebar scrolls, so every page link stays reachable. */
 .app-sidebar{overflow-y:auto;overscroll-behavior:contain}
+
+/* A menu link that opens another site in a new tab. */
+.nav-ext{margin-left:auto;font-size:12px;opacity:.7}

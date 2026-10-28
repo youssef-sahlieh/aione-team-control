@@ -32,7 +32,8 @@ const pages = [
   ["worklog", "Work log", "Time logged on tickets and sent to Odoo timesheets."],
   ["errors", "Sync errors","Changes that didn't reach Jira, Odoo or the dashboard, ready to retry, and the state of the API keys."]
 ];
-// AI1 Monitor is a full page on its own site. Its sign-in starts there and comes back here in the same tab.
+// AI1 Monitor is a full page on its own site, opened in a new tab so the dashboard stays open. Its sign-in starts
+// there, passes through this dashboard (in that new tab, which shares the dashboard sign-in) and ends on the Monitor.
 const MONITOR_START_URL = "https://monitor.ai1.host/auth/aione/start";
 function icon(name) {
   const box = node("span", "nav-icon");
@@ -116,9 +117,9 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
   const dbReport = node("a", "nav-link"); dbReport.id = "dbreport-link"; dbReport.href = "databases.html"; dbReport.dataset.link = "databases"; dbReport.title = "Databases"; dbReport.hidden = true;
   dbReport.append(icon("audit"), node("span", "", "Databases"));
   nav.insertBefore(dbReport, audit.nextSibling);
-  // AI1 Monitor opens in this tab on the Monitor's own site (a same-tab sign-in starts from the link). Every dashboard role may use it.
-  const monitor = node("a", "nav-link"); monitor.id = "ai1-monitor-link"; monitor.href = MONITOR_START_URL; monitor.title = "AI1 Monitor"; monitor.hidden = true;
-  monitor.append(icon("audit"), node("span", "", "AI1 Monitor"));
+  // AI1 Monitor opens in a new tab on the Monitor's own site (its sign-in starts from the link). Every dashboard role may use it.
+  const monitor = node("a", "nav-link"); monitor.id = "ai1-monitor-link"; monitor.href = MONITOR_START_URL; monitor.target = "_blank"; monitor.rel = "noopener"; monitor.title = "AI1 Monitor (opens in a new tab)"; monitor.hidden = true;
+  monitor.append(icon("audit"), node("span", "", "AI1 Monitor"), node("span", "nav-ext", "↗"));
   nav.insertBefore(monitor, dbReport.nextSibling);
   const navOrder = ["overview", "tickets", "audit", "databases", "monitor", "requests", "internal", "workload", "boards", "calendar", "reports", "clients", "worklog", "errors"];
   const navItem = id => nav.querySelector(id === "audit" ? "#monitor-link" : id === "databases" ? "#dbreport-link" : id === "monitor" ? "#ai1-monitor-link" : `[data-page="${id}"]`);
