@@ -63,7 +63,8 @@ jobs:
         run: node scripts/wait-for-proxy.js
 
   # Cross-repository check: runs the AI1 Monitor SSO browser suite against the exact AI1 Monitor commit below.
-  # Mark this job as a required status check in the branch protection rules for main.
+  # Informational for now: it runs on PRs but is not a required status check. Make it required in the branch
+  # protection rules for main once the token works and MONITOR_REF points to a passing commit.
   monitor-sso-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 20
