@@ -61,7 +61,8 @@ const tests = [
     mails.length = 0;
     const r = await call("/users", { method: "POST", token: admin.token, body: { email: "Bashar.B@aione.biz", name: "Bashar", role: "user", dev: "ai1_bashar" } });
     assert.equal(r.status, 201);
-    assert.deepEqual(r.data.user, { email: "bashar.b@aione.biz", name: "Bashar", role: "user", dev: "bashar", hasPassword: false, createdAt: r.data.user.createdAt, lastLoginAt: null, lastLoginIp: "" });
+    assert.match(r.data.user.accountId, /^[A-Za-z0-9_-]{16,128}$/, "every new account gets an account ID");
+    assert.deepEqual(r.data.user, { email: "bashar.b@aione.biz", name: "Bashar", role: "user", dev: "bashar", hasPassword: false, createdAt: r.data.user.createdAt, lastLoginAt: null, lastLoginIp: "", accountId: r.data.user.accountId });
     assert.equal(r.data.invited, true); assert.equal(r.data.link, undefined);
     assert.equal(mails.length, 1); assert.deepEqual(mails[0].to, ["bashar.b@aione.biz"]);
     assert.match(mails[0].html, /Youssef added you/); assert.match(mails[0].html, /developer \(ai1_bashar\)/);

@@ -306,7 +306,7 @@ for(const role of ["admin"])for(const width of [320,1440])test(`${role} reporter
 for(const width of [320,1024,1440])test(`manager workspace keeps secondary tools accessible at ${width}px`,async({page})=>{
   await page.setViewportSize({width,height:1000});const mock=await mockDashboard(page);await page.goto("/dashboard.html");
   if(width<=820)await page.locator("#mobile-menu").click();
-  await expect(page.locator('#main-nav > a:not([hidden])')).toHaveCount(11);await expect(page.locator('[data-page="history"]')).toHaveCount(0);
+  await expect(page.locator('#main-nav > a:not([hidden])')).toHaveCount(12);await expect(page.locator('#ai1-monitor-link')).toBeVisible();await expect(page.locator('[data-page="history"]')).toHaveCount(0);
   await expect(page.locator('[data-page="requests"]')).toBeVisible();await page.locator('[data-page="requests"]').click();await expect(page.locator("#page-heading")).toHaveText("Date requests");
   if(width<=820)await page.locator("#mobile-menu").click();await page.locator('[data-page="tickets"]').click();
   await expect(page.locator("#quick-filters select")).toHaveCount(10);await expect(page.getByRole("combobox",{name:"Saved view",exact:true})).toBeHidden();await expect(page.locator("#bulk")).toBeHidden();
@@ -1146,4 +1146,60 @@ test('Work log setup: map a client to an Odoo project by searching; it stays unt
  await expect.poll(()=>mock.calls.filter(c=>c.path==='/time-entries/setup'&&c.method==='PUT').length).toBe(2);
  expect(mock.calls.filter(c=>c.path==='/time-entries/setup'&&c.method==='PUT').at(-1).body.mapping).toEqual({});
  expect(mock.errors).toEqual([]);expect(mock.unexpected).toEqual([]);
+});
+
+// AI1 Monitor is a full page on its own site, opened in this tab. The dashboard never embeds it.
+test("the AI1 Monitor link opens the Monitor in the same tab, with no frame",async({page})=>{
+  const mock=await mockDashboard(page,{role:"admin"});
+  await page.route("https://monitor.ai1.host/**",route=>route.fulfill({contentType:"text/html",body:"<!doctype html><title>AI1 Monitor</title><p>Synthetic monitor</p>"}));
+  await page.goto("/dashboard.html");
+  await expect(page.locator("#ai1-monitor-link")).toHaveAttribute("href","https://monitor.ai1.host/auth/aione/start");
+  await expect(page.locator("iframe")).toHaveCount(0);
+  await page.locator("#ai1-monitor-link").click();
+  await expect(page).toHaveURL("https://monitor.ai1.host/auth/aione/start");
+  expect(mock.unexpected).toEqual([]);
+});
+
+test("every dashboard role sees the AI1 Monitor link",async({page})=>{
+  const mock=await mockDashboard(page,{role:"user"});
+  await page.goto("/dashboard.html");
+  await expect(page.locator("#ai1-monitor-link")).toBeVisible();
+  await expect(page.locator("#ai1-monitor-link")).toHaveAttribute("href","https://monitor.ai1.host/auth/aione/start");
+  expect(mock.unexpected).toEqual([]);
+});
+
+// The sign-in step: the dashboard gets a one-time code for the state the Monitor set, then sends the browser to
+// the Monitor's callback with the code and state. The token itself never passes through the browser.
+test("a Monitor sign-in hands a one-time code and the state to the Monitor's callback",async({page})=>{
+  const mock=await mockDashboard(page,{role:"admin"});
+  const state="synthetic-state-0000000001";
+  const seen=[];
+  await page.route("**/sso/monitor/code",r=>{seen.push(r.request().postDataJSON());return r.fulfill({json:{code:"synthetic-code-000000000001",callback:"https://monitor.ai1.host/auth/aione/callback"}});});
+  await page.route("https://monitor.ai1.host/**",route=>route.fulfill({contentType:"text/html",body:"<!doctype html><title>AI1 Monitor</title><p>Callback</p>"}));
+  await page.goto("/dashboard.html?ai1-monitor="+state);
+  await expect(page).toHaveURL("https://monitor.ai1.host/auth/aione/callback?code=synthetic-code-000000000001&state="+state);
+  expect(seen).toEqual([{state}]);
+  expect(mock.unexpected.filter(c=>c.path!=="/sso/monitor/code")).toEqual([]);
+});
+
+test("a Monitor sign-in that Team Control refuses stays on the dashboard and says so",async({page})=>{
+  const mock=await mockDashboard(page,{role:"admin"});
+  await page.route("**/sso/monitor/code",r=>r.fulfill({status:403,json:{error:"This account can't use AI1 Monitor."}}));
+  await page.route("https://monitor.ai1.host/**",route=>route.fulfill({contentType:"text/html",body:"<!doctype html><title>AI1 Monitor</title>"}));
+  await page.goto("/dashboard.html?ai1-monitor=synthetic-state-0000000002");
+  await expect(page.locator("#updated")).toHaveText("not connected");
+  expect(page.url()).toContain("/dashboard.html?ai1-monitor=");
+  expect(mock.unexpected.filter(c=>c.path!=="/sso/monitor/code")).toEqual([]);
+});
+
+test("a sign-in code is never sent to a callback on any other origin",async({page})=>{
+  const mock=await mockDashboard(page,{role:"user"});
+  const elsewhere=[];
+  await page.route("**/sso/monitor/code",r=>r.fulfill({json:{code:"synthetic-code-000000000003",callback:"https://monitor.ai1.host.evil.example/auth/aione/callback"}}));
+  await page.route("https://monitor.ai1.host.evil.example/**",route=>{elsewhere.push(route.request().url());return route.fulfill({contentType:"text/html",body:"<p>wrong site</p>"});});
+  await page.goto("/dashboard.html?ai1-monitor=synthetic-state-0000000003");
+  await expect(page.locator("#updated")).toHaveText("not connected");
+  expect(elsewhere).toEqual([]);
+  expect(page.url()).not.toContain("evil.example");
+  expect(mock.unexpected.filter(c=>c.path!=="/sso/monitor/code")).toEqual([]);
 });

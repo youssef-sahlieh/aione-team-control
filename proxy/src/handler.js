@@ -28,7 +28,7 @@ import { timeRoutes, timeSyncCron } from "./time-entries.js";
 import { monitorRoutes } from "./monitor.js";
 import { dbReportRoutes, dbReportCron } from "./db-report.js";
 import { odooAppRoutes, odooTranslations } from "./odoo-app.js";
-import { monitorPublicKeys, monitorToken } from "./monitor-sso.js";
+import { monitorCallbackUrl, monitorPublicKeys, monitorToken } from "./monitor-sso.js";
 import { cookieSessionRequest } from "./sessions.js";
 import { SESSION_MS, SESSION_SECONDS } from "./session-policy.js";
 import { aiChat, aiBrief, aiConfigured, aiDescription, AIError } from "./ai.js";
@@ -38,7 +38,7 @@ import { integrationRoutes } from "./integrations.js";
 import { epicMapRoutes } from "./epic-map.js";
 import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
 import { recordLogin } from "./users.js";
-import { ROLES, checkPassword, createLinkToken, deleteUser, getUser, hashPassword, listUsers, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, useLinkToken, validDev, validEmail } from "./users.js";
+import { ROLES, checkPassword, createLinkToken, deleteUser, ensureAccountId, getUser, hashPassword, listUsers, newAccountId, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, updateUser, useLinkToken, validDev, validEmail } from "./users.js";
 
 const enc = new TextEncoder();
 // Saved sign-ins last up to one year; account version changes still revoke tokens.
@@ -277,7 +277,7 @@ async function accountRoutes(request, env, url, me) {
     if (role === "user" && !validDev(dev)) return fail("bad_request", "Choose the developer this user sees.", 400);
     if (dev && !validDev(dev)) return fail("bad_request", "Developer names use letters, numbers, dots and dashes.", 400);
     if (await getUser(store, email)) return fail("exists", "There's already an account for " + email + ".", 409);
-    const user = { email, name, role, dev: dev || "", pw: null, v: 1, createdAt: new Date().toISOString(), createdBy: me.email };
+    const user = { id: newAccountId(), email, name, role, dev: dev || "", pw: null, v: 1, createdAt: new Date().toISOString(), createdBy: me.email };
     await saveUser(store, user);
     const { sent, link } = await sendPasswordLink(env, user, "invite", me.name);
     return json({ user: publicUser(user), invited: sent, ...(sent ? {} : { link }) }, 201);
@@ -305,8 +305,14 @@ async function accountRoutes(request, env, url, me) {
       if (target.email === me.email) return fail("bad_request", "You can't remove your own administrator role.", 400);
       if (admins.length <= 1) return fail("bad_request", "There must be at least one administrator.", 400);
     }
-    await saveUser(store, next);
-    return json({ user: publicUser(next) });
+    // Only the fields this request changed are written, on top of the stored record (so a concurrent change survives).
+    const set = {};
+    if (b.name !== undefined) set.name = next.name;
+    if (b.role !== undefined) set.role = next.role;
+    if (b.dev !== undefined) set.dev = next.dev;
+    const saved = await updateUser(store, target.email, (cur) => ({ ...cur, ...set }));
+    if (!saved) return fail("not_found", "No such user.", 404);
+    return json({ user: publicUser(saved) });
   }
 
   if (!m[2] && method === "DELETE") {
@@ -364,6 +370,19 @@ async function route(request, env, url) {
   // AI1 Monitor checks its tokens with this public key. It holds no private key.
   if (path === "/sso/monitor/keys" && method === "GET") {
     try { return json(monitorPublicKeys(env)); } catch { return fail("not_configured", "AI1 Monitor sign-in isn't set up.", 503); }
+  }
+  // Same-tab sign-in, step 2: AI1 Monitor's server trades the one-time code (and the state it was issued for)
+  // for a signed token. No browser session is involved, and the code works once.
+  if (path === "/sso/monitor/redeem" && method === "POST") {
+    const b = (await readJson(request)) || {};
+    const state = typeof b.state === "string" && /^[A-Za-z0-9_-]{20,100}$/.test(b.state) ? b.state : "";
+    const grant = state && env.STORE ? await useLinkToken(env.STORE, b.code) : null;
+    if (!grant || grant.purpose !== "monitor-sso:" + state) return fail("bad_code", "AI1 Monitor sign-in expired. Open AI1 Monitor again.", 400);
+    const stored = await getUser(env.STORE, grant.email);
+    const account = stored && (await ensureAccountId(env.STORE, stored));
+    // A deleted and recreated account has the same email but a new ID, so the old code must not sign it in.
+    if (!account || account.id !== grant.accountId) return fail("forbidden", "This account can't use AI1 Monitor.", 403);
+    try { return json(await monitorToken(env, account)); } catch { return fail("not_configured", "AI1 Monitor sign-in isn't set up.", 503); }
   }
   if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1","reports-all-v1","reports-saved-v1", "db-report-v1", "db-report-company-v1", "db-report-pos-version-v1", "time-entries-v1","epic-map-v1"], build: String(env.BUILD || "").slice(0, 7)});
 
@@ -428,9 +447,13 @@ async function route(request, env, url) {
     if (problem) return fail("bad_request", problem, 400);
     if (await overLimit(env, "reset-ip:" + clientIp(request), 20, 900)) return fail("rate_limited", "Too many attempts. Wait a while and try again.", 429);
     const t = await useLinkToken(env.STORE, b.token);
-    const u = t && (await getUser(env.STORE, t.email));
+    // Only password links may set a password. A sign-in code for AI1 Monitor is refused even though it was issued by us.
+    if (!t || !["reset", "invite"].includes(t.purpose)) return fail("bad_link", "This link has expired or was already used. Ask for a new one.", 400);
+    const u = await getUser(env.STORE, t.email);
     if (!u) return fail("bad_link", "This link has expired or was already used. Ask for a new one.", 400);
-    await saveUser(env.STORE, { ...u, pw: await hashPassword(b.password), v: (u.v || 0) + 1 });
+    const pw = await hashPassword(b.password);
+    const saved = await updateUser(env.STORE, u.email, (cur) => ({ ...cur, pw, v: (cur.v || 0) + 1 }));
+    if (!saved) return fail("bad_link", "This link has expired or was already used. Ask for a new one.", 400);
     return json({ ok: true, email: u.email });
   }
 
@@ -441,9 +464,26 @@ async function route(request, env, url) {
     return json({ ok: true });
   }
   if (!me) return fail("session", "Please sign in again.", 401);
+  // Same-tab sign-in, step 1: the AION dashboard asks for a one-time code for the state that AI1 Monitor set.
+  // The code is good for 60 seconds, works once, and is bound to that state.
+  if (path === "/sso/monitor/code" && method === "POST") {
+    const b = (await readJson(request)) || {};
+    const state = typeof b.state === "string" && /^[A-Za-z0-9_-]{20,100}$/.test(b.state) ? b.state : "";
+    if (!state) return fail("bad_request", "AI1 Monitor sign-in didn't start correctly. Open AI1 Monitor again.", 400);
+    const stored = env.STORE ? await getUser(env.STORE, me.email) : null;
+    const account = stored && (await ensureAccountId(env.STORE, stored));
+    if (!account) return fail("forbidden", "This account can't use AI1 Monitor.", 403);
+    const code = await createLinkToken(env.STORE, account.email, "monitor-sso:" + state, 60, { accountId: account.id });
+    return json({ code, callback: monitorCallbackUrl(env) });
+  }
   // The signed-in person asks for a token to open AI1 Monitor as themselves.
   if (path === "/sso/monitor" && method === "POST") {
-    try { return json(await monitorToken(env, me)); } catch { return fail("not_configured", "AI1 Monitor sign-in isn't set up.", 503); }
+    // The token names the account by its ID. The email is sent only as a display and audit claim.
+    const stored = env.STORE ? await getUser(env.STORE, me.email) : null;
+    if (!stored) return fail("forbidden", "This account can't use AI1 Monitor.", 403);
+    const account = await ensureAccountId(env.STORE, stored);
+    if (!account) return fail("forbidden", "This account can't use AI1 Monitor.", 403);
+    try { return json(await monitorToken(env, { ...me, id: account.id })); } catch { return fail("not_configured", "AI1 Monitor sign-in isn't set up.", 503); }
   }
   const readBusinessTicket = async key => {
     if(typeof key!=="string" || !new RegExp("^(?:INT|"+env.JIRA_PROJECT+")-\\d+$").test(key))return null;

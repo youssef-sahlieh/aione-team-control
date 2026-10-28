@@ -79,13 +79,18 @@ The monitor session is not ended by AION signing out. Section 6 decides how long
 
 ### 2. Exchange route (`POST /auth/aione/exchange`)
 - Accept `POST` only, with `Content-Type: application/json`, and a body of `{token}`.
-- Reject unless the `Origin` header is exactly `https://dashboard.ai1.host`. This is in addition to the token check.
+- Reject unless the `Origin` header is exactly `MONITOR_PUBLIC_ORIGIN`. The default is `https://monitor.ai1.host`, the
+  monitor's own origin, because the exchange is called from the monitor page. The AION origin
+  (`https://dashboard.ai1.host`) is the frame's parent and is not the request origin. This is in addition to the token check.
 - Verify the token (section 3). Any failure returns a bounded 401 with no detail; a repeated `jti` returns 409.
-- Map the email to a monitor account. Recommended: only accounts that already exist (pre-provisioned), otherwise 403.
+- Map the token `sub` (the AION account ID) to a monitor user through an administrator-approved link
+  (`aione_identity_links`, keyed by the subject). Email is never used to match accounts. Without a link the answer is
+  403. Links are created and removed only by an administrator, through the CSRF-protected link routes, and each change
+  is audited (`aione.link` / `aione.unlink`).
 - Call `session.clear()`, then `login_user(user)`, set the session permanent, and issue a new CSRF token. This is the same
   sequence the Odoo callback uses.
 - Respond with `Cache-Control: no-store`, and never echo the token.
-- Record an auth event (`aione.signin`) with the email, the `jti` and the request ID. Do not record the token.
+- Record an auth event (`aione.signin`) with the subject, the email (display only), the `jti` and the request ID. Do not record the token.
 
 ### 3. Verifier (`verify_aione_sso_assertion`)
 Model: `verify_odoo_sso_assertion` in `actor_assertion.py` (about lines 253–345). It hardcodes the Odoo issuer, audience and
@@ -100,7 +105,7 @@ helper with parameters and keep the Odoo tests passing unchanged.
 | Audience | `filehostingservice-web` | `ai1-monitor` |
 | State | required | none |
 | Lifetime | up to 120 s | `exp - iat` ≤ 60 s; reject expired; allow 60 s of clock skew |
-| Subject | `odoo-user:<db>:<uid>` | the person's email |
+| Subject | `odoo-user:<db>:<uid>` | the AION account ID (`users[].id`): random, never reused, unchanged by an email change. Tokens with an email as subject are refused. |
 | Required claims | `jti`, `sub` | `jti`, `email` |
 | Replay | `odoo_sso_replays` by `jti` | same table pattern, separate subject, expired rows removed |
 

@@ -52,6 +52,34 @@ export async function saveUser(store, user) {
   await store.sadd("users", user.email);
 }
 
+// The account ID AI1 Monitor links to. It is random and never reused, so it doesn't change with the email
+// and a deleted-then-recreated person gets a new one.
+export function newAccountId() {
+  return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// Changes a stored user only if the record is still the one that was read (compare-and-set), so a concurrent
+// password, role or ID change is never overwritten by a stale copy. Returns the saved record, or null when the
+// account no longer exists. A deleted account is never written back.
+export async function updateUser(store, email, change) {
+  const k = "u:" + normEmail(email);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const raw = await store.get(k);
+    if (!raw) return null;
+    const next = change(JSON.parse(raw));
+    if (await store.compareAndSet(k, raw, JSON.stringify(next))) return next;
+  }
+  throw new Error("The account changed while it was being saved. Try again.");
+}
+
+// Accounts saved before IDs existed get one the first time they're needed. Two requests at once both see no ID,
+// but only one write succeeds; the other re-reads and returns the ID that was saved. Returns null if the account
+// was deleted.
+export async function ensureAccountId(store, user) {
+  if (user.id) return user;
+  return updateUser(store, user.email, (cur) => (cur.id ? cur : { ...cur, id: newAccountId() }));
+}
+
 export async function deleteUser(store, email) {
   await store.del("u:" + normEmail(email));
   await store.srem("users", normEmail(email));
@@ -64,7 +92,7 @@ export async function listUsers(store) {
 }
 
 // What the dashboard may see about a user (never the password hash).
-export const publicUser = (u) => ({ email: u.email, name: u.name, role: u.role, dev: u.dev || "", hasPassword: !!u.pw, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null, lastLoginIp: u.lastLoginIp || "" });
+export const publicUser = (u) => ({ email: u.email, accountId: u.id || "", name: u.name, role: u.role, dev: u.dev || "", hasPassword: !!u.pw, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null, lastLoginIp: u.lastLoginIp || "" });
 
 // The last successful sign-in (time and IP address), shown on Manage users. Never blocks or fails a sign-in.
 export async function recordLogin(store, email, ip, at = new Date().toISOString()) {
@@ -84,9 +112,10 @@ async function sha256hex(s) {
 }
 
 // One-time link token. Only its hash is stored, so a copy of the database can't be used to reset passwords.
-export async function createLinkToken(store, email, purpose, ttlSeconds) {
+// extra can bind the token to more than the email (for example the immutable account ID).
+export async function createLinkToken(store, email, purpose, ttlSeconds, extra = {}) {
   const token = b64url(crypto.getRandomValues(new Uint8Array(32)));
-  await store.set("rt:" + (await sha256hex(token)), JSON.stringify({ email: normEmail(email), purpose }), ttlSeconds);
+  await store.set("rt:" + (await sha256hex(token)), JSON.stringify({ ...extra, email: normEmail(email), purpose }), ttlSeconds);
   return token;
 }
 

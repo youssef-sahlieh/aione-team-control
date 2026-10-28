@@ -5,6 +5,7 @@ import { createTicketBusiness } from "./components/ticket-business.js";
 import { previewFile, canPreview } from "./components/file-preview.js";
 import { INTERNAL_ASSIGNEE, sortTickets, validSort, createdDate } from "./models/ticket-business.js";
 import { api, apiFile, getSession, signOut, onApiWrite } from "./session.js";
+import { monitorStateFromUrl, completeMonitorSignIn } from "./app/monitor-sign-in.js";
 import { createSyncErrors } from "./components/sync-errors.js";
 import { createWorkLog } from "./components/work-log.js";
 import { isDevLabel, devOf, labelsWith, withRendered, normalizeJiraIssue, normalizeInternalIssue, normalizeOdooIssue } from "./models/issue.js";
@@ -1382,6 +1383,9 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   window.addEventListener("hashchange",()=>{try{const key=decodeURIComponent(location.hash.slice(1));if(issueByKey(key))openDrawer(key);}catch(_){} });
   async function start(){
     const s=getSession(); if(!s){ signOut(true); return; }
+    // Opened from AI1 Monitor: hand the browser on to the Monitor with a one-time code, instead of loading the dashboard.
+    const monitorState=monitorStateFromUrl();
+    if(monitorState){ try{ await completeMonitorSignIn(monitorState); }catch(err){ showState(errorText(err),true); $("updated").textContent="not connected"; } return; }
     $("me").textContent=s.email; ME=s.email.split("@")[0].replace(/^./,c=>c.toUpperCase());
     $("today").textContent=fmtDate(todayStr())+" "+todayStr().slice(0,4);
     // Show the last loaded tickets straight away, then refresh.
