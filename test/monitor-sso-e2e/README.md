@@ -39,7 +39,13 @@ Coverage (test/monitor-sso-e2e/redirect.spec.js):
 - No token-shaped value appears in any URL the browser visited, in the code response, or in the Monitor's storage.
 - Bob signs in on a browser where Alice's Monitor session is still valid, and Bob replaces her.
 - A person with no AION link is refused, and the earlier Monitor session does not stay signed in.
-- A used sign-in callback is refused and ends the session it would have replaced.
+- A used sign-in callback is refused and the existing Monitor session stays signed in.
+
+Sign-in callback policy (shared with the AI1 Monitor, see its docs/aione-monitor-sso-deployment.md):
+- A callback whose state doesn't match this browser's state cookie (missing, reused or forged) returns 400 and
+  changes nothing. A forged link can't sign anyone out.
+- A callback with a matching state whose code is refused (unknown, expired, used, or an account that can't use
+  AI1 Monitor) ends the current Monitor session, so a failed sign-in never leaves the previous person signed in.
 
 Playwright failure traces may contain synthetic tokens. They are test credentials only; never use production
 credentials with this harness. To inspect a failure: npx playwright show-trace <trace.zip>.
