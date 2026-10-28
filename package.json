@@ -10,7 +10,8 @@
     "test": "node test/proxy.test.js && node test/accounts.test.js && node --test test/ai.test.js test/ai-report-evidence.test.js test/saved-reports.test.js test/ticket-business.test.js test/date-requests.test.js test/ticket-notes.test.js test/inbox.test.js test/deployment.test.js test/notifications.test.js test/security.test.js test/odoo.test.js test/github.test.js test/db-report.test.js test/monitor.test.js test/odoo-app.test.js test/time-entries.test.js test/monitor-sso.test.js test/account-identity.test.js && npm run test:frontend",
     "test:frontend": "node --test test/frontend/*.test.js",
     "test:approvals": "playwright test --config playwright.approvals.config.js",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:monitor-sso": "playwright test --config playwright.monitor-sso.config.js"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.0"

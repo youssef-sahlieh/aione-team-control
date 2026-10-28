@@ -204,3 +204,21 @@ test("a code for an account deleted in the meantime gives no token", async () =>
   assert.equal(r.status, 403);
   assert.equal((await getUser(STORE, "gone@aione.biz")), null);
 });
+
+test("a second person in the same browser gets their own token, never the first person's", async () => {
+  const BOB_STATE = "bob-state-0000000000000001";
+  await saveUser(STORE, { id: "acct-bob-0000000000000001", email: "bob@aione.biz", name: "Bob", role: "admin", dev: "", pw: null, v: 0 });
+  // A code is bound to its state: the other person's state is refused (and burns the code).
+  const bobForAlice = (await (await codeFor(BOB_STATE, "bob@aione.biz")).json()).code;
+  assert.equal((await redeem({ code: bobForAlice, state: STATE })).status, 400);
+  const aliceForBob = (await (await codeFor(STATE)).json()).code;
+  assert.equal((await redeem({ code: aliceForBob, state: BOB_STATE })).status, 400);
+  // Each person's own code names that person's account.
+  const bobCode = (await (await codeFor(BOB_STATE, "bob@aione.biz")).json()).code;
+  const bobClaims = await checkMonitorToken((await (await redeem({ code: bobCode, state: BOB_STATE })).json()).token, await publicKeys());
+  assert.equal(bobClaims.sub, "acct-bob-0000000000000001");
+  assert.equal(bobClaims.email, "bob@aione.biz");
+  const aliceCode = (await (await codeFor(STATE)).json()).code;
+  const aliceClaims = await checkMonitorToken((await (await redeem({ code: aliceCode, state: STATE })).json()).token, await publicKeys());
+  assert.equal(aliceClaims.sub, ACCOUNT_ID);
+});
