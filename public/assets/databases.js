@@ -5,6 +5,7 @@
 // The table sorts by any column (click its header), filters by search and by access, Odoo version, expiry,
 // Flutter POS and order activity, and shows the columns you pick. Choices are kept in this browser.
 import { api, getSession, signOut } from "./session.js";
+import { monitorInstanceUrl } from "./models/monitor-links.js";
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -43,8 +44,7 @@ const COLUMNS = [
   { key: "addons", label: "Add-ons", value: (r) => addonCell(r), sort: (r) => (r.addons || []).length, csv: (r) => (r.addons || []).join("; ") },
   { key: "control", label: "Actions", action: true, value: (r) => actionCell(r), sort: () => null, csv: () => "" }
 ];
-// "Open" for each instance opens its page in AI1 Monitor, e.g. https://monitor.ai1.host/dashboard#instance/000/info
-const monitorInstanceUrl = (instance) => "https://monitor.ai1.host/dashboard#instance/" + encodeURIComponent(instance) + "/info";
+// "Open" for each instance opens its page in AI1 Monitor.
 function adLinkCell(r) {
   if (!r.instance) return el("span", "db-muted", "—");
   const a = el("a", "db-link", "Open"); a.href = monitorInstanceUrl(r.instance); a.target = "_blank"; a.rel = "noopener";
