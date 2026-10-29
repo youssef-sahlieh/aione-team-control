@@ -40,7 +40,7 @@ function setup() {
   // Audit & Deploy data: two prod (Main), one test (Tests), one development (Dev).
   const instances = {
     services: [
-      { instance_name: "odoo503", domain: "503.ai1.host", server_zone: "prod", created: "2026-01-15T18:33:19Z" },
+      { instance_name: "odoo503", domain: "503.ai1.host", server_zone: "prod", created: "2026-01-15T18:33:19Z", custom_data: { custom_name: "Ronit Yam", notes: "" } },
       { instance_name: "odoo100", domain: "100.ai1.host", server_zone: "prod", created: "2026-02-01T00:00:00Z" },
       { instance_name: "odoo999", domain: "999.ai1.host", server_zone: "test", created: "2026-03-01T00:00:00Z" },
       { instance_name: "odoo777", domain: "777.ai1.host", server_zone: "development", created: "2026-04-01T00:00:00Z" },
@@ -143,6 +143,9 @@ test("report covers main, test and development instances, each in its section, w
   assert.equal(ronit.flutter, true);
   assert.deepEqual(ronit.addons, ["PosDashboardOdooFlutter_Addon", "flutter_pos_api", "sale"]);
   assert.equal(ronit.posVersion, "19.0.3.97.2"); assert.equal(ronit.posVersionDate, "");
+  // The name set in AI1 Monitor comes with the instance; an instance without one has an empty name.
+  assert.equal(ronit.monitorName, "Ronit Yam");
+  assert.equal(rows.find((x) => x.instance === "odoo100").monitorName, "");
   assert.equal(ronit.loginFound, true); assert.equal(ronit.loginOk, true);
   assert.equal(ronit.users, customer.users); assert.equal(ronit.pos, customer.pos);
   assert.equal(ronit.branches, 1); // companies 2 -> 1 extra branch (no res.branch model)
@@ -229,7 +232,7 @@ test("the page gets the saved report at once; an out-of-date one is updated in t
   const admin = { email: "boss@aione.biz", name: "Boss", role: "admin", dev: "", v: 1 };
   await saveUser(env.STORE, admin);
   const token = (await makeToken(env, admin.email, Date.now(), 1)).token;
-  const old = { builtAt: Date.now() - 3 * 3600 * 1000, count: 1, format: 2, rows: [{ instance: "odoo503", database: "RonitYamProd", posVersion: "", section: "main", online: true }] };
+  const old = { builtAt: Date.now() - 3 * 3600 * 1000, count: 1, format: 2, rows: [{ instance: "odoo503", database: "RonitYamProd", posVersion: "", section: "main", online: true, monitorName: "" }] };
   await env.STORE.set("dbreport:v1", JSON.stringify(old), 3600);
   const seen = []; const inner = globalThis.fetch;
   globalThis.fetch = (url, init) => { seen.push(String(url)); return inner(url, init); };
