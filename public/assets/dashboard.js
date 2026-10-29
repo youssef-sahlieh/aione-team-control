@@ -681,7 +681,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     c.addEventListener("dragend",()=>{ c.classList.remove("dragging"); document.querySelectorAll(".col.over").forEach(x=>x.classList.remove("over")); setTimeout(()=>{ drag=null; },0); });
     const r1=el("div","row1"); r1.appendChild(keyLink(i)); if(mode!=="assignee") r1.appendChild(avatar(i)); r1.appendChild(selBox(i,on=>c.classList.toggle("sel",on))); c.appendChild(r1);
     const tt=el("button","t",i.summary); tt.type="button"; tt.dir="auto"; tt.addEventListener("click",()=>openDrawer(i.key)); c.appendChild(tt);
-    const tags=tagsFor(i,t,true); if(tags.childNodes.length) c.appendChild(tags);
+    const tags=tagsFor(i,t,true); if(i.overage==="overage") tags.appendChild(el("span","flag checkup","Needs checkup")); if(tags.childNodes.length) c.appendChild(tags);
     const r3=el("div","row3");
     if(mode!=="status") r3.appendChild(statusButton(i));
     if(mode!=="dev") r3.appendChild(devButton(i));

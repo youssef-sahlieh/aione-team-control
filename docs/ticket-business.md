@@ -18,6 +18,10 @@ New internal tickets default to **Internal Tickets**, a virtual assignee without
 
 Users choose a client/sub-client during internal creation. Administrators manage catalog entries and change client selection afterward. Both roles can save positive estimated and actual hours (up to two decimal places, maximum 1,000,000) and a plain-text Work done description up to 5,000 characters while the ticket is open. Blank work fields are allowed in progress. Billing is administrator-only; user responses, histories and AI context exclude it.
 
+**Agreed hours** are also administrator-only: they are stripped from ordinary users' responses. An administrator sets them in the ticket drawer, under "Agreed hours (administrators only)". The value must be a valid positive number of hours. It is written to the ticket's history. Clearing agreed hours is refused with 409 `agreed_sent` once the ticket's agreed line is in Odoo. Setting them needs a non-internal assignee first (409 `agreed_needs_developer`, "Assign a developer first."). While agreed hours are set, people's Odoo entries are replaced by one agreed line per ticket; see [work-log.md](work-log.md).
+
+**Overage flag.** The flag is computed when the ticket is read, not stored. When logged hours are more than agreed hours, the ticket shows **Needs checkup** in the drawer, on the board card and in the report. Only logged entries are compared, and the amount over (`overHours`) is shown to administrators only.
+
 All dashboard transitions into a completed status require client selection, estimated hours, actual hours and Work done. Administrators can override missing requirements with a recorded reason. The same server guard protects drawer, board, bulk and direct API calls. Bulk actions report per-ticket failures. Closing directly in Jira bypasses dashboard validation; the next authoritative read locks the business fields. Created date always uses the original ticket timestamp and displays in Asia/Jerusalem time.
 
 ## API and storage
@@ -33,7 +37,8 @@ All routes require the existing authenticated session:
 - POST /ticket-metadata/batch: read metadata for up to 100 authorized ticket keys.
 - GET /ticket-metadata?key=KEY: authorized metadata, filtered history and authoritative closed state.
 - PUT /ticket-metadata: body {key, fields:{revision, ...changes}}. Stale revisions and closed tickets return 409.
-- POST /reports/run: administrator workflow (completeness, delivery, hours, management), optional start/end dates, clientId, subClientId and source.
+- POST /reports/run: the unified business report (one row per ticket), with optional start/end dates, clientId, subClientId, source, flag, employee and status filters.
+- POST /agreed-hours/import/preview and POST /agreed-hours/import (administrators): bulk-set agreed hours from a CSV with the columns `Ticket,Agreed hours`. A preview checks up to 100 rows without saving. Apply refuses the whole import with `import_errors` if any row has an error, so fix the rows and apply again.
 
 New records are namespaced business:<JIRA_PROJECT>:catalog and business:<JIRA_PROJECT>:ticket:<KEY>. Ticket locks coordinate metadata writes and dashboard transitions. A successful status change is recorded before returning; failed Jira responses do not create successful completion/override events. Jira and Redis are separate services: an infrastructure outage after a Jira write can require checking ticket status before retrying.
 
@@ -41,12 +46,17 @@ New records are namespaced business:<JIRA_PROJECT>:catalog and business:<JIRA_PR
 
 Reports run on demand inside the administrator workspace without an AI key. They ignore ordinary list filters; their own client, sub-client, source and period controls define scope. The default period is today and the previous six calendar dates in Asia/Jerusalem.
 
-- Completeness: client selection/developers/estimates on open work; all closure requirements on completed work; historical overrides separately.
-- Delivery: overdue, no approved date, or no ticket activity for seven calendar days.
-- Hours: actual greater than estimate, showing hours and percentage over.
-- Management: open work, period creations/completions, risks, exceptions and client/sub-client/billing groups.
+The report is one row per ticket, with its client, developers, estimated, agreed, logged and actual hours, the overage flag and its Odoo status. Filters: client, employee, flag (Needs checkup, Within agreed hours, No agreed hours), status and period. The period filter selects tickets created or completed in the period. Logged hours are all-time totals per ticket, compared only against logged entries.
 
-Hours groups are current totals for tickets created or completed in the selected cohort, not hours worked in that period. Missing hours are reported as missing, not silently treated as zero. Completion uses authoritative Jira resolution/history or dashboard/internal completion records. Updated is never substituted for Completed. Bounded or failed Jira pagination is disclosed as partial coverage. CSV exports quote cells and neutralize spreadsheet formulas.
+The report can be grouped by employee, then customer. Expanding an employee shows each ticket with that person's own hours, and the ticket's total is repeated under each person who worked on it. Work entries for a ticket load on demand from a list inside the report.
+
+**Export CSV** downloads the visible rows as `aion-business-report-<date>.csv`. Every cell is quoted, double quotes are doubled, and values starting with `=`, `+`, `@`, `-`, tab or carriage return get a leading apostrophe. Lines end with CRLF, and an unset agreed or logged value is an empty cell.
+
+**Agreed hours import.** Choose a CSV with `Ticket,Agreed hours`, check the preview, then apply. The import is for setting agreed hours in bulk. It accepts a byte-order mark, quoted cells and CRLF, and refuses a file without those two headers.
+
+Missing hours are reported as missing, not silently treated as zero. Completion uses authoritative Jira resolution/history or dashboard/internal completion records. Updated is never substituted for Completed. Bounded or failed Jira pagination is disclosed as partial coverage.
+
+Saved reports are stored under the `reports:all:v2:` key. A report saved before this change must be refreshed to show the new columns.
 
 ## Claude
 
@@ -58,7 +68,7 @@ Scheduled delivery, email reports, automatic ticket changes, a third Project fie
 
 ## Verification
 
-Run npm test and npm run test:e2e. Tests use synthetic accounts, tickets, catalog files and AI responses and do not write to production. Live Claude credentials, deployment, and the real catalog import are activation steps after local verification.
+Run npm test and npm run test:e2e. The browser tests cover the database and monitor pages; the dashboard browser spec was removed. Tests use synthetic accounts, tickets, catalog files and AI responses and do not write to production. Live Claude credentials, deployment, and the real catalog import are activation steps after local verification.
 
 ## Assignment and scheduling prerequisites
 

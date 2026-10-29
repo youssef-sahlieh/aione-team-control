@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import worker,{makeToken} from '../proxy/src/handler.js';
+import {agreedImportPreview,agreedImportApply} from '../proxy/src/ticket-metadata.js';
 import {memoryStore,saveUser} from '../proxy/src/users.js';
 import {readMetadata,readCatalog,prepareImport,catalogKey,metadataKey,publicHistory,publicMetadata,saveMetadata,withTicketLock,guardedTransition,closureErrors,INTERNAL_ASSIGNEE} from '../proxy/src/ticket-metadata.js';
 import {buildReport,reportPeriod} from '../proxy/src/reports.js';
@@ -386,4 +387,35 @@ test('contacts archived in Odoo are archived in the dashboard by the sync, and c
   assert.equal(top(c,'Old Shop').archived,false);assert.equal(top(c,'Old Shop').archivedBy,undefined);assert.equal(top(c,'Closed Ltd').archived,false);
   assert.equal(top(c,'Standalone').archived,true);
  }finally{globalThis.fetch=realFetch;}
+});
+
+test('agreed hours CSV import: bad keys, hours, duplicates and closed tickets are refused in the preview; valid rows are saved',async()=>{
+  const env={SESSION_SECRET:'synthetic-secret',JIRA_PROJECT:'AION',JIRA_SITE:'https://jira.invalid',STORE:memoryStore(),TEAM_CONFIG:JSON.stringify({people:{lead:{id:'lead',name:'Lead'}}})};
+  const tickets={'INT-1':{title:'One',closed:false,assignee:'lead'},'INT-2':{title:'Two',closed:true,assignee:'lead'}};
+  const readTicket=async key=>tickets[key]?{key,...tickets[key]}:null;
+  const preview=await agreedImportPreview(env,[
+    {key:' int-1 ',agreedHours:'12.5'},
+    {key:'INT-9',agreedHours:2},
+    {key:'bogus',agreedHours:2},
+    {key:'INT-1',agreedHours:3},
+    {key:'INT-2',agreedHours:1},
+    {key:'INT-3',agreedHours:'abc'},
+    {key:'INT-3',agreedHours:0},
+    {key:'INT-4',agreedHours:1.234},
+  ],readTicket);
+  assert.equal(preview.ok,1);assert.equal(preview.errors,7);
+  assert.deepEqual(preview.rows.map(r=>r.status),['ok','error','error','error','error','error','error','error']);
+  assert.equal(preview.rows[0].key,'INT-1');assert.equal(preview.rows[0].agreedHours,12.5);
+  assert.equal(preview.rows[1].message,'Ticket not found or not visible.');
+  assert.equal(preview.rows[2].message,'Unknown ticket key.');
+  assert.equal(preview.rows[3].message,'Listed more than once.');
+  assert.match(preview.rows[4].message,/closed/);
+  assert.match(preview.rows[5].message,/positive number/);
+  // Apply refuses the whole file while any row is an error.
+  await assert.rejects(agreedImportApply(env,admin,[{key:'INT-1',agreedHours:2},{key:'INT-9',agreedHours:2}],readTicket),{code:'import_errors'});
+  assert.equal((await readMetadata(env,'INT-1')).agreedHours,null);
+  // A file of valid rows is saved through the ticket's own save path.
+  const applied=await agreedImportApply(env,admin,[{key:'INT-1',agreedHours:12.5}],readTicket);
+  assert.deepEqual(applied,{applied:1,failed:[]});
+  assert.equal((await readMetadata(env,'INT-1')).agreedHours,12.5);
 });

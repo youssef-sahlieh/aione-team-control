@@ -1,44 +1,99 @@
-import {selectReport} from '../models/report-view.js';
-import {reportCsv} from '../models/ticket-business.js';
+import {selectReport,unifiedCsv,groupByEmployee,parseAgreedCsv,flagLabel} from '../models/report-view.js';
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
 const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.addEventListener('click',fn);return b;};
 const field=(parent,label,node)=>{node.setAttribute('aria-label',label);const l=el('label','business-field');l.append(el('span','',label),node);parent.append(l);return node;};
-const choices=(select,options,value)=>{if(value&&!options.some(([v])=>v===value))options=[...options,[value,"No longer in snapshot ("+value+")"]];select.replaceChildren(...options.map(([v,label])=>new Option(label,v)));select.value=value||'';};
+const choices=(select,options,value)=>{if(value&&!options.some(([v])=>v===value))options=[...options,[value,'No longer in snapshot ('+value+')']];select.replaceChildren(...options.map(([v,label])=>new Option(label,v)));select.value=value||'';};
 const dateInput=value=>{const n=el('input','inp');n.type='date';n.value=value;return n;};
+const num=v=>typeof v==='number'&&Number.isFinite(v)?String(v):'—';
+const total=(list,pick)=>Math.round(list.reduce((n,t)=>n+(typeof pick(t)==='number'?pick(t):0),0)*100)/100;
+const FLAGS=[['','All flags'],['overage','Needs checkup'],['ok','Within agreed hours'],['none','No agreed hours']];
+const TABLE_HEADERS=['Ticket','Title','Status','Client','Project','Billing','Developers','Estimated (h)','Agreed (h)','Logged (h)','Actual (h)','Over agreed (h)','Flag','Odoo'];
+const PAGE=50;
 export function createReportBrowser({api,openIssue}){
- let supported=false,snapshot=null,pending=false,page=0,groupPage=0,generation=0,refreshCurrent=null,attempted=false,snapshotInfo={};
+ let supported=false,agreedSupported=false,snapshot=null,pending=false,page=0,generation=0,refreshCurrent=null,attempted=false,snapshotInfo={},view='employee';
  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Jerusalem',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),startDate=new Date(today+'T12:00:00Z');startDate.setUTCDate(startDate.getUTCDate()-6);
- const filters={workflow:'all',source:'all',start:startDate.toISOString().slice(0,10),end:today,sort:''};
- return {configure:cfg=>{supported=cfg.capabilities?.includes('reports-saved-v1')===true;},render(target){
- const turn=++generation,panel=el('section','panel business-panel');target.append(panel);panel.append(el('h2','','Checks & Reports'),el('p','msg','Your latest saved report opens automatically. Combine filters instantly, or refresh the source data when needed.'));
+ const filters={source:'all',start:startDate.toISOString().slice(0,10),end:today,period:'all',flag:'',employee:'',clientId:'',subClientId:'',status:'',text:''};
+ const resetFilters=()=>Object.assign(filters,{source:'all',start:startDate.toISOString().slice(0,10),end:today,period:'all',flag:'',employee:'',clientId:'',subClientId:'',status:'',text:''});
+ return {configure:cfg=>{const caps=cfg.capabilities||[];supported=caps.includes('reports-saved-v1')===true;agreedSupported=caps.includes('agreed-hours-v1')===true;},render(target){
+ const turn=++generation,panel=el('section','panel business-panel');target.append(panel);
+ panel.append(el('h2','','Checks & Reports'),el('p','msg','The business report: one row per ticket, with agreed hours, logged hours and whether the ticket needs a checkup. Your latest saved report opens automatically; use Refresh report for current source data.'));
  if(!supported){panel.append(el('p','msg err','Saved reports require the updated backend (reports-saved-v1). Deploy the compatible backend first.'));return;}
  const form=el('div','business-form report-filter-form'),msg=el('p','msg'),output=el('div','report-results');panel.append(form,msg,output);
- function select(label,options,key){const n=field(form,label,el('select','fsel'));choices(n,options,filters[key]);n.addEventListener('change',()=>{filters[key]=n.value;if(key==='clientId'){filters.subClientId='';populateSub();}page=0;groupPage=0;show();});return n;}
- select('Report type',[['all','All reports'],['management','Management report'],['completeness','Ticket completeness'],['delivery','Delivery risks'],['hours','Hours review']],'workflow');
+ const controls=[];
+ function select(label,options,key){const n=field(form,label,el('select','fsel'));choices(n,options,filters[key]);controls.push([n,key]);n.addEventListener('change',()=>{filters[key]=n.value;if(key==='clientId'){filters.subClientId='';populateSub();}page=0;show();});return n;}
  const start=field(form,'From',dateInput(filters.start)),end=field(form,'Through',dateInput(filters.end));
- for(const [node,key]of [[start,'start'],[end,'end']])node.addEventListener('change',()=>{filters[key]=node.value;page=0;groupPage=0;show();});
- select('Report ticket source',[['all','All tickets'],['jira','Jira'],['internal','Internal']],'source');
- const client=select('Report client',[['','All clients'],['__none','Client not set']],'clientId'),sub=select('Report project',[['','All projects']],'subClientId'),developer=select('Report developer',[['','All developers'],['__none','No developer']],'developer'),status=select('Report status',[['','All statuses'],['__open','Open tickets'],['__closed','Closed tickets']],'status');
- select('Report billing',[['','All billing'],['__none','Billing not set'],['billable','Billable'],['not_billable','Not billable']],'billing');
- select('Report sort',[['','Source order (no sorting)'],['key:asc','Ticket: ascending'],['key:desc','Ticket: descending'],['due:asc','Due date: oldest first'],['due:desc','Due date: newest first'],['created:asc','Created: oldest first'],['created:desc','Created: newest first'],['estimatedHours:desc','Estimated hours: highest first'],['actualHours:desc','Actual hours: highest first']],'sort');
- const search=field(form,'Search report tickets',el('input','inp'));search.type='search';search.placeholder='Ticket, title, developer or work done';search.value=filters.text||'';let searchTimer;search.addEventListener('input',()=>{clearTimeout(searchTimer);filters.text=search.value;page=0;groupPage=0;searchTimer=setTimeout(()=>{if(turn===generation&&target.isConnected)show();},150);});
+ for(const [node,key] of [[start,'start'],[end,'end']])node.addEventListener('change',()=>{filters[key]=node.value;page=0;show();});
+ const client=select('Client',[['','All clients'],['__none','Client not set']],'clientId'),sub=select('Project',[['','All projects']],'subClientId'),employee=select('Employee',[['','All employees']],'employee');
+ select('Flag',FLAGS,'flag');select('Status',[['','All statuses'],['__open','Open tickets'],['__closed','Closed tickets']],'status');
+ select('Source',[['all','All tickets'],['jira','Jira'],['internal','Internal']],'source');
+ select('Period',[['all','All tickets'],['period','Created or completed in period']],'period');
+ const search=field(form,'Search report tickets',el('input','inp'));search.type='search';search.placeholder='Ticket, title, developer or employee';search.value=filters.text;let searchTimer;search.addEventListener('input',()=>{clearTimeout(searchTimer);filters.text=search.value;page=0;searchTimer=setTimeout(()=>{if(turn===generation&&target.isConnected)show();},150);});
+ const run=button('Refresh report',()=>load(true));
+ form.append(run,button('Export CSV',exportCsv),button('Clear report filters',()=>{resetFilters();start.value=filters.start;end.value=filters.end;search.value='';for(const [node,key] of controls)node.value=filters[key]||'';page=0;populateSub();show();}));
  async function load(refresh=false){if(pending)return;pending=true;attempted=true;run.disabled=true;msg.textContent=refresh?'Refreshing the saved report…':'Opening your saved report…';try{
  const result=await api(refresh?'/reports/refresh':'/reports/latest',refresh?{method:'POST',body:{}}:undefined);
  if(result.report?.workflow!=='all'||!Array.isArray(result.report.tickets))throw new Error('The backend did not return a valid saved report.');
- snapshot=result.report;snapshotInfo=result;page=0;groupPage=0;if(turn===generation&&target.isConnected){populate();show();msg.textContent='';}
+ snapshot=result.report;snapshotInfo=result;page=0;if(turn===generation&&target.isConnected){populate();show();msg.textContent='';}
  }catch(e){if(turn===generation)msg.textContent=e.message||'Could not open the saved report.';}finally{pending=false;run.disabled=false;refreshCurrent?.();}}
- const run=button('Refresh report',()=>load(true));run.disabled=pending;form.append(run);
- form.append(button('Clear report filters',()=>{Object.assign(filters,{workflow:'all',source:'all',clientId:'',subClientId:'',developer:'',status:'',billing:'',sort:'',text:'',start:startDate.toISOString().slice(0,10),end:today});page=0;groupPage=0;clearTimeout(searchTimer);target.replaceChildren();this.render(target);}));
  function validPeriod(){const valid=!!filters.start&&!!filters.end&&filters.start<=filters.end&&start.checkValidity()&&end.checkValidity();if(!valid)msg.textContent='Choose a valid From / Through period.';else if(msg.textContent==='Choose a valid From / Through period.')msg.textContent='';return valid;}
  function populateSub(){const pairs=new Map((snapshot?.tickets||[]).filter(t=>!filters.clientId||t.clientId===filters.clientId).filter(t=>t.subClientId).map(t=>[t.subClientId,t.subClientName||t.subClientId]));choices(sub,[['','All projects'],...pairs],filters.subClientId);}
- function populate(){if(!snapshot)return;const rows=snapshot.tickets;choices(client,[['','All clients'],['__none','Client not set'],...new Map(rows.filter(t=>t.clientId).map(t=>[t.clientId,t.clientName||t.clientId]))],filters.clientId);populateSub();choices(developer,[['','All developers'],['__none','No developer'],...[...new Set(rows.flatMap(t=>t.devs||[]))].map(d=>[d,d])],filters.developer);choices(status,[['','All statuses'],['__open','Open tickets'],['__closed','Closed tickets'],...[...new Set(rows.map(t=>t.status).filter(Boolean))].map(s=>[s,s])],filters.status);}
- function pager(total,current,set){const nav=el('div','report-pagination');const prev=button('Previous',()=>set(current-1)),next=button('Next',()=>set(current+1));prev.disabled=current===0;next.disabled=(current+1)*50>=total;nav.append(prev,el('span','msg',total?((current*50+1)+'–'+Math.min((current+1)*50,total)+' of '+total):'0 results'),next);return nav;}
+ function populate(){if(!snapshot)return;const rows=snapshot.tickets;choices(client,[['','All clients'],['__none','Client not set'],...new Map(rows.filter(t=>t.clientId).map(t=>[t.clientId,t.clientName||t.clientId]))],filters.clientId);populateSub();choices(employee,[['','All employees'],...[...new Set(rows.flatMap(t=>(t.employees||[]).map(e=>e.name)))].sort().map(n=>[n,n])],filters.employee);}
+ function pager(count,current,set){const nav=el('div','report-pagination');const prev=button('Previous',()=>set(current-1)),next=button('Next',()=>set(current+1));prev.disabled=current===0;next.disabled=(current+1)*PAGE>=count;nav.append(prev,el('span','msg',count?((current*PAGE+1)+'–'+Math.min((current+1)*PAGE,count)+' of '+count):'0 results'),next);return nav;}
+ // The tickets the page shows: the filters, then the period option (tickets created or completed in the period).
+ function visibleRows(){const report=selectReport(snapshot,filters);return filters.period==='period'?report.tickets.filter(t=>t.createdInPeriod||t.completedInPeriod):report.tickets;}
+ function ticketRow(t){const row=el('div','report-ticket'+(t.overage==='overage'?' report-flag':''));
+  row.append(button(t.key+' · '+t.title,()=>openIssue(t.key),'linkbtn'),el('p','',[t.status,t.clientName||'Client not set',t.subClientName,(t.devs||[]).join(', ')||'No developer'].filter(Boolean).join(' · ')),
+  el('p','msg',['Agreed '+num(t.agreedHours)+' h','Logged '+num(t.loggedHours)+' h',...(t.employeeHours!=null?['This person '+t.employeeHours+' h']:[]),flagLabel(t),'Odoo: '+(t.odooStatus||'—')].join(' · ')));return row;}
+ function ticketTable(rows){const table=el('table','workload-table'),head=table.createTHead().insertRow();for(const h of TABLE_HEADERS)head.append(el('th','',h));const body=table.createTBody();
+  for(const t of rows.slice(page*PAGE,page*PAGE+PAGE)){const tr=body.insertRow(),k=el('td');k.append(button(t.key,()=>openIssue(t.key),'linkbtn'));
+   tr.append(k,el('td','',t.title),el('td','',t.status),el('td','',t.clientName||''),el('td','',t.subClientName||''),el('td','',t.billing||''),el('td','',(t.devs||[]).join(', ')),el('td','num',num(t.estimatedHours)),el('td','num',num(t.agreedHours)),el('td','num',num(t.loggedHours)),el('td','num',num(t.actualHours)),el('td','num',t.overage==='overage'?num(t.overHours):'—'),el('td','',flagLabel(t)),el('td','',t.odooStatus||''));}
+  const wrap=el('div','report-table-scroll');wrap.append(table);return wrap;}
+ function entriesTable(report){const table=el('table','workload-table'),head=table.createTHead().insertRow();for(const h of ['Date','Person','Ticket','Client','Project','Hours','Status'])head.append(el('th','',h));const body=table.createTBody();
+  for(const r of report.rows||[]){const tr=body.insertRow();tr.append(el('td','',r.date),el('td','',r.user),el('td','',r.ticket),el('td','',r.clientName||''),el('td','',r.subClientName||''),el('td','num',num(Math.round(r.minutes/60*100)/100)),el('td','',report.statuses?.[r.status]||r.status));}
+  return table;}
+ function exportCsv(){if(!snapshot||!validPeriod())return;const url=URL.createObjectURL(new Blob(['﻿'+unifiedCsv(visibleRows())],{type:'text/csv;charset=utf-8'})),a=el('a');a.href=url;a.download='aion-business-report-'+filters.end+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+ function importPanel(){
+  const box=el('details','report-import'),file=el('input'),previewOut=el('div'),preview=button('Preview',()=>runPreview()),apply=button('Apply agreed hours',()=>runApply(),'btn primary');
+  let rowsIn=null;apply.disabled=true;file.type='file';file.accept='.csv,text/csv';file.setAttribute('aria-label','Agreed hours CSV file');
+  box.append(el('summary','','Import agreed hours from CSV'),el('p','msg','A CSV with a header row “Ticket,Agreed hours”. Each row sets one ticket\'s agreed hours, and Odoo gets one line for them. Preview first; the file is applied only when every row is valid.'),file,preview,apply,previewOut);
+  async function runPreview(){previewOut.replaceChildren();apply.disabled=true;rowsIn=null;
+   if(!file.files?.[0]){previewOut.append(el('p','msg err','Choose a CSV file first.'));return;}
+   try{rowsIn=parseAgreedCsv(await file.files[0].text());}catch(err){previewOut.append(el('p','msg err',err.message));return;}
+   try{const result=await api('/agreed-hours/import/preview',{method:'POST',body:{rows:rowsIn}});
+    previewOut.append(el('p','msg',result.ok+' rows ready · '+result.errors+' with errors'));
+    const table=el('table','workload-table'),head=table.createTHead().insertRow();for(const h of ['Row','Ticket','Agreed (h)','Result'])head.append(el('th','',h));const body=table.createTBody();
+    for(const r of result.rows){const tr=body.insertRow();tr.append(el('td','num',String(r.row)),el('td','',r.key),el('td','num',num(r.agreedHours)),el('td',r.status==='error'?'msg err':'',r.message));}
+    previewOut.append(table);apply.disabled=!(result.ok>0&&result.errors===0);
+   }catch(err){previewOut.append(el('p','msg err',err.message||'Could not preview the import.'));}}
+  async function runApply(){apply.disabled=true;previewOut.append(el('p','msg','Applying…'));
+   try{const r=await api('/agreed-hours/import',{method:'POST',body:{rows:rowsIn}});
+    previewOut.replaceChildren(el('p','msg','Agreed hours set on '+r.applied+' tickets.'+(r.failed.length?' Not set: '+r.failed.map(f=>f.key+' ('+f.message+')').join('; '):'')+' Refresh report to see the new figures.'));
+   }catch(err){previewOut.replaceChildren(el('p','msg err',err.message||'Could not apply the import.'));}}
+  return box;}
  function show(){output.replaceChildren();if(!snapshot){output.append(el('p','msg','The saved report will appear here automatically. Use Refresh report to retry if loading fails.'));return;}if(!validPeriod())return;
- const report=selectReport(snapshot,filters);output.append(el('p','msg','Saved report generated '+new Date(report.generatedAt).toLocaleString('en-GB',{timeZone:'Asia/Jerusalem'})+' · '+report.coverage.examined+' tickets examined · '+report.tickets.length+' match your filters'),el('p','msg','Period: '+filters.start+' to '+filters.end+' (Asia/Jerusalem). Created/completed counts and grouped hours use this period; open work and risks are current snapshots.'),el('p','',report.hoursLabel));if(snapshotInfo.stale)output.append(el('p','msg err','This saved report is more than an hour old. Filters still work; use Refresh report when you need current source data.'));if(snapshotInfo.refreshing)output.append(el('p','msg','Another report refresh is already in progress.'));if(snapshotInfo.refreshWarning)output.append(el('p','msg err',snapshotInfo.refreshWarning));for(const w of report.warnings||[])output.append(el('p','msg err',w));
- const totals=el('div','report-totals');for(const [key,label]of [['open','Open'],['created','Created'],['completed','Completed'],['atRisk','At risk'],['overrides','Overrides']])totals.append(el('span','',label+': '+report.totals[key]));output.append(totals);
- output.append(button('Export ticket findings CSV',()=>{const url=URL.createObjectURL(new Blob(['\uFEFF'+reportCsv(report)],{type:'text/csv;charset=utf-8'})),a=el('a');a.href=url;a.download='aion-'+report.workflow+'-'+report.period.end+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}));
- if(report.groups.length){output.append(el('h3','','Client / billing totals for the selected cohort'));groupPage=Math.min(groupPage,Math.floor((report.groups.length-1)/50));const wrap=el('div','report-table-scroll'),table=el('table','workload-table'),head=el('tr');for(const label of ['Client','Project','Billing','Tickets','Estimated hours','Actual hours','Missing estimates / actuals'])head.append(el('th','',label));table.append(head);for(const g of report.groups.slice(groupPage*50,groupPage*50+50)){const row=el('tr');for(const value of [g.client,g.subClient,g.billing,g.tickets,g.estimatedHours??'Unavailable',g.actualHours??'Unavailable',g.missingEstimated+' / '+g.missingActual])row.append(el('td','',value));table.append(row);}wrap.append(table);output.append(wrap);if(report.groups.length>50)output.append(pager(report.groups.length,groupPage,n=>{groupPage=n;show();}));}
- page=Math.min(page,Math.max(0,Math.ceil(report.tickets.length/50)-1));output.append(el('h3','','Ticket results'),pager(report.tickets.length,page,n=>{page=n;show();}));for(const t of report.tickets.slice(page*50,page*50+50)){const row=el('div','report-ticket');row.append(button(t.key+' · '+t.title,()=>openIssue(t.key),'linkbtn'),el('p','',t.status+' · '+(t.clientName||'Client not set')+(t.subClientName?' / '+t.subClientName:'')+' · '+((t.devs||[]).join(', ')||'No developer')),el('p','msg',[...(t.missing||[]),...(t.risks||[]),...(t.overEstimate?['Over estimate by '+t.overEstimate.hours+' h ('+t.overEstimate.percent+'%)']:[]),...(t.overrides||[]).map(o=>'Override: '+o.reason)].join(' · ')));output.append(row);}if(!report.tickets.length)output.append(el('p','','No tickets match these report filters.'));
+  const rows=visibleRows();
+  output.append(el('p','msg','Saved report generated '+new Date(snapshot.generatedAt).toLocaleString('en-GB',{timeZone:'Asia/Jerusalem'})+' · '+snapshot.coverage.examined+' tickets examined · '+rows.length+' match your filters'),
+   el('p','msg','Logged and agreed hours are totals for each ticket. Period: '+filters.start+' to '+filters.end+' (Asia/Jerusalem), used when “Created or completed in period” is chosen.'));
+  if(snapshotInfo.stale)output.append(el('p','msg err','This saved report is more than an hour old. Filters still work; use Refresh report when you need current source data.'));
+  if(snapshotInfo.refreshing)output.append(el('p','msg','Another report refresh is already in progress.'));
+  if(snapshotInfo.refreshWarning)output.append(el('p','msg err',snapshotInfo.refreshWarning));
+  for(const w of snapshot.warnings||[])output.append(el('p','msg err',w));
+  const cards=el('div','report-totals');cards.append(el('span','','Tickets: '+rows.length),el('span','','Logged: '+total(rows,t=>t.loggedHours)+' h'),el('span','','Agreed: '+total(rows.filter(t=>t.agreedHours!=null),t=>t.agreedHours)+' h'),el('span','','Needs checkup: '+rows.filter(t=>t.overage==='overage').length));output.append(cards);
+  const switcher=el('select','fsel');switcher.setAttribute('aria-label','Report view');switcher.append(new Option('By employee, then customer','employee'),new Option('All tickets (table)','tickets'));switcher.value=view;switcher.addEventListener('change',()=>{view=switcher.value;page=0;show();});output.append(switcher);
+  if(view==='employee'){
+   const people=groupByEmployee(rows);if(!people.length)output.append(el('p','msg','No tickets match these report filters.'));
+   for(const person of people){const count=person.customers.reduce((n,c)=>n+c.tickets.length,0),d=el('details','report-group');d.append(el('summary','',person.name+' · '+person.hours+' h logged · '+count+(count===1?' ticket':' tickets')));
+    for(const c of person.customers){const cd=el('details','report-subgroup');cd.append(el('summary','',c.name+' · '+c.hours+' h · '+c.tickets.length+(c.tickets.length===1?' ticket':' tickets')));for(const t of c.tickets)cd.append(ticketRow(t));d.append(cd);}
+    output.append(d);}
+  }else{
+   page=Math.min(page,Math.max(0,Math.ceil(rows.length/PAGE)-1));output.append(pager(rows.length,page,n=>{page=n;show();}));
+   if(rows.length)output.append(ticketTable(rows));else output.append(el('p','msg','No tickets match these report filters.'));
+   if(rows.length>PAGE)output.append(pager(rows.length,page,n=>{page=n;show();}));
+  }
+  const entries=el('details','report-entries');entries.append(el('summary','','Work entries in this period'));let loaded=false;
+  entries.addEventListener('toggle',async()=>{if(!entries.open||loaded)return;loaded=true;const wait=el('p','msg','Loading…');entries.append(wait);try{const r=await api('/time-entries/report?from='+filters.start+'&to='+filters.end);wait.replaceWith(entriesTable(r));}catch(err){wait.textContent=err.message||'Could not load the work entries.';}});
+  output.append(entries);
+  if(agreedSupported)output.append(importPanel());
  }
  refreshCurrent=()=>{if(turn===generation&&target.isConnected){run.disabled=pending;populate();show();}};
  populate();show();if(!snapshot&&!pending&&!attempted)void load();
