@@ -288,20 +288,20 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const ACT_OPTS=[["any","Any"],["reply","Needs reply"],["new3","Opened ≤ 3 days"],["upd1","Updated today"]];
 
   function passFilters(i,t,skip){
-    const filters=IS_ADMIN&&workspace.route().page==="internal"?{...state.f,source:"internal"}:state.f;
+    const filters=state.f;
     return business.matches(i,state.businessFilter)&&matchesFilters(i,t,{filters,query:state.q,needsReply,assigneeKey:i=>assigneeFilterKey(i,PEOPLE)},skip);
   }
   const focusDef=()=>FOCUS.find(x=>x.id===state.focus)||FOCUS[0];
   function visible(skip){ const t=todayStr(), fd=focusDef(); return (state.issues||[]).filter(i=>fd.f(i,t)&&passFilters(i,t,skip)); }
-  function filterCount(){ const f=state.f; return Object.values(state.businessFilter||{}).filter(Boolean).length+ f.reporter.size+f.assignee.size+f.dev.size+f.status.size+f.type.size+f.priority.size+(f.epic?1:0)+(f.due!=="any"?1:0)+(f.activity!=="any"?1:0)+(f.source!=="all"&&workspace.route().page!=="internal"?1:0)+(state.q?1:0); }
-  const showTicketBriefs=()=>ticketBriefs.enabled()&&workspace.route().page!=="internal";
+  function filterCount(){ const f=state.f; return Object.values(state.businessFilter||{}).filter(Boolean).length+ f.reporter.size+f.assignee.size+f.dev.size+f.status.size+f.type.size+f.priority.size+(f.epic?1:0)+(f.due!=="any"?1:0)+(f.activity!=="any"?1:0)+(f.source!=="all"?1:0)+(state.q?1:0); }
+  const showTicketBriefs=()=>ticketBriefs.enabled();
 
   function renderQuickFilters(){
     const box=$("quick-filters"), more=$("ftoggle"); box.replaceChildren();
     const pick=(label,options,value,onChange)=>{ const field=el("label","quick-field"), select=el("select"); field.appendChild(el("span",null,label)); select.setAttribute("aria-label",label); options.forEach(([v,l])=>select.appendChild(new Option(l,v))); if(value==="__multiple"){const o=new Option("Multiple selected",value);o.disabled=true;select.appendChild(o);} select.value=value;select.addEventListener("change",()=>{onChange(select.value);state.sel.clear();state.pageIndex=0;render();});field.appendChild(select);box.appendChild(field);return select;};
     const val=set=>set.size>1?"__multiple":[...set][0]||"";
     box.appendChild(assigneeFilter.renderButton());
-    if(workspace.route().page!=="internal")pick("Ticket source",[["all","All tickets"],["internal","Internal tickets only"],["jira","Jira tickets only"],...(ODOO?[["odoo","Odoo Helpdesk only"]]:[])],state.f.source,v=>state.f.source=v);
+    pick("Ticket source",[["all","All tickets"],["internal","Internal tickets only"],["jira","Jira tickets only"],...(ODOO?[["odoo","Odoo Helpdesk only"]]:[])],state.f.source,v=>state.f.source=v);
     if(IS_ADMIN)pick("Developer",[["","All developers"],["__none","No developer"],...[...new Set([...allDevs(),...state.f.dev])].filter(d=>d!=="__none").sort().map(d=>[d,d])],val(state.f.dev),v=>state.f.dev=new Set(v?[v]:[]));
     if(IS_ADMIN)pick("Reporter",[["","All reporters"],...[...new Set([...(state.issues||[]).map(i=>i.reporter),...state.f.reporter])].filter(Boolean).sort((a,b)=>a.localeCompare(b)).map(x=>[x,x])],val(state.f.reporter),v=>state.f.reporter=new Set(v?[v]:[]));
     pick("Status",[["","All statuses"],...[...new Set([...(state.issues||[]).map(i=>i.status),...state.f.status])].sort((a,b)=>stIdx(a)-stIdx(b)).map(x=>[x,x])],val(state.f.status),v=>state.f.status=new Set(v?[v]:[]));
@@ -425,7 +425,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(f.epic) addA(f.epic==="none"?"No epic":(eps[f.epic]||f.epic),"k8",()=>f.epic="");
     if(f.due!=="any") addA("Due: "+DUE_OPTS.find(x=>x[0]===f.due)[1],"k3",()=>f.due="any");
     if(f.activity!=="any") addA(ACT_OPTS.find(x=>x[0]===f.activity)[1],"k6",()=>f.activity="any");
-    if(f.source!=="all"&&workspace.route().page!=="internal")addA(f.source==="internal"?"Internal tickets only":f.source==="odoo"?"Odoo Helpdesk only":"Jira tickets only","k7",()=>f.source="all");
+    if(f.source!=="all")addA(f.source==="internal"?"Internal tickets only":f.source==="odoo"?"Odoo Helpdesk only":"Jira tickets only","k7",()=>f.source="all");
     if(state.q) addA("“"+state.q+"”","k1",()=>{ state.q=""; $("q").value=""; });
     if(!act.childNodes.length) act.appendChild(el("span","filter-empty","All tickets in this focus"));
     const matches=visible().length;$("filter-summary").textContent=matches+" ticket"+(matches===1?"":"s")+" match · "+filterCount()+" selected";

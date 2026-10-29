@@ -1,7 +1,6 @@
 import { readRoute, routeUrl } from "./router.js";
 import { calculateWorkload } from "../models/workload.js";
 import { assigneeOptions } from "../models/assignees.js";
-import { isInternalTicket } from "../models/filters.js";
 const $ = id => document.getElementById(id);
 const node = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const button = (text, cls, action) => { const b = node("button", cls, text); b.type = "button"; b.addEventListener("click", action); return b; };
@@ -22,7 +21,6 @@ const icons = {
 const pages = [
   ["overview", "Overview", "Your work, at a glance."],
   ["tickets", "All tickets", "A clear view of your team's work, from first task to final delivery."],
-  ["internal", "Internal tickets", "Dashboard-created tickets with INT- IDs, separate from AION Jira tickets."],
   ["boards", "Boards", "Keep work moving with a shared view of every stage."],
   ["workload", "Workload", "Understand assignments, deadlines, and where support is needed."],
   ["calendar", "Calendar", "Make space for what's next. Plan around your ticket due dates."],
@@ -104,7 +102,6 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     a.append(icon(id), node("span", "", label));
     if (id === "tickets") { const count = node("span", "nav-count", "—"); count.id = "nav-ticket-count"; a.appendChild(count); }
     if(id==="requests"){const count=node("span","nav-count","0");count.id="nav-date-count";a.append(count);}
-    if (id === "internal") { const count = node("span", "nav-count", "—"); count.id = "nav-internal-count"; a.appendChild(count); }
     if (id === "errors") { const count = node("span", "nav-count nav-alert", "0"); count.id = "nav-error-count"; count.hidden = true; a.appendChild(count); }
     a.addEventListener("click", e => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate(id); });
     nav.appendChild(a);
@@ -121,7 +118,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
   const monitor = node("a", "nav-link"); monitor.id = "ai1-monitor-link"; monitor.href = MONITOR_START_URL; monitor.target = "_blank"; monitor.rel = "noopener"; monitor.title = "AI1 Monitor (opens in a new tab)"; monitor.hidden = true;
   monitor.append(icon("audit"), node("span", "", "AI1 Monitor"), node("span", "nav-ext", "↗"));
   nav.insertBefore(monitor, dbReport.nextSibling);
-  const navOrder = ["overview", "tickets", "audit", "databases", "monitor", "requests", "internal", "workload", "boards", "calendar", "reports", "clients", "worklog", "errors"];
+  const navOrder = ["overview", "tickets", "audit", "databases", "monitor", "requests", "workload", "boards", "calendar", "reports", "clients", "worklog", "errors"];
   const navItem = id => nav.querySelector(id === "audit" ? "#monitor-link" : id === "databases" ? "#dbreport-link" : id === "monitor" ? "#ai1-monitor-link" : `[data-page="${id}"]`);
   function configure() {
     route = readRoute(new URL(location.href), context().admin);
@@ -132,7 +129,6 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     nav.querySelector('[data-page="requests"]').hidden = false;
     nav.querySelector("#ai1-monitor-link").hidden = false;
     nav.querySelector('[data-page="workload"]').hidden = !context().admin;
-    nav.querySelector('[data-page="internal"]').hidden = !context().admin;
     const current = new URL(location.href);
     if(current.searchParams.get("page") === "mytasks")history.replaceState(null,"",routeUrl("tickets",null,current));
     // Preserve the old saved ticket modes when there is no explicit page route.
@@ -248,7 +244,6 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     if(context().admin&&["boards","history"].includes(route.page))moreNav.open=true;
     $("nav-date-count").textContent=String(context().pendingDates||0);
     $("nav-ticket-count").textContent = String(state.issues?.length || 0);
-    $("nav-internal-count").textContent = String((state.issues||[]).filter(isInternalTicket).length);
     const custom = ["overview", "requests", "workload", "calendar", "reports", "clients", "worklog", "errors"].includes(route.page);
     $("tickets-area").hidden = custom; $("workspace-content").hidden = !custom;
     if (!custom) return false;
