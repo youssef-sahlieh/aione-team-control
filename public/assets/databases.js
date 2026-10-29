@@ -29,7 +29,7 @@ const COLUMNS = [
   { key: "company", label: "Company", value: (r) => companyCell(r), sort: (r) => companyOf(r).toLowerCase() || null, csv: (r) => companyOf(r) },
   { key: "database", label: "Database", value: (r) => databaseCell(r), sort: (r) => (r.database || r.instance || "").toLowerCase(), csv: (r) => r.database || r.instance || "" },
   { key: "url", label: "URL", value: (r) => r.url ? linkCell(r.url) : el("span", "db-muted", "—"), sort: (r) => r.url || null, csv: (r) => r.url || "" },
-  { key: "adlink", label: "Audit & Deploy", value: (r) => adLinkCell(r), sort: (r) => (r.instance || null), csv: (r) => (r.instance ? MONITOR_START_URL : "") },
+  { key: "adlink", label: "Audit & Deploy", value: (r) => adLinkCell(r), sort: (r) => (r.instance || null), csv: (r) => (r.instance ? monitorInstanceUrl(r.instance) : "") },
   { key: "version", label: "Odoo", value: (r) => r.odooVersion ? el("span", "db-ver", r.odooVersion) : el("span", "db-muted", "—"), sort: (r) => Number(r.odooVersion) || null, csv: (r) => r.odooVersion || "" },
   { key: "users", label: "Users", num: true, value: (r) => numCell(r, "users"), sort: (r) => inside(r, r.users), csv: (r) => num(r.users) },
   { key: "pos", label: "POS", num: true, value: (r) => numCell(r, "pos"), sort: (r) => inside(r, r.pos), csv: (r) => num(r.pos) },
@@ -43,11 +43,11 @@ const COLUMNS = [
   { key: "addons", label: "Add-ons", value: (r) => addonCell(r), sort: (r) => (r.addons || []).length, csv: (r) => (r.addons || []).join("; ") },
   { key: "control", label: "Actions", action: true, value: (r) => actionCell(r), sort: () => null, csv: () => "" }
 ];
-// "Open" for each instance opens AI1 Monitor (same address as the nav's AI1 Monitor link).
-const MONITOR_START_URL = "https://monitor.ai1.host/auth/aione/start";
+// "Open" for each instance opens its page in AI1 Monitor, e.g. https://monitor.ai1.host/dashboard#instance/000/info
+const monitorInstanceUrl = (instance) => "https://monitor.ai1.host/dashboard#instance/" + encodeURIComponent(instance) + "/info";
 function adLinkCell(r) {
   if (!r.instance) return el("span", "db-muted", "—");
-  const a = el("a", "db-link", "Open"); a.href = MONITOR_START_URL; a.target = "_blank"; a.rel = "noopener";
+  const a = el("a", "db-link", "Open"); a.href = monitorInstanceUrl(r.instance); a.target = "_blank"; a.rel = "noopener";
   return a;
 }
 const WEIGHT = { company: 2.2, database: 1.6, url: 1.5, adlink: 1.1, version: 0.6, users: 0.75, pos: 0.6, branches: 0.85, created: 1, lastLogin: 1.3, lastOrder: 1.3, expired: 1.2, flutter: 0.95, posver: 1.1, addons: 2, control: 0.9 };
