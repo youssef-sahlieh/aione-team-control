@@ -6,7 +6,7 @@ import handler from '../proxy/src/handler.js';
 test('health is public, uncached and exposes only the supported API contract',async()=>{
  const response=await handler.fetch(new Request('https://proxy.test/health'),{SESSION_SECRET:'private',JIRA_API_TOKEN:'private',TEAM_CONFIG:'private'});
  assert.equal(response.status,200);assert.equal(response.headers.get('Cache-Control'),'no-store');
- assert.deepEqual(await response.json(),{ok:true,apiVersion:1,capabilities:['date-requests-v1','ticket-notes-v1','odoo-helpdesk-v1','ticket-business-v1','reports-all-v1','reports-saved-v1','db-report-v1','db-report-company-v1','db-report-pos-version-v1','time-entries-v1','epic-map-v1'],build:''});
+ assert.deepEqual(await response.json(),{ok:true,apiVersion:1,capabilities:['date-requests-v1','ticket-notes-v1','odoo-helpdesk-v1','ticket-business-v1','agreed-hours-v1','reports-all-v1','reports-saved-v1','db-report-v1','db-report-company-v1','db-report-pos-version-v1','time-entries-v1','epic-map-v1'],build:''});
 });
 test('old or incomplete backends cannot release the dashboard',()=>{
  for(const data of [{ok:true,apiVersion:1,capabilities:['date-requests-v1','ticket-notes-v1','ticket-business-v1']},null,{}, {ok:true}, {ok:true,apiVersion:1,capabilities:['date-requests-v1']}, {ok:true,apiVersion:2,capabilities:['date-requests-v1','ticket-notes-v1','ticket-business-v1']}])assert.equal(compatibleProxy(data),false);
