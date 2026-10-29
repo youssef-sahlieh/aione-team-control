@@ -1,4 +1,4 @@
-import {selectReport,unifiedCsv,groupByEmployee,parseAgreedCsv,flagLabel} from '../models/report-view.js';
+import {selectReport,unifiedCsv,groupByEmployee,parseAgreedCsv,flagLabel,insights} from '../models/report-view.js';
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
 const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.addEventListener('click',fn);return b;};
 const field=(parent,label,node)=>{node.setAttribute('aria-label',label);const l=el('label','business-field');l.append(el('span','',label),node);parent.append(l);return node;};
@@ -8,7 +8,33 @@ const num=v=>typeof v==='number'&&Number.isFinite(v)?String(v):'—';
 const total=(list,pick)=>Math.round(list.reduce((n,t)=>n+(typeof pick(t)==='number'?pick(t):0),0)*100)/100;
 const FLAGS=[['','All flags'],['overage','Needs checkup'],['ok','Within agreed hours'],['none','No agreed hours']];
 const TABLE_HEADERS=['Ticket','Title','Status','Client','Project','Billing','Developers','Estimated (h)','Agreed (h)','Logged (h)','Actual (h)','Over agreed (h)','Flag','Odoo'];
-const PAGE=50;
+const PAGE=50,BARS_SHOWN=12;
+const tile=(label,value)=>{const t=el('div','insight-tile');t.append(el('span','insight-label',label),el('strong','insight-value',String(value)));return t;};
+// One bar per item, scaled to the largest value. The label and number are text, so colour is not the only cue.
+function bars(title,items){const box=el('div','insight-bars'),max=Math.max(0,...items.map(i=>i.value));box.append(el('h3','',title));
+ if(!items.length){box.append(el('p','msg','Nothing to show.'));return box;}
+ for(const item of items.slice(0,BARS_SHOWN)){const row=el('div','bar-row'),track=el('span','bar-track'),fill=el('span','bar-fill');fill.style.width=(max>0?Math.round(item.value/max*1000)/10:0)+'%';track.append(fill);
+  row.append(el('span','bar-label',item.label),track,el('span','bar-value',item.text??String(item.value)));box.append(row);}
+ if(items.length>BARS_SHOWN)box.append(el('p','msg','and '+(items.length-BARS_SHOWN)+' more (use the table or CSV for the full list)'));
+ return box;}
+function monthTable(months){const table=el('table','workload-table'),head=table.createTHead().insertRow();for(const h of ['Month','Tickets created','Tickets completed'])head.append(el('th','',h));const body=table.createTBody();
+ for(const m of months){const tr=body.insertRow();tr.append(el('td','',m.month),el('td','num',String(m.created)),el('td','num',String(m.completed)));}
+ const wrap=el('div','report-table-scroll');wrap.append(table);return wrap;}
+// Statistics for the tickets the report shows. Hours are all-time totals per ticket; months are when a ticket was created or completed.
+function insightsPanel(rows){
+ const data=insights(rows),k=data.kpis,box=el('details','report-insights');box.open=true;box.append(el('summary','','Insights for these tickets'));
+ const pctText=v=>v==null?'—':v+'%';
+ const tiles=el('div','insight-tiles');
+ for(const [label,value] of [['Tickets',k.tickets],['Open',k.open],['Closed',k.closed],['With agreed hours',k.withAgreed],['No agreed hours',k.noAgreed],['Needs checkup',k.checkups],['Checkup rate',pctText(k.checkupRate)],['Agreed hours',k.agreedHours+' h'],['Logged on those tickets',k.loggedOnAgreed+' h'],['Burn rate',pctText(k.burnRate)],['Total logged',k.loggedHours+' h'],['Estimated',k.estimatedHours+' h'],['Actual',k.actualHours+' h']])tiles.append(tile(label,value));
+ box.append(tiles,
+  bars('Logged against agreed hours (tickets with agreed hours)',data.burn.map(b=>({label:b.label,value:b.tickets,text:b.tickets+' tickets'}))),
+  bars('Flags',data.flags.map(f=>({label:f.label,value:f.tickets,text:f.tickets+' tickets'}))),
+  bars('Logged hours by employee',data.byEmployee.map(e=>({label:e.label,value:e.loggedHours,text:e.loggedHours+' h · '+e.tickets+(e.tickets===1?' ticket':' tickets')}))),
+  bars('Logged hours by client',data.byClient.map(c=>({label:c.label,value:c.loggedHours,text:c.loggedHours+' h · '+c.tickets+(c.tickets===1?' ticket':' tickets')+(c.checkups?' · '+c.checkups+' need checkup':'')}))),
+  bars('Billing',data.byBilling.map(b=>({label:b.label,value:b.tickets,text:b.tickets+' tickets · '+b.loggedHours+' h logged'}))),
+  bars('Odoo status',data.byOdoo.map(o=>({label:o.label,value:o.tickets,text:o.tickets+' tickets'}))));
+ const months=el('div','insight-bars');months.append(el('h3','','Tickets created and completed by month'));months.append(data.byMonth.length?monthTable(data.byMonth):el('p','msg','Nothing to show.'));box.append(months);
+ return box;}
 export function createReportBrowser({api,openIssue}){
  let supported=false,agreedSupported=false,snapshot=null,pending=false,page=0,generation=0,refreshCurrent=null,attempted=false,snapshotInfo={},view='employee';
  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Jerusalem',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),startDate=new Date(today+'T12:00:00Z');startDate.setUTCDate(startDate.getUTCDate()-6);
@@ -78,7 +104,7 @@ export function createReportBrowser({api,openIssue}){
   if(snapshotInfo.refreshing)output.append(el('p','msg','Another report refresh is already in progress.'));
   if(snapshotInfo.refreshWarning)output.append(el('p','msg err',snapshotInfo.refreshWarning));
   for(const w of snapshot.warnings||[])output.append(el('p','msg err',w));
-  const cards=el('div','report-totals');cards.append(el('span','','Tickets: '+rows.length),el('span','','Logged: '+total(rows,t=>t.loggedHours)+' h'),el('span','','Agreed: '+total(rows.filter(t=>t.agreedHours!=null),t=>t.agreedHours)+' h'),el('span','','Needs checkup: '+rows.filter(t=>t.overage==='overage').length));output.append(cards);
+  const cards=el('div','report-totals');cards.append(el('span','','Tickets: '+rows.length),el('span','','Logged: '+total(rows,t=>t.loggedHours)+' h'),el('span','','Agreed: '+total(rows.filter(t=>t.agreedHours!=null),t=>t.agreedHours)+' h'),el('span','','Needs checkup: '+rows.filter(t=>t.overage==='overage').length));output.append(cards,insightsPanel(rows));
   const switcher=el('select','fsel');switcher.setAttribute('aria-label','Report view');switcher.append(new Option('By employee, then customer','employee'),new Option('All tickets (table)','tickets'));switcher.value=view;switcher.addEventListener('change',()=>{view=switcher.value;page=0;show();});output.append(switcher);
   if(view==='employee'){
    const people=groupByEmployee(rows);if(!people.length)output.append(el('p','msg','No tickets match these report filters.'));

@@ -60,3 +60,52 @@ export function parseAgreedCsv(text){
  if(keyCol<0||hoursCol<0)throw new Error('The CSV needs a header row with "Ticket" and "Agreed hours" columns.');
  return rows.slice(1).filter(r=>r.some(c=>c.trim())).map(r=>({key:(r[keyCol]||'').trim(),agreedHours:(r[hoursCol]||'').trim()}));
 }
+
+// ---- Insights: statistics for the rows the report shows (after its filters) ----
+const pct=(part,whole)=>whole>0?Math.round(part/whole*1000)/10:null;
+const numberOf=v=>typeof v==='number'&&Number.isFinite(v)?v:0;
+const BURN_BUCKETS=[['Under 50%',0,50],['50–79%',50,80],['80–100%',80,100.0001],['Over 100%',100.0001,Infinity]];
+// Counts and sums for one breakdown, sorted by logged hours, then by name.
+function breakdown(tickets,labelOf){
+ const groups=new Map();
+ for(const t of tickets){const label=labelOf(t);const g=groups.get(label)||{label,tickets:0,agreedHours:0,loggedHours:0,checkups:0};g.tickets++;g.agreedHours=sum(g.agreedHours,numberOf(t.agreedHours));g.loggedHours=sum(g.loggedHours,numberOf(t.loggedHours));g.checkups+=t.overage==='overage'?1:0;groups.set(label,g);}
+ return [...groups.values()].sort((a,b)=>b.loggedHours-a.loggedHours||a.label.localeCompare(b.label));
+}
+// Everything the Insights panel shows. Logged hours are all-time totals per ticket; agreed and estimated hours are summed only where set.
+export function insights(tickets){
+ const withAgreed=tickets.filter(t=>hours(t.agreedHours));
+ const loggedOnAgreed=sum(0,withAgreed.reduce((n,t)=>n+numberOf(t.loggedHours),0));
+ const agreedTotal=sum(0,withAgreed.reduce((n,t)=>n+t.agreedHours,0));
+ const checkups=tickets.filter(t=>t.overage==='overage').length;
+ const burn=withAgreed.map(t=>pct(numberOf(t.loggedHours),t.agreedHours));
+ const monthOf=value=>{const d=localDate(value);return d?d.slice(0,7):'';};
+ const months=new Map();
+ for(const t of tickets){const created=monthOf(t.created);if(created){const m=months.get(created)||{month:created,created:0,completed:0};m.created++;months.set(created,m);}
+  const done=monthOf(t.completedAt);if(done){const m=months.get(done)||{month:done,created:0,completed:0};m.completed++;months.set(done,m);}}
+ const people=new Map();
+ for(const t of tickets)for(const e of t.employees||[]){const p=people.get(e.name)||{label:e.name,tickets:0,loggedHours:0};p.tickets++;p.loggedHours=sum(p.loggedHours,numberOf(e.hours));people.set(e.name,p);}
+ return {
+  kpis:{
+   tickets:tickets.length,
+   open:tickets.filter(t=>!t.closed).length,
+   closed:tickets.filter(t=>t.closed).length,
+   withAgreed:withAgreed.length,
+   checkups,
+   checkupRate:pct(checkups,withAgreed.length),
+   agreedHours:agreedTotal,
+   loggedOnAgreed,
+   burnRate:pct(loggedOnAgreed,agreedTotal),
+   loggedHours:sum(0,tickets.reduce((n,t)=>n+numberOf(t.loggedHours),0)),
+   estimatedHours:sum(0,tickets.reduce((n,t)=>n+numberOf(t.estimatedHours),0)),
+   actualHours:sum(0,tickets.reduce((n,t)=>n+numberOf(t.actualHours),0)),
+   noAgreed:tickets.length-withAgreed.length
+  },
+  burn:BURN_BUCKETS.map(([label,from,to])=>({label,tickets:burn.filter(p=>p>=from&&p<to).length})),
+  flags:[['overage','Needs checkup'],['ok','Within agreed hours'],[null,'No agreed hours']].map(([value,label])=>({label,tickets:tickets.filter(t=>(t.overage??null)===value).length})),
+  byClient:breakdown(tickets,t=>t.clientName||'Client not set'),
+  byBilling:breakdown(tickets,t=>t.billing||'Not set'),
+  byOdoo:breakdown(tickets,t=>t.odooStatus||'Not set'),
+  byEmployee:[...people.values()].sort((a,b)=>b.loggedHours-a.loggedHours||a.label.localeCompare(b.label)),
+  byMonth:[...months.values()].sort((a,b)=>a.month.localeCompare(b.month))
+ };
+}

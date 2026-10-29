@@ -92,6 +92,19 @@
 
 .report-pagination { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:16px 0; }
 .report-table-scroll { max-width:100%; overflow-x:auto; }
+.report-insights { margin:16px 0; }
+.insight-tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:12px 0 18px; }
+.insight-tile { border:1px solid var(--line); border-radius:10px; padding:10px 12px; background:var(--surface); min-width:0; }
+.insight-label { display:block; font-size:12px; color:var(--muted); }
+.insight-value { display:block; font-size:20px; overflow-wrap:anywhere; }
+.insight-bars { margin:16px 0; }
+.insight-bars h3 { margin:0 0 8px; font-size:13px; }
+.bar-row { display:grid; grid-template-columns:minmax(110px,220px) 1fr minmax(120px,auto); gap:10px; align-items:center; margin:4px 0; font-size:13px; }
+.bar-label { overflow-wrap:anywhere; }
+.bar-track { display:block; height:12px; border-radius:6px; background:var(--line); overflow:hidden; }
+.bar-fill { display:block; height:100%; background:var(--accent,#2563eb); }
+.bar-value { color:var(--muted); font-variant-numeric:tabular-nums; }
+@media (max-width:480px){ .bar-row { grid-template-columns:1fr; gap:2px; } }
 .business-panel .report-filter-form { align-items:end; }
 .report-results .report-ticket { content-visibility:auto; contain-intrinsic-size:auto 110px; }
 

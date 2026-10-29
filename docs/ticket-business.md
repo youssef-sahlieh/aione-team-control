@@ -54,6 +54,8 @@ The report can be grouped by employee, then customer. Expanding an employee show
 
 **Agreed hours import.** Choose a CSV with `Ticket,Agreed hours`, check the preview, then apply. The import is for setting agreed hours in bulk. It accepts a byte-order mark, quoted cells and CRLF, and refuses a file without those two headers.
 
+**Insights** sits above the report results and describes the same rows the filters select. Its tiles give tickets (total, open, closed, with and without agreed hours), checkups and the checkup rate (flagged tickets as a share of tickets with agreed hours), agreed hours, logged hours on those tickets, the burn rate (logged as a share of agreed on those tickets), and total logged, estimated and actual hours. Bars show logged against agreed in four bands (under 50%, 50–79%, 80–100%, over 100%), flags, logged hours by employee and by client, billing, and Odoo status. A table counts tickets created and completed by month. A rate is shown as "—" when its denominator is zero. Logged hours are all-time totals per ticket, so the bars do not show hours by month. The statistics are calculated in the browser from the saved report, so they update with the filters and need no extra backend call.
+
 Missing hours are reported as missing, not silently treated as zero. Completion uses authoritative Jira resolution/history or dashboard/internal completion records. Updated is never substituted for Completed. Bounded or failed Jira pagination is disclosed as partial coverage.
 
 Saved reports are stored under the `reports:all:v2:` key. A report saved before this change must be refreshed to show the new columns.
