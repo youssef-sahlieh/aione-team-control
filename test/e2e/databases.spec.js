@@ -38,6 +38,9 @@ test("Databases: POS version column, Actions preview, restart needs a confirm", 
   // Without a company name from the database, the company is the id before the first underscore.
   await expect(page.locator("#rows tr", { hasText: "db101" }).locator("td.db-col-company")).toContainText("db101");
   await expect(page.locator("#notice")).toBeHidden();
+  // Open goes to the instance's page on AI1 Monitor, in a new tab.
+  await expect(ronit.getByRole("link", { name: "Open" })).toHaveAttribute("href", "https://monitor.ai1.host/dashboard#instance/odoo503/info");
+  await expect(ronit.getByRole("link", { name: "Open" })).toHaveAttribute("target", "_blank");
 
   // Actions opens the preview with all three actions.
   await ronit.getByRole("button", { name: "Actions" }).click();
