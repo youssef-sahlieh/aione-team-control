@@ -356,6 +356,8 @@ async function instanceFacts(env, inst) {
     url: base,
     num: (String(inst.domain || name).match(/(\d{2,4})/) || [])[1] || "",
     label: (String(inst.domain || "").match(/([a-z0-9][\w-]*)\.ai1\.host/i) || [])[1]?.toLowerCase() || "",
+    // The name set in AI1 Monitor (custom_data from the Monitor's instance inventory), already in the snapshot.
+    monitorName: String(inst.custom_data?.custom_name || ""),
     databases,
     database: databases[0] || "",
     created: inst.created || null,
@@ -407,7 +409,7 @@ export async function buildReport(env, { force = false } = {}) {
     if (force || !progress || Date.now() - (progress.startedAt || 0) > 10 * 60 * 1000) {
       // Production instances first, so their database names are known when their test and dev copies are checked.
       const instances = (await reportInstances(env)).sort((a, b) => (sectionOf(a.server_zone, a.instance_name, a.domain) === "main" ? 0 : 1) - (sectionOf(b.server_zone, b.instance_name, b.domain) === "main" ? 0 : 1));
-      progress = { startedAt: Date.now(), rows: [], done: 0, total: instances.length, instances: instances.map((i) => ({ instance_name: i.instance_name, domain: i.domain, created: i.created, server_zone: i.server_zone })) };
+      progress = { startedAt: Date.now(), rows: [], done: 0, total: instances.length, instances: instances.map((i) => ({ instance_name: i.instance_name, domain: i.domain, created: i.created, server_zone: i.server_zone, custom_data: i.custom_data })) };
     }
     const creds = await readCredentialIndex(env);
     // The production database names per instance number (this build, then the last report), for test and dev copies.
@@ -459,7 +461,7 @@ export async function dbReportRoutes(request, env, url, me) {
   // column existed, "building" tells the page to update it in the background (POST /db-report/refresh).
   if (path === "/db-report" && request.method === "GET") {
     const report = await readReport(env);
-    const outdated = !!report && (report.format !== REPORT_FORMAT || (report.rows || []).some((r) => !("posVersion" in r) || !("section" in r) || !("online" in r)));
+    const outdated = !!report && (report.format !== REPORT_FORMAT || (report.rows || []).some((r) => !("posVersion" in r) || !("section" in r) || !("online" in r) || !("monitorName" in r)));
     return json({ report: report || null, building: !report || outdated || Date.now() - report.builtAt > STALE_MS });
   }
   if (path === "/db-report/refresh" && request.method === "POST") {
