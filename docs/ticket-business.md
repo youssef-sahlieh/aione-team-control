@@ -54,7 +54,28 @@ The report can be grouped by employee, then customer. Expanding an employee show
 
 **Agreed hours import.** Choose a CSV with `Ticket,Agreed hours`, check the preview, then apply. The import is for setting agreed hours in bulk. It accepts a byte-order mark, quoted cells and CRLF, and refuses a file without those two headers.
 
-**Insights** sits above the report results and describes the same rows the filters select. Its tiles give tickets (total, open, closed, with and without agreed hours), checkups and the checkup rate (flagged tickets as a share of tickets with agreed hours), agreed hours, logged hours on those tickets, the burn rate (logged as a share of agreed on those tickets), and total logged, estimated and actual hours. Bars show logged against agreed in four bands (under 50%, 50–79%, 80–100%, over 100%), flags, logged hours by employee and by client, billing, and Odoo status. A table counts tickets created and completed by month. A rate is shown as "—" when its denominator is zero. Logged hours are all-time totals per ticket, so the bars do not show hours by month. The statistics are calculated in the browser from the saved report, so they update with the filters and need no extra backend call.
+**Statistics dashboard.** Above the report results, the dashboard has three tabs. Every chart, card and table reads the same rows: the report filters, then the chart selection. Local interaction makes no backend call. The one exception is dated effort on Team & Delivery, which loads once per period when that tab opens.
+
+- **Overview:** five cards (open tickets now, completed in period, overdue now, logged hours on these tickets, excess above agreement); agreed against logged by client; open-ticket age; the largest overrun contributors; and an exceptions table. Each ticket opens in its drawer.
+- **Hours & Agreements:** agreed against logged by client or project, sorted by excess, logged hours or name; an estimate-accuracy scatter (estimated on X, logged on Y, with the dashed Y = X line and a zoom to the 90th percentile of points); an overrun Pareto with the top 10 tickets, an "Other" bar and the cumulative share; and a client and project comparison table.
+- **Team & Delivery:** a heatmap of each person's logged hours by client; open work by developer and status; created and completed per week; and dated logged effort per week, grouped by person or client.
+
+**Chart selection.** Choosing a client or project bar, an age bucket or a heatmap cell narrows the table, employee grouping, dashboard and CSV together. Each selection shows as a chip with a remove control, and Clear selection removes them all. Choosing the same item again clears it.
+
+**Definitions.**
+- A *matched* ticket has agreed hours above zero and a known logged value. Only matched tickets feed the agreed and logged totals, excess and ratios. Tickets without agreed hours, or with unknown logged hours, are counted apart in each group.
+- *Excess* is the sum of logged minus agreed, counting only the tickets over agreement. *Net variance* is the sum of logged minus agreed over all matched tickets. *Logged ÷ agreed* is total logged over total agreed for matched tickets. Usage bands are over agreement, approaching (80% to 100%) and within (under 80%), using unrounded values.
+- *Unknown is not zero.* When the work log cannot be read, logged hours are unknown and are never added as zero. A recorded zero means the log has no hours. A card shows "n of N recorded" when some values are unknown.
+- *Ticket age* is calendar days from the creation day to the snapshot day in Asia/Jerusalem. Buckets are 0–7, 8–14, 15–30, 31–60 and 61+ days. Missing creation dates, and creation dates after the snapshot, are shown apart.
+- *Overdue now* is an open ticket whose due date is before the snapshot day.
+- *Completed in period* counts closed tickets with a verified completion date in the period. Closed tickets without one are excluded and disclosed.
+- *Created and completed per week* uses Sunday to Saturday weeks in Asia/Jerusalem; the first and last weeks are marked partial when they extend past the period. Completion uses the latest recorded completion only.
+- *Estimate accuracy* uses completed tickets with a positive estimated-hours value and known logged hours. The legacy actual-hours field is not used.
+- *Employee × client* cells hold each person's own hours from work entries. A ticket's total is never split or repeated per person.
+- *Open work by developer* counts assignments from the ai1 developer labels, not time. A shared ticket counts once for each developer and once in the team totals.
+- *Dated effort* is the work entries dated in the period on the selected tickets, from the administrator work-entry report (up to 400 days). Agreed billing lines are excluded.
+
+**Limits.** Logged hours on the cards and tables are all-time totals per ticket, not hours worked during the period. Only dated effort is shown by week. Estimates are the ticket's estimated-hours field.
 
 Missing hours are reported as missing, not silently treated as zero. Completion uses authoritative Jira resolution/history or dashboard/internal completion records. Updated is never substituted for Completed. Bounded or failed Jira pagination is disclosed as partial coverage.
 
