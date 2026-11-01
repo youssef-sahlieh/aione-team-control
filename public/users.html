@@ -18,7 +18,7 @@
   <div class="top">
     <div class="brand">
       <h1>Users</h1>
-      <div class="sub">AION Team Control · who can sign in, and what they see</div>
+      <div class="sub">Who can sign in, and what they can see</div>
     </div>
     <a class="btn" href="dashboard.html">← Dashboard</a>
     <span class="me">Signed in as <b id="me">…</b> <button class="btn" id="signout" type="button">Sign out</button></span>
@@ -26,35 +26,59 @@
 
   <div id="pagestate" class="state">Loading users…</div>
 
-  <section class="upanel" id="add" hidden>
-    <h2>Add a user</h2>
-    <p class="uhelp">They get an email with a link to choose their own password. <b>Administrators</b> see and change everything, like you. <b>Users</b> only see the tickets labelled with their developer name (ai1_…) and can move status, set due dates and comment on them.</p>
-    <form class="uform" id="add-form" novalidate>
-      <label class="ufield"><span>Name</span><input class="inp" id="a-name" autocomplete="off" required></label>
-      <label class="ufield"><span>Work email</span><input class="inp" id="a-email" type="email" autocomplete="off" required></label>
-      <div class="ufield"><span>Role</span>
-        <div class="seg" role="group" aria-label="Role" id="a-role">
-          <button type="button" data-role="user" aria-pressed="true">User</button>
-          <button type="button" data-role="admin" aria-pressed="false">Administrator</button>
-        </div>
-      </div>
-      <label class="ufield" id="a-devwrap"><span>Developer (sees only ai1_… tickets)</span>
-        <select class="fsel" id="a-dev"></select>
-      </label>
-      <label class="ufield" id="a-otherwrap" hidden><span>Other developer name</span><input class="inp" id="a-other" placeholder="e.g. bashar.k" autocomplete="off"></label>
-      <div class="uactions"><button class="btn primary" id="a-save" type="submit">Add user and send invitation</button><span class="msg" id="a-msg" role="status"></span></div>
-    </form>
-    <div class="ulink" id="a-link" hidden>
-      <p>Email isn't set up, so send this link to them yourself (it works once, for 3 days):</p>
-      <div class="inline"><input class="inp" id="a-linkval" readonly><button class="btn" id="a-copy" type="button">Copy link</button></div>
-    </div>
-  </section>
-
   <section class="upanel" id="list" hidden>
-    <h2>Everyone <span class="count" id="count"></span></h2>
+    <div class="utools">
+      <h2>Everyone <span class="count" id="count"></span></h2>
+      <input class="inp" id="search" type="search" placeholder="Search by name or email" aria-label="Search people" autocomplete="off">
+      <select class="fsel" id="filter" aria-label="Show">
+        <option value="all">Everyone</option>
+        <option value="admin">Administrators</option>
+        <option value="user">Users</option>
+        <option value="pending">Invitation not used yet</option>
+      </select>
+      <button class="btn primary" id="invite" type="button">Invite someone</button>
+    </div>
     <div class="ulist" id="rows"></div>
+    <p class="msg" id="empty" hidden>No one matches your search.</p>
   </section>
 </div>
+
+<dialog class="udialog" id="person" aria-labelledby="p-title">
+  <form id="person-form" class="udform" novalidate>
+    <h2 id="p-title">Invite someone</h2>
+    <label class="ufield"><span>Name</span><input class="inp" id="p-name" autocomplete="off" required></label>
+    <label class="ufield"><span>Work email</span><input class="inp" id="p-email" type="email" autocomplete="off" required></label>
+    <div class="ufield"><span>Role</span>
+      <div class="rolecards" role="group" aria-label="Role" id="p-role">
+        <button type="button" class="rolecard" data-role="user" aria-pressed="true"><b>User</b><span>Sees the tickets for one developer. Can change status, set due dates and comment.</span></button>
+        <button type="button" class="rolecard" data-role="admin" aria-pressed="false"><b>Administrator</b><span>Sees and changes everything, including this page.</span></button>
+      </div>
+    </div>
+    <label class="ufield"><span id="p-devlabel">Sees the tickets for</span>
+      <select class="fsel" id="p-dev"></select>
+    </label>
+    <label class="ufield" id="p-otherwrap" hidden><span>Developer name</span><input class="inp" id="p-other" placeholder="e.g. bashar.k" autocomplete="off"></label>
+
+    <div class="ulink" id="p-link" hidden>
+      <p>Email isn't set up, so send this link to them yourself (it works once, for 3 days):</p>
+      <div class="inline"><input class="inp" id="p-linkval" readonly><button class="btn" id="p-copy" type="button">Copy link</button></div>
+    </div>
+
+    <div id="p-manage" hidden>
+      <p class="uhelp" id="p-info"></p>
+      <div class="inline">
+        <button class="btn" id="p-reset" type="button">Send password reset</button>
+        <button class="btn danger" id="p-remove" type="button">Remove</button>
+      </div>
+    </div>
+
+    <div class="uactions">
+      <span class="msg" id="p-msg" role="status"></span>
+      <button class="btn" id="p-cancel" type="button">Cancel</button>
+      <button class="btn primary" id="p-save" type="submit">Send invitation</button>
+    </div>
+  </form>
+</dialog>
 <div class="toast" id="toast" hidden role="status"></div>
 
 <script src="assets/config.js"></script>
