@@ -102,20 +102,16 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     a.addEventListener("click", e => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate(id); });
     nav.appendChild(a);
   }
-  // Audit & Deploy is its own page (Odoo's Audit & Deployment System); shown when Odoo is connected.
-  const audit = node("a", "nav-link"); audit.id = "monitor-link"; audit.href = "audit-deploy.html"; audit.dataset.link = "audit"; audit.title = "Audit & Deploy"; audit.hidden = true;
-  audit.append(icon("audit"), node("span", "", "Audit & Deploy"));
-  nav.insertBefore(audit, nav.querySelector('[data-page="tickets"]').nextSibling);
   // Databases report is its own admin-only page; shown when Odoo is connected (set in applyConfig).
   const dbReport = node("a", "nav-link"); dbReport.id = "dbreport-link"; dbReport.href = "databases.html"; dbReport.dataset.link = "databases"; dbReport.title = "Databases"; dbReport.hidden = true;
   dbReport.append(icon("audit"), node("span", "", "Databases"));
-  nav.insertBefore(dbReport, audit.nextSibling);
+  nav.insertBefore(dbReport, nav.querySelector('[data-page="tickets"]').nextSibling);
   // AI1 Monitor opens in a new tab on the Monitor's own site (its sign-in starts from the link). Every dashboard role may use it.
   const monitor = node("a", "nav-link"); monitor.id = "ai1-monitor-link"; monitor.href = MONITOR_START_URL; monitor.target = "_blank"; monitor.rel = "noopener"; monitor.title = "AI1 Monitor (opens in a new tab)"; monitor.hidden = true;
   monitor.append(icon("audit"), node("span", "", "AI1 Monitor"), node("span", "nav-ext", "↗"));
   nav.insertBefore(monitor, dbReport.nextSibling);
-  const navOrder = ["overview", "tickets", "audit", "databases", "monitor", "requests", "workload", "calendar", "reports", "clients", "worklog", "errors"];
-  const navItem = id => nav.querySelector(id === "audit" ? "#monitor-link" : id === "databases" ? "#dbreport-link" : id === "monitor" ? "#ai1-monitor-link" : `[data-page="${id}"]`);
+  const navOrder = ["overview", "tickets", "databases", "monitor", "requests", "workload", "calendar", "reports", "clients", "worklog", "errors"];
+  const navItem = id => nav.querySelector(id === "databases" ? "#dbreport-link" : id === "monitor" ? "#ai1-monitor-link" : `[data-page="${id}"]`);
   function configure() {
     route = readRoute(new URL(location.href), context().admin);
     document.body.dataset.workspaceRole=context().admin?"manager":"user";
