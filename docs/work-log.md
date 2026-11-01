@@ -7,21 +7,29 @@ People log time on Jira, internal and Odoo Helpdesk tickets with **Log work** (i
 ## What it does
 
 - **Form:** ticket and user (read-only), work date (today in Israel time; earlier dates are allowed, future
-  dates and dates in Odoo's lock are not), duration from 1 minute to 24 hours (shortcuts 15m / 30m / 1h / 2h),
-  and a required description. It shows the Odoo project and task the work goes to. **Save**, or
-  **Save and add another**.
+  dates and dates in Odoo's lock are not), duration as **Hours** (0–24) and **Minutes** (0–59) boxes, and a
+  required description. The shortcuts 15m / 30m / 1h / 2h fill both boxes. Zero in total and more than 24 hours
+  are refused. It shows the Odoo project and task the work goes to. **Save**, or **Save and add another**.
+  The API still takes total minutes.
 - **Statuses:** Syncing, Synced, Needs setup (e.g. the ticket has no client or project), Needs review (an
   administrator must reconcile).
 - **Work log** in the ticket lists every entry: date, user, duration, description and status.
 - **Actual hours** = the hours entered before the work log (kept as they are) + the logged entries.
+- **Agreed hours** (set by an administrator on the ticket, see [ticket-business.md](ticket-business.md)): while they
+  are set, people's entries are saved but **not sent to Odoo one by one**. Instead the ticket has one Odoo line,
+  with the assigned developer in **Users**, the day the agreed hours were first set as its date, and the agreed
+  hours as its duration (its uuid is `agreed:<KEY>`). Changing the agreed hours updates that same line and keeps
+  its date. Closing the ticket requires the agreed line to be in Odoo. Setting agreed hours on a ticket that
+  already has entries in Odoo shows a warning with how many there are; those lines stay as they are.
 - **Corrections:** administrators only, with a required reason. The Odoo line is updated, and every revision is
   kept. There is no delete or reassign in this release.
 - **Closed tickets** take no new work and no corrections: reopen first.
 - **Closing** (Jira, internal and Odoo Helpdesk) is blocked until every entry and correction is in Odoo,
   confirmed by one Odoo read. The administrator override can't skip this.
-- **Work log page:** a dated report by user, client, project, ticket, source and status, with logged,
-  confirmed and pending hours. The hours entered before the work log are shown separately. Users see their
-  own work; administrators see everyone's and have the **Setup** tab.
+- **Work log page:** users get a dated report of their own work by client, project, ticket, source and status,
+  with logged, confirmed and pending hours. The hours entered before the work log are shown separately.
+  Administrators get **Setup** on this page. Their report of everyone's work moved to **Checks & Reports**
+  (the unified business report in [ticket-business.md](ticket-business.md)).
 
 ## Safety of sending
 

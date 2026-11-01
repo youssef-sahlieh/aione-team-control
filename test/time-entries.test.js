@@ -300,3 +300,102 @@ test('the entry and its "waiting to sync" place are saved together',async()=>{
   assert.equal(await store.writeIndexed('e:1','a','c',[],[['pending','1']]),true);
   assert.deepEqual(await store.smembers('pending'),[]);assert.equal(await store.get('e:1'),'c');
 });
+
+// Agreed hours: one Odoo line for the ticket, given to its developer; the users' entries stay in the dashboard.
+async function agreedSetup(){
+  const s=await setup();
+  s.env.TEAM_CONFIG=JSON.stringify({devEmails:{builder:'builder@x'},people:{'Dana Developer':{}}});
+  const r=await s.call('/internal','POST',{summary:'Fix the report',devs:['builder'],assignee:'Dana Developer',metadata:{clientId:s.client.id,subClientId:s.sub.id,billing:'billable'}},admin);
+  assert.equal(r.status,201,JSON.stringify(r.data));
+  return {...s,key:r.data.ticket.key};
+}
+const agree=async(s,key,agreedHours,me=admin)=>{const m=await s.call('/ticket-metadata?key='+key,'GET',undefined,admin);return s.call('/ticket-metadata','PUT',{key,fields:{revision:m.data.metadata.revision,agreedHours}},me);};
+const agreedLines=s=>[...s.odoo.lines.values()].filter(l=>l.x_aione_entry_uuid&&l.x_aione_entry_uuid.startsWith('agreed:'));
+
+test('agreed hours: user entries stay in the dashboard; Odoo gets one agreed line for the developer',async()=>{
+  const s=await agreedSetup();
+  assert.equal((await agree(s,s.key,3)).status,200);
+  assert.equal(agreedLines(s).length,1);
+  const logged=await s.log(s.key,{minutes:90});assert.equal(logged.status,201,JSON.stringify(logged.data));
+  assert.equal(logged.data.entry.status,'agreed');
+  assert.equal(s.odoo.lines.size,1,'the user entry itself is not sent to Odoo');
+  const [line]=agreedLines(s);
+  assert.equal(line.x_aione_entry_uuid,'agreed:'+s.key);assert.equal(line.x_studio_users,'Dana Developer');
+  assert.equal(line.unit_amount,3);assert.equal(line.date,todayIn());
+  // Setting the same hours again keeps the one line.
+  assert.equal((await agree(s,s.key,3)).status,200);assert.equal(agreedLines(s).length,1);
+});
+
+test('agreed hours: changing them updates the same line and keeps its date',async()=>{
+  const s=await agreedSetup();
+  await agree(s,s.key,3);const [first]=agreedLines(s);
+  const changed=await agree(s,s.key,4.5);assert.equal(changed.status,200,JSON.stringify(changed.data));
+  const lines=agreedLines(s);assert.equal(lines.length,1);assert.equal(lines[0].id,first.id);
+  assert.equal(lines[0].unit_amount,4.5);assert.equal(lines[0].date,first.date);
+});
+
+test('agreed hours: users never see them and cannot set them; the flag is shown to everyone, the hours over only to administrators',async()=>{
+  const s=await agreedSetup();await agree(s,s.key,1);await s.log(s.key,{minutes:90});
+  const asUser=await s.call('/ticket-metadata?key='+s.key,'GET',undefined,user);
+  assert.equal('agreedHours' in asUser.data.metadata,false);assert.equal('overHours' in asUser.data.metadata,false);
+  assert.equal(asUser.data.metadata.overage,'overage');
+  assert.equal((await agree(s,s.key,5,user)).status,403);
+  const asAdmin=await s.call('/ticket-metadata?key='+s.key,'GET',undefined,admin);
+  assert.equal(asAdmin.data.metadata.agreedHours,1);assert.equal(asAdmin.data.metadata.overHours,0.5);
+  const userView=await s.call('/time-entries?ticket='+s.key);assert.equal(userView.data.overage,'overage');assert.equal('overHours' in userView.data,false);
+});
+
+test('agreed hours: logged more than agreed is overage; equal or less is not',async()=>{
+  const s=await agreedSetup();await agree(s,s.key,1);await s.log(s.key,{minutes:90});
+  const over=await s.call('/time-entries?ticket='+s.key,'GET',undefined,admin);assert.equal(over.data.overage,'overage');assert.equal(over.data.overHours,0.5);
+  await agree(s,s.key,1.5);
+  const equal=await s.call('/time-entries?ticket='+s.key,'GET',undefined,admin);assert.equal(equal.data.overage,'ok');assert.equal(equal.data.overHours,0);
+  await agree(s,s.key,2);
+  assert.equal((await s.call('/time-entries?ticket='+s.key)).data.overage,'ok');
+});
+
+test('agreed hours: no flag while none are set',async()=>{
+  const s=await setup(),key=await s.ticket();await s.log(key,{minutes:90});
+  const view=await s.call('/time-entries?ticket='+key);assert.equal(view.data.overage,null);
+});
+
+test('agreed hours: the developer is required, and clearing is refused once the line is in Odoo',async()=>{
+  const s=await setup(),key=await s.ticket();
+  const noDev=await agree(s,key,2);assert.equal(noDev.status,409);assert.equal(noDev.data.code,'agreed_needs_developer');
+  const d=await agreedSetup();
+  assert.equal((await agree(d,d.key,2)).status,200);
+  const cleared=await agree(d,d.key,null);assert.equal(cleared.status,409);assert.equal(cleared.data.code,'agreed_sent');
+});
+
+test('agreed hours: setting them on a ticket with entries already in Odoo warns with the count',async()=>{
+  const s=await agreedSetup();
+  await s.log(s.key,{minutes:30});await s.log(s.key,{minutes:45});
+  assert.equal(s.odoo.lines.size,2);
+  const set=await agree(s,s.key,3);assert.equal(set.status,200);
+  assert.match(set.data.warning,/^2 work entries are already in Odoo/);
+});
+
+test('agreed hours: the agreed line can be checked and resent by an administrator, not corrected by hand',async()=>{
+  const s=await agreedSetup(),id=encodeURIComponent('agreed:'+s.key);
+  s.odoo.createMode='down';await agree(s,s.key,2);s.odoo.createMode=null;
+  const check=await s.call('/time-entries/'+id+'/sync','POST',{},admin);
+  assert.equal(check.data.entry.reviewKind,'nomatch');assert.equal(agreedLines(s).length,0);
+  assert.equal((await s.call('/time-entries/'+id+'/sync','POST',{action:'resend'},user)).status,403);
+  const resent=await s.call('/time-entries/'+id+'/sync','POST',{action:'resend'},admin);
+  assert.equal(resent.data.entry.status,'synced');assert.equal(agreedLines(s).length,1);
+  assert.equal((await s.call('/time-entries/'+id,'PATCH',{minutes:30,reason:'Fix'},admin)).data.code,'agreed_line');
+});
+
+test('agreed hours: closing waits for the agreed line in Odoo',async()=>{
+  const s=await agreedSetup(),id=encodeURIComponent('agreed:'+s.key);
+  await s.log(s.key);
+  const m=await s.call('/ticket-metadata?key='+s.key,'GET',undefined,admin);
+  await s.call('/ticket-metadata','PUT',{key:s.key,fields:{revision:m.data.metadata.revision,estimatedHours:2,workDone:'Done'}},admin);
+  s.odoo.createMode='down';await agree(s,s.key,2);s.odoo.createMode=null;
+  const blocked=await s.call('/internal/'+s.key,'PUT',{status:'Closed'},admin);
+  assert.equal(blocked.status,409);assert.equal(blocked.data.code,'time_not_synced');assert.match(JSON.stringify(blocked.data),/agreed hours/);
+  await s.call('/time-entries/'+id+'/sync','POST',{},admin);
+  await s.call('/time-entries/'+id+'/sync','POST',{action:'resend'},admin);
+  assert.equal(agreedLines(s).length,1);
+  const closed=await s.call('/internal/'+s.key,'PUT',{status:'Closed'},admin);assert.equal(closed.status,200,JSON.stringify(closed.data));
+});

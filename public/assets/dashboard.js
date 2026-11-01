@@ -312,7 +312,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     moreField.hidden=!IS_ADMIN;more.hidden=!IS_ADMIN;
     if(!IS_ADMIN)return;
     let views=[]; try{views=readViews(localStorage,MY_EMAIL);}catch(_){}
-    const savedField=pick("Saved view",[["","Saved views"],...views.map((v,n)=>[String(n),v.name])],"",v=>{ if(v==="")return; const restored=restoreView(views[+v],IS_ADMIN,PEOPLE);if(!restored)return;Object.assign(state,restored);$("q").value=state.q;workspace.navigate(state.view==="history"?"requests":["dev","status","assignee"].includes(state.view)?"boards":"tickets",{mode:state.view}); }).closest("label");
+    const savedField=pick("Saved view",[["","Saved views"],...views.map((v,n)=>[String(n),v.name])],"",v=>{ if(v==="")return; const restored=restoreView(views[+v],IS_ADMIN,PEOPLE);if(!restored)return;Object.assign(state,restored);$("q").value=state.q;workspace.navigate(state.view==="history"?"requests":"tickets"); }).closest("label");
     const save=el("button","btn","Save view");save.type="button";save.addEventListener("click",()=>{ const name=prompt("Name this personal view:");if(!name||!name.trim())return;const view=serializeView(workspace.route().page==="internal"?{...state,f:{...state.f,source:"internal"}}:state,name);const updated=views.filter(v=>v.name!==view.name).concat(view).slice(-20);try{localStorage.setItem(savedViewKey(MY_EMAIL),JSON.stringify(updated));toast("View saved in this browser.");renderQuickFilters();}catch(_){toast("Couldn't save this view. Browser storage is unavailable.",[],true);} });box.appendChild(save);
     if(IS_ADMIN){$("fgrid").querySelector(".saved-view-tools")?.remove();const tools=el("div","saved-view-tools");tools.append(savedField,save);$("fgrid").appendChild(tools);}
   }
@@ -681,7 +681,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     c.addEventListener("dragend",()=>{ c.classList.remove("dragging"); document.querySelectorAll(".col.over").forEach(x=>x.classList.remove("over")); setTimeout(()=>{ drag=null; },0); });
     const r1=el("div","row1"); r1.appendChild(keyLink(i)); if(mode!=="assignee") r1.appendChild(avatar(i)); r1.appendChild(selBox(i,on=>c.classList.toggle("sel",on))); c.appendChild(r1);
     const tt=el("button","t",i.summary); tt.type="button"; tt.dir="auto"; tt.addEventListener("click",()=>openDrawer(i.key)); c.appendChild(tt);
-    const tags=tagsFor(i,t,true); if(tags.childNodes.length) c.appendChild(tags);
+    const tags=tagsFor(i,t,true); if(i.overage==="overage") tags.appendChild(el("span","flag checkup","Needs checkup")); if(tags.childNodes.length) c.appendChild(tags);
     const r3=el("div","row3");
     if(mode!=="status") r3.appendChild(statusButton(i));
     if(mode!=="dev") r3.appendChild(devButton(i));

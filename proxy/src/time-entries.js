@@ -16,7 +16,7 @@
 // entry's id first. If a create's outcome is unclear (no answer), it is never blindly sent again: one exact
 // match is linked, no match or a conflicting one goes to "Needs review" for an administrator.
 import { odoo, odooConfigured, odooUid } from './odoo.js';
-import { requireStore, readMetadata, readCatalog, metadataKey, shownName, withTicketLock, BusinessError } from './ticket-metadata.js';
+import { requireStore, readMetadata, readCatalog, metadataKey, shownName, withTicketLock, overageOf, BusinessError } from './ticket-metadata.js';
 import { recordTicketEvent } from './ticket-log.js';
 import { getUser, normEmail } from './users.js';
 
@@ -31,7 +31,7 @@ export const TIME_ZONE='Asia/Jerusalem';
 export const todayIn=(now=new Date())=>new Intl.DateTimeFormat('en-CA',{timeZone:TIME_ZONE,year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
 export const MAX_MINUTES=24*60;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-export const STATUS={syncing:'Syncing',synced:'Synced',setup:'Needs setup',review:'Needs review'};
+export const STATUS={syncing:'Syncing',synced:'Synced',setup:'Needs setup',review:'Needs review',agreed:'Agreed hours'};
 export const sourceOf=(env,key)=>typeof key!=='string'?null:/^INT-\d+$/.test(key)?'internal':/^HD-\d+$/.test(key)?'odoo':new RegExp('^'+env.JIRA_PROJECT+'-\\d+$').test(key)?'jira':null;
 export const formatMinutes=m=>[Math.floor(m/60)?Math.floor(m/60)+'h':'',m%60?m%60+'m':''].filter(Boolean).join(' ')||'0m';
 export const totalHours=(baseline,minutes)=>Math.round(((Number(baseline)||0)+minutes/60)*100)/100;
@@ -176,9 +176,11 @@ const isSynced=e=>e.state==='synced'&&!!e.lineId&&e.syncedRevision===e.revision;
 const monthOf=d=>d.slice(0,7);
 const pendingState=s=>s==='syncing'||s==='setup';
 async function saveEntry(env,prevRaw,e){
-  const prev=prevRaw?JSON.parse(prevRaw):null,add=[[K.ticket(env,e.ticket),e.id],[K.month(env,monthOf(e.date)),e.id]],rem=[];
+  const prev=prevRaw?JSON.parse(prevRaw):null,add=[],rem=[];
+  // The agreed-hours line is not one of the ticket's entries: it is in no list but the send queue.
+  if(!e.agreed)add.push([K.ticket(env,e.ticket),e.id],[K.month(env,monthOf(e.date)),e.id]);
   (pendingState(e.state)?add:rem).push([K.pending(env),e.id]);
-  if(prev&&monthOf(prev.date)!==monthOf(e.date))rem.push([K.month(env,monthOf(prev.date)),e.id]);
+  if(prev&&!e.agreed&&monthOf(prev.date)!==monthOf(e.date))rem.push([K.month(env,monthOf(prev.date)),e.id]);
   const next=JSON.stringify(e);
   return await requireStore(env).writeIndexed(K.entry(env,e.id),prevRaw,next,add,rem)?next:null;
 }
@@ -189,7 +191,8 @@ export async function ticketEntries(env,key){
 }
 export function summarize(entries){
   const s={entries:entries.length,loggedMinutes:0,confirmedMinutes:0,pendingMinutes:0,unsynced:0};
-  for(const e of entries){s.loggedMinutes+=e.minutes;if(isSynced(e))s.confirmedMinutes+=e.minutes;else{s.pendingMinutes+=e.minutes;s.unsynced++;}}
+  // Entries held for agreed hours are not waiting for Odoo: the agreed line is what goes there.
+  for(const e of entries){s.loggedMinutes+=e.minutes;if(isSynced(e))s.confirmedMinutes+=e.minutes;else if(e.state!=='agreed'){s.pendingMinutes+=e.minutes;s.unsynced++;}}
   return s;
 }
 async function refreshSummary(env,key){const s=summarize(await ticketEntries(env,key));await requireStore(env).set(K.sum(env,key),JSON.stringify(s));return s;}
@@ -205,7 +208,7 @@ export function publicEntry(e,me){
   return {id:e.id,ticket:e.ticket,source:e.source,ticketTitle:e.ticketTitle,date:e.date,minutes:e.minutes,description:e.description,
     author:{name:e.author.name,...(admin||own?{email:e.author.email}:{})},createdAt:e.createdAt,revision:e.revision,
     status:e.state,statusLabel:STATUS[e.state],synced:isSynced(e),
-    reason:e.state==='setup'?e.setup:e.state==='review'?e.review?.message:e.state==='syncing'?e.error||'':'',reviewKind:e.state==='review'?e.review?.kind:'',
+    reason:e.state==='setup'?e.setup:e.state==='review'?e.review?.message:e.state==='syncing'?e.error||'':e.state==='agreed'?'Odoo gets the ticket\'s agreed hours instead of this entry.':'',reviewKind:e.state==='review'?e.review?.kind:'',
     ...(admin?{lineId:e.lineId,taskId:e.taskId,projectId:e.projectId,revisions:e.revisions,attempts:e.attempts||0}:{corrections:e.revisions.length})};
 }
 function checkInput(b,today,{partial=false}={}){
@@ -290,13 +293,17 @@ export async function syncEntry(env,id,{force=false}={}){
     const store=requireStore(env);let raw=await store.get(K.entry(env,id));if(!raw)return null;let e=JSON.parse(raw);
     const save=async next=>{const r=await saveEntry(env,raw,next);if(!r)problem('The work entry changed. Refresh and retry.',409,'conflict');raw=r;e=next;return next;};
     if(isSynced(e)||e.state==='review')return e;
+    // The agreed line was cleared before it reached Odoo: nothing to send.
+    if(e.agreed&&e.state==='agreed')return e;
     if(!force&&e.nextTryAt&&e.nextTryAt>Date.now())return e;
+    // While the ticket has agreed hours, its users' entries stay in the dashboard: Odoo gets the agreed line instead.
+    if(!e.agreed&&!e.lineId&&(await readMetadata(env,e.ticket)).agreedHours!=null)return save({...e,state:'agreed',setup:'',error:'',nextTryAt:0});
     const cfg=await readConfig(env);
     if(!odooConfigured(env)||!configReady(cfg))return save({...e,state:'setup',setup:!odooConfigured(env)?"Odoo isn't connected.":"Work log setup isn't finished or is switched off. An administrator must complete it in Work log setup."});
     try{
       // A correction of a line Odoo already has: writing the same values again is harmless.
       if(e.lineId){
-        await odoo(env,'account.analytic.line','write',[[e.lineId],{name:e.description,date:e.date,unit_amount:e.minutes/60}]);
+        await odoo(env,'account.analytic.line','write',[[e.lineId],{name:e.description,date:e.date,unit_amount:e.minutes/60,...(e.agreed?{[cfg.fields.users]:e.author.name}:{})}]);
         return save({...e,state:'synced',syncedRevision:e.revision,error:'',setup:'',attempts:0,nextTryAt:0});
       }
       const dest=await destination(env,cfg,e);
@@ -331,19 +338,82 @@ export async function syncEntry(env,id,{force=false}={}){
   return result;
 }
 
+// ---- Agreed hours (administrators) ----
+// Agreed hours put one Odoo line on the ticket instead of the users' entries. The line is a record of its own,
+// id "agreed:<KEY>": dated the day the hours were first set (agreedDate), given to the ticket's developer, lasting
+// the agreed hours (rounded to the minute). It goes through syncEntry like any entry. While the hours are set,
+// the ticket's entries are held in the dashboard (state "agreed"); clearing them releases the entries.
+export const agreedId=key=>'agreed:'+key;
+export async function agreedLineSent(env,key){const r=await readEntry(env,agreedId(key));return !!(r&&r.lineId);}
+export async function syncedEntryCount(env,key){return (await ticketEntries(env,key)).filter(isSynced).length;}
+async function holdEntries(env,key,hold){
+  for(const e of await ticketEntries(env,key)){
+    const raw=JSON.stringify(e);
+    if(hold&&!e.lineId&&e.state!=='review'&&e.state!=='agreed')await saveEntry(env,raw,{...e,state:'agreed',setup:'',error:'',nextTryAt:0});
+    else if(!hold&&e.state==='agreed')await saveEntry(env,raw,{...e,state:'syncing',error:'',nextTryAt:0});
+  }
+}
+// Called by saveMetadata after the agreed hours are saved: m.agreedHours (null clears them), m.agreedDate, m.agreedDeveloper.
+export async function syncAgreedLine(env,key,m,{title='',me}){
+  const id=agreedId(key),busy=()=>problem('The agreed hours are being sent to Odoo right now. Try again in a moment.',409,'busy');
+  if(m.agreedHours==null){
+    await withLock(env,'e:'+id,async()=>{const e=await readEntry(env,id);if(e&&!e.lineId&&e.state!=='agreed')await saveEntry(env,JSON.stringify(e),{...e,state:'agreed',setup:'',error:'',nextTryAt:0});},busy);
+    return holdEntries(env,key,false);
+  }
+  await withLock(env,'e:'+id,async()=>{
+    const prev=await readEntry(env,id),now=new Date().toISOString(),minutes=Math.round(m.agreedHours*60);
+    const author={email:'',name:m.agreedDeveloper,uuid:'dev:'+m.agreedDeveloper};
+    const e={...(prev||{id,ticket:key,source:sourceOf(env,key),createdAt:now,revision:0,syncedRevision:-1,lineId:null,taskId:null,projectId:null,dispatch:null,review:null,setup:'',error:'',attempts:0,nextTryAt:0,revisions:[]}),
+      agreed:true,ticketTitle:clean(title,250)||prev?.ticketTitle||'',date:m.agreedDate,minutes,description:'Agreed hours for '+key,author};
+    // A change to the hours, date or developer updates the same line; its date stays as it was first set.
+    if(!prev||prev.minutes!==minutes||prev.date!==m.agreedDate||prev.author.name!==author.name){
+      if(prev)e.revisions=[...prev.revisions,{n:prev.revision+1,at:now,by:{email:normEmail(me.email),name:me.name||me.email},reason:'Agreed hours changed',from:{date:prev.date,minutes:prev.minutes},to:{date:e.date,minutes}}];
+      e.revision=prev?prev.revision+1:0;
+      Object.assign(e,{state:'syncing',error:'',setup:'',attempts:0,nextTryAt:0,review:null});
+    }
+    if(!await saveEntry(env,prev?JSON.stringify(prev):null,e))problem('The agreed hours changed while saving. Refresh and retry.',409,'conflict');
+  },busy);
+  await holdEntries(env,key,true);
+  // Sent now; if Odoo is unreachable the line stays queued and the scheduled sync retries it.
+  try{await syncEntry(env,id,{force:true});}catch{}
+}
+
+// The overage flag is shown to everyone; the hours over are shown to administrators only (they reveal the agreed hours).
+export const overageView=(me,agreed,loggedMinutes)=>{const {overage,overHours}=overageOf(agreed,loggedMinutes);return me.role==='admin'?{overage,overHours}:{overage};};
+
+// Per ticket, for the business report: the hours each person logged and where Odoo stands with them.
+export async function reportWork(env,rows){
+  const out={};
+  for(let i=0;i<rows.length;i+=12)await Promise.all(rows.slice(i,i+12).map(async({key,agreedHours})=>{
+    const entries=await ticketEntries(env,key),byName=new Map();
+    for(const e of entries)byName.set(e.author.name,(byName.get(e.author.name)||0)+e.minutes);
+    let odoo;
+    if(agreedHours!=null){const line=await readEntry(env,agreedId(key));odoo=!line?'Not sent':isSynced(line)?'Synced':'Waiting to sync';}
+    else odoo=!entries.length?'No work logged':entries.some(e=>!isSynced(e))?'Waiting to sync':'Synced';
+    out[key]={odoo,employees:[...byName].map(([name,minutes])=>({name,hours:Math.round(minutes/60*100)/100}))};
+  }));
+  return out;
+}
+
 // ---- Closure gate ----
 // Every route that closes a ticket calls this under the ticket lock. All the ticket's work entries and their
 // corrections must be in Odoo, confirmed by one batched read. No override.
 export async function timeClosureErrors(env,key){
   if(!env.STORE?.writeIndexed)return [];
-  const entries=await ticketEntries(env,key);if(!entries.length)return [];
-  const waiting=entries.filter(e=>!isSynced(e));
+  // With agreed hours, the ticket's entries are held in the dashboard: the agreed line must be in Odoo instead.
+  const agreed=(await readMetadata(env,key)).agreedHours??null;
+  const entries=await ticketEntries(env,key),agreedLine=agreed!=null?await readEntry(env,agreedId(key)):null;
+  if(!entries.length&&agreed==null)return [];
+  const held=e=>agreed!=null&&e.state==='agreed';
+  const waiting=entries.filter(e=>!isSynced(e)&&!held(e));
   if(waiting.length)return [waiting.length+' work '+(waiting.length===1?'entry is':'entries are')+' not in Odoo yet ('+[...new Set(waiting.map(e=>STATUS[e.state]))].join(', ')+')'];
+  if(agreed!=null&&!(agreedLine&&isSynced(agreedLine)))return ['The agreed hours ('+agreed+' h) are not in Odoo yet'+(agreedLine?' ('+STATUS[agreedLine.state]+')':'')];
+  const checked=[...entries.filter(isSynced),...(agreed!=null?[agreedLine]:[])];
   const cfg=await readConfig(env);let lines;
-  try{lines=await odoo(env,'account.analytic.line','search_read',[[['id','in',entries.map(e=>e.lineId)]]],{fields:['date','unit_amount',...(cfg.fields.entryUuid?[cfg.fields.entryUuid]:[])]});}
+  try{lines=await odoo(env,'account.analytic.line','search_read',[[['id','in',checked.map(e=>e.lineId)]]],{fields:['date','unit_amount',...(cfg.fields.entryUuid?[cfg.fields.entryUuid]:[])]});}
   catch(err){return ["Couldn't confirm the work log with Odoo: "+clean(err.message,200)];}
   const byId=new Map(lines.map(l=>[l.id,l]));
-  const bad=entries.filter(e=>{const l=byId.get(e.lineId);return !l||!lineMatches(l,e)||(cfg.fields.entryUuid&&l[cfg.fields.entryUuid]!==e.id);});
+  const bad=checked.filter(e=>{const l=byId.get(e.lineId);return !l||!lineMatches(l,e)||(cfg.fields.entryUuid&&l[cfg.fields.entryUuid]!==e.id);});
   if(!bad.length)return [];
   // Changed or deleted in Odoo: these go to an administrator.
   for(const e of bad){const raw=JSON.stringify(e);await saveEntry(env,raw,{...e,state:'review',review:{kind:'conflict',message:byId.get(e.lineId)?'Odoo line #'+e.lineId+' was changed in Odoo and no longer matches this entry.':'Odoo line #'+e.lineId+' was deleted in Odoo.',lines:[e.lineId]}}).catch(()=>null);}
@@ -356,7 +426,7 @@ async function body(request){const raw=await request.text();if(raw.length>20000)
 async function ticketView(env,me,key,t){
   const cfg=await readConfig(env),source=sourceOf(env,key),entries=await ticketEntries(env,key),summary=summarize(entries);
   await requireStore(env).set(K.sum(env,key),JSON.stringify(summary));
-  const baselineHours=source==='odoo'?null:(await readMetadata(env,key)).actualHours;
+  const meta=source==='odoo'?{}:await readMetadata(env,key),baselineHours=source==='odoo'?null:meta.actualHours;
   const allowed=canLog(cfg,me);
   let destination=null;
   if(allowed&&odooConfigured(env)){
@@ -371,7 +441,7 @@ async function ticketView(env,me,key,t){
   }
   return {ticket:key,source,closed:!!t.closed,logging:cfg.mode!=='off',canLog:allowed&&!t.closed,today:todayIn(),maxMinutes:MAX_MINUTES,
     lockDate:allowed?await cachedLockDate(env,cfg).catch(()=>null):null,entries:entries.map(e=>publicEntry(e,me)),summary,
-    baselineHours,totalHours:totalHours(baselineHours,summary.loggedMinutes),destination};
+    baselineHours,totalHours:totalHours(baselineHours,summary.loggedMinutes),...overageView(me,meta.agreedHours??null,summary.loggedMinutes),destination};
 }
 const destinationFor=(env,cfg,e)=>destination(env,cfg,e);
 
@@ -513,9 +583,12 @@ export async function timeRoutes(request,env,url,me,{readTicket}){
     if(method==='POST'){const r=await createEntry(env,me,await body(request),readTicket);return json({entry:publicEntry(r.entry,me),summary:r.summary},r.created?201:200);}
     problem('Use GET or POST.',405,'method');
   }
-  const m=/^\/time-entries\/([0-9a-f-]{36})(\/sync)?$/.exec(path);
-  if(m&&!m[2]&&method==='PATCH'){const r=await correctEntry(env,me,m[1],await body(request),readTicket);return json({entry:publicEntry(r.entry,me),summary:r.summary});}
-  if(m&&m[2]&&method==='POST'){const r=await syncAction(env,me,m[1],await body(request),readTicket);return json({entry:publicEntry(r.entry,me),summary:r.summary});}
+  // A ticket's agreed-hours line ("agreed:<KEY>") can be checked and resent like an entry; only an administrator can, since no user wrote it.
+  const m=/^\/time-entries\/((?:[0-9a-f-]{36})|agreed(?::|%3A)[A-Z][A-Z0-9_]*-[0-9]+)(\/sync)?$/.exec(path);
+  const id=m&&decodeURIComponent(m[1]);
+  if(m&&!m[2]&&method==='PATCH'&&id.startsWith('agreed:'))problem('Change the agreed hours on the ticket instead.',409,'agreed_line');
+  if(m&&!m[2]&&method==='PATCH'){const r=await correctEntry(env,me,id,await body(request),readTicket);return json({entry:publicEntry(r.entry,me),summary:r.summary});}
+  if(m&&m[2]&&method==='POST'){const r=await syncAction(env,me,id,await body(request),readTicket);return json({entry:publicEntry(r.entry,me),summary:r.summary});}
   problem('Not found.',404,'not_found');
 }
 

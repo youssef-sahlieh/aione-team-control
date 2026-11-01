@@ -36,6 +36,8 @@ function combobox(select){
 }
 const input=(type,value)=>{const n=el('input','inp');n.type=type;n.value=value??'';return n;};
 const message=(target,e)=>{target.textContent=e.message||String(e);target.className='msg err';};
+// The overage flag: more work logged than the agreed hours. Administrators also see the hours over.
+export function checkupNote(m){const text=m.agreedHours!=null?'Needs checkup: '+(Math.round(m.loggedMinutes/60*100)/100)+' h logged, '+m.agreedHours+' h agreed'+(m.overHours>0?' ('+m.overHours+' h over)':'')+'.':'Needs checkup: more work is logged than agreed.';return el('p','msg err checkup',text);}
 export function createTicketBusiness({api,context,onChange,openIssue}){
   let billingNeeded=false,enabled=false,epicMapping=false,catalog={revision:0,entries:[]},records={},editor=null;
   const reportBrowser=createReportBrowser({api,openIssue});
@@ -72,11 +74,13 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const logged=values.loggedMinutes>0;
     const estimated=field(workGroup,'Estimated hours',input('number',values.estimatedHours)),actual=field(workGroup,logged?'Actual hours before the work log':'Actual hours',input('number',values.actualHours));
     if(logged){const total=el('p','msg business-total','Actual hours with the work log: '+values.totalActualHours+' h ('+(Math.round(values.loggedMinutes/60*100)/100)+' h logged).');workGroup.append(total);}
+    // Agreed hours: administrators only. They are the figure Odoo gets for the ticket; empty clears them.
+    let agreed=null;if(admin()&&!creating){agreed=field(workGroup,'Agreed hours (administrators only)',input('number',values.agreedHours));agreed.min='0.01';agreed.max='1000000';agreed.step='0.01';agreed.disabled=closed;agreed.title='Odoo gets one line with these hours for the developer. Empty clears them.';}
     for(const n of [estimated,actual]){n.min='0.01';n.max='1000000';n.step='0.01';n.disabled=closed;}
     // Once set, the estimate is changed by administrators only.
     if(!admin()&&!creating&&values.estimatedHours!=null){estimated.disabled=true;estimated.title='The estimate is set. Ask an administrator to change it.';}
     const work=field(workGroup,'Work done',el('textarea','inp'));work.value=values.workDone||'';work.maxLength=5000;work.rows=4;work.dir='auto';work.disabled=closed;
-    const read=()=>{if(creating&&admin()&&billingNeeded&&!billing.value)throw new Error('Choose Billable or Not billable before assigning this ticket.');for(const n of [estimated,actual])if(!n.checkValidity())throw new Error('Hours must be greater than zero, with up to two decimal places.');const out={estimatedHours:estimated.value===''?null:Number(estimated.value),actualHours:actual.value===''?null:Number(actual.value),workDone:work.value};if(admin()||creating)Object.assign(out,selects.read());if(billing)out.billing=billing.value||null;return out;};
+    const read=()=>{if(creating&&admin()&&billingNeeded&&!billing.value)throw new Error('Choose Billable or Not billable before assigning this ticket.');for(const n of [estimated,actual])if(!n.checkValidity())throw new Error('Hours must be greater than zero, with up to two decimal places.');const out={estimatedHours:estimated.value===''?null:Number(estimated.value),actualHours:actual.value===''?null:Number(actual.value),workDone:work.value};if(admin()||creating)Object.assign(out,selects.read());if(billing)out.billing=billing.value||null;if(agreed){if(!agreed.checkValidity())throw new Error('Agreed hours must be greater than zero, with up to two decimal places.');const hours=agreed.value===''?null:Number(agreed.value);if(hours!==(values.agreedHours??null))out.agreedHours=hours;}return out;};
     return {read,box,selects};
   }
   async function load(keys){
@@ -117,6 +121,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       records[key]=r.metadata;target.replaceChildren(el('h3','','Ticket work & client'));
       target.append(el('p','business-guidance',r.closed?'Completed work is read-only. Reopen the ticket to make corrections.':'Complete the hours and work summary before closing. The client is optional.'));
       if(r.metadata.epicKey)target.append(el('p','business-guidance','The client comes from epic '+r.metadata.epicKey+' and follows it. Choosing another client here stops that.'));
+      if(r.metadata.overage==='overage')target.append(checkupNote(r.metadata));
       const controls=createFields(target,{values:r.metadata,closed:r.closed}),msg=el('p','msg');let initial=JSON.stringify(controls.read()),editorRevision=r.metadata.revision;
       const readiness=el('div','work-readiness');target.insertBefore(readiness,controls.box);
       const updateReadiness=()=>{let value;try{value={...r.metadata,...controls.read()};}catch{value={...r.metadata};}readiness.replaceChildren();for(const [label,ready]of [['Estimate',value.estimatedHours>0],['Actual hours',value.actualHours>0||r.metadata.loggedMinutes>0],['Work done',!!value.workDone?.trim()]]){const chip=el('span','readiness-chip'+(ready?' ready':''),(ready?'✓ ':'○ ')+label);readiness.append(chip);}};controls.box.addEventListener('input',updateReadiness);controls.box.addEventListener('change',updateReadiness);updateReadiness();
@@ -124,7 +129,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       if(r.closed)target.append(el('p','msg','Closed ticket. An administrator must reopen it before these fields can be edited.'));
       else target.append(button('Save ticket fields',async e=>{
         const save=e.currentTarget;save.disabled=true;
-        try{const data=await api('/ticket-metadata',{method:'PUT',body:{key,fields:{revision:editorRevision,...controls.read()}}});records[key]=data.metadata;editorRevision=data.metadata.revision;initial=JSON.stringify(controls.read());msg.className='msg';msg.textContent='Ticket fields saved.';await onChange();}
+        try{const data=await api('/ticket-metadata',{method:'PUT',body:{key,fields:{revision:editorRevision,...controls.read()}}});records[key]=data.metadata;editorRevision=data.metadata.revision;initial=JSON.stringify(controls.read());msg.className='msg';msg.textContent='Ticket fields saved.'+(data.warning?' '+data.warning:'');await onChange();}
         catch(err){message(msg,err);}finally{save.disabled=false;}
       },'btn primary'));
       target.append(msg);

@@ -1,5 +1,5 @@
 import { readRoute, routeUrl } from "./router.js";
-import { calculateWorkload } from "../models/workload.js";
+import { calculateWorkload, workloadTotals } from "../models/workload.js";
 import { assigneeOptions } from "../models/assignees.js";
 const $ = id => document.getElementById(id);
 const node = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
@@ -8,7 +8,6 @@ const icons = {
   overview: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z",
   tickets: "M4 4h16v16H4z M8 9h8 M8 14h5",
   internal: "M4 3h12l4 4v14H4z M16 3v5h4 M8 12h8 M8 16h5",
-  boards: "M3 4h5v16H3z M10 4h5v11h-5z M17 4h5v14h-5z",
   workload: "M4 20V10 M10 20V4 M16 20v-7 M22 20H2",
   calendar: "M4 5h16v16H4z M8 2v6 M16 2v6 M4 10h16 M8 14h2 M14 14h2",
   reports: "M4 3h16v18H4z M8 8h8 M8 12h8 M8 16h5",
@@ -21,7 +20,6 @@ const icons = {
 const pages = [
   ["overview", "Overview", "Your work, at a glance."],
   ["tickets", "All tickets", "A clear view of your team's work, from first task to final delivery."],
-  ["boards", "Boards", "Keep work moving with a shared view of every stage."],
   ["workload", "Workload", "Understand assignments, deadlines, and where support is needed."],
   ["calendar", "Calendar", "Make space for what's next. Plan around your ticket due dates."],
   ["requests", "Date requests", "Review and decide proposed date changes."],
@@ -75,9 +73,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     }
   });
   function synchronize() {
-    if (route.page === "boards") state.view = route.mode;
-    else if (route.page === "requests") state.view = "list";
-    else state.view = "list";
+    state.view = "list";
     state.sel.clear();
     state.pageIndex = 0;
   }
@@ -118,7 +114,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
   const monitor = node("a", "nav-link"); monitor.id = "ai1-monitor-link"; monitor.href = MONITOR_START_URL; monitor.target = "_blank"; monitor.rel = "noopener"; monitor.title = "AI1 Monitor (opens in a new tab)"; monitor.hidden = true;
   monitor.append(icon("audit"), node("span", "", "AI1 Monitor"), node("span", "nav-ext", "↗"));
   nav.insertBefore(monitor, dbReport.nextSibling);
-  const navOrder = ["overview", "tickets", "audit", "databases", "monitor", "requests", "workload", "boards", "calendar", "reports", "clients", "worklog", "errors"];
+  const navOrder = ["overview", "tickets", "audit", "databases", "monitor", "requests", "workload", "calendar", "reports", "clients", "worklog", "errors"];
   const navItem = id => nav.querySelector(id === "audit" ? "#monitor-link" : id === "databases" ? "#dbreport-link" : id === "monitor" ? "#ai1-monitor-link" : `[data-page="${id}"]`);
   function configure() {
     route = readRoute(new URL(location.href), context().admin);
@@ -203,7 +199,17 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
       for (const stage of metric.statuses) { const part = node("span"); part.style.setProperty("--weight", stage.count);part.title=`${stage.status}: ${stage.count}`;bar.appendChild(part); }
       bar.setAttribute("aria-label",metric.statuses.map(stage=>`${stage.status}: ${stage.count}`).join(", ")); distribution.appendChild(bar); row.appendChild(distribution); body.appendChild(row);
     }
-    table.appendChild(body); p.appendChild(table); if (!names.length) p.appendChild(node("div", "empty-copy", "No assignments in this view.")); target.appendChild(p);
+    table.appendChild(body);
+    if (names.length) {
+      const totals = workloadTotals(items, today()), foot = node("tfoot"), row = node("tr", "workload-total");
+      const label = workloadMode === "dev" ? "All tickets" : "All assignees";
+      row.appendChild(node("td", "", `${label} (${totals.tickets})`));
+      for (const [value, text] of [[totals.open, "Open"], [totals.inProgress, "In progress"], [totals.overdue, "Overdue"], [totals.noDueDate, "No date"], [totals.completed, "Done"]]) { const td = node("td", "", String(value)); td.dataset.label = text; row.appendChild(td); }
+      const distribution = node("td", "workload-distribution"), bar = node("div", "workload-bar");
+      for (const stage of totals.statuses) { const part = node("span"); part.style.setProperty("--weight", stage.count); part.title = `${stage.status}: ${stage.count}`; bar.appendChild(part); }
+      distribution.appendChild(bar); row.appendChild(distribution); foot.appendChild(row); table.appendChild(foot);
+    }
+    p.appendChild(table); if (!names.length) p.appendChild(node("div", "empty-copy", "No assignments in this view.")); target.appendChild(p);
   }
   function calendar(items, target) {
     const p = panel("Approved deadlines", "Calendar dates change only after admin approval. Open a ticket to propose a change."); p.classList.add("calendar-panel");
@@ -241,7 +247,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     document.body.dataset.workspacePage = route.page;
     $("page-heading").textContent = page[1]; $("page-description").textContent = route.page==="tickets"&&!context().admin?"The tickets you’re authorized to work on.":page[2]; $("breadcrumbs").textContent = page[1];
     for (const link of nav.querySelectorAll("a[data-page]")) { if (link.dataset.page === route.page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); }
-    if(context().admin&&["boards","history"].includes(route.page))moreNav.open=true;
+    if(context().admin&&route.page==="history")moreNav.open=true;
     $("nav-date-count").textContent=String(context().pendingDates||0);
     $("nav-ticket-count").textContent = String(state.issues?.length || 0);
     const custom = ["overview", "requests", "workload", "calendar", "reports", "clients", "worklog", "errors"].includes(route.page);

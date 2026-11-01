@@ -1,5 +1,5 @@
 // Log work → Odoo timesheets: the "Log work" form, the ticket's Work log, administrator corrections and
-// reconciliation, the Work log page (report for everyone, setup for administrators).
+// reconciliation, the Work log page (report for everyone; administrators get setup, reports are in Checks & Reports).
 // Durations are whole minutes; dates are work dates in Asia/Jerusalem. The server checks everything again.
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
 const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.addEventListener('click',fn);return b;};
@@ -10,6 +10,15 @@ const hours=m=>(Math.round(m/60*100)/100).toLocaleString('en-US',{maximumFractio
 const niceDate=d=>{try{return new Date(d+'T12:00:00Z').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric',timeZone:'UTC'});}catch{return d;}};
 const STATUS_CLASS={synced:'ok',syncing:'busy',setup:'warn',review:'crit'};
 // "90", "1:30", "1h 30m", "1.5h", "45m" -> minutes (null when it can't be read).
+// The two boxes (hours 0–24, minutes 0–59) as total minutes; null when a box is not a whole number in range.
+// The total can still be over a day (24 h 30 m); saving refuses anything over 1440 minutes.
+export function boxesMinutes(hoursText,minutesText){
+  const h=String(hoursText||'').trim()||'0',mi=String(minutesText||'').trim()||'0';
+  if(!/^\d{1,2}$/.test(h)||!/^\d{1,2}$/.test(mi))return null;
+  const hv=Number(h),mv=Number(mi);
+  if(hv>24||mv>59)return null;
+  return hv*60+mv;
+}
 export function parseDuration(text){
   const s=String(text||'').trim().toLowerCase();if(!s)return null;
   let m=/^(\d{1,2}):([0-5]\d)$/.exec(s);if(m)return Number(m[1])*60+Number(m[2]);
@@ -41,21 +50,27 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,onLogged
     const minDate=view.lockDate?new Date(Date.parse(view.lockDate+'T12:00:00Z')+86400000).toISOString().slice(0,10):'';
     const date=field(row,'Work date',input('date',view.today),view.lockDate?'Odoo is locked up to '+view.lockDate+'.':'Today or earlier (Israel time).');
     date.max=view.today;if(minDate)date.min=minDate;date.required=true;
-    const duration=field(row,'Duration',input('text',''),'Minutes, or like 1h 30m or 1:30. Up to 24 hours.');
-    duration.placeholder='e.g. 45 or 1h 30m';duration.inputMode='text';duration.autocomplete='off';
-    const shown=el('span','wl-duration-shown');duration.closest('label').append(shown);
-    const shortcuts=el('div','wl-shortcuts');for(const [label,m] of [['15m',15],['30m',30],['1h',60],['2h',120]])shortcuts.append(button(label,()=>{duration.value=String(m);update();duration.focus();},'btn wl-chip'));
-    duration.closest('label').after(shortcuts);
+    // Hours (0 to 24) and minutes (0 to 59) are whole numbers; the total in minutes is what gets saved.
+    const hoursBox=field(row,'Hours',input('number',''),'Whole hours, 0 to 24.');
+    const minutesBox=field(row,'Minutes',input('number',''),'Whole minutes, 0 to 59. The total is 1 minute to 24 hours.');
+    for(const n of [hoursBox,minutesBox]){n.min='0';n.step='1';n.inputMode='numeric';n.autocomplete='off';}
+    hoursBox.max='24';minutesBox.max='59';
+    const shown=el('span','wl-duration-shown');minutesBox.closest('label').append(shown);
+    const setMinutes=m=>{hoursBox.value=String(Math.floor(m/60));minutesBox.value=String(m%60);};
+    const shortcuts=el('div','wl-shortcuts');for(const [label,m] of [['15m',15],['30m',30],['1h',60],['2h',120]])shortcuts.append(button(label,()=>{setMinutes(m);update();hoursBox.focus();},'btn wl-chip'));
+    minutesBox.closest('label').after(shortcuts);
     const desc=field(body,'Description',el('textarea','inp'),'What you did. Required; it is written on the Odoo timesheet line.');desc.rows=4;desc.maxLength=2000;desc.dir='auto';desc.required=true;
-    const update=()=>{const m=parseDuration(duration.value);shown.textContent=duration.value.trim()?(m&&m>=1&&m<=1440?'= '+formatMinutes(m):'Not a valid duration'):'';shown.className='wl-duration-shown'+(duration.value.trim()&&!(m&&m>=1&&m<=1440)?' err':'');};
-    duration.addEventListener('input',update);
+    // The total in minutes, or null when a box isn't a whole number in range. An empty box counts as 0.
+    const readMinutes=()=>boxesMinutes(hoursBox.value,minutesBox.value);
+    const update=()=>{const m=readMinutes(),typed=hoursBox.value.trim()||minutesBox.value.trim(),ok=m!=null&&m>=1&&m<=1440;shown.textContent=!typed?'':ok?'= '+formatMinutes(m):'Hours 0 to 24, minutes 0 to 59, at least 1 minute in total.';shown.className='wl-duration-shown'+(typed&&!ok?' err':'');};
+    hoursBox.addEventListener('input',update);minutesBox.addEventListener('input',update);
     // The id makes saving safe to repeat: a retry after a lost answer can't log the work twice.
     let id=crypto.randomUUID();
     const save=async again=>{
-      const minutes=parseDuration(duration.value),description=desc.value.trim();
+      const minutes=readMinutes(),description=desc.value.trim();
       if(!date.value||date.value>view.today){fail(msg,new Error('Choose a work date that is not in the future.'));date.focus();return;}
       if(minDate&&date.value<minDate){fail(msg,new Error('Odoo is locked up to '+view.lockDate+'. Choose a later date.'));date.focus();return;}
-      if(!minutes||minutes<1||minutes>1440){fail(msg,new Error('Enter a duration between 1 minute and 24 hours.'));duration.focus();return;}
+      if(!minutes||minutes<1||minutes>1440){fail(msg,new Error('Enter hours (0 to 24) and minutes (0 to 59): at least 1 minute, and no more than 24 hours.'));hoursBox.focus();return;}
       if(!description){fail(msg,new Error('Describe the work.'));desc.focus();return;}
       for(const b of actions.querySelectorAll('button'))b.disabled=true;msg.className='msg';msg.textContent='Saving…';
       try{
@@ -63,14 +78,14 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,onLogged
         id=crypto.randomUUID();
         const note=formatMinutes(minutes)+' logged on '+key+(r.entry.status==='synced'?' and saved in Odoo.':' · '+r.entry.statusLabel+(r.entry.reason?': '+r.entry.reason:''));
         onLogged(key);render(key);
-        if(again){duration.value='';desc.value='';update();msg.className='msg ok';msg.textContent=note+' Add the next one.';duration.focus();}
+        if(again){hoursBox.value='';minutesBox.value='';desc.value='';update();msg.className='msg ok';msg.textContent=note+' Add the next one.';hoursBox.focus();}
         else{d.close();if(toast)toast(note);}
       }catch(err){fail(msg,err);}
       finally{for(const b of actions.querySelectorAll('button'))b.disabled=false;}
     };
     const actions=el('div','wl-actions');actions.append(button('Save',()=>save(false),'btn primary'),button('Save and add another',()=>save(true)),button('Cancel',()=>d.close()));body.append(actions);
     body.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();save(false);}});
-    duration.focus();
+    hoursBox.focus();
   }
 
   // ---- Correction (administrators) ----
@@ -155,7 +170,7 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,onLogged
   function openFor(key,title){const view=views[key];if(view&&view.canLog)openForm(key,title,view);}
 
   // ---- Work log page ----
-  let report=null,filters={user:'',client:'',project:'',ticket:'',source:'',status:''},groupBy='user',tab='report';
+  let report=null,filters={user:'',client:'',project:'',ticket:'',source:'',status:''},groupBy='user';
   const SOURCES={jira:'Jira',internal:'Internal',odoo:'Odoo Helpdesk'};
   // The dashboard redraws its pages whenever data refreshes: the page shown is kept as it is (no reload, no
   // flashing). It is rebuilt only for a tab change or after saving (fresh).
@@ -163,10 +178,8 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,onLogged
   function renderPage(target,fresh=false){
     if(pageNode&&!fresh){if(pageNode.parentNode!==target)target.replaceChildren(pageNode);return;}
     const wrap=el('div','wl-page');pageNode=wrap;target.replaceChildren(wrap);
-    if(isAdmin()){const tabs=el('div','wl-tabs');tabs.setAttribute('role','tablist');
-      for(const [id,label] of [['report','Report'],['setup','Setup']]){const b=button(label,()=>{tab=id;renderPage(target,true);},'btn'+(tab===id?' primary':''));b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===id));tabs.append(b);}
-      wrap.append(tabs);}
-    if(tab==='setup'&&isAdmin())return renderSetup(wrap);
+    // Reports moved to Checks & Reports (the unified business report); administrators get setup only here.
+    if(isAdmin())return renderSetup(wrap);
     renderReport(wrap);
   }
   function renderReport(wrap){

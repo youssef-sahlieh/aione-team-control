@@ -1,6 +1,6 @@
 import {BusinessError,requireStore} from './ticket-metadata.js';
 import {buildReport} from './reports.js';
-export const savedReportKey=env=>'reports:all:v1:'+encodeURIComponent(env.JIRA_SITE||'')+':'+env.JIRA_PROJECT;
+export const savedReportKey=env=>'reports:all:v2:'+encodeURIComponent(env.JIRA_SITE||'')+':'+env.JIRA_PROJECT;
 const isComplete=report=>report?.coverage?.jiraComplete===true&&report.coverage.internalComplete===true;
 export async function savedReport(env,me,deps,{refresh=false,now=new Date()}={}){
  if(me.role!=='admin')throw new BusinessError('Only administrators can read saved management reports.',403,'forbidden');

@@ -1,9 +1,11 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
 import {readRoute,routeUrl} from "../../public/assets/app/router.js";
-test("unknown pages and disallowed developer boards fall back safely",()=>{
+test("unknown and removed pages fall back safely",()=>{
   assert.deepEqual(readRoute(new URL("http://localhost/dashboard.html?page=unknown&mode=dev"),false),{page:"tickets",mode:"status"});
-  assert.deepEqual(readRoute(new URL("http://localhost/dashboard.html?page=boards&mode=dev"),false),{page:"boards",mode:"status"});
+  // The Boards tab is gone: its old links open All tickets.
+  assert.deepEqual(readRoute(new URL("http://localhost/dashboard.html?page=boards&mode=dev"),false),{page:"tickets",mode:"status"});
+  assert.deepEqual(readRoute(new URL("http://localhost/dashboard.html?page=boards&mode=dev"),true),{page:"tickets",mode:"dev"});
   assert.equal(readRoute(new URL("http://localhost/dashboard.html?page=history#AION-101"),false).page,"tickets");
   assert.equal(readRoute(new URL("http://localhost/dashboard.html?page=history"),true).page,"requests");
   assert.equal(readRoute(new URL("http://localhost/dashboard.html?page=workload#INT-101"),false).page,"tickets");
