@@ -76,13 +76,13 @@ test("a developer sees Audit & Deploy and every change is logged with their name
   expect(mock.unexpected).toEqual([]); expect(mock.errors).toEqual([]);
 });
 
-test("dashboard sidebar links to Audit & Deploy when Odoo is connected", async ({ page }) => {
+test("dashboard sidebar has no Audit & Deploy link when Odoo is connected", async ({ page }) => {
   await page.addInitScript(() => { localStorage.setItem("aione-session", JSON.stringify({ token: "t", email: "x@example.invalid", expiresAt: Date.now() + 3600000, role: "user" })); });
   await page.route("**/*", (route) => {
     const url = new URL(route.request().url());
     if (url.origin === "http://127.0.0.1:4173") return route.continue();
     if (url.hostname !== "aione-team-proxy.vercel.app") return route.abort();
-    if (url.pathname === "/config") return route.fulfill({ json: { site: "https://jira.example.invalid", project: "AION", people: {}, devs: ["builder"], role: "user", dev: "builder", email: "x@example.invalid", accounts: true, odoo: true, mail: false, ai: { enabled: false } } });
+    if (url.pathname === "/config") return route.fulfill({ json: { site: "https://jira.example.invalid", project: "AION", people: {}, devs: ["builder"], role: "user", dev: "builder", email: "x@example.invalid", accounts: true, odoo: true, dbReport: true, mail: false, ai: { enabled: false } } });
     if (url.pathname === "/jira/search") return route.fulfill({ json: { issues: [], isLast: true } });
     if (url.pathname === "/odoo/tickets") return route.fulfill({ json: { tickets: [] } });
     if (url.pathname === "/internal") return route.fulfill({ json: { tickets: [] } });
@@ -90,13 +90,13 @@ test("dashboard sidebar links to Audit & Deploy when Odoo is connected", async (
     return route.fulfill({ status: 403, json: { code: "forbidden", error: "x" } });
   });
   await page.goto("/dashboard.html");
-  await expect(page.locator("#monitor-link")).toBeVisible();
-  await expect(page.locator("#monitor-link")).toHaveAttribute("href", "audit-deploy.html");
-  // Sidebar order: no "More" menu; Audit & Deploy right after All tickets.
+  // Audit & Deploy is no longer in the sidebar; Databases stays right after All tickets.
+  await expect(page.locator("#monitor-link")).toHaveCount(0);
   await expect(page.locator("#manager-more-nav")).toHaveCount(0);
   const order = await page.locator("#main-nav > a:visible").evaluateAll((links) => links.map((a) => a.textContent.replace(/[—\d]+$/, "").trim()));
-  expect(order.indexOf("Audit & Deploy")).toBe(order.indexOf("All tickets") + 1);
+  expect(order).not.toContain("Audit & Deploy");
   expect(order).not.toContain("Boards");
+  expect(order.indexOf("Databases")).toBe(order.indexOf("All tickets") + 1);
 });
 
 test("a second visit shows the saved tickets at once, and signing out removes them", async ({ page }) => {
