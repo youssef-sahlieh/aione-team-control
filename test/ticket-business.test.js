@@ -119,6 +119,20 @@ test('reports reconcile ticket-total hours, partial coverage, missing dates and 
  assert.equal(r.tickets.find(x=>x.key===t.key).overEstimate.percent,100);await assert.rejects(buildReport(s.env,user,deps),/Only administrators/);
  assert.throws(()=>reportPeriod({start:'2026-02-30',end:'2026-10-15'}),/valid report period/);
 });
+test('when work-log summaries cannot be read, logged hours and checkup flags are unknown; a recorded zero stays zero',async()=>{
+ const env={SESSION_SECRET:'synthetic-secret',JIRA_PROJECT:'AION',JIRA_SITE:'https://jira.invalid',STORE:memoryStore(),TEAM_CONFIG:JSON.stringify({people:{lead:{id:'lead',name:'Lead'}}})};
+ const tickets={'INT-1':{title:'One',closed:false,assignee:'lead'}},readTicket=async key=>tickets[key]?{key,...tickets[key]}:null;
+ await agreedImportApply(env,admin,[{key:'INT-1',agreedHours:4}],readTicket);
+ const deps={readSearch:async()=>({issues:[],isLast:true}),readInternal:async()=>[{key:'INT-1',title:'One',status:'Open',cat:'new',closed:false,devs:[],created:'2026-10-14T10:00:00Z',updated:'2026-10-14T10:00:00Z',completedAt:null,internal:true}]};
+ const broken={...env,STORE:{...env.STORE,async mget(){throw new Error('store unavailable');}}};
+ const unknown=await buildReport(broken,admin,deps,{workflow:'all'},new Date('2026-10-15T10:00:00Z'));
+ const row=unknown.tickets.find(x=>x.key==='INT-1');
+ assert.equal(row.agreedHours,4);assert.equal(row.loggedHours,null);assert.equal(row.overage,null);assert.equal(row.odooStatus,'Not checked');assert.equal(row.employees,null);
+ assert.match(unknown.warnings.join(' '),/Logged hours could not be retrieved/);
+ const known=await buildReport(env,admin,deps,{workflow:'all'},new Date('2026-10-15T10:00:00Z'));
+ const zero=known.tickets.find(x=>x.key==='INT-1');
+ assert.equal(zero.loggedHours,0);assert.equal(zero.overage,'ok');assert.deepEqual(known.warnings.filter(w=>/Logged hours/.test(w)),[]);
+});
 test('AI internal reads filter unauthorized developers and omit user billing even from an unsafe adapter',async()=>{
  const internal=[{key:'INT-1',title:'Own',devs:['builder'],status:'Open'},{key:'INT-2',title:'Other',devs:['other'],status:'Open'}];
  const tools=createReadTools({me:user,project:'AION',readSearch:async()=>({issues:[],isLast:true}),readDashboard:async()=>internal,readBusiness:async key=>({...internal.find(t=>t.key===key),billing:'billable',workDone:'Done',actualHours:1})});
@@ -157,26 +171,31 @@ test('user initial dates, submissions and revisions require a saved positive est
  assert.equal((await s.call('/date-requests/submit','POST',{...body,proposedDate:'2026-11-04'})).status,400);
 });
 
-test('clients sync from Odoo: every contact is a client, each project a sub-client (Project) of its contact; only admins force it',async()=>{
+test('clients sync from Odoo: only Odoo companies are clients, each project a sub-client (Project) of its company; only admins force it',async()=>{
  const {env,call:api}=await setup();
  // An earlier sync grouped contact-less projects under "No customer": renamed in place, keeping its projects.
  {const c=await readCatalog(env);c.entries.push({id:'nc',name:'No customer',parentId:null,archived:false,sources:[]},{id:'old',name:'Old tool',parentId:'nc',archived:false,sources:[]});await env.STORE.set(catalogKey(env),JSON.stringify(c));}const realFetch=globalThis.fetch;let odooCalls=0;
  Object.assign(env,{ODOO_URL:'https://odoo.invalid',ODOO_DB:'db',ODOO_LOGIN:'bot@example.invalid',ODOO_API_KEY:'k'});
  globalThis.fetch=async(u,init)=>{const p=JSON.parse(init.body).params;if(p.service==='common')return Response.json({result:7});odooCalls++;
   const [model,method]=[p.args[3],p.args[4]];
-  if(model==='res.partner'&&method==='search_read'){assert.deepEqual(p.args[5],[[['parent_id','=',false],['user_ids','=',false]]]);return Response.json({result:[{id:1,display_name:'Acme'},{id:2,display_name:'Solo Customer'}]});}
-  if(model==='res.partner'&&method==='read')return Response.json({result:[{id:5,commercial_partner_id:[1,'Acme']},{id:1,commercial_partner_id:[1,'Acme']}]});
+  // Odoo filters the contact list to companies; the mock returns only what that domain matches.
+  if(model==='res.partner'&&method==='search_read'){assert.deepEqual(p.args[5],[[['parent_id','=',false],['user_ids','=',false],['is_company','=',true]]]);return Response.json({result:[{id:1,display_name:'Acme'}]});}
+  if(model==='res.partner'&&method==='read'){const ids=p.args[5][0],kw=p.args[6];
+    // Person 6 (Jane) works for no company: her own project is not a client's.
+    if(kw.fields.includes('is_company'))return Response.json({result:ids.map(id=>({id,active:true,is_company:id===1}))});
+    const commercial={5:[1,'Acme'],1:[1,'Acme'],6:[6,'Jane']};return Response.json({result:ids.map(id=>({id,commercial_partner_id:commercial[id]}))});}
   assert.equal(model,'project.project');assert.equal(method,'search_read');
-  return Response.json({result:[{id:10,display_name:'Branch A',partner_id:[5,'Acme, John']},{id:11,display_name:'Branch B',partner_id:[1,'Acme']},{id:12,display_name:'In-house',partner_id:false}]});};
+  return Response.json({result:[{id:10,display_name:'Branch A',partner_id:[5,'Acme, John']},{id:11,display_name:'Branch B',partner_id:[1,'Acme']},{id:12,display_name:'In-house',partner_id:false},{id:13,display_name:'Jane desk',partner_id:[6,'Jane']}]});};
  try{
   const call=(me,q='')=>api('/clients/odoo-sync'+q,'POST',{},me);
   assert.equal((await call(user,'?force=1')).status,403);
   const r=await (await call(admin,'?force=1')).json();
-  assert.equal(r.changed,true);assert.equal(r.customers,2);assert.equal(r.projects,3);
+  assert.equal(r.changed,true);assert.equal(r.customers,1);assert.equal(r.projects,4);
   const c=await readCatalog(env),top=n=>c.entries.find(e=>e.name===n&&!e.parentId),under=n=>c.entries.filter(e=>e.parentId===top(n).id).map(e=>e.name).sort();
   assert.deepEqual(under('Acme'),['Branch A','Branch B']); // a project of a person at Acme belongs to Acme
-  assert.ok(top('Solo Customer'));assert.deepEqual(under('Solo Customer'),[]); // a customer without a project is still a client
-  assert.deepEqual(under('No contact'),['In-house','Old tool']);assert.ok(!top('In-house'));assert.ok(!top('No customer'));assert.equal(top('No contact').id,'nc');
+  assert.equal(top('Solo Customer'),undefined); // a person (not a company) is not a client
+  assert.equal(top('Jane'),undefined);
+  assert.deepEqual(under('No contact'),['In-house','Jane desk','Old tool']);assert.ok(!top('In-house'));assert.ok(!top('No customer'));assert.equal(top('No contact').id,'nc');
   assert.ok(top('Acme').sources.some(x=>x.source==='odoo-customer'&&x.row===1)); // the Odoo contact id is kept
   // A fresh catalog is not read from Odoo again on the automatic refresh, and nothing changes.
   const before=odooCalls,again=await (await call(user)).json();assert.equal(again.changed,false);assert.equal(odooCalls,before);
@@ -190,7 +209,7 @@ test('administrators create a customer or a project in Odoo from the Clients pag
   const [model,method,args]=[p.args[3],p.args[4],p.args[5]];
   if(method==='create'){created.push({model,values:args[0]});const id=100+created.length;if(model==='res.partner')customers.push({id,display_name:args[0].name});else projects.push({id,display_name:args[0].name,partner_id:[args[0].partner_id,'x']});return Response.json({result:id});}
   if(model==='res.partner'&&method==='search_read')return Response.json({result:customers});
-  if(model==='res.partner'&&method==='read')return Response.json({result:args[0].map(id=>({id,commercial_partner_id:[id,(customers.find(c=>c.id===id)||{}).display_name]}))});
+  if(model==='res.partner'&&method==='read')return Response.json({result:args[0].map(id=>({id,active:true,is_company:true,commercial_partner_id:[id,(customers.find(c=>c.id===id)||{}).display_name]}))});
   return Response.json({result:projects});};
  try{
   assert.equal((await api('/clients/odoo/customer','POST',{name:'New Shop'},user)).status,403);
@@ -365,7 +384,7 @@ test('contacts archived in Odoo are archived in the dashboard by the sync, and c
   const [model,method,args,kw]=[p.args[3],p.args[4],p.args[5],p.args[6]||{}];
   if(model==='res.partner'&&method==='search_read')return Response.json({result:odooState.customers});
   if(model==='res.partner'&&method==='read'){const ids=args[0];
-   if(kw.fields.includes('active'))return Response.json({result:ids.map(id=>({id,active:!odooState.inactive.has(id)}))});
+   if(kw.fields.includes('active'))return Response.json({result:ids.map(id=>({id,active:!odooState.inactive.has(id),is_company:true}))});
    return Response.json({result:ids.map(id=>({id,commercial_partner_id:[id,id===7?'Closed Ltd':'Acme']}))});}
   return Response.json({result:[{id:20,display_name:'Branch',partner_id:[1,'Acme']},{id:21,display_name:'Legacy app',partner_id:[7,'Closed Ltd']}]});};
  const top=(c,n)=>c.entries.find(e=>e.name===n&&!e.parentId),sync=()=>api('/clients/odoo-sync?force=1','POST',{},admin);

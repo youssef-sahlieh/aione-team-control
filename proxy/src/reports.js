@@ -23,7 +23,8 @@ export async function buildReport(env,me,{readSearch,readInternal,readHistory},o
   let internalComplete=true;try{rows.push(...await readInternal());}catch{internalComplete=false;warnings.push('Internal tickets could not be fully retrieved.');}
   const unique=[...new Map(rows.map(t=>[t.key,t])).values()],all=[],unknownCompletion=[];let historyReads=0;
   // Actual hours include the logged work entries.
-  const sums=await readSummaries(env,unique.map(t=>t.key)).catch(()=>({}));
+  // If the work-log summaries cannot be read, logged hours are unknown (null), not zero.
+  let sums={},loggedKnown=true;try{sums=await readSummaries(env,unique.map(t=>t.key));}catch{loggedKnown=false;warnings.push('Logged hours could not be retrieved, so logged hours and checkup flags are unknown for this report.');}
   const metadata=new Map();for(let i=0;i<unique.length;i+=12)await Promise.all(unique.slice(i,i+12).map(async t=>metadata.set(t.key,withLogged(await readMetadata(env,t.key),sums[t.key]))));
   for(const t of unique){
     const m=metadata.get(t.key);let completedAt=t.closed?(t.completedAt||m.completedAt):null;
@@ -33,8 +34,8 @@ export async function buildReport(env,me,{readSearch,readInternal,readHistory},o
     if(options.source==='internal'&&!t.internal||options.source==='jira'&&t.internal)continue;
     const lastActivityAt=[t.updated,m.updatedAt].filter(v=>Number.isFinite(Date.parse(v))).sort((a,b)=>Date.parse(b)-Date.parse(a))[0]||null;
     // Agreed hours against the work the users logged: "Needs checkup" when logged is more than agreed (computed here, not stored).
-    const loggedMinutes=sums[t.key]?.loggedMinutes||0,agreedHours=m.agreedHours??null;
-    const data={...t,...publicMetadata(m,me,catalog),completedAt,lastActivityAt,agreedHours,loggedMinutes,loggedHours:Math.round(loggedMinutes/60*100)/100,...overageOf(agreedHours,loggedMinutes)};
+    const loggedMinutes=loggedKnown?(sums[t.key]?.loggedMinutes||0):null,agreedHours=m.agreedHours??null;
+    const data={...t,...publicMetadata(m,me,catalog),completedAt,lastActivityAt,agreedHours,loggedMinutes,loggedHours:loggedMinutes==null?null:Math.round(loggedMinutes/60*100)/100,...overageOf(agreedHours,loggedMinutes)};
     data.missing=t.closed?closureErrors(catalog,m):[...closureErrors(catalog,m).filter(x=>!x.includes('actual hours')&&!x.includes('work done')), ...(!t.devs.length?['Assign a developer']:[])];
     data.overrides=m.history.filter(h=>h.type==='override');
     data.risks=[];if(!t.closed){if(t.due&&t.due<localDate(now))data.risks.push('Overdue');if(!t.due)data.risks.push('No approved due date');if(lastActivityAt&&localDate(new Date(lastActivityAt))<=localDate(new Date(now.getTime()-7*86400000)))data.risks.push('No activity for at least seven calendar days');}
@@ -43,8 +44,9 @@ export async function buildReport(env,me,{readSearch,readInternal,readHistory},o
     data.createdInPeriod=!!inPeriod(t.created);data.completedInPeriod=!!inPeriod(completedAt);all.push(data);
   }
   // Who logged the time on each ticket, and whether Odoo has it (only tickets with work or agreed hours need a read).
-  const work=await reportWork(env,all.filter(t=>t.loggedMinutes||t.agreedHours!=null).map(t=>({key:t.key,agreedHours:t.agreedHours}))).catch(()=>({}));
-  for(const t of all){const w=work[t.key]||{odoo:'No work logged',employees:[]};t.odooStatus=w.odoo;t.employees=w.employees;}
+  const work=loggedKnown?await reportWork(env,all.filter(t=>t.loggedMinutes||t.agreedHours!=null).map(t=>({key:t.key,agreedHours:t.agreedHours}))).catch(()=>null):null;
+  if(loggedKnown&&work===null)warnings.push('Work entries and Odoo status could not be retrieved, so people and Odoo status are unknown for this report.');
+  for(const t of all){const w=work?(work[t.key]||{odoo:'No work logged',employees:[]}):{odoo:'Not checked',employees:null};t.odooStatus=w.odoo;t.employees=w.employees;}
   if(unknownCompletion.length)warnings.push(unknownCompletion.length+' retrieved completed tickets have no verified completion date. They are excluded from period completion counts.');
   const cohort=all.filter(t=>t.createdInPeriod||t.completedInPeriod),groups=new Map();
   for(const t of cohort){const key=[t.clientId,t.subClientId,t.billing].join('|'),g=groups.get(key)||{client:t.clientName||'Not set',subClient:t.subClientName||'',billing:t.billing||'Not set',tickets:0,estimatedHours:null,actualHours:null,missingEstimated:0,missingActual:0};g.tickets++;for(const [k,missing]of [['estimatedHours','missingEstimated'],['actualHours','missingActual']]){if(validHours(t[k]))g[k]=Math.round(((g[k]||0)+t[k])*100)/100;else g[missing]++;}groups.set(key,g);}

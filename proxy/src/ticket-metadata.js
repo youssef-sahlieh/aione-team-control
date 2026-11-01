@@ -55,7 +55,7 @@ export function withLogged(m,summary){const minutes=summary?.loggedMinutes||0;re
 // Logged entries against the agreed hours: "overage" (Needs checkup) when the logged work is above them, "ok"
 // when it is not, null when no agreed hours are set. Only the logged entries count. Computed on every read.
 export function overageOf(agreedHours,loggedMinutes){
-  if(agreedHours==null)return {overage:null,overHours:0};
+  if(agreedHours==null||loggedMinutes==null)return {overage:null,overHours:0};
   const over=(loggedMinutes||0)-agreedHours*60;
   return over>1e-9?{overage:'overage',overHours:Math.round(over/60*100)/100}:{overage:'ok',overHours:0};
 }
@@ -152,22 +152,23 @@ const odooSyncKey=env=>prefix(env)+'catalog:odoo-sync';
 export const NO_CUSTOMER='No contact';
 async function odooRows(env){
   const [customers,projects]=await Promise.all([
-    odoo(env,'res.partner','search_read',[[['parent_id','=',false],['user_ids','=',false]]],{fields:['display_name'],order:'id',limit:5000}),
+    odoo(env,'res.partner','search_read',[[['parent_id','=',false],['user_ids','=',false],['is_company','=',true]]],{fields:['display_name'],order:'id',limit:5000}),
     odoo(env,'project.project','search_read',[[]],{fields:['display_name','partner_id'],order:'id',limit:1000})
   ]);
-  // A project's contact can be a person inside a company: the project belongs to the company.
+  // A project's contact can be a person inside a company: the project belongs to the company. Clients are Odoo companies only:
+  // a project whose owner is not a company (a person with no company) goes under NO_CUSTOMER, not under a client named after the person.
   const ids=[...new Set(projects.map(p=>Array.isArray(p.partner_id)?p.partner_id[0]:null).filter(Boolean))];
   const company={};
   if(ids.length)for(const c of await odoo(env,'res.partner','read',[ids],{fields:['commercial_partner_id']}))company[c.id]=Array.isArray(c.commercial_partner_id)?{id:c.commercial_partner_id[0],name:String(c.commercial_partner_id[1]||'').trim()}:null;
   // The contacts the projects belong to that are archived in Odoo (reading by id also returns archived ones).
   const owners=new Map();for(const p of projects)if(Array.isArray(p.partner_id)){const o=company[p.partner_id[0]]||{id:p.partner_id[0],name:String(p.partner_id[1]||'').trim()};owners.set(o.id,o.name);}
-  const archivedOwners=[];
-  if(owners.size)for(const c of await odoo(env,'res.partner','read',[[...owners.keys()]],{fields:['active']}))if(c.active===false&&owners.get(c.id))archivedOwners.push(owners.get(c.id));
+  const archivedOwners=[],companies=new Set();
+  if(owners.size)for(const c of await odoo(env,'res.partner','read',[[...owners.keys()]],{fields:['active','is_company']})){if(c.is_company)companies.add(c.id);if(c.active===false&&owners.get(c.id))archivedOwners.push(owners.get(c.id));}
   const fits=n=>n&&n.length<=300;
   return {archivedOwners,
     customers:customers.map(c=>({displayName:String(c.display_name||'').trim(),sourceRow:c.id})).filter(r=>fits(r.displayName)),
     projects:projects.map(p=>{const owner=Array.isArray(p.partner_id)?(company[p.partner_id[0]]||{id:p.partner_id[0],name:String(p.partner_id[1]||'').trim()}):null;
-      return {displayName:String(p.display_name||'').trim(),customer:owner&&owner.name?owner.name:NO_CUSTOMER,sourceRow:p.id};}).filter(r=>fits(r.displayName)&&fits(r.customer))
+      return {displayName:String(p.display_name||'').trim(),customer:owner&&owner.name&&companies.has(owner.id)?owner.name:NO_CUSTOMER,sourceRow:p.id};}).filter(r=>fits(r.displayName)&&fits(r.customer))
   };
 }
 export async function syncCatalogFromOdoo(env,{force=false}={}){
