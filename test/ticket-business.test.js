@@ -226,6 +226,13 @@ test('administrators create a customer or a project in Odoo from the Clients pag
   assert.equal((await api('/clients/odoo/project','POST',{name:'Orphan',clientId:'missing'},admin)).status,400);
  }finally{globalThis.fetch=realFetch;}
 });
+test('the dashboard priority is stored with the ticket, validated, and never changes Jira fields',async()=>{
+ const {env}=await setup();const key='AION-88';
+ let m=await saveMetadata(env,key,{revision:0,dashPriority:'High'},user);assert.equal(m.dashPriority,'High');
+ await assert.rejects(saveMetadata(env,key,{revision:m.revision,dashPriority:'Urgent!!'},user),e=>e.status===400);
+ m=await saveMetadata(env,key,{revision:m.revision,dashPriority:null},user);assert.equal(m.dashPriority,null);
+ assert.equal((await readMetadata(env,key)).dashPriority,null);
+});
 test('users set the estimate once; only administrators change it afterwards',async()=>{
  const {env}=await setup();const key='AION-77';
  let m=await saveMetadata(env,key,{revision:0,estimatedHours:3},user);assert.equal(m.estimatedHours,3);

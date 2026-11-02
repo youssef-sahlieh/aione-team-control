@@ -1,11 +1,16 @@
 export const INTERNAL_ASSIGNEE='__internal_tickets';
-export const SORT_FIELDS=new Set(['key','summary','assigneeName','reporter','developers','status','due','created','updated','clientName','subClientName','estimatedHours','actualHours','workDone','billing','prs']);
+export const SORT_FIELDS=new Set(['key','summary','dashPriority','assigneeName','reporter','developers','status','due','created','updated','clientName','subClientName','estimatedHours','actualHours','workDone','billing','prs']);
+// Highest first, so ascending sort puts the most urgent tickets at the top. Unknown or empty priorities go last.
+// The dashboard priorities (same list as proxy/src/ticket-metadata.js).
+export const DASH_PRIORITIES=['Highest','High','Medium','Low','Lowest'];
+const PRIORITY_RANK={highest:0,critical:0,blocker:0,high:1,medium:2,low:3,lowest:4};
+export const priorityRank=p=>PRIORITY_RANK[String(p||'').trim().toLowerCase()]??5;
 export function validSort(sort,admin=false){return !!sort&&SORT_FIELDS.has(sort.field)&&['asc','desc'].includes(sort.direction)&&(admin||sort.field!=='billing');}
 export function sortTickets(items,sort,admin=false){
   if(!validSort(sort,admin))return items.slice();
-  const value=t=>sort.field==='developers'?t.devs?.join(', '):sort.field==='prs'?t.prRank:t[sort.field];
+  const value=t=>sort.field==='developers'?t.devs?.join(', '):sort.field==='prs'?t.prRank:sort.field==='dashPriority'?(t.dashPriority?priorityRank(t.dashPriority):null):t[sort.field];
   return items.slice().sort((a,b)=>{let x=value(a),y=value(b);const missing=v=>v===null||v===undefined||v==='';if(missing(x)||missing(y))return missing(x)===missing(y)?a.key.localeCompare(b.key,undefined,{numeric:true}):missing(x)?1:-1;
-    let n;if(['estimatedHours','actualHours','prs'].includes(sort.field))n=x-y;else if(['created','updated','due'].includes(sort.field))n=Date.parse(x)-Date.parse(y);else n=String(x).localeCompare(String(y),undefined,{numeric:true,sensitivity:'base'});
+    let n;if(['estimatedHours','actualHours','prs','dashPriority'].includes(sort.field))n=x-y;else if(['created','updated','due'].includes(sort.field))n=Date.parse(x)-Date.parse(y);else n=String(x).localeCompare(String(y),undefined,{numeric:true,sensitivity:'base'});
     return (sort.direction==='desc'?-n:n)||a.key.localeCompare(b.key,undefined,{numeric:true});});
 }
 export function csvCell(value){let s=String(value??'');if(/^[\s]*[=+@-]/.test(s)||/^[\t\r]/.test(s))s="'"+s;return '"'+s.replace(/"/g,'""')+'"';}

@@ -300,6 +300,25 @@ a.btn{text-decoration:none;display:inline-block}
 .ustatus.pending{color:var(--warn)}
 .ulast{font-size:12px;color:var(--muted)}
 .uacts{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center}
+.utools{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.utools h2{margin:0 auto 0 0}
+.utools .inp{min-width:220px;flex:1 1 220px;max-width:340px}
+.utools .fsel{width:auto}
+.useesc{font-size:13px;color:var(--ink,inherit)}
+.ustatus{font-size:12px;color:var(--muted)}
+.udialog{border:1px solid var(--line);border-radius:12px;padding:0;width:min(560px,calc(100% - 32px));background:var(--surface);color:inherit}
+.udialog::backdrop{background:rgba(0,0,0,.4)}
+.udform{display:flex;flex-direction:column;gap:14px;padding:18px}
+.udform h2{margin:0;font-size:17px}
+.udform .uactions{justify-content:flex-end;flex-wrap:wrap;gap:8px}
+.udform .uactions .msg{margin-right:auto}
+.udform .ufield .inp,.udform .ufield .fsel{width:100%;box-sizing:border-box}
+.rolecards{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.rolecard{display:flex;flex-direction:column;align-items:flex-start;gap:4px;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:inherit;cursor:pointer}
+.rolecard span{font-size:12px;color:var(--muted)}
+.rolecard[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.rolecard:disabled{opacity:.5;cursor:not-allowed}
+@media (max-width:560px){.rolecards{grid-template-columns:1fr}}
 @media (max-width:820px){ .urow{grid-template-columns:1fr} .uacts{justify-content:flex-start} }
 .role-user .admin-only{display:none!important}
 

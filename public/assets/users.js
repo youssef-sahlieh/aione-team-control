@@ -1,5 +1,5 @@
-// Users page (administrators only): add people, choose Administrator or User, pick the developer a
-// User sees, send password links, and remove accounts. Everything is checked again by the proxy.
+// Users page (administrators only): invite people, choose Administrator or User, pick whose tickets a User sees,
+// send password links and remove accounts. Everything is checked again by the proxy.
 import { api, getSession, signOut } from "./session.js";
 
 const $ = (id) => document.getElementById(id);
@@ -8,6 +8,8 @@ const initials = (n) => String(n || "?").split(/\s+/).filter(Boolean).slice(0, 2
 const OTHER = "__other";
 
 let me = null, devs = [], devColors = {}, users = [];
+let editing = null; // the person being managed; null while inviting someone new
+let role = "user";
 const devK = (d) => devColors[d] || "k" + (1 + [...d].reduce((a, c) => a + c.charCodeAt(0), 0) % 8);
 
 let toastTimer = null;
@@ -22,52 +24,137 @@ function toast(text, isErr) {
 function showState(text, isErr) { const s = $("pagestate"); s.hidden = !text; s.className = "state" + (isErr ? " err" : ""); s.textContent = text || ""; }
 function setMsg(id, text, ok) { const m = $(id); m.textContent = text || ""; m.className = "msg" + (text ? (ok ? " ok" : " err") : ""); }
 const errText = (err) => err.code === "network" ? "Can't reach the AION server. Try again." : err.message;
+const isPending = (u) => !u.hasPassword;
 
-// Developer choices: the team's developers plus any already given to a user.
+// What a person can see, in one plain sentence.
+function seesText(u) {
+  if (u.role === "admin") return "Administrator: sees and changes every ticket";
+  return u.dev ? "User: sees the tickets for " + u.dev : "User: no developer chosen yet";
+}
+function lastText(u) {
+  if (!u.lastLoginAt) return "Has not signed in yet";
+  return "Last sign-in " + new Date(u.lastLoginAt).toLocaleString("en-GB", { timeZone: "Asia/Jerusalem", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+// Developer choices: the team's developers plus any already given to a user. Shown without the ai1_ prefix.
 function devOptions(select, current) {
   const names = new Set(devs);
   users.forEach((u) => u.dev && names.add(u.dev));
   if (current) names.add(current);
-  select.replaceChildren(new Option("Choose a developer…", ""));
-  [...names].sort().forEach((d) => select.appendChild(new Option("ai1_" + d, d)));
+  select.replaceChildren(new Option("Choose a person…", ""));
+  [...names].sort().forEach((d) => select.appendChild(new Option(d, d)));
   select.appendChild(new Option("Other…", OTHER));
   select.value = current || "";
 }
 
-// ---- Add a user ----
-let addRole = "user";
-function setAddRole(role) {
-  addRole = role;
-  document.querySelectorAll("#a-role button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.role === role)));
-  $("a-devwrap").querySelector("span").textContent = role === "user" ? "Developer (sees only ai1_… tickets)" : "Developer name (optional)";
+// ---- Invite or manage one person (one dialog for both) ----
+const dialog = $("person");
+function setRole(next) {
+  role = next;
+  document.querySelectorAll("#p-role button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.role === next)));
+  $("p-devlabel").textContent = next === "user" ? "Sees the tickets for" : "Sees the tickets for (optional)";
 }
-document.querySelectorAll("#a-role button").forEach((b) => b.addEventListener("click", () => setAddRole(b.dataset.role)));
-$("a-dev").addEventListener("change", () => { $("a-otherwrap").hidden = $("a-dev").value !== OTHER; if (!$("a-otherwrap").hidden) $("a-other").focus(); });
+function openDialog(u) {
+  editing = u || null;
+  setMsg("p-msg", "");
+  $("p-link").hidden = true;
+  $("person-form").reset();
+  $("p-title").textContent = u ? "Manage " + u.name : "Invite someone";
+  $("p-email").readOnly = !!u;
+  $("p-manage").hidden = !u;
+  $("p-save").textContent = u ? "Save changes" : "Send invitation";
+  $("p-otherwrap").hidden = true;
+  setRole(u ? u.role : "user");
+  $("p-name").value = u ? u.name : "";
+  $("p-email").value = u ? u.email : "";
+  devOptions($("p-dev"), u ? u.dev : "");
+  if (u) {
+    $("p-info").textContent = lastText(u) + (u.lastLoginIp ? " · from IP " + u.lastLoginIp : "") + (isPending(u) ? ". The invitation is still waiting to be used." : ".");
+    $("p-reset").textContent = u.hasPassword ? "Send password reset" : "Resend invitation";
+    $("p-remove").hidden = u.email === me.email;
+    $("p-role").querySelector('[data-role="admin"]').disabled = u.email === me.email;
+  } else {
+    $("p-role").querySelector('[data-role="admin"]').disabled = false;
+  }
+  dialog.showModal();
+  $("p-name").focus();
+}
+document.querySelectorAll("#p-role button").forEach((b) => b.addEventListener("click", () => setRole(b.dataset.role)));
+$("p-dev").addEventListener("change", () => { $("p-otherwrap").hidden = $("p-dev").value !== OTHER; if (!$("p-otherwrap").hidden) $("p-other").focus(); });
+$("p-cancel").addEventListener("click", () => dialog.close());
+$("invite").addEventListener("click", () => openDialog(null));
+$("p-copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("p-linkval").value); toast("Link copied."); }
+  catch { $("p-linkval").select(); toast("Press Ctrl+C to copy the link."); }
+});
+// Email isn't set up: the server returns a one-time link to send by hand.
+function showLink(link) {
+  $("p-linkval").value = link;
+  $("p-link").hidden = false;
+}
 
-$("add-form").addEventListener("submit", async (e) => {
+$("person-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const name = $("a-name").value.trim(), email = $("a-email").value.trim();
-  const dev = $("a-dev").value === OTHER ? $("a-other").value.trim() : $("a-dev").value;
-  if (!name) return setMsg("a-msg", "Enter their name.", false);
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return setMsg("a-msg", "Enter their work email.", false);
-  if (addRole === "user" && !dev) return setMsg("a-msg", "Choose the developer whose tickets they see.", false);
-  const btn = $("a-save");
-  btn.disabled = true; setMsg("a-msg", "Adding…", true); $("a-link").hidden = true;
+  const name = $("p-name").value.trim(), email = $("p-email").value.trim();
+  const dev = $("p-dev").value === OTHER ? $("p-other").value.trim() : $("p-dev").value;
+  if (!name) return setMsg("p-msg", "Enter their name.", false);
+  if (!editing && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return setMsg("p-msg", "Enter their work email.", false);
+  if (role === "user" && !dev) return setMsg("p-msg", "Choose the person whose tickets they see.", false);
+  const btn = $("p-save");
+  btn.disabled = true; setMsg("p-msg", editing ? "Saving…" : "Sending…", true);
   try {
-    const r = await api("/users", { method: "POST", body: { name, email, role: addRole, dev } });
-    $("add-form").reset(); setAddRole("user"); $("a-otherwrap").hidden = true;
-    setMsg("a-msg", r.invited ? "Added. " + r.user.name + " has been emailed a link to choose a password." : "Added.", true);
-    if (!r.invited && r.link) { $("a-linkval").value = r.link; $("a-link").hidden = false; }
+    if (editing) {
+      await api("/users/" + encodeURIComponent(editing.email), { method: "PUT", body: { name, role, dev } });
+      dialog.close();
+      toast("Saved. It applies right away.");
+    } else {
+      const r = await api("/users", { method: "POST", body: { name, email, role, dev } });
+      if (r.invited) {
+        dialog.close();
+        toast(r.user.name + " has been emailed a link to choose a password.");
+      } else {
+        // Added, but email isn't set up: the dialog switches to managing them, with the link to send by hand.
+        editing = r.user;
+        $("p-title").textContent = "Manage " + r.user.name;
+        $("p-email").readOnly = true;
+        $("p-manage").hidden = false;
+        $("p-info").textContent = "Invitation not used yet.";
+        $("p-reset").textContent = "Resend invitation";
+        $("p-remove").hidden = false;
+        $("p-save").textContent = "Save changes";
+        setMsg("p-msg", "Added. Send them this link yourself:", true);
+        if (r.link) showLink(r.link);
+      }
+    }
     await load();
   } catch (err) {
-    setMsg("a-msg", errText(err), false);
+    setMsg("p-msg", errText(err), false);
   } finally {
     btn.disabled = false;
   }
 });
-$("a-copy").addEventListener("click", async () => {
-  try { await navigator.clipboard.writeText($("a-linkval").value); toast("Link copied."); }
-  catch { $("a-linkval").select(); toast("Press Ctrl+C to copy the link."); }
+
+$("p-reset").addEventListener("click", async () => {
+  if (!editing) return;
+  const b = $("p-reset");
+  b.disabled = true;
+  try {
+    const res = await api("/users/" + encodeURIComponent(editing.email) + "/invite", { method: "POST" });
+    if (res.invited) toast("Emailed " + editing.email + " a link to choose a password.");
+    else if (res.link) { showLink(res.link); setMsg("p-msg", "Email isn't set up: send them this link yourself.", true); }
+  } catch (err) { setMsg("p-msg", errText(err), false); }
+  b.disabled = false;
+});
+
+$("p-remove").addEventListener("click", async () => {
+  if (!editing) return;
+  if (!confirm("Remove " + editing.name + " (" + editing.email + ")? They're signed out right away and can't sign in again.")) return;
+  try {
+    await api("/users/" + encodeURIComponent(editing.email), { method: "DELETE" });
+    dialog.close();
+    toast(editing.name + " removed.");
+    await load();
+  } catch (err) { setMsg("p-msg", errText(err), false); }
 });
 
 // ---- The list ----
@@ -80,81 +167,42 @@ function row(u) {
 
   const view = el("div", "uview");
   view.appendChild(el("span", "flag " + (u.role === "admin" ? "k1" : "k6"), u.role === "admin" ? "Administrator" : "User"));
-  if (u.dev) view.appendChild(el("span", "dev " + devK(u.dev), "ai1_" + u.dev));
-  view.appendChild(el("span", "ustatus" + (u.hasPassword ? "" : " pending"), u.hasPassword ? "Active" : "Invited, no password yet"));
-  // Last sign-in (Israel time) and the IP address it came from.
-  const last = el("span", "ulast");
-  last.textContent = u.lastLoginAt ? "Last login " + new Date(u.lastLoginAt).toLocaleString("en-GB", { timeZone: "Asia/Jerusalem", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) + (u.lastLoginIp ? " · IP " + u.lastLoginIp : "") : "Never logged in";
-  view.appendChild(last);
+  view.appendChild(el("span", "useesc", seesText(u)));
+  view.appendChild(el("span", "ustatus" + (isPending(u) ? " pending" : ""), isPending(u) ? "Invitation not used yet" : lastText(u)));
   r.appendChild(view);
 
   const acts = el("div", "uacts");
-  const edit = el("button", "btn", "Edit"); edit.type = "button";
-  edit.addEventListener("click", () => r.replaceWith(editRow(u)));
-  const link = el("button", "btn", u.hasPassword ? "Send password reset" : "Resend invitation"); link.type = "button";
-  link.addEventListener("click", async () => {
-    link.disabled = true;
-    try {
-      const res = await api("/users/" + encodeURIComponent(u.email) + "/invite", { method: "POST" });
-      if (res.invited) toast("Emailed " + u.email + " a link to choose a password.");
-      else if (res.link) { $("a-linkval").value = res.link; $("a-link").hidden = false; $("add").scrollIntoView({ behavior: "smooth" }); toast("Email isn't set up: copy the link at the top and send it to them."); }
-    } catch (err) { toast(errText(err), true); }
-    link.disabled = false;
-  });
-  acts.appendChild(edit); acts.appendChild(link);
-  if (u.email !== me.email) {
-    const del = el("button", "btn danger", "Remove"); del.type = "button";
-    del.addEventListener("click", async () => {
-      if (!confirm("Remove " + u.name + " (" + u.email + ")? They're signed out right away and can't sign in again.")) return;
-      try { await api("/users/" + encodeURIComponent(u.email), { method: "DELETE" }); toast(u.name + " removed."); await load(); }
-      catch (err) { toast(errText(err), true); }
-    });
-    acts.appendChild(del);
-  }
+  const manage = el("button", "btn", "Manage"); manage.type = "button";
+  manage.setAttribute("aria-label", "Manage " + u.name);
+  manage.addEventListener("click", () => openDialog(u));
+  acts.appendChild(manage);
   r.appendChild(acts);
   return r;
 }
 
-function editRow(u) {
-  const r = el("div", "urow editing");
-  const who = el("div", "uwho");
-  const name = el("input", "inp"); name.value = u.name; name.setAttribute("aria-label", "Name");
-  const nm = el("div"); nm.appendChild(name); nm.appendChild(el("small", null, u.email)); who.appendChild(nm);
-  r.appendChild(who);
-
-  const view = el("div", "uview");
-  const role = el("select", "fsel auto"); role.setAttribute("aria-label", "Role");
-  role.appendChild(new Option("User", "user")); role.appendChild(new Option("Administrator", "admin")); role.value = u.role;
-  if (u.email === me.email) role.disabled = true;
-  const dev = el("select", "fsel auto"); dev.setAttribute("aria-label", "Developer"); devOptions(dev, u.dev);
-  const other = el("input", "inp"); other.placeholder = "Other developer name"; other.hidden = true;
-  dev.addEventListener("change", () => { other.hidden = dev.value !== OTHER; if (!other.hidden) other.focus(); });
-  view.appendChild(role); view.appendChild(dev); view.appendChild(other);
-  r.appendChild(view);
-
-  const acts = el("div", "uacts");
-  const msg = el("span", "msg");
-  const save = el("button", "btn primary", "Save"); save.type = "button";
-  save.addEventListener("click", async () => {
-    const d = dev.value === OTHER ? other.value.trim() : dev.value;
-    if (role.value === "user" && !d) { msg.textContent = "Choose a developer."; msg.className = "msg err"; return; }
-    save.disabled = true;
-    try { await api("/users/" + encodeURIComponent(u.email), { method: "PUT", body: { name: name.value.trim(), role: role.value, dev: d } }); toast("Saved. It applies right away."); await load(); }
-    catch (err) { msg.textContent = errText(err); msg.className = "msg err"; save.disabled = false; }
+// The search box and the filter narrow the list; the count shows how many match.
+function visible() {
+  const q = $("search").value.trim().toLowerCase(), f = $("filter").value;
+  return users.filter((u) => {
+    if (f === "admin" && u.role !== "admin") return false;
+    if (f === "user" && u.role !== "user") return false;
+    if (f === "pending" && !isPending(u)) return false;
+    return !q || (u.name + " " + u.email + " " + (u.dev || "")).toLowerCase().includes(q);
   });
-  const cancel = el("button", "btn", "Cancel"); cancel.type = "button";
-  cancel.addEventListener("click", () => r.replaceWith(row(u)));
-  acts.appendChild(save); acts.appendChild(cancel); acts.appendChild(msg);
-  r.appendChild(acts);
-  return r;
 }
+function render() {
+  const shown = visible();
+  $("rows").replaceChildren(...shown.map(row));
+  $("count").textContent = shown.length === users.length ? users.length + (users.length === 1 ? " person" : " people") : shown.length + " of " + users.length;
+  $("empty").hidden = shown.length > 0;
+}
+$("search").addEventListener("input", render);
+$("filter").addEventListener("change", render);
 
 async function load() {
   const r = await api("/users");
   users = r.users;
-  $("count").textContent = users.length + (users.length === 1 ? " person" : " people");
-  $("rows").replaceChildren(...users.map(row));
-  devOptions($("a-dev"), $("a-dev").value === OTHER ? "" : $("a-dev").value);
+  render();
 }
 
 $("signout").addEventListener("click", () => signOut());
@@ -171,7 +219,7 @@ async function start() {
     devs = cfg.devs || []; devColors = cfg.devColors || {};
     await load();
     showState("");
-    $("add").hidden = false; $("list").hidden = false;
+    $("list").hidden = false;
   } catch (err) {
     showState(errText(err), true);
   }

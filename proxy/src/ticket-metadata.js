@@ -12,7 +12,9 @@ export function requireStore(env) {
   return env.STORE;
 }
 const prefix=env=>'business:'+env.JIRA_PROJECT+':';
-const empty=()=>({revision:0,clientId:null,subClientId:null,billing:null,agreedHours:null,agreedDate:null,agreedDeveloper:null,estimatedHours:null,actualHours:null,workDone:'',completedAt:null,epicKey:null,history:[]});
+const empty=()=>({revision:0,clientId:null,subClientId:null,billing:null,agreedHours:null,agreedDate:null,agreedDeveloper:null,estimatedHours:null,actualHours:null,workDone:'',dashPriority:null,completedAt:null,epicKey:null,history:[]});
+// The dashboard's own priority. It is stored only here, never sent to Jira (Jira's priority is a separate field).
+export const DASH_PRIORITIES=['Highest','High','Medium','Low','Lowest'];
 // Fields only administrators see: billing, and the agreed hours with the date and developer they went to Odoo with.
 const ADMIN_ONLY=['billing','agreedHours','agreedDate','agreedDeveloper'];
 export const catalogKey=env=>prefix(env)+'catalog';
@@ -77,7 +79,7 @@ export async function saveMetadata(env,key,patch,me,{closed=false,creating=false
   const store=requireStore(env),raw=await store.get(metadataKey(env,key)),old={...empty(),...JSON.parse(raw||'{}')},m=structuredClone(old),catalog=await readCatalog(env);
   if(closed)problem('Reopen this ticket before editing its business fields.',409,'ticket_closed');
   if(!patch || typeof patch!=='object'||Array.isArray(patch))problem('Invalid ticket fields.');
-  const allowed=['revision','clientId','subClientId','billing','agreedHours','estimatedHours','actualHours','workDone'];
+  const allowed=['revision','clientId','subClientId','billing','agreedHours','estimatedHours','actualHours','workDone','dashPriority'];
   if(Object.keys(patch).some(k=>!allowed.includes(k)))problem('Unknown ticket business field.');
   if(!Number.isInteger(patch.revision)||patch.revision!==old.revision)problem('Ticket fields changed. Refresh and retry.',409,'conflict');
   if(me.role!=='admin'&&'billing' in patch)problem('Only administrators can access billing.',403,'forbidden');
@@ -107,6 +109,7 @@ export async function saveMetadata(env,key,patch,me,{closed=false,creating=false
     m.agreedHours=patch.agreedHours;
   }
   if('workDone' in patch){if(typeof patch.workDone!=='string'||patch.workDone.length>5000)problem('Work done must be text up to 5,000 characters.');m.workDone=patch.workDone.trim();}
+  if('dashPriority' in patch){if(patch.dashPriority!==null&&!DASH_PRIORITIES.includes(patch.dashPriority))problem('Choose a priority from the list.');m.dashPriority=patch.dashPriority;}
   if(creating&&!noClient){const errors=selectionErrors(catalog,m,{active:true});if(errors.length)problem(errors.join('. '));}
   const changes={};for(const k of allowed.filter(k=>k!=='revision'))if(m[k]!==old[k])changes[k]={from:old[k],to:m[k]};
   m.revision++;m.updatedAt=new Date().toISOString();m.history.push({type:'edit',at:m.updatedAt,by:{email:me.email,name:me.name},changes});
