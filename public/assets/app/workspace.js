@@ -208,7 +208,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     p.appendChild(table); if (!names.length) p.appendChild(node("div", "empty-copy", "No assignments in this view.")); target.appendChild(p);
   }
   function calendar(items, target) {
-    const p = panel("Approved deadlines", "Calendar dates change only after admin approval. Open a ticket to propose a change."); p.classList.add("calendar-panel");
+    const p = panel("Approved deadlines"); p.classList.add("calendar-panel");
     const controls = node("div", "calendar-controls");
     const anchor = new Date(month + "-01T00:00:00Z");
     const move = delta => { if(calendarMode === "week"){ const day=new Date(weekAnchor+"T00:00:00Z");day.setUTCDate(day.getUTCDate()+delta*7);weekAnchor=day.toISOString().slice(0,10);month=weekAnchor.slice(0,7);}else{anchor.setUTCMonth(anchor.getUTCMonth()+delta);month=anchor.toISOString().slice(0,7);weekAnchor=month+"-01";} render(); };
@@ -233,7 +233,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
       if(!scheduled.length)cell.appendChild(node("span","calendar-empty","No tickets due"));
       grid.appendChild(cell);
     }
-    p.appendChild(grid); target.appendChild(p);
+    p.appendChild(grid); p.appendChild(node("p", "calendar-note", "Calendar dates change only after admin approval. Open a ticket to propose a change.")); target.appendChild(p);
     const unscheduled = panel("Unscheduled tickets", "Give open work a place on the calendar."); unscheduled.classList.add("calendar-unscheduled");
     const noDate = items.filter(i => !i.due && i.cat !== "done"); noDate.slice(0,25).forEach(i => unscheduled.appendChild(compactIssue(i))); if (!noDate.length) unscheduled.appendChild(node("div", "empty-copy", "All open tickets have a due date."));if(noDate.length>25)unscheduled.appendChild(button(`View all ${noDate.length} unscheduled tickets →`,"btn",()=>navigate("tickets",{focus:"nodue"}))); target.appendChild(unscheduled);
   }
@@ -251,7 +251,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     if (!custom) return false;
     const target = $("workspace-content");
     target.replaceChildren();
-    if(context().filterCount&&!["requests","reports","clients","worklog","errors"].includes(route.page)){const info=node("div","summary-filter-info");info.append(node("span","","Using your current ticket filters"),button("Adjust filters →","linkbtn",()=>navigate("tickets")));target.appendChild(info);}
+    if(context().filterCount&&!["requests","reports","clients","worklog","errors","calendar"].includes(route.page)){const info=node("div","summary-filter-info");info.append(node("span","","Using your current ticket filters"),button("Adjust filters →","linkbtn",()=>navigate("tickets")));target.appendChild(info);}
     // Respect all active filters but include closed tickets for summary metrics.
     const data = allowedItems();
     if(route.page==="reports"&&context().admin)context().renderReports(target);

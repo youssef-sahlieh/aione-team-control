@@ -1,5 +1,5 @@
 import {createReportBrowser} from './report-browser.js';
-import { createdDate } from '../models/ticket-business.js';
+import { createdDate, DASH_PRIORITIES } from '../models/ticket-business.js';
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
 const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.addEventListener('click',fn);return b;};
 const field=(parent,label,node)=>{const l=el('label','business-field');node.setAttribute('aria-label',label);l.append(el('span','',label),node);parent.append(l);return node;};
@@ -91,7 +91,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   function decorate(i){const r=records[i.key];return {...i,...(r?names(r):{}),...(r&&r.totalActualHours!=null?{actualHours:r.totalActualHours}:{})};}
   // One field (or the client pair) edited straight from the ticket list, with the same rules as the ticket panel
   // (client and billing for administrators; closed tickets locked). The server checks all of it again.
-  const QUICK={client:'Client',billing:'Billing',estimatedHours:'Estimated hours',actualHours:'Actual hours',workDone:'Work done'};
+  const QUICK={client:'Client',billing:'Billing',estimatedHours:'Estimated hours',actualHours:'Actual hours',workDone:'Work done',dashPriority:'Priority'};
   function canQuickEdit(i,name){if(!enabled||!i||i.odoo||i.cat==='done'||!(name in QUICK))return false;if(name==='estimatedHours'&&!admin()&&i.estimatedHours!=null)return false;return name==='client'||name==='billing'?admin():true;}
   async function quickEdit(box,key,name,done){
     const msg=el('p','msg','Loading…');box.replaceChildren(msg);
@@ -102,6 +102,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     if(name==='client'){const s=selections(form,v);read=s.read;first=s.client;}
     else if(name==='billing'){const b=field(form,'Billing',el('select','fsel'));billingOptions(b,v.billing);read=()=>{if(!b.value)throw new Error('Choose Billable or Not billable.');return {billing:b.value};};first=b;}
     else if(name==='workDone'){const t=field(form,'Work done',el('textarea','inp'));t.value=v.workDone||'';t.maxLength=5000;t.rows=4;t.dir='auto';read=()=>({workDone:t.value});first=t;}
+    else if(name==='dashPriority'){const p=field(form,'Priority',el('select','fsel'));option(p,'Not set','');DASH_PRIORITIES.forEach(x=>option(p,x,x));p.value=v.dashPriority||'';read=()=>({dashPriority:p.value||null});first=p;}
     else{const n=field(form,QUICK[name],input('number',v[name]));n.min='0.01';n.max='1000000';n.step='0.01';read=()=>{if(!n.checkValidity())throw new Error('Hours must be greater than zero, with up to two decimal places.');return {[name]:n.value===''?null:Number(n.value)};};first=n;}
     const status=el('p','msg'),save=button('Save',async()=>{
       save.disabled=true;

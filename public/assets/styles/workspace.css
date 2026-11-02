@@ -80,6 +80,19 @@ body.sidebar-collapsed .app-sidebar{width:76px;padding-inline:10px}body.sidebar-
 .jira-activity .drawer-tab{min-height:34px;padding:4px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface);font-size:13px}
 .jira-activity .drawer-tab[aria-selected=true]{background:var(--accent-soft,#eef0ff);border-color:var(--accent);color:var(--accent);font-weight:600}
 .jira-activity .drawer-tab[aria-selected=true]::after{display:none}
+/* The "…" menu in the ticket header: Internal note, Open in Odoo/Jira, Side panel and Delete. */
+.dmore{position:relative}
+.dmore>summary{list-style:none;cursor:pointer;min-width:40px;justify-content:center;font-weight:700}
+.dmore>summary::-webkit-details-marker{display:none}
+.dmore[open]>summary{border-color:var(--accent);color:var(--accent)}
+.dmore-list{position:absolute;right:0;top:calc(100% + 6px);z-index:5;display:flex;flex-direction:column;gap:2px;min-width:200px;padding:6px;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:0 12px 30px #17244222}
+.dmore-list .btn{justify-content:flex-start;text-align:left;border-color:transparent;background:transparent;width:100%}
+.dmore-list .btn.primary{color:var(--accent)}
+/* Calendar page: the calendar comes straight after the title. The subtitle, filter note and sync line are hidden. */
+body[data-workspace-page="calendar"] .eyebrow,
+body[data-workspace-page="calendar"] #page-description,
+body[data-workspace-page="calendar"] .sync-line{display:none}
+.calendar-note{margin:12px 0 0;font-size:13px;color:var(--muted)}
 @media(min-width:1000px){
   .drawer.full{--gutter:max(24px,calc((100% - 1480px) / 2))}
   .drawer.full .jira-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,380px);gap:36px;align-items:start}

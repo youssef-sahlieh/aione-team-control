@@ -68,6 +68,10 @@ export function createIssueDrawer({ isDirty, canViewHistory, canViewFullHistory 
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
   });
   select(active);
+  // The "…" menu in the header closes after an action is picked, or when the user clicks elsewhere.
+  const more = drawer.querySelector(".dmore");
+  more.addEventListener("click", e => { if (e.target.closest(".dmore-list button,.dmore-list a")) more.open = false; });
+  document.addEventListener("click", e => { if (more.open && !more.contains(e.target)) more.open = false; });
   return {
     select,
     open() { opener = document.activeElement; select("overview"); body.scrollTop = 0; $("main-content").closest(".app-shell").inert = true; document.body.classList.add("drawer-open"); },

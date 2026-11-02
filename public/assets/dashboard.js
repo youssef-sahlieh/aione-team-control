@@ -67,7 +67,17 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     ticketBriefs.configure(cfg);
   }
   // Both roles start with the named team; Others is an explicit opt-in.
-  function defaultFilters(){ const f=F(); defaultAssigneeKeys(PEOPLE).forEach(k=>f.assignee.add(k)); return f; }
+  // Users see only tickets for their own developer, so their filters always include it.
+  const mine=f=>{ if(!IS_ADMIN&&MY_DEV) f.dev.add(MY_DEV); return f; };
+  function defaultFilters(){ const f=F(); defaultAssigneeKeys(PEOPLE).forEach(k=>f.assignee.add(k)); return mine(f); }
+  // "Anyone": every assignee, including unassigned tickets (the "other" key).
+  function anyoneFilters(){ const f=F(); assigneeOptions(PEOPLE).forEach(([k])=>f.assignee.add(k)); f.assignee.add("other"); return mine(f); }
+  // Built-in views for every user, listed first in the Saved view menu. "Current tickets" is the default.
+  const BUILT_IN_VIEWS={
+    "__current":{label:"Current tickets",focus:"open",filters:defaultFilters,range:{}},
+    "__all":{label:"All tickets (all assignees, mine)",focus:"all",filters:anyoneFilters,range:{}},
+    "__closed":{label:"All closed (mine)",focus:"closed",filters:anyoneFilters,range:{closedDays:365}}
+  };
   const teamNames=()=>{ const n=Object.values(PEOPLE).map(p=>p.name); return n.length>1?n.slice(0,-1).join(", ")+" or "+n[n.length-1]:n.join(""); };
   let lastLoad=0;
   const NEW_STATUSES=["open","pending approval"];
@@ -282,6 +292,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     {id:"nodue",k:"k5",l:"No due date",h:"Open, no date set",f:i=>i.cat!=="done"&&!i.odoo&&!i.due},
     {id:"recent",k:"k7",l:"Updated",range:"updDays",max:30,h:"Recent activity",f:i=>i.cat!=="done"&&Date.parse(i.updated)>=Date.now()-state.updDays*dayMs},
     {id:"datereq",k:"k3",l:"Date request pending",h:"Awaiting an admin decision",f:i=>!!dateRequests.activeFor(i.key)},
+    {id:"all",k:"k1",l:"All tickets",h:"Every ticket, open or closed",f:()=>true},
     {id:"closed",k:"k8",l:"Closed",range:"closedDays",max:365,step:7,h:"All closed AION tickets",f:i=>i.cat==="done"&&Date.parse(i.updated)>=Date.now()-state.closedDays*dayMs}
   ];
   const DUE_OPTS=[["any","Any"],["overdue","Overdue"],["today","Today"],["week","Next 7 days"],["later","Later"],["none","No date"],["pending","Pending date request"]];
@@ -310,11 +321,12 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     business.filters(box,state.businessFilter,()=>{state.pageIndex=0;render();});
     const moreField=el("div","quick-field more-filter-field");moreField.append(el("span",null,"Additional filters"),more);box.appendChild(moreField);
     moreField.hidden=!IS_ADMIN;more.hidden=!IS_ADMIN;
-    if(!IS_ADMIN)return;
     let views=[]; try{views=readViews(localStorage,MY_EMAIL);}catch(_){}
-    const savedField=pick("Saved view",[["","Saved views"],...views.map((v,n)=>[String(n),v.name])],"",v=>{ if(v==="")return; const restored=restoreView(views[+v],IS_ADMIN,PEOPLE);if(!restored)return;Object.assign(state,restored);$("q").value=state.q;workspace.navigate(state.view==="history"?"requests":"tickets"); }).closest("label");
+    const builtIn=IS_ADMIN?[]:Object.entries(BUILT_IN_VIEWS).map(([id,b])=>[id,b.label]);
+    const savedField=pick("Saved view",[["","Saved views"],...builtIn,...views.map((v,n)=>[String(n),v.name])],IS_ADMIN?"":"__current",v=>{ if(v==="")return; if(BUILT_IN_VIEWS[v]){ const b=BUILT_IN_VIEWS[v]; Object.assign(state,{f:b.filters(),focus:b.focus,view:"list",q:"",...b.range}); $("q").value=""; if(b.range.closedDays) loadClosed(); workspace.navigate("tickets"); return; } const restored=restoreView(views[+v],IS_ADMIN,PEOPLE);if(!restored)return;Object.assign(state,restored);$("q").value=state.q;workspace.navigate(state.view==="history"?"requests":"tickets"); }).closest("label");
     const save=el("button","btn","Save view");save.type="button";save.addEventListener("click",()=>{ const name=prompt("Name this personal view:");if(!name||!name.trim())return;const view=serializeView(workspace.route().page==="internal"?{...state,f:{...state.f,source:"internal"}}:state,name);const updated=views.filter(v=>v.name!==view.name).concat(view).slice(-20);try{localStorage.setItem(savedViewKey(MY_EMAIL),JSON.stringify(updated));toast("View saved in this browser.");renderQuickFilters();}catch(_){toast("Couldn't save this view. Browser storage is unavailable.",[],true);} });box.appendChild(save);
-    if(IS_ADMIN){$("fgrid").querySelector(".saved-view-tools")?.remove();const tools=el("div","saved-view-tools");tools.append(savedField,save);$("fgrid").appendChild(tools);}
+    // Admins find saved views under More filters; users see them in the quick filter row, which is always visible.
+    $("fgrid").querySelector(".saved-view-tools")?.remove();box.querySelector(".saved-view-tools")?.remove();const tools=el("div","saved-view-tools");tools.append(savedField,save);(IS_ADMIN?$("fgrid"):box).appendChild(tools);
   }
 
   function renderTiles(){
@@ -488,14 +500,14 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const h=el("div","gr head"); const all=el("input","ck"); all.type="checkbox"; all.setAttribute("aria-label","Select all");
     all.checked=items.every(i=>state.sel.has(i.key)); all.addEventListener("change",()=>{ items.forEach(i=>all.checked?state.sel.add(i.key):state.sel.delete(i.key)); render(); });
     const hc=el("span","c-ck"); hc.appendChild(all); h.appendChild(hc);
-    [["c-key","Ticket ID"],["c-ttl","Title / Priority"],["c-who","Assignee"],["c-rep","Reporter"],["c-dev","Developers"],["c-st","Status"],["c-due","Due date"],["c-cre","Created date"],["c-upd","Updated"],["c-note","Internal note"],["c-actions",""]].forEach(([c,x])=>h.appendChild(el("span",c,x)));
+    [["c-key","Ticket ID"],["c-ttl","Title"],["c-prio","Priority"],["c-who","Assignee"],["c-rep","Reporter"],["c-dev","Developers"],["c-st","Status"],["c-due","Due date"],["c-cre","Created date"],["c-upd","Updated"],["c-note","Internal note"],["c-actions",""]].forEach(([c,x])=>h.appendChild(el("span",c,x)));
     if(showTicketBriefs()){const label=el("span","c-brief","AI brief");label.title="Generate a short AI explanation of each Jira ticket.";h.insertBefore(label,h.querySelector(".c-who"));}
     const businessColumns=[['clientName','Client',150],['subClientName','Project',150],['estimatedHours','Estimated hours',130],['actualHours','Actual hours',120],['workDone','Work done',220],...(IS_ADMIN?[['billing','Billing',130]]:[])];
     businessColumns.forEach(([key,label])=>h.appendChild(el('span','c-'+key,label)));
     if(GITHUB) h.appendChild(el('span','c-prs','Pull requests'));
-    const sortMap={'c-key':'key','c-ttl':'summary','c-who':'assigneeName','c-rep':'reporter','c-dev':'developers','c-st':'status','c-due':'due','c-cre':'created','c-upd':'updated','c-prs':'prs'};
+    const sortMap={'c-key':'key','c-ttl':'summary','c-prio':'dashPriority','c-who':'assigneeName','c-rep':'reporter','c-dev':'developers','c-st':'status','c-due':'due','c-cre':'created','c-upd':'updated','c-prs':'prs'};
     for(const header of h.children){const key=sortMap[header.className]||businessColumns.find(c=>header.classList.contains('c-'+c[0]))?.[0];if(!key)continue;const label=header.textContent;header.replaceChildren();const b=el('button','column-sort',label+(state.sort?.field===key?(state.sort.direction==='asc'?' ↑':' ↓'):' ▾'));b.type='button';b.setAttribute('aria-label','Sort '+label);b.setAttribute('aria-haspopup','menu');b.addEventListener('click',()=>columnSortMenu(b,key));header.addEventListener('contextmenu',e=>{e.preventDefault();columnSortMenu(b,key);});header.append(b);}
-    let widths=[28,92,300,...(showTicketBriefs()?[220]:[]),130,150,170,140,120,120,90,120,48,...businessColumns.map(c=>c[2]),...(GITHUB?[240]:[])];
+    let widths=[28,92,300,...(showTicketBriefs()?[220]:[]),100,130,150,170,140,120,120,90,120,48,...businessColumns.map(c=>c[2]),...(GITHUB?[240]:[])];
     if(state.columnsMode!=='all'){
       // Work view fits the page width: each column has a minimum and shares the rest of the space.
       const {defs,hidden}=fitWorkColumns();workColumns=defs.map(d=>d[0]);
@@ -549,6 +561,14 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(withEpic&&i.parent){ const ep=el("span","epic",i.parent.name); ep.dir="auto"; ep.title="Epic "+i.parent.key; tags.appendChild(ep); }
     return tags;
   }
+  // The dashboard's own priority (stored with the ticket's business fields, never sent to Jira). Jira's priority stays in the ticket details.
+  function priorityCell(i){
+    const edit=business.canQuickEdit(i,"dashPriority"), p=el(edit?"button":"span","business-cell c-prio"+(edit?" cell-edit":""),i.dashPriority||"Not set");
+    p.title="Dashboard priority (not in Jira)";
+    if(edit){ p.type="button"; p.setAttribute("aria-label","Edit priority for "+i.key); p.addEventListener("click",e=>{ e.stopPropagation(); businessPopover(p,i,"dashPriority"); }); }
+    if(/high|highest|critical|blocker/i.test(i.dashPriority||"")) p.classList.add("flag","k2");
+    return p;
+  }
   function devButton(i){
     if(!IS_ADMIN){ const ds=el("span","devcell c-dev"); i.devs.forEach(d=>ds.appendChild(el("span","dev "+devK(d),d))); return ds; }
     const dc=el("button","devcell c-dev"+(i.devs.length?"":" nodev")); dc.type="button"; dc.title="Assign developers";
@@ -569,7 +589,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // Work view columns: [class, minimum px, share of the spare width]. When the list is narrower than the
   // minimums, the least needed columns are left out (in WORK_DROP order) so it never scrolls sideways;
   // All columns still shows everything.
-  const workColumnDefs=()=>[['c-ck',28],['c-key',84],['c-ttl',170,2.6],['c-who',84,.8],['c-dev',88,.9],['c-st',104,.9],['c-due',72,.6],...(GITHUB?[['c-prs',104,1]]:[]),['c-clientName',96,1.1],['c-estimatedHours',62,.45],['c-actualHours',62,.45],['c-workDone',104,1.2],...(IS_ADMIN?[['c-billing',70,.55]]:[]),['c-note',44],['c-actions',36]];
+  const workColumnDefs=()=>[['c-ck',28],['c-key',84],['c-ttl',170,2.6],['c-prio',78,.6],['c-who',84,.8],['c-dev',88,.9],['c-st',104,.9],['c-due',72,.6],...(GITHUB?[['c-prs',104,1]]:[]),['c-clientName',96,1.1],['c-estimatedHours',62,.45],['c-actualHours',62,.45],['c-workDone',104,1.2],...(IS_ADMIN?[['c-billing',70,.55]]:[]),['c-note',44],['c-actions',36]];
   const WORK_DROP=['c-workDone','c-actualHours','c-billing','c-prs','c-estimatedHours','c-dev','c-who'];
   let workColumns=null;
   // Phones (under 900px) keep every column and scroll the list sideways inside its own box.
@@ -592,6 +612,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const tags=tagsFor(i,t,state.group!=="epic"); if(tags.childNodes.length) tt.appendChild(tags);
     if((state.focus==="reply"||state.focus==="recent"||state.f.activity==="reply")&&i.last){ const sn=el("span","snip"); sn.dir="auto"; sn.appendChild(el("b",null,i.last.author+" · "+ago(i.last.when)+": ")); sn.append(i.last.text); tt.appendChild(sn); }
     tt.addEventListener("click",()=>openDrawer(i.key)); r.appendChild(tt);
+    r.appendChild(priorityCell(i));
     if(showTicketBriefs())r.appendChild(ticketBriefs.renderCell(i));
     const canAsg=IS_ADMIN; const who=el(canAsg?"button":"span","who c-who"+(canAsg?" asg":"")); who.appendChild(avatar(i)); who.appendChild(el("span",null,i.assignee?PEOPLE[i.assignee].name:i.assigneeName));
     if(canAsg){ who.type="button"; who.title="Change assignee"; who.addEventListener("click",e=>{ e.stopPropagation(); assigneePopover(who,[i.key]); }); } r.appendChild(who);

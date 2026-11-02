@@ -3,7 +3,7 @@ import { createFilters } from "./filters.js";
 import { defaultAssigneeKeys, assigneeOptions } from "./assignees.js";
 const fields = ["reporter", "assignee", "dev", "status", "type", "priority"];
 const modes = ["list", "dev", "status", "assignee", "history"];
-const focuses = ["open", "nodev", "reply", "overdue", "today", "approval", "nodue", "recent", "duechg", "closed"];
+const focuses = ["open", "all", "nodev", "reply", "overdue", "today", "approval", "nodue", "recent", "duechg", "closed"];
 export const savedViewKey = email => "aion.savedViews.v1." + encodeURIComponent(email.toLowerCase());
 export function serializeView(state, name) {
   const f = state.f;
