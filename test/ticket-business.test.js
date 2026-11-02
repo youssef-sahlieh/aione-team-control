@@ -59,6 +59,13 @@ test('client selection requires an active client and locks administrator-only ch
  assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,clientId:s.client.id,subClientId:null}},user)).status,403);
  assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,clientId:s.client.id,subClientId:s.sub.id}},admin)).status,200);
 });
+test('anyone can choose a client and project while they are empty; after that only administrators change them',async()=>{
+ const s=await setup(),t=await s.create(user,{metadata:{clientId:null,subClientId:null}});
+ assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,clientId:s.client.id,subClientId:s.sub.id}},user)).status,200);
+ assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:2,clientId:s.client.id,subClientId:s.sub.id,workDone:'Done'}},user)).status,200);
+ assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:3,clientId:s.client.id,subClientId:null}},user)).status,403);
+ assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:3,clientId:s.client.id,subClientId:null}},admin)).status,200);
+});
 test('billing never reaches user metadata, history or batch reads and forged writes fail',async()=>{
  const s=await setup(),t=await s.create(admin,{metadata:{clientId:s.client.id,billing:'billable'}});
  const r=await (await s.call('/ticket-metadata?key='+t.key)).json();assert.equal('billing'in r.metadata,false);assert.doesNotMatch(JSON.stringify(r.history),/billable|billing/);
@@ -228,9 +235,16 @@ test('administrators create a customer or a project in Odoo from the Clients pag
 });
 test('the dashboard priority is stored with the ticket, validated, and never changes Jira fields',async()=>{
  const {env}=await setup();const key='AION-88';
- let m=await saveMetadata(env,key,{revision:0,dashPriority:'High'},user);assert.equal(m.dashPriority,'High');
- await assert.rejects(saveMetadata(env,key,{revision:m.revision,dashPriority:'Urgent!!'},user),e=>e.status===400);
- m=await saveMetadata(env,key,{revision:m.revision,dashPriority:null},user);assert.equal(m.dashPriority,null);
+ let m=await saveMetadata(env,key,{revision:0,dashPriority:'High'},admin);assert.equal(m.dashPriority,'High');
+await assert.rejects(saveMetadata(env,key,{revision:m.revision,dashPriority:'Highest'},admin),e=>e.status===400);
+m=await saveMetadata(env,key,{revision:m.revision,dashOrder:2},admin);assert.equal(m.dashOrder,2);
+await assert.rejects(saveMetadata(env,key,{revision:m.revision,dashOrder:0},admin),e=>e.status===400);
+await assert.rejects(saveMetadata(env,key,{revision:m.revision,dashOrder:1.5},admin),e=>e.status===400);
+m=await saveMetadata(env,key,{revision:m.revision,dashPriority:null},admin);assert.equal(m.dashOrder,null);
+ await assert.rejects(saveMetadata(env,key,{revision:m.revision,dashPriority:'Urgent!!'},admin),e=>e.status===400);
+ m=await saveMetadata(env,key,{revision:m.revision,dashPriority:null},admin);assert.equal(m.dashPriority,null);
+ await assert.rejects(saveMetadata(env,key,{revision:m.revision,dashPriority:'Low'},user),e=>e.status===403);
+ await assert.rejects(saveMetadata(env,key,{revision:m.revision,dashOrder:1},user),e=>e.status===403);
  assert.equal((await readMetadata(env,key)).dashPriority,null);
 });
 test('users set the estimate once; only administrators change it afterwards',async()=>{

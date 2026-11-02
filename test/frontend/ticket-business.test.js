@@ -16,10 +16,11 @@ test('natural, numeric and date sorting keep blanks last in both directions with
  assert.deepEqual(sortTickets(items,{field:'billing',direction:'desc'},false),items);
 });
 test('priority sorts by urgency, not alphabetically, and unset priorities go last',()=>{
- const items=[{key:'AION-1',dashPriority:'Low'},{key:'AION-2',dashPriority:'Highest'},{key:'AION-3',dashPriority:null},{key:'AION-4',dashPriority:'Medium'},{key:'AION-5',dashPriority:'High'}];
- assert.deepEqual(sortTickets(items,{field:'dashPriority',direction:'asc'}).map(i=>i.key),['AION-2','AION-5','AION-4','AION-1','AION-3']);
- assert.deepEqual(sortTickets(items,{field:'dashPriority',direction:'desc'}).map(i=>i.key),['AION-1','AION-4','AION-5','AION-2','AION-3']);
- assert.equal(priorityRank('Lowest'),4);
+ const items=[{key:'AION-1',dashPriority:'Low'},{key:'AION-2',dashPriority:'High',dashOrder:1},{key:'AION-3',dashPriority:null},{key:'AION-4',dashPriority:'Medium',dashOrder:2},{key:'AION-5',dashPriority:'High',dashOrder:3},{key:'AION-6',dashPriority:'High',dashOrder:null}];
+ assert.deepEqual(sortTickets(items,{field:'dashPriority',direction:'asc'}).map(i=>i.key),['AION-2','AION-5','AION-6','AION-4','AION-1','AION-3']);
+ assert.deepEqual(sortTickets(items,{field:'dashPriority',direction:'desc'}).map(i=>i.key),['AION-1','AION-4','AION-6','AION-5','AION-2','AION-3']);
+ assert.equal(priorityRank('Low'),3);
+ assert.equal(priorityRank('Urgent'),99);
 });
 test('creation timestamps stay intact and display Jerusalem calendar dates',()=>{
  const stamp='2026-10-14T22:30:00Z';assert.match(createdDate(stamp),/15 Oct 2026/);
