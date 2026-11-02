@@ -352,7 +352,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
           x.addEventListener("click",go); x.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" ") go(e); }); return x; };
         st.appendChild(mk("−",-1,"Fewer days")); st.appendChild(el("span","stepv",v+"d")); st.appendChild(mk("+",1,"More days")); b.appendChild(st);
       } else { b.appendChild(el("span","l",fd.l)); b.appendChild(el("span","h",fd.h)); }
-      b.addEventListener("click",()=>{ if(fd.id==="all"){ applyBuiltIn("__all"); return; } state.focus=fd.id; state.sel.clear(); render(); });
+      // "All open" and "All tickets" start from their built-in views, so the filters reset too.
+      b.addEventListener("click",()=>{ if(fd.id==="open"){ applyBuiltIn("__current"); return; } if(fd.id==="all"){ applyBuiltIn("__all"); return; } state.focus=fd.id; state.sel.clear(); render(); });
       if(extra&&!primaryFocus.includes(fd.id))extra.appendChild(b);else box.appendChild(b);
     });
     if(extra)box.appendChild(extra);
@@ -1125,6 +1126,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       const box=$("d-comments"); box.replaceChildren(); $("d-ccount").textContent="("+d.messages.length+")";
       if(!d.messages.length) box.appendChild(el("div","msg","No messages yet."));
       d.messages.forEach(m=>{ const cd=el("div","cmt"+(m.note?" mine":" ext")); const meta=el("div","cmeta"); meta.appendChild(el("b",null,m.author)); meta.appendChild(el("span",null,ago(m.when)+(m.note?" · internal note":m.email?" · email":""))); cd.appendChild(meta); const b=richNode(m.body); b.classList.add("rich"); b.dir="auto"; cd.appendChild(b); box.appendChild(cd); });
+      renderAttachments(d.attachments||[]);
       $("d-reply").placeholder="Write an internal note (saved in Odoo's chatter, not emailed to the customer)…";
     }catch(err){ if(dz.key===key) $("d-desc").replaceChildren(el("span","msg err",errorText(err))); }
   }
@@ -1300,7 +1302,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       const row=el("div","att "+k); row.appendChild(el("span","ic",ext||"FILE"));
       const mid=el("div"); mid.style.minWidth="0"; const nm=el("div","nm",a.filename); nm.dir="auto"; mid.appendChild(nm);
       const fw=fmtWhen(a.created); mid.appendChild(el("div","mt",fmtSize(a.size)+" · "+((a.author&&a.author.displayName)||"")+" · "+fw.d+" "+fw.t)); row.appendChild(mid);
-      row.appendChild(fileActions(key,a.filename,a.mimeType,()=>apiFile("/jira/issue/"+key+"/attachments/"+a.id))); box.appendChild(row);
+      const route=isOdoo(key)?"/odoo/tickets/"+key+"/attachments/":"/jira/issue/"+key+"/attachments/";
+      row.appendChild(fileActions(key,a.filename,a.mimeType,()=>apiFile(route+a.id))); box.appendChild(row);
     });
   }
   // Suggest description with AI: the AI writes one from the title, description and comments; you can

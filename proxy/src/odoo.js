@@ -156,6 +156,16 @@ export async function odooTicketForTime(env, key) {
 // Odoo HTML (descriptions, chatter) is shown as text by the dashboard's own sanitizer; this only trims size.
 const clip = (html, n = 50000) => String(html || "").slice(0, n);
 
+// Files attached to the ticket in Odoo (added on the ticket or in its chatter). Links are not files.
+const ticketFiles = (env, id, extra = []) => odoo(env, "ir.attachment", "search_read",
+  [[["res_model", "=", "helpdesk.ticket"], ["res_id", "=", id], ["type", "=", "binary"], ...extra]],
+  { fields: ["name", "mimetype", "file_size", "create_date", "create_uid"], order: "create_date desc", limit: 100 });
+// Same shape the dashboard shows for Jira and internal attachments.
+const fileView = (x) => ({
+  id: x.id, filename: x.name || "attachment", mimeType: x.mimetype || "application/octet-stream", size: x.file_size || 0,
+  created: iso(x.create_date), author: { displayName: Array.isArray(x.create_uid) ? x.create_uid[1] : "" }
+});
+
 export async function odooRoutes(request, env, url, me) {
   const path = url.pathname, method = request.method;
   if (!odooConfigured(env)) return fail("odoo_off", "Odoo isn't connected. See SETUP.md.", 501);
@@ -181,7 +191,7 @@ export async function odooRoutes(request, env, url, me) {
       return json({ tickets: rows.filter(mine).map((t) => view(env, t, maps, allStages)) });
     }
 
-    const m = /^\/odoo\/tickets\/(HD-\d+)(\/note)?$/.exec(path);
+    const m = /^\/odoo\/tickets\/(HD-\d+)(\/note|\/attachments\/\d{1,20})?$/.exec(path);
     if (!m) return fail("not_found", "Not found.", 404);
     const [t] = await odoo(env, "helpdesk.ticket", "search_read", [byRef(m[1])], { fields: [...FIELDS, "description"], limit: 1 });
     if (!t || !mine(t)) return fail("not_found", "No such Odoo ticket.", 404);
@@ -189,12 +199,31 @@ export async function odooRoutes(request, env, url, me) {
     const teamId = Array.isArray(t.team_id) ? t.team_id[0] : 0;
     const teamStages = allStages.filter((s) => !teamId || !s.team_ids.length || s.team_ids.includes(teamId));
 
+    // Download one file of this ticket through the proxy, so the Odoo login stays on the server.
+    const file = /^\/attachments\/(\d{1,20})$/.exec(m[2] || "");
+    if (file && method === "GET") {
+      const [x] = await ticketFiles(env, id, [["id", "=", Number(file[1])]]);
+      if (!x) return fail("not_found", "No such attachment on this ticket.", 404);
+      const [{ datas }] = await odoo(env, "ir.attachment", "read", [[x.id], ["datas"]]);
+      if (!datas) return fail("not_found", "The file is missing.", 404);
+      const bytes = Uint8Array.from(atob(datas), (c) => c.charCodeAt(0));
+      const type = String(x.mimetype || "application/octet-stream").split(";")[0].trim();
+      return new Response(bytes, { status: 200, headers: {
+        "Content-Type": /^[\w.+-]+\/[\w.+-]+$/.test(type) ? type : "application/octet-stream", "Content-Length": String(bytes.length),
+        "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": "attachment; filename*=UTF-8''" + encodeURIComponent(x.name || "attachment")
+      } });
+    }
+    if (m[2] && m[2] !== "/note") return fail("not_found", "Not found.", 404);
+
     if (!m[2] && method === "GET") {
       const msgs = await odoo(env, "mail.message", "search_read", [[["model", "=", "helpdesk.ticket"], ["res_id", "=", id], ["message_type", "in", ["comment", "email"]]]],
         { fields: ["body", "author_id", "email_from", "date", "subtype_id", "message_type"], order: "date asc", limit: 200 });
+      const files = await ticketFiles(env, id);
       return json({
         ticket: view(env, t, maps, allStages),
         description: clip(t.description),
+        attachments: files.map(fileView),
         messages: msgs.filter((x) => String(x.body || "").replace(/<[^>]*>/g, "").trim()).map((x) => ({
           author: Array.isArray(x.author_id) ? x.author_id[1] : String(x.email_from || "Someone").replace(/<[^>]*>/g, "").replace(/"/g, "").trim(),
           when: iso(x.date), body: clip(x.body, 20000),

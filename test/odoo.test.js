@@ -9,6 +9,10 @@ const TICKETS = {
   300: { id: 300, name: "Ready development", stage_id: [2, "In Progress"], user_id: [12, "Shahd Ghayadah"], partner_email: '"Ariel Amiri" <ariel@kadouri.co.il>', partner_name: "", partner_id: [5, "ariel@kadouri.co.il"], priority: "1", team_id: [1, "ai1 | Support"], create_date: "2026-10-01 08:00:00", write_date: "2026-10-14 09:00:00", close_date: false, sla_deadline: "2026-10-20 10:00:00", ticket_ref: "302", description: "<p>Please deploy</p>" },
   293: { id: 293, name: "Cartons order", stage_id: [2, "In Progress"], user_id: [34, "Bashar Bannoura"], partner_email: "neor@suzume.co.il", partner_name: "Neor El Hai", partner_id: false, priority: "0", team_id: [1, "ai1 | Support"], create_date: "2026-10-02 08:00:00", write_date: "2026-10-13 09:00:00", close_date: false, sla_deadline: false, ticket_ref: "293", description: "" }
 };
+const ATTACHMENTS = [
+  { id: 501, name: "invoice.pdf", mimetype: "application/pdf", file_size: 5, create_date: "2026-10-03 10:00:00", create_uid: [12, "Shahd Ghayadah"], res_model: "helpdesk.ticket", res_id: 300, type: "binary", datas: Buffer.from("%PDF-").toString("base64") },
+  { id: 502, name: "other.txt", mimetype: "text/plain", file_size: 3, create_date: "2026-10-03 11:00:00", create_uid: false, res_model: "helpdesk.ticket", res_id: 293, type: "binary", datas: Buffer.from("abc").toString("base64") }
+];
 globalThis.fetch = async (url, init) => {
   const body = JSON.parse(init.body);
   const { service, method, args } = body.params;
@@ -17,6 +21,12 @@ globalThis.fetch = async (url, init) => {
   if (service === "common" && method === "authenticate") return reply(args[2] === "good-key" ? 7 : false);
   const [, , , model, m, a, kw = {}] = args;
   if (model === "res.users") return reply([{ id: 12, name: "Shahd Ghayadah", login: "shahd@aione.biz", email: "shahd@aione.biz" }, { id: 34, name: "Bashar Bannoura", login: "bashar.b@aione.biz", email: "bashar.b@aione.biz" }, { id: 6, name: "Ireen Khair", login: "ireen@aione.biz", email: "ireen@aione.biz" }]);
+  if (model === "ir.attachment" && m === "read") return reply(ATTACHMENTS.filter((x) => a[0].includes(x.id)).map((x) => ({ id: x.id, datas: x.datas })));
+  if (model === "ir.attachment") {
+    const byTerm = (field) => a[0].find((t) => Array.isArray(t) && t[0] === field);
+    const rows = ATTACHMENTS.filter((x) => x.res_model === byTerm("res_model")[2] && x.res_id === byTerm("res_id")[2] && x.type === "binary" && (!byTerm("id") || x.id === byTerm("id")[2]));
+    return reply(rows.map(({ datas, res_model, res_id, type, ...rest }) => ({ ...rest })));
+  }
   if (model === "helpdesk.stage") return reply([{ id: 1, name: "New", fold: false, sequence: 1, team_ids: [1] }, { id: 2, name: "In Progress", fold: false, sequence: 2, team_ids: [1] }, { id: 3, name: "Solved", fold: true, sequence: 3, team_ids: [1] }, { id: 9, name: "Other team only", fold: false, sequence: 4, team_ids: [5] }]);
   if (model === "mail.message") return reply([{ body: "<p>Hello</p>", author_id: [5, "Ariel Amiri"], date: "2026-10-03 10:00:00", subtype_id: [1, "Discussions"], message_type: "email" }]);
   if (model === "helpdesk.ticket" && m === "search_read") {
@@ -72,6 +82,19 @@ test("detail: description, chatter and only this team's stages", async () => {
   assert.equal(data.description, "<p>Please deploy</p>");
   assert.equal(data.messages[0].author, "Ariel Amiri"); assert.equal(data.messages[0].email, true);
   assert.deepEqual(data.stages.map((s) => s.name), ["New", "In Progress", "Solved"]);
+});
+
+test("attachments are listed on the ticket and downloaded through the proxy, only for that ticket", async () => {
+  const t = await adminToken();
+  const { data } = await req("/odoo/tickets/HD-302", { token: t });
+  assert.deepEqual(data.attachments.map((a) => [a.id, a.filename, a.mimeType, a.size, a.author.displayName]), [[501, "invoice.pdf", "application/pdf", 5, "Shahd Ghayadah"]]);
+  const ok = await worker.fetch(new Request("https://p/odoo/tickets/HD-302/attachments/501", { headers: { Authorization: "Bearer " + t } }), env);
+  assert.equal(ok.status, 200); assert.equal(ok.headers.get("Content-Type"), "application/pdf");
+  assert.match(ok.headers.get("Content-Disposition"), /invoice\.pdf/);
+  assert.equal(await ok.text(), "%PDF-");
+  const other = await req("/odoo/tickets/HD-302/attachments/502", { token: t });
+  assert.equal(other.status, 404, "a file on another ticket is not served under this one");
+  assert.equal((await req("/odoo/tickets/HD-302/attachments/501", { method: "POST", token: t, body: {} })).status, 404);
 });
 
 test("admin moves the stage and changes the developer in Odoo", async () => {
