@@ -27,6 +27,7 @@ import { odooConfigured, odooRoutes, odooTicketInfo, odooTicketForTime } from ".
 import { timeRoutes, timeSyncCron } from "./time-entries.js";
 import { monitorRoutes } from "./monitor.js";
 import { dbReportRoutes, dbReportCron } from "./db-report.js";
+import { knowledgeRoutes } from "./knowledge-lock.js";
 import { odooAppRoutes, odooTranslations } from "./odoo-app.js";
 import { monitorCallbackUrl, monitorPublicKeys, monitorToken } from "./monitor-sso.js";
 import { cookieSessionRequest } from "./sessions.js";
@@ -614,6 +615,7 @@ async function route(request, env, url) {
   if (path.startsWith("/monitor/odoo/")) return odooAppRoutes(request, env, url, me);
   if (path.startsWith("/monitor/")) return monitorRoutes(request, env, url, me);
   if (path === "/db-report" || path.startsWith("/db-report/")) return dbReportRoutes(request, env, url, me);
+  if (path === "/knowledge" || path.startsWith("/knowledge/")) return knowledgeRoutes(request, env, me, path);
 
   const P = env.JIRA_PROJECT;
   const isOurKey = (k) => new RegExp("^" + P + "-\\d+$").test(k);
@@ -627,7 +629,7 @@ async function route(request, env, url) {
     // At most a short wait for Jira; when it's slow or down, the team setting's list is used.
     const fromJira = await Promise.race([jiraDevs(env).catch(() => []), new Promise((r) => setTimeout(() => r([]), 3000))]);
     team.devs = [...new Set([...(Array.isArray(team.devs) ? team.devs : []), ...fromJira])];
-    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE, capabilities:["ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1","db-report-pos-version-v1","epic-map-v1"] });
+    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE,knowledgeLock:odooConfigured(env)&&!!env.STORE, capabilities:["ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1","db-report-pos-version-v1","epic-map-v1"] });
   }
 
   if (!isAdmin && (path === "/mail" || path === "/jira/users")) return fail("forbidden", "Only administrators can do that.", 403);

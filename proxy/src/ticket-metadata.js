@@ -12,15 +12,23 @@ export function requireStore(env) {
   return env.STORE;
 }
 const prefix=env=>'business:'+env.JIRA_PROJECT+':';
-const empty=()=>({revision:0,clientId:null,subClientId:null,billing:null,agreedHours:null,agreedDate:null,agreedDeveloper:null,estimatedHours:null,actualHours:null,workDone:'',dashPriority:null,completedAt:null,epicKey:null,history:[]});
+const empty=()=>({revision:0,clientId:null,subClientId:null,billing:null,agreedHours:null,agreedDate:null,agreedDeveloper:null,estimatedHours:null,actualHours:null,workDone:'',dashPriority:null,dashOrder:null,completedAt:null,epicKey:null,history:[]});
 // The dashboard's own priority. It is stored only here, never sent to Jira (Jira's priority is a separate field).
-export const DASH_PRIORITIES=['Highest','High','Medium','Low','Lowest'];
+export const DASH_PRIORITIES=['High','Medium','Low'];
+// Priorities saved before the three levels existed, read as the nearest new value. Stored records are not rewritten
+// until someone edits the ticket.
+const LEGACY_DASH={Highest:['High',1],Critical:['High',1],Blocker:['High',1],High:['High',null],Medium:['Medium',null],Low:['Low',null],Lowest:['Low',null]};
+export function migrateDash(m){
+  if(m.dashPriority==null||DASH_PRIORITIES.includes(m.dashPriority))return m;
+  const [level,order]=LEGACY_DASH[m.dashPriority]||[null,null];
+  return {...m,dashPriority:level,dashOrder:m.dashOrder??order};
+}
 // Fields only administrators see: billing, and the agreed hours with the date and developer they went to Odoo with.
 const ADMIN_ONLY=['billing','agreedHours','agreedDate','agreedDeveloper'];
 export const catalogKey=env=>prefix(env)+'catalog';
 export const metadataKey=(env,key)=>prefix(env)+'ticket:'+key;
 export async function readCatalog(env) { return JSON.parse(await requireStore(env).get(catalogKey(env)) || '{"revision":0,"entries":[]}'); }
-export async function readMetadata(env,key) { return {...empty(),...JSON.parse(await requireStore(env).get(metadataKey(env,key)) || '{}')}; }
+export async function readMetadata(env,key) { return migrateDash({...empty(),...JSON.parse(await requireStore(env).get(metadataKey(env,key)) || '{}')}); }
 // The name shown for a client or project: the AI name an administrator chose, else its Odoo name.
 export const shownName=e=>e?(e.aiName||e.name):'';
 export function publicMetadata(record,me,catalog) {
@@ -76,15 +84,17 @@ async function persist(env,key,m,previous) {
 }
 // ticket: {title, assignee} from the ticket read, for the agreed hours' Odoo line.
 export async function saveMetadata(env,key,patch,me,{closed=false,creating=false,ticket={}}={}) {
-  const store=requireStore(env),raw=await store.get(metadataKey(env,key)),old={...empty(),...JSON.parse(raw||'{}')},m=structuredClone(old),catalog=await readCatalog(env);
+  const store=requireStore(env),raw=await store.get(metadataKey(env,key)),old=migrateDash({...empty(),...JSON.parse(raw||'{}')}),m=structuredClone(old),catalog=await readCatalog(env);
   if(closed)problem('Reopen this ticket before editing its business fields.',409,'ticket_closed');
   if(!patch || typeof patch!=='object'||Array.isArray(patch))problem('Invalid ticket fields.');
-  const allowed=['revision','clientId','subClientId','billing','agreedHours','estimatedHours','actualHours','workDone','dashPriority'];
+  const allowed=['revision','clientId','subClientId','billing','agreedHours','estimatedHours','actualHours','workDone','dashPriority','dashOrder'];
   if(Object.keys(patch).some(k=>!allowed.includes(k)))problem('Unknown ticket business field.');
   if(!Number.isInteger(patch.revision)||patch.revision!==old.revision)problem('Ticket fields changed. Refresh and retry.',409,'conflict');
   if(me.role!=='admin'&&'billing' in patch)problem('Only administrators can access billing.',403,'forbidden');
   if(me.role!=='admin'&&'agreedHours' in patch)problem('Only administrators can set agreed hours.',403,'forbidden');
-  if(me.role!=='admin'&&!creating&&('clientId' in patch||'subClientId' in patch))problem('Only administrators can change the client selection.',403,'forbidden');
+  if(me.role!=='admin'&&!creating&&('dashPriority' in patch||'dashOrder' in patch))problem('Only administrators can set the priority.',403,'forbidden');
+  // Anyone may choose a client or project while it is empty; after that only administrators can change it.
+  if(me.role!=='admin'&&!creating&&(old.clientId||old.subClientId)&&['clientId','subClientId'].some(k=>k in patch&&patch[k]!==old[k]))problem('Only administrators can change the client or project once it is set.',403,'forbidden');
   // Once an estimate is set, only an administrator can change it.
   if(me.role!=='admin'&&'estimatedHours' in patch&&old.estimatedHours!=null&&Number(patch.estimatedHours)!==Number(old.estimatedHours))problem('The estimate is already set. Ask an administrator to change it.',403,'estimate_locked');
   for(const k of ['clientId','subClientId'])if(k in patch){if(patch[k]!==null&&(typeof patch[k]!=='string'||patch[k].length>80))problem('Invalid client selection.');m[k]=patch[k];}
@@ -110,6 +120,9 @@ export async function saveMetadata(env,key,patch,me,{closed=false,creating=false
   }
   if('workDone' in patch){if(typeof patch.workDone!=='string'||patch.workDone.length>5000)problem('Work done must be text up to 5,000 characters.');m.workDone=patch.workDone.trim();}
   if('dashPriority' in patch){if(patch.dashPriority!==null&&!DASH_PRIORITIES.includes(patch.dashPriority))problem('Choose a priority from the list.');m.dashPriority=patch.dashPriority;}
+  // The order only means something inside a priority, so it is cleared with the priority.
+  if('dashOrder' in patch){if(patch.dashOrder!==null&&!(Number.isInteger(patch.dashOrder)&&patch.dashOrder>=1&&patch.dashOrder<=99))problem('The order must be a whole number from 1 to 99.');m.dashOrder=patch.dashOrder;}
+  if(m.dashPriority===null)m.dashOrder=null;
   if(creating&&!noClient){const errors=selectionErrors(catalog,m,{active:true});if(errors.length)problem(errors.join('. '));}
   const changes={};for(const k of allowed.filter(k=>k!=='revision'))if(m[k]!==old[k])changes[k]={from:old[k],to:m[k]};
   m.revision++;m.updatedAt=new Date().toISOString();m.history.push({type:'edit',at:m.updatedAt,by:{email:me.email,name:me.name},changes});
@@ -362,7 +375,7 @@ export async function metadataRoutes(request,env,url,me,readTicket,readTickets) 
     else{const seen=[];for(let offset=0;offset<keys.length;offset+=8)await Promise.all(keys.slice(offset,offset+8).map(async k=>{if(await readTicket(k))seen.push(k);}));shown=seen;}
     const raws=!shown.length?[]:store.mget?await store.mget(shown.map(k=>metadataKey(env,k))):await Promise.all(shown.map(k=>store.get(metadataKey(env,k))));
     const sums=await readSummaries(env,shown);
-    shown.forEach((k,n)=>{const rec={...empty(),...JSON.parse(raws[n]||'{}')};records[k]=logged(publicMetadata(rec,me,catalog),sums[k],rec.agreedHours,me);});
+    shown.forEach((k,n)=>{const rec=migrateDash({...empty(),...JSON.parse(raws[n]||'{}')});records[k]=logged(publicMetadata(rec,me,catalog),sums[k],rec.agreedHours,me);});
     return Response.json({records},{headers:{'Cache-Control':'no-store'}});
   }
   if(!validKey(key))problem('Choose a valid ticket.');

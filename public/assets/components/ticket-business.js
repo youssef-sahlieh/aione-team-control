@@ -68,7 +68,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   function createFields(parent,{values={},creating=false,closed=false}={}){
     const box=el('div','business-form');parent.append(box);
     const clientGroup=el('fieldset','business-section business-client-section');clientGroup.append(el('legend','','Client & billing'));box.append(clientGroup);
-    const selects=selections(clientGroup,values,closed||(!admin()&&!creating),true);
+    const selects=selections(clientGroup,values,closed||(!admin()&&!creating&&!!(values.clientId||values.subClientId)),true);
     let billing;if(admin()){billing=field(clientGroup,'Billing (administrators only)',el('select','fsel'));billingOptions(billing,values.billing);billing.disabled=closed;if(creating&&billingNeeded)billing.setAttribute('aria-required','true');}
     const workGroup=el('fieldset','business-section business-work-section');workGroup.append(el('legend','','Work summary'));box.append(workGroup);
     const logged=values.loggedMinutes>0;
@@ -80,7 +80,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     // Once set, the estimate is changed by administrators only.
     if(!admin()&&!creating&&values.estimatedHours!=null){estimated.disabled=true;estimated.title='The estimate is set. Ask an administrator to change it.';}
     const work=field(workGroup,'Work done',el('textarea','inp'));work.value=values.workDone||'';work.maxLength=5000;work.rows=4;work.dir='auto';work.disabled=closed;
-    const read=()=>{if(creating&&admin()&&billingNeeded&&!billing.value)throw new Error('Choose Billable or Not billable before assigning this ticket.');for(const n of [estimated,actual])if(!n.checkValidity())throw new Error('Hours must be greater than zero, with up to two decimal places.');const out={estimatedHours:estimated.value===''?null:Number(estimated.value),actualHours:actual.value===''?null:Number(actual.value),workDone:work.value};if(admin()||creating)Object.assign(out,selects.read());if(billing)out.billing=billing.value||null;if(agreed){if(!agreed.checkValidity())throw new Error('Agreed hours must be greater than zero, with up to two decimal places.');const hours=agreed.value===''?null:Number(agreed.value);if(hours!==(values.agreedHours??null))out.agreedHours=hours;}return out;};
+    const read=()=>{if(creating&&admin()&&billingNeeded&&!billing.value)throw new Error('Choose Billable or Not billable before assigning this ticket.');for(const n of [estimated,actual])if(!n.checkValidity())throw new Error('Hours must be greater than zero, with up to two decimal places.');const out={estimatedHours:estimated.value===''?null:Number(estimated.value),actualHours:actual.value===''?null:Number(actual.value),workDone:work.value};if(admin()||creating||!(values.clientId||values.subClientId))Object.assign(out,selects.read());if(billing)out.billing=billing.value||null;if(agreed){if(!agreed.checkValidity())throw new Error('Agreed hours must be greater than zero, with up to two decimal places.');const hours=agreed.value===''?null:Number(agreed.value);if(hours!==(values.agreedHours??null))out.agreedHours=hours;}return out;};
     return {read,box,selects};
   }
   async function load(keys){
@@ -92,7 +92,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   // One field (or the client pair) edited straight from the ticket list, with the same rules as the ticket panel
   // (client and billing for administrators; closed tickets locked). The server checks all of it again.
   const QUICK={client:'Client',billing:'Billing',estimatedHours:'Estimated hours',actualHours:'Actual hours',workDone:'Work done',dashPriority:'Priority'};
-  function canQuickEdit(i,name){if(!enabled||!i||i.odoo||i.cat==='done'||!(name in QUICK))return false;if(name==='estimatedHours'&&!admin()&&i.estimatedHours!=null)return false;return name==='client'||name==='billing'?admin():true;}
+  function canQuickEdit(i,name){if(!enabled||!i||i.odoo||i.cat==='done'||!(name in QUICK))return false;if(name==='estimatedHours'&&!admin()&&i.estimatedHours!=null)return false;if(name==='dashPriority')return admin();if(name==='client')return admin()||!i.clientId;return name==='billing'?admin():true;}
   async function quickEdit(box,key,name,done){
     const msg=el('p','msg','Loading…');box.replaceChildren(msg);
     let r;try{r=await api('/ticket-metadata?key='+encodeURIComponent(key));}catch(e){message(msg,e);return;}
@@ -102,7 +102,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     if(name==='client'){const s=selections(form,v);read=s.read;first=s.client;}
     else if(name==='billing'){const b=field(form,'Billing',el('select','fsel'));billingOptions(b,v.billing);read=()=>{if(!b.value)throw new Error('Choose Billable or Not billable.');return {billing:b.value};};first=b;}
     else if(name==='workDone'){const t=field(form,'Work done',el('textarea','inp'));t.value=v.workDone||'';t.maxLength=5000;t.rows=4;t.dir='auto';read=()=>({workDone:t.value});first=t;}
-    else if(name==='dashPriority'){const p=field(form,'Priority',el('select','fsel'));option(p,'Not set','');DASH_PRIORITIES.forEach(x=>option(p,x,x));p.value=v.dashPriority||'';read=()=>({dashPriority:p.value||null});first=p;}
+    else if(name==='dashPriority'){const p=field(form,'Priority',el('select','fsel'));option(p,'Not set','');DASH_PRIORITIES.forEach(x=>option(p,x,x));p.value=v.dashPriority||'';const o=field(form,'Order within priority',input('number',v.dashOrder));o.min='1';o.max='99';o.step='1';o.placeholder='Last';read=()=>{if(o.value!==''&&!o.checkValidity())throw new Error('The order must be a whole number from 1 to 99.');return {dashPriority:p.value||null,dashOrder:o.value===''?null:Number(o.value)};};first=p;}
     else{const n=field(form,QUICK[name],input('number',v[name]));n.min='0.01';n.max='1000000';n.step='0.01';read=()=>{if(!n.checkValidity())throw new Error('Hours must be greater than zero, with up to two decimal places.');return {[name]:n.value===''?null:Number(n.value)};};first=n;}
     const status=el('p','msg'),save=button('Save',async()=>{
       save.disabled=true;

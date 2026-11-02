@@ -43,7 +43,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     SITE=cfg.site; PROJECT=cfg.project; MAIL=!!cfg.mail; PEOPLE=cfg.people||{}; DEVS=cfg.devs||[]; DEV_EMAIL=cfg.devEmails||{}; DEV_COLOR=cfg.devColors||{};
     PEOPLE={...PEOPLE,[INTERNAL_ASSIGNEE]:{name:"Internal Tickets",ini:"IT",id:INTERNAL_ASSIGNEE}};
     BYID={}; for(const k in PEOPLE) BYID[PEOPLE[k].id]=k;
-    IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||""; MY_EMAIL=cfg.email||""; INTERNAL=!!cfg.accounts; ODOO=!!cfg.odoo; { const dl=$("dbreport-link"); if(dl) dl.hidden=!cfg.dbReport; } $("new-int").hidden=!INTERNAL;
+    IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||""; MY_EMAIL=cfg.email||""; INTERNAL=!!cfg.accounts; ODOO=!!cfg.odoo; { const dl=$("dbreport-link"); if(dl) dl.hidden=!cfg.dbReport; } { const kl=$("knowledge-link"); if(kl) kl.hidden=!cfg.knowledgeLock; } $("new-int").hidden=!INTERNAL;
     const filtersKey="aion.ticket-filters.open."+encodeURIComponent(MY_EMAIL);
     if(ticketFiltersKey!==filtersKey){ticketFiltersKey=filtersKey;ticketFiltersOpen=false;try{ticketFiltersOpen=localStorage.getItem(ticketFiltersKey)==="1";}catch{}}
     document.body.classList.toggle("role-user",!IS_ADMIN);
@@ -62,7 +62,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(state.focus==="duechg")state.focus="open";
     state.f=defaultFilters();
     try{state.columnsMode=localStorage.getItem("aion.columns."+encodeURIComponent(MY_EMAIL))==="all"?"all":"work";}catch{state.columnsMode="work";}
-    try{const sort=JSON.parse(localStorage.getItem("aion.sort."+encodeURIComponent(MY_EMAIL))||"null");state.sort=validSort(sort,IS_ADMIN)?sort:null;}catch{}
+    // Tickets start ordered by priority; a user who clears the sort gets an unsorted list, and that choice is kept.
+    try{const raw=localStorage.getItem("aion.sort."+encodeURIComponent(MY_EMAIL));const sort=raw===null?{field:"dashPriority",direction:"asc"}:JSON.parse(raw);state.sort=validSort(sort,IS_ADMIN)?sort:null;}catch{}
     aiAssistant.configure(cfg);
     ticketBriefs.configure(cfg);
   }
@@ -78,6 +79,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     "__all":{label:"All tickets (all assignees, mine)",focus:"all",filters:anyoneFilters,range:{}},
     "__closed":{label:"All closed (mine)",focus:"closed",filters:anyoneFilters,range:{closedDays:365}}
   };
+  // A built-in view replaces the current filters and business filter, so nothing from the last view carries over.
+  function applyBuiltIn(id){ const b=BUILT_IN_VIEWS[id]; Object.assign(state,{f:b.filters(),businessFilter:{},focus:b.focus,view:"list",q:"",...b.range}); state.sel.clear(); $("q").value=""; if(b.range.closedDays) loadClosed(); workspace.navigate("tickets"); render(); }
   const teamNames=()=>{ const n=Object.values(PEOPLE).map(p=>p.name); return n.length>1?n.slice(0,-1).join(", ")+" or "+n[n.length-1]:n.join(""); };
   let lastLoad=0;
   const NEW_STATUSES=["open","pending approval"];
@@ -292,7 +295,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     {id:"nodue",k:"k5",l:"No due date",h:"Open, no date set",f:i=>i.cat!=="done"&&!i.odoo&&!i.due},
     {id:"recent",k:"k7",l:"Updated",range:"updDays",max:30,h:"Recent activity",f:i=>i.cat!=="done"&&Date.parse(i.updated)>=Date.now()-state.updDays*dayMs},
     {id:"datereq",k:"k3",l:"Date request pending",h:"Awaiting an admin decision",f:i=>!!dateRequests.activeFor(i.key)},
-    {id:"all",k:"k1",l:"All tickets",h:"Every ticket, open or closed",f:()=>true},
+    // Closed and resolved tickets are left out; the Closed tile shows them.
+    {id:"all",k:"k1",l:"All tickets",h:"Open tickets, every assignee",f:i=>i.cat!=="done"&&!["resolved","closed"].includes((i.status||"").toLowerCase())},
     {id:"closed",k:"k8",l:"Closed",range:"closedDays",max:365,step:7,h:"All closed AION tickets",f:i=>i.cat==="done"&&Date.parse(i.updated)>=Date.now()-state.closedDays*dayMs}
   ];
   const DUE_OPTS=[["any","Any"],["overdue","Overdue"],["today","Today"],["week","Next 7 days"],["later","Later"],["none","No date"],["pending","Pending date request"]];
@@ -323,7 +327,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     moreField.hidden=!IS_ADMIN;more.hidden=!IS_ADMIN;
     let views=[]; try{views=readViews(localStorage,MY_EMAIL);}catch(_){}
     const builtIn=IS_ADMIN?[]:Object.entries(BUILT_IN_VIEWS).map(([id,b])=>[id,b.label]);
-    const savedField=pick("Saved view",[["","Saved views"],...builtIn,...views.map((v,n)=>[String(n),v.name])],IS_ADMIN?"":"__current",v=>{ if(v==="")return; if(BUILT_IN_VIEWS[v]){ const b=BUILT_IN_VIEWS[v]; Object.assign(state,{f:b.filters(),focus:b.focus,view:"list",q:"",...b.range}); $("q").value=""; if(b.range.closedDays) loadClosed(); workspace.navigate("tickets"); return; } const restored=restoreView(views[+v],IS_ADMIN,PEOPLE);if(!restored)return;Object.assign(state,restored);$("q").value=state.q;workspace.navigate(state.view==="history"?"requests":"tickets"); }).closest("label");
+    const savedField=pick("Saved view",[["","Saved views"],...builtIn,...views.map((v,n)=>[String(n),v.name])],IS_ADMIN?"":"__current",v=>{ if(v==="")return; if(BUILT_IN_VIEWS[v]){ applyBuiltIn(v); return; } const restored=restoreView(views[+v],IS_ADMIN,PEOPLE);if(!restored)return;Object.assign(state,restored);$("q").value=state.q;workspace.navigate(state.view==="history"?"requests":"tickets"); }).closest("label");
     const save=el("button","btn","Save view");save.type="button";save.addEventListener("click",()=>{ const name=prompt("Name this personal view:");if(!name||!name.trim())return;const view=serializeView(workspace.route().page==="internal"?{...state,f:{...state.f,source:"internal"}}:state,name);const updated=views.filter(v=>v.name!==view.name).concat(view).slice(-20);try{localStorage.setItem(savedViewKey(MY_EMAIL),JSON.stringify(updated));toast("View saved in this browser.");renderQuickFilters();}catch(_){toast("Couldn't save this view. Browser storage is unavailable.",[],true);} });box.appendChild(save);
     // Admins find saved views under More filters; users see them in the quick filter row, which is always visible.
     $("fgrid").querySelector(".saved-view-tools")?.remove();box.querySelector(".saved-view-tools")?.remove();const tools=el("div","saved-view-tools");tools.append(savedField,save);(IS_ADMIN?$("fgrid"):box).appendChild(tools);
@@ -337,6 +341,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const base=(state.issues||[]).filter(i=>passFilters(i,t));
     FOCUS.forEach(fd=>{
       if((fd.id==="nodev"||fd.id==="duechg")&&!IS_ADMIN) return;
+      // Administrators see every ticket by default; the All tickets tile is for users, who get the same view as "All tickets" in Saved views.
+      if(fd.id==="all"&&IS_ADMIN) return;
       const n=base.filter(i=>fd.f(i,t)).length;
       const b=el("button","tile "+fd.k); b.type="button"; b.setAttribute("aria-pressed",String(state.focus===fd.id));
       b.appendChild(el("span","n",String(n)));
@@ -346,7 +352,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
           x.addEventListener("click",go); x.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" ") go(e); }); return x; };
         st.appendChild(mk("−",-1,"Fewer days")); st.appendChild(el("span","stepv",v+"d")); st.appendChild(mk("+",1,"More days")); b.appendChild(st);
       } else { b.appendChild(el("span","l",fd.l)); b.appendChild(el("span","h",fd.h)); }
-      b.addEventListener("click",()=>{ state.focus=fd.id; state.sel.clear(); render(); });
+      b.addEventListener("click",()=>{ if(fd.id==="all"){ applyBuiltIn("__all"); return; } state.focus=fd.id; state.sel.clear(); render(); });
       if(extra&&!primaryFocus.includes(fd.id))extra.appendChild(b);else box.appendChild(b);
     });
     if(extra)box.appendChild(extra);
@@ -563,10 +569,10 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   }
   // The dashboard's own priority (stored with the ticket's business fields, never sent to Jira). Jira's priority stays in the ticket details.
   function priorityCell(i){
-    const edit=business.canQuickEdit(i,"dashPriority"), p=el(edit?"button":"span","business-cell c-prio"+(edit?" cell-edit":""),i.dashPriority||"Not set");
+    const edit=business.canQuickEdit(i,"dashPriority"), p=el(edit?"button":"span","business-cell c-prio"+(edit?" cell-edit":""),i.dashPriority?i.dashPriority+(i.dashOrder!=null?" "+i.dashOrder:""):"Not set");
     p.title="Dashboard priority (not in Jira)";
     if(edit){ p.type="button"; p.setAttribute("aria-label","Edit priority for "+i.key); p.addEventListener("click",e=>{ e.stopPropagation(); businessPopover(p,i,"dashPriority"); }); }
-    if(/high|highest|critical|blocker/i.test(i.dashPriority||"")) p.classList.add("flag","k2");
+    if(/^High\b/.test(i.dashPriority||"")) p.classList.add("flag","k2");
     return p;
   }
   function devButton(i){

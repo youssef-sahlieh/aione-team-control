@@ -110,6 +110,10 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
   const monitor = node("a", "nav-link"); monitor.id = "ai1-monitor-link"; monitor.href = MONITOR_START_URL; monitor.target = "_blank"; monitor.rel = "noopener"; monitor.title = "AI1 Monitor (opens in a new tab)"; monitor.hidden = true;
   monitor.append(icon("audit"), node("span", "", "AI1 Monitor"), node("span", "nav-ext", "↗"));
   nav.insertBefore(monitor, dbReport.nextSibling);
+  // The Odoo knowledge base is its own page behind a password; shown when Odoo is connected (set in applyConfig).
+  const knowledge = node("a", "nav-link"); knowledge.id = "knowledge-link"; knowledge.href = "knowledge.html"; knowledge.dataset.link = "knowledge"; knowledge.title = "Odoo knowledge base"; knowledge.hidden = true;
+  knowledge.append(icon("audit"), node("span", "", "Knowledge base"));
+  nav.insertBefore(knowledge, monitor.nextSibling);
   const navOrder = ["overview", "tickets", "databases", "monitor", "requests", "workload", "calendar", "reports", "clients", "worklog", "errors"];
   const navItem = id => nav.querySelector(id === "databases" ? "#dbreport-link" : id === "monitor" ? "#ai1-monitor-link" : `[data-page="${id}"]`);
   function configure() {
