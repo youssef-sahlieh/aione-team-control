@@ -29,6 +29,7 @@
   <div id="pagestate" class="state">Loading users…</div>
 
   <section class="upanel" id="list" hidden>
+    <div class="ustats" id="stats" aria-label="Summary"></div>
     <div class="utools">
       <h2>Everyone <span class="count" id="count"></span></h2>
       <input class="inp" id="search" type="search" placeholder="Search by name or email" aria-label="Search people" autocomplete="off">
@@ -62,8 +63,8 @@
     <label class="ufield"><span>Work email</span><input class="inp" id="p-email" type="email" autocomplete="off" required></label>
     <div class="ufield"><span>Role</span>
       <div class="rolecards" role="group" aria-label="Role" id="p-role">
-        <button type="button" class="rolecard" data-role="user" aria-pressed="true"><b>User</b><span>Sees the tickets for one developer. Can change status, set due dates and comment.</span></button>
-        <button type="button" class="rolecard" data-role="admin" aria-pressed="false"><b>Administrator</b><span>Sees and changes everything, including this page.</span></button>
+        <button type="button" class="rolecard" data-role="user" aria-pressed="true"><b>User</b><span>Sees only one developer's tickets. Can change status, set due dates and comment.</span></button>
+        <button type="button" class="rolecard" data-role="admin" aria-pressed="false"><b>Administrator</b><span>Sees every ticket and can change anything. Also approves date changes and manages users.</span></button>
       </div>
     </div>
     <label class="ufield"><span id="p-devlabel">Sees the tickets for</span>

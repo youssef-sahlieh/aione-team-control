@@ -381,6 +381,7 @@ const logged=(record,summary,agreed,me)=>{const minutes=summary?.loggedMinutes||
   return {...record,loggedMinutes:minutes,totalActualHours:withLogged(record,{loggedMinutes:minutes}).actualHours,overage,...(me.role==='admin'?{overHours}:{})};};
 export async function metadataRoutes(request,env,url,me,readTicket,readTickets) {
   requireStore(env);
+  if(url.pathname==='/ticket-metadata/import'||url.pathname==='/ticket-metadata/import/preview')return bulkImportRoutes(request,env,url,me,readTicket);
   const raw=request.method==='GET'?'':await request.text();
   if(raw.length>64000)problem('Ticket fields request too large.',413);
   let b=null;if(raw){try{b=JSON.parse(raw);}catch{problem('Invalid ticket fields request.');}}
@@ -457,4 +458,123 @@ export async function agreedImportRoutes(request,env,url,me,readTicket){
   if(url.pathname==='/agreed-hours/import/preview')return Response.json(await agreedImportPreview(env,b.rows,readTicket),{headers:{'Cache-Control':'no-store'}});
   if(url.pathname==='/agreed-hours/import')return Response.json(await agreedImportApply(env,me,b.rows,readTicket),{headers:{'Cache-Control':'no-store'}});
   problem('Not found.',404);
+}
+
+// ---- Bulk import of ticket business fields from a spreadsheet (administrators) ----
+// Agreed hours, client, project and billing, one row per ticket key. A blank cell leaves that field as it is, so an
+// import never clears anything. The preview works out each row's changes from the stored ticket and catalog; apply
+// runs that again, refuses the whole file while any row is an error, then saves each ok row through saveMetadata
+// against the revision it was planned on (a concurrent edit is reported as failed, the other rows still save).
+const BULK_LIMIT=300,BULK_BODY=400000;
+const BILLING_SPELLINGS=new Map([['billable','billable'],['not billable','not_billable'],['not_billable','not_billable'],['non billable','not_billable'],['non-billable','not_billable']]);
+const blankCell=v=>v==null||(typeof v==='string'&&!v.trim());
+const cellText=v=>typeof v==='string'?v.trim():typeof v==='number'&&Number.isFinite(v)?String(v):v==null?'':null;
+const matchKey=n=>nameKey(n).replace(/\s+/g,' ');
+const named=(e,k)=>[e.name,e.aiName].some(n=>n&&matchKey(n)===k);
+const billingLabel=b=>b==null?null:b==='billable'?'Billable':'Not billable';
+const keyOf=r=>typeof r?.key==='string'?r.key.trim().toUpperCase():'';
+const bulkKeyOk=(env,k)=>/^(?:INT|[A-Z][A-Z0-9_]*)-[0-9]+$/.test(k)&&['INT',env.JIRA_PROJECT].includes(k.split('-')[0]);
+// The client and project a row names. A client must be active and top level; a project must be active and under an
+// active client. Without a client, a project comes from the ticket's current client, else from the one active project
+// with that name in the catalog.
+function bulkSelection(catalog,current,clientName,projectName){
+  const top=catalog.entries.filter(e=>!e.parentId&&!e.archived),subs=catalog.entries.filter(e=>e.parentId&&!e.archived&&top.some(c=>c.id===e.parentId));
+  let clientId=current.clientId,subClientId=current.subClientId;
+  if(clientName){
+    const found=top.filter(e=>named(e,matchKey(clientName)));
+    if(!found.length)return {error:'Unknown client.'};
+    if(found.length>1)return {error:'Several clients have this name.'};
+    if(found[0].id!==current.clientId)subClientId=null;
+    clientId=found[0].id;
+  }
+  if(projectName){
+    const k=matchKey(projectName);
+    let found=clientId?subs.filter(e=>e.parentId===clientId&&named(e,k)):[];
+    if(!found.length&&!clientName&&!clientId)found=subs.filter(e=>named(e,k));
+    if(found.length>1)return {error:'Several projects have this name. Fill in the Client column too.'};
+    if(!found.length)return {error:clientId?'Unknown project for this client.':'Unknown project.'};
+    clientId=found[0].parentId;subClientId=found[0].id;
+  }
+  return {clientId,subClientId};
+}
+async function bulkPlan(env,rows,readTicket){
+  if(!Array.isArray(rows)||!rows.length)problem('Add at least one row with a ticket key and a field to change.');
+  if(rows.length>BULK_LIMIT)problem('Import up to '+BULK_LIMIT+' rows at a time.');
+  const catalog=await readCatalog(env),keys=[...new Set(rows.map(keyOf).filter(k=>bulkKeyOk(env,k)))],tickets=new Map();
+  // A few tickets at a time, so a long file does not wait on one read after another.
+  for(let o=0;o<keys.length;o+=8)await Promise.all(keys.slice(o,o+8).map(async k=>tickets.set(k,await readTicket(k))));
+  const seen=new Set(),out=[],work=new Map();
+  for(const [i,r] of rows.entries()){
+    const row={row:i+1,line:Number.isInteger(r?.line)?r.line:null,key:keyOf(r),title:'',status:'error',message:'',changes:[]};
+    const fail=message=>{row.message=message;out.push(row);};
+    if(!bulkKeyOk(env,row.key)){fail('Unknown ticket key.');continue;}
+    if(seen.has(row.key)){fail('Listed more than once.');continue;}seen.add(row.key);
+    const [clientName,projectName,billingName]=[r.client,r.project,r.billing].map(cellText);
+    if([clientName,projectName,billingName].includes(null)){fail('Client, project and billing must be text.');continue;}
+    const raw=r.agreedHours;let hours=null;
+    if(!blankCell(raw)){hours=typeof raw==='number'?raw:typeof raw==='string'&&/^\d+(\.\d{1,2})?$/.test(raw.trim())?Number(raw.trim()):NaN;if(!validHours(hours)){fail('Agreed hours must be a positive number with up to two decimal places, e.g. 12.5.');continue;}}
+    const billing=billingName?BILLING_SPELLINGS.get(billingName.toLowerCase().replace(/\s+/g,' ')):null;
+    if(billingName&&!billing){fail('Billing must be Billable or Not billable.');continue;}
+    const t=tickets.get(row.key);
+    if(!t){fail('Ticket not found or not visible.');continue;}
+    row.title=t.title||'';
+    if(t.closed){fail('This ticket is closed. Reopen it before changing its business fields.');continue;}
+    const current=await readMetadata(env,row.key);
+    let target={clientId:current.clientId,subClientId:current.subClientId};
+    if(clientName||projectName){const sel=bulkSelection(catalog,current,clientName,projectName);if(sel.error){fail(sel.error);continue;}target=sel;}
+    const patch={};
+    if(target.clientId!==current.clientId||target.subClientId!==current.subClientId){
+      const errors=selectionErrors(catalog,target,{active:true});if(errors.length){fail(errors.join('. ')+'.');continue;}
+      Object.assign(patch,{clientId:target.clientId,subClientId:target.subClientId});
+    }
+    if(billing&&billing!==current.billing)patch.billing=billing;
+    if(hours!==null&&hours!==current.agreedHours){
+      if(!(t.assignee&&t.assignee!==INTERNAL_ASSIGNEE)){fail('Assign a developer first.');continue;}
+      patch.agreedHours=hours;
+    }
+    const nameOf=id=>{const e=catalog.entries.find(x=>x.id===id);return e?shownName(e):null;};
+    const changes=[];
+    if('agreedHours' in patch)changes.push({field:'agreedHours',from:current.agreedHours,to:patch.agreedHours});
+    if('clientId' in patch&&patch.clientId!==current.clientId)changes.push({field:'client',from:nameOf(current.clientId),to:nameOf(patch.clientId)});
+    if('subClientId' in patch&&patch.subClientId!==current.subClientId)changes.push({field:'project',from:nameOf(current.subClientId),to:nameOf(patch.subClientId)});
+    if('billing' in patch)changes.push({field:'billing',from:billingLabel(current.billing),to:billingLabel(patch.billing)});
+    if(!changes.length){row.status='unchanged';row.message='No change. Blank cells are left unchanged.';out.push(row);continue;}
+    const cleared=changes.some(c=>c.field==='project'&&c.to===null);
+    row.status='ok';row.changes=changes;
+    row.message='Will change '+changes.length+(changes.length===1?' field':' fields')+'. Blank cells are left unchanged.'+(cleared?' Changing the client clears the project.':'');
+    work.set(row.key,{revision:current.revision,patch});out.push(row);
+  }
+  const count=s=>out.filter(r=>r.status===s).length;
+  return {rows:out,ok:count('ok'),unchanged:count('unchanged'),errors:count('error'),work};
+}
+export async function bulkImportPreview(env,rows,readTicket){const {work,...plan}=await bulkPlan(env,rows,readTicket);return plan;}
+export async function bulkImportApply(env,me,rows,readTicket){
+  const plan=await bulkPlan(env,rows,readTicket);
+  if(plan.errors)problem('Fix the rows marked as errors, then apply again.',400,'import_errors',{rows:plan.rows});
+  let applied=0;const failed=[];
+  for(const r of plan.rows.filter(r=>r.status==='ok')){
+    const {revision,patch}=plan.work.get(r.key);
+    try{
+      await withTicketLock(env,r.key,async()=>{
+        const t=await readTicket(r.key);if(!t)problem('Ticket not found or not visible.',404,'not_found');
+        await saveMetadata(env,r.key,{revision,...patch},me,{closed:t.closed,ticket:{title:t.title,assignee:t.assignee}});
+      });
+      applied++;
+    }catch(err){
+      // saveMetadata throws 'busy' only from the agreed line, after the fields were saved.
+      if(err instanceof BusinessError&&err.code==='busy'&&'agreedHours' in patch)failed.push({key:r.key,message:'Saved, but the Odoo line was busy. Ask an administrator to re-send the agreed hours for this ticket.'});
+      else failed.push({key:r.key,message:err instanceof BusinessError?err.message:'Could not save this ticket.'});
+    }
+  }
+  return {applied,unchanged:plan.unchanged,failed};
+}
+export async function bulkImportRoutes(request,env,url,me,readTicket){
+  if(me.role!=='admin')problem('Only administrators can import ticket fields.',403,'forbidden');
+  if(request.method!=='POST')problem('Use POST.',405);
+  requireStore(env);
+  const raw=await request.text();if(raw.length>BULK_BODY)problem('Import request too large.',413);
+  let b;try{b=JSON.parse(raw);}catch{problem('Invalid import request.');}
+  if(!b||typeof b!=='object'||Array.isArray(b))problem('Invalid import request.');
+  if(url.pathname.endsWith('/preview'))return Response.json(await bulkImportPreview(env,b.rows,readTicket),{headers:{'Cache-Control':'no-store'}});
+  return Response.json(await bulkImportApply(env,me,b.rows,readTicket),{headers:{'Cache-Control':'no-store'}});
 }

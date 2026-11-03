@@ -1,0 +1,77 @@
+/* Analytics page: filters, headline numbers, charts and the overdue table.
+   Ink, surfaces and lines come from the theme variables in workspace.css. Chart colours are validated palettes
+   (colour-blind-safe, 3:1 against the surface): --an-1..3 are the series, --an-ramp-* the single-hue age scale. */
+:root{--an-1:#4a5fd6;--an-2:#0f8f80;--an-3:#c9731a;--an-ramp-1:#a8b4f0;--an-ramp-2:#8594e8;--an-ramp-3:#6c7de0;--an-ramp-4:#4a5fd6;--an-ramp-5:#2f3fa8;
+  --an-good:#17744a;--an-good-soft:#e4f5ec;--an-bad:#b42318;--an-bad-soft:#fdecea;--an-flat:#5f6d83;--an-flat-soft:#eef1f6}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--an-1:#6d80e8;--an-2:#2a9f88;--an-3:#c08030;--an-ramp-1:#3d4a8f;--an-ramp-2:#4d5db3;--an-ramp-3:#5a6bc9;--an-ramp-4:#6d80e8;--an-ramp-5:#93a2f5;
+  --an-good:#5fcf9f;--an-good-soft:#16372a;--an-bad:#ff8a80;--an-bad-soft:#3b1a19;--an-flat:#a8b5ca;--an-flat-soft:#26324a}}
+:root[data-theme=dark]{--an-1:#6d80e8;--an-2:#2a9f88;--an-3:#c08030;--an-ramp-1:#3d4a8f;--an-ramp-2:#4d5db3;--an-ramp-3:#5a6bc9;--an-ramp-4:#6d80e8;--an-ramp-5:#93a2f5;
+  --an-good:#5fcf9f;--an-good-soft:#16372a;--an-bad:#ff8a80;--an-bad-soft:#3b1a19;--an-flat:#a8b5ca;--an-flat-soft:#26324a}
+
+.an-page{display:flex;flex-direction:column;gap:20px}
+
+/* Filters: one quiet row. */
+.an-controls{display:flex;flex-wrap:wrap;gap:12px 14px;align-items:flex-end;padding:12px 14px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+.an-grow{flex:1 1 0}
+.an-field{display:flex;flex-direction:column;gap:4px;font-size:11.5px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:var(--muted)}
+.an-field select,.an-field input{font:inherit;font-size:14px;font-weight:500;letter-spacing:0;text-transform:none;color:var(--fg);background:var(--sunk);border:1px solid var(--line);border-radius:8px;padding:6px 9px;min-height:36px}
+.an-field select:hover,.an-field input:hover{border-color:var(--line-strong)}
+.an-seg{display:inline-flex;padding:3px;gap:2px;background:var(--sunk);border:1px solid var(--line);border-radius:10px}
+.an-seg-btn{font:inherit;font-size:13.5px;font-weight:500;color:var(--muted);background:transparent;border:0;border-radius:7px;padding:6px 12px;min-height:34px;cursor:pointer}
+.an-seg-btn:hover{color:var(--fg)}
+.an-seg-btn[aria-pressed=true]{background:var(--surface);color:var(--fg);font-weight:600;box-shadow:0 1px 2px #1724421f,0 0 0 1px var(--line)}
+.an-refresh{display:inline-flex;align-items:center;gap:7px;font:inherit;font-size:13.5px;font-weight:600;color:var(--accent);background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 12px;min-height:36px;cursor:pointer}
+.an-refresh:hover{background:var(--accent-soft);border-color:var(--accent)}
+.an-refresh svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+
+/* Headline numbers. */
+.an-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px}
+.an-tile{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.an-l{font-size:12.5px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:var(--muted)}
+.an-n{font-size:34px;font-weight:700;line-height:1.05;letter-spacing:-.02em;font-variant-numeric:tabular-nums;color:var(--fg)}
+.an-h{font-size:12.5px;color:var(--muted);line-height:1.35}
+.an-delta{align-self:flex-start;font-size:12px;font-weight:600;line-height:1;padding:5px 8px;border-radius:999px;background:var(--an-flat-soft);color:var(--an-flat);font-variant-numeric:tabular-nums}
+.an-delta.good{background:var(--an-good-soft);color:var(--an-good)}
+.an-delta.bad{background:var(--an-bad-soft);color:var(--an-bad)}
+
+/* Charts. */
+.an-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr));gap:14px}
+.an-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px 20px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.an-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.an-card-titles h3{margin:0;font-size:15.5px;font-weight:650;color:var(--fg)}
+.an-sub{margin:2px 0 0;font-size:12.5px;color:var(--muted);line-height:1.4}
+.an-chart{position:relative;height:260px}
+.an-legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin:0;padding:0;list-style:none;font-size:12.5px;color:var(--fg)}
+.an-legend li{display:inline-flex;align-items:center;gap:7px}
+.an-sw{width:10px;height:10px;border-radius:3px;flex:none}
+.an-link{font:inherit;font-size:12.5px;font-weight:600;color:var(--accent);background:none;border:0;padding:2px 0;cursor:pointer;white-space:nowrap;text-align:left}
+.an-link:hover{text-decoration:underline}
+.an-empty{padding:34px 8px;text-align:center;color:var(--muted);font-size:13.5px;background:var(--sunk);border-radius:10px}
+.an-empty.ok{color:var(--an-good);background:var(--an-good-soft);font-weight:600}
+.an-wide{grid-column:1/-1}
+
+/* Tables (the chart alternative and the overdue list). */
+.an-table-wrap{overflow-x:auto}
+.an-table{width:100%;border-collapse:collapse;font-size:13.5px}
+.an-table th,.an-table td{text-align:left;padding:10px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+.an-table th{font-size:11.5px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
+.an-table tbody tr:last-child td{border-bottom:0}
+.an-table tbody tr:hover td{background:var(--sunk)}
+.an-table td.an-title{max-width:420px;overflow-wrap:anywhere}
+.an-table td.an-key{white-space:nowrap}
+.an-pill,.an-count{display:inline-block;font-size:12px;font-weight:600;line-height:1;padding:5px 9px;border-radius:999px;white-space:nowrap}
+.an-pill.bad,.an-count.bad{background:var(--an-bad-soft);color:var(--an-bad)}
+
+/* Footer note and loading state. */
+.an-foot{margin:0;font-size:12px;color:var(--muted);text-align:center}
+.an-page .state{margin:0}
+.an-sk{background:linear-gradient(90deg,var(--sunk),var(--line),var(--sunk));background-size:200% 100%;animation:an-shimmer 1.4s linear infinite;border-color:transparent;min-height:112px}
+.an-sk-card{min-height:300px}
+.an-skeleton{display:flex;flex-direction:column;gap:16px}
+@keyframes an-shimmer{to{background-position:-200% 0}}
+@media(prefers-reduced-motion:reduce){.an-sk{animation:none}}
+
+@media(max-width:640px){
+  .an-controls{flex-direction:column;align-items:stretch}.an-grow{display:none}.an-seg{display:flex;overflow-x:auto}.an-seg-btn{flex:1;white-space:nowrap}
+  .an-chart{height:230px}.an-n{font-size:30px}.an-card{padding:16px}
+}
