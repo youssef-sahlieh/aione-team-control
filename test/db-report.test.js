@@ -341,7 +341,7 @@ test("the POS version comes from Audit & Deploy's AI1 Settings (flutter_pos_api 
   } finally { globalThis.fetch = inner; }
 });
 
-test("Extend database sets database.expiration_date on a Tests or Dev copy (never production), checks it, and logs it", async () => {
+test("Extend database sets database.expiration_date, checks it, and logs it", async () => {
   const { env, call } = setup();
   const admin = { email: "boss@aione.biz", name: "Boss", role: "admin", dev: "", v: 1 };
   await saveUser(env.STORE, admin);
@@ -369,7 +369,6 @@ test("Extend database sets database.expiration_date on a Tests or Dev copy (neve
     for (let i = 0; i < 5; i++) { const r = await (await call("/db-report/refresh", { method: "POST", token })).json(); if (r.done) break; }
     const d = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
     const extend = (instance, date) => call("/db-report/action", { method: "POST", token, body: { instance, action: "extend", date } });
-    assert.equal((await extend("odoo503", d)).status, 400, "production is never extended");
     assert.equal((await extend("odoo503test", "2020-01-01")).status, 400, "a past date is refused");
     assert.equal((await extend("odoo503test", "not-a-date")).status, 400);
     assert.equal(params["database.expiration_date"], "2026-10-01 00:00:00", "refused calls change nothing");
@@ -409,5 +408,44 @@ test("a site whose address gives 404 counts as offline (no login attempts)", asy
     assert.equal(row.offline, true); assert.equal(row.loginOk, false);
     assert.deepEqual(hits, ["version"]);
     assert.equal(r.report.rows.find((x) => x.instance === "odoo100").offline, undefined, "online without a login: not offline");
+  } finally { globalThis.fetch = inner; }
+});
+
+test("a server with several databases gets a row for each (a test database goes to Tests); a Knowledge site Audit & Deploy doesn't list is added", async () => {
+  const { env, call } = setup();
+  const admin = { email: "boss@aione.biz", name: "Boss", role: "admin", dev: "", v: 1 };
+  await saveUser(env.STORE, admin);
+  const token = (await makeToken(env, admin.email, Date.now(), 1)).token;
+  const inner = globalThis.fetch, params = {};
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url), p = (JSON.parse(init.body || "{}").params) || {};
+    if (u.includes("kadis.odoo.test") && p.args && p.args[3] === "knowledge.article") {
+      return Response.json({ result: [{ name: "Ronit Yam", body: "URL: https://503.ai1.host/web User: admin Password: pw123" }, { name: "Nativity Travel", body: "https://515.ai1.host<br>owner@example.invalid<br>Trip@2026" }, { name: "Order 2024", body: "no site here, user: x password: y12345" }] });
+    }
+    // 515: not in Audit & Deploy; two databases; the login works on both.
+    if (u.includes("515.ai1.host")) {
+      if (p.service === "db") return Response.json({ result: ["nativity", "test2"] });
+      if (p.service === "common" && p.method === "version") return Response.json({ result: { server_serie: "18.0" } });
+      if (p.service === "common") return Response.json({ result: p.args[1] === "owner@example.invalid" && p.args[2] === "Trip@2026" ? 5 : false });
+      const [db, , , model, method, args] = p.args;
+      if (model === "ir.config_parameter" && method === "set_param") { params[db] = args[1]; return Response.json({ result: true }); }
+      if (model === "ir.config_parameter" && method === "get_param") return Response.json({ result: params[db] || false });
+      if (model === "res.company") return Response.json({ result: [{ id: 1, name: db === "nativity" ? "Nativity Travel" : "Nativity Test" }] });
+      return Response.json({ result: method === "search_count" ? 2 : [] });
+    }
+    return inner(url, init);
+  };
+  try {
+    let r; for (let i = 0; i < 5; i++) { r = await (await call("/db-report/refresh", { method: "POST", token })).json(); if (r.done) break; }
+    const at515 = r.report.rows.filter((x) => x.url === "https://515.ai1.host");
+    assert.deepEqual(at515.map((x) => [x.database, x.section, x.loginOk, x.company]), [["nativity", "main", true, "Nativity Travel"], ["test2", "tests", true, "Nativity Test"]]);
+    assert.ok(at515.every((x) => x.fromKnowledge && x.multi));
+    assert.ok(!r.report.rows.some((x) => x.url === "https://2024.ai1.host"), "a number in a title isn't a site");
+    // Extend the test database only; restart isn't available for a site outside Audit & Deploy.
+    const d = new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10);
+    const ok = await call("/db-report/action", { method: "POST", token, body: { instance: "515.ai1.host", database: "test2", action: "extend", date: d } });
+    assert.equal(ok.status, 200);
+    assert.deepEqual(params, { test2: d + " 00:00:00" });
+    assert.equal((await call("/db-report/action", { method: "POST", token, body: { instance: "515.ai1.host", database: "test2", action: "restart" } })).status, 400);
   } finally { globalThis.fetch = inner; }
 });

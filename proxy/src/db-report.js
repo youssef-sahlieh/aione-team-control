@@ -6,7 +6,7 @@
 // their own. The six in-database numbers need a login to that database; those logins live in the Odoo
 // knowledge base ("Our Customers") and are read server-side at build time only. A password is NEVER
 // stored and NEVER sent to the browser - the report connects read-only and keeps only the numbers.
-// The one write is the "Extend database" action on Tests and Dev copies (database.expiration_date).
+// The one write is the "Extend database" action (database.expiration_date), meant for test databases.
 //
 // The whole report is cached in the store. A build runs incrementally (resumable) to stay within the
 // function's time limit, refreshes at most once a day on view (stale-while-revalidate), can be forced by
@@ -17,8 +17,9 @@ import { act } from "./monitor.js";
 const REPORT_KEY = "dbreport:v1";          // the finished/most-recent report
 const PROGRESS_KEY = "dbreport:progress";  // an in-flight incremental build
 const LOCK_KEY = "dbreport:lock";
-// Raised when the report gains data that saved reports lack (2: POS version from AI1 Settings), so they rebuild.
-const REPORT_FORMAT = 2;
+// Raised when the report gains data that saved reports lack (2: POS version from AI1 Settings; 3: a row per
+// database, Knowledge-only sites), so they rebuild.
+const REPORT_FORMAT = 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STALE_MS = 60 * 60 * 1000;           // rebuild on view when the cached report is older than an hour
 const BUILD_BUDGET_MS = 45000;             // leave headroom under the 60s function limit
@@ -190,7 +191,8 @@ async function readCredentialIndex(env) {
       const titleNums = [...title.matchAll(/(\d{2,4})/g)].map((m) => m[1]);
       const numbers = [...new Set([...(c.labels || []), ...c.nums, c.num, ...titleNums].filter(Boolean))];
       for (const n of numbers) {
-        const slot = index[n] || (index[n] = { url: "", candidates: [], seen: new Set(), titles: [], dbs: [] });
+        const slot = index[n] || (index[n] = { url: "", candidates: [], seen: new Set(), titles: [], dbs: [], site: false });
+        if ((c.labels || []).includes(String(n).toLowerCase())) slot.site = true;
         if (!slot.url && (c.url.includes(n + ".ai1.host") || !slot.url)) slot.url = c.url.includes(n + ".ai1.host") ? c.url : (slot.url || "https://" + n + ".ai1.host");
         // Remember the client name (article title) so the database name can be derived as <num>_<client>.
         if (title && !/^https?:/i.test(title) && !slot.titles.includes(title)) slot.titles.push(title);
@@ -224,7 +226,8 @@ async function customerRpc(base, service, method, args, signal) {
 // section: "main", "tests" or "dev". Test and dev servers use their production instance's logins, and their own
 // database names (from Audit & Deploy, or the server's list) are tried before the production ones.
 // Signs in and returns { loginOk, db, kw } (kw calls the database's models), or why it couldn't.
-async function loginToDatabase(slot, dbHint, section = "main") {
+// only: try exactly these database names (one row per database on a server that hosts several).
+async function loginToDatabase(slot, dbHint, section = "main", only = null) {
   const base = (slot.url.match(/^https?:\/\/[^/]+/) || [])[0];
   if (!base) return { loginOk: false, error: "no url" };
   // Short per-request timeout so one slow/unreachable server can't stall the whole build.
@@ -240,7 +243,7 @@ async function loginToDatabase(slot, dbHint, section = "main") {
   if (!nonProd) for (const d of (slot.dbs || [])) push(d);
   for (const d of (Array.isArray(dbHint) ? dbHint : [dbHint]).filter(Boolean)) push(d);
   let down = false;
-  const list = await customerRpc(base, "db", "list", [], signal()).catch((e) => { if (e.offline) down = true; return null; });
+  const list = only ? [] : await customerRpc(base, "db", "list", [], signal()).catch((e) => { if (e.offline) down = true; return null; });
   if (down) return { loginOk: false, loginFound: true, offline: true };
   if (Array.isArray(list)) for (const d of list) push(d);
   // Test and dev copies of the production database: its name, and the name with _test / _dev and similar.
@@ -263,7 +266,7 @@ async function loginToDatabase(slot, dbHint, section = "main") {
   // Named hosts (e.g. paytag): the database is often <label> or <label>_prod.
   if (label) { push(label); push(label + "_prod"); push(label + "_odoo"); }
   if (num) { push(num); push(num + "_prod"); }
-  const tryDbs = dbNames.slice(0, nonProd ? 14 : 8);
+  const tryDbs = only || dbNames.slice(0, nonProd ? 14 : 8);
   // Try the best credential against each database first (finds the right database fast), then the next.
   let db = "", uid = 0, password = "", attempts = 0;
   outer: for (const c of slot.candidates) {
@@ -280,8 +283,8 @@ async function loginToDatabase(slot, dbHint, section = "main") {
   return { loginOk: true, loginFound: true, db, kw };
 }
 
-async function readInsideDatabase(slot, dbHint, section = "main") {
-  const login = await loginToDatabase(slot, dbHint, section);
+async function readInsideDatabase(slot, dbHint, section = "main", only = null) {
+  const login = await loginToDatabase(slot, dbHint, section, only);
   if (!login.loginOk) return login;
   const { db, kw } = login;
   const one = async (p, dflt) => { try { return await p; } catch { return dflt; } };
@@ -328,6 +331,13 @@ const unwrap = (r) => (r && r.payload) ? r.payload : r;
 // Instance numbers to leave out of the report entirely (down servers, non-customer instances).
 const excludedNums = (env) => new Set(String(env.DB_REPORT_EXCLUDE || "").split(",").map((s) => s.trim()).filter(Boolean));
 // Every instance Audit & Deploy lists in a zone the Databases page shows (its section is set by sectionOf).
+// Sites with logins in Knowledge that Audit & Deploy doesn't list (e.g. a server set up outside it).
+const NOT_CUSTOMER = new Set(["www", "monitor", "dashboard", "api", "mail"]);
+export function knowledgeOnlySites(creds, instances, skip = new Set()) {
+  const covered = new Set(instances.map((i) => String(i.domain || "").toLowerCase().replace(/\.ai1\.host.*$/, "")));
+  return Object.entries(creds).filter(([label, s]) => s.site && !covered.has(label) && !NOT_CUSTOMER.has(label) && !skip.has(label) && /^[a-z0-9][\w-]*$/.test(label))
+    .map(([label]) => ({ instance_name: label + ".ai1.host", domain: label + ".ai1.host", server_zone: "prod", fromKnowledge: true }));
+}
 async function reportInstances(env) {
   const snap = unwrap(await odoo(env, "monitor.data.snapshot", "get_instances", [false]));
   const services = (snap && snap.services) || [];
@@ -339,7 +349,8 @@ async function reportInstances(env) {
 async function instanceFacts(env, inst) {
   const name = inst.instance_name;
   const section = sectionOf(inst.server_zone, name, inst.domain) || "main";
-  const [cfg, add, ai1] = await Promise.all([
+  const fromAD = !inst.fromKnowledge;
+  const [cfg, add, ai1] = !fromAD ? [{}, {}, {}] : await Promise.all([
     odoo(env, "monitor.data.snapshot", "get_instance_config", [name, false]).then(unwrap).catch(() => ({})),
     odoo(env, "monitor.data.snapshot", "get_instance_addons", [name, null, false]).then(unwrap).catch(() => ({})),
     // What Audit & Deploy's AI1 Settings tab shows: "flutter_pos_api <module_version>" (its saved snapshot).
@@ -368,6 +379,8 @@ async function instanceFacts(env, inst) {
     label: (String(inst.domain || "").match(/([a-z0-9][\w-]*)\.ai1\.host/i) || [])[1]?.toLowerCase() || "",
     // The name set in AI1 Monitor (custom_data from the Monitor's instance inventory), already in the snapshot.
     monitorName: String(inst.custom_data?.custom_name || ""),
+    // Only in Knowledge (Audit & Deploy doesn't list it): no AI1 Monitor page and no restart.
+    fromKnowledge: !fromAD,
     databases,
     database: databases[0] || "",
     created: inst.created || null,
@@ -393,7 +406,8 @@ export function oneRowPerSite(rows) {
   for (const r of rows) {
     const web = String(r.url || "").toLowerCase().replace(/\/+$/, "");
     if (!web) { out.push(r); continue; }
-    const site = (r.section || "main") + " " + web; // the same address can appear in two sections
+    // The same address can appear in two sections; a server with several databases has a row for each.
+    const site = (r.section || "main") + " " + web + (r.multi ? " " + (r.database || "") : "");
     const kept = bySite.get(site);
     if (!kept) { bySite.set(site, r); out.push(r); continue; }
     const [keep, drop] = better(r, kept) ? [r, kept] : [kept, r];
@@ -425,12 +439,14 @@ export async function buildReport(env, { force = false } = {}) {
     let progress = null;
     try { progress = JSON.parse(await env.STORE.get(PROGRESS_KEY) || "null"); } catch {}
     // Start fresh when forced, when there is no in-flight build, or when the in-flight one is stale.
-    if (force || !progress || Date.now() - (progress.startedAt || 0) > 10 * 60 * 1000) {
-      // Production instances first, so their database names are known when their test and dev copies are checked.
-      const instances = (await reportInstances(env)).sort((a, b) => (sectionOf(a.server_zone, a.instance_name, a.domain) === "main" ? 0 : 1) - (sectionOf(b.server_zone, b.instance_name, b.domain) === "main" ? 0 : 1));
-      progress = { startedAt: Date.now(), rows: [], done: 0, total: instances.length, instances: instances.map((i) => ({ instance_name: i.instance_name, domain: i.domain, created: i.created, server_zone: i.server_zone, custom_data: i.custom_data })) };
-    }
     const creds = await readCredentialIndex(env);
+    if (force || !progress || Date.now() - (progress.startedAt || 0) > 10 * 60 * 1000) {
+      const listed = await reportInstances(env);
+      const all = [...listed, ...knowledgeOnlySites(creds, listed, excludedNums(env))];
+      // Production instances first, so their database names are known when their test and dev copies are checked.
+      const instances = all.sort((a, b) => (sectionOf(a.server_zone, a.instance_name, a.domain) === "main" ? 0 : 1) - (sectionOf(b.server_zone, b.instance_name, b.domain) === "main" ? 0 : 1));
+      progress = { startedAt: Date.now(), rows: [], done: 0, total: instances.length, instances: instances.map((i) => ({ instance_name: i.instance_name, domain: i.domain, created: i.created, server_zone: i.server_zone, custom_data: i.custom_data, fromKnowledge: i.fromKnowledge })) };
+    }
     // The production database names per instance number (this build, then the last report), for test and dev copies.
     const previous = await readReport(env);
     const prodDbs = (num) => [...new Set([...progress.rows, ...((previous && previous.rows) || [])].filter((r) => (r.section || "main") === "main" && r.num === num).flatMap((r) => [r.db, ...(r.databases || [])]).filter(Boolean))];
@@ -443,14 +459,22 @@ export async function buildReport(env, { force = false } = {}) {
       const rows = await pool(batch, POOL, async (inst) => {
         const facts = await instanceFacts(env, inst);
         const slot = slotFor(creds, facts, prodDbs);
-        let inside = { loginOk: false, loginFound: !!slot };
-        // A server that didn't answer is shown as offline, without waiting on login attempts.
-        if (!facts.online) inside = { ...inside, offline: true };
-        else if (inside.loginFound) { try { inside = await readInsideDatabase(slot, facts.databases, facts.section); } catch (e) { inside = { loginFound: true, loginOk: false, error: String(e.message || e).slice(0, 80) }; } }
-        // The company name only ever comes from inside the database (never from Knowledge text).
-        return { ...facts, ...inside, company: inside.company || "", companySource: inside.company ? "database" : "" };
+        const read = async (f, only) => {
+          let inside = { loginOk: false, loginFound: !!slot };
+          // A server that didn't answer is shown as offline, without waiting on login attempts.
+          if (!f.online) inside = { ...inside, offline: true };
+          else if (inside.loginFound) { try { inside = await readInsideDatabase(slot, f.databases, f.section, only); } catch (e) { inside = { loginFound: true, loginOk: false, error: String(e.message || e).slice(0, 80) }; } }
+          // The company name only ever comes from inside the database (never from Knowledge text).
+          return { ...f, ...inside, company: inside.company || "", companySource: inside.company ? "database" : "" };
+        };
+        // A server that hosts several databases (its database list shows them, like 515: nativity and test2) gets a
+        // row for each. A database named like a test or dev copy goes to Tests or Dev.
+        const list = facts.online && facts.url ? await customerRpc(facts.url, "db", "list", [], AbortSignal.timeout(7000)).catch(() => null) : null;
+        const many = Array.isArray(list) ? list.filter((d) => /^[\w-]+$/.test(d)).slice(0, 8) : [];
+        if (many.length < 2) return [await read(facts)];
+        return Promise.all(many.map((db) => read({ ...facts, database: db, databases: [db], multi: true, section: facts.section === "main" ? sectionOf("prod", db) : facts.section }, [db])));
       });
-      progress.rows.push(...rows);
+      progress.rows.push(...rows.flat());
       progress.done += batch.length;
       await env.STORE.set(PROGRESS_KEY, JSON.stringify(progress), 3600);
     }
@@ -468,9 +492,9 @@ export async function buildReport(env, { force = false } = {}) {
 async function readReport(env) { try { return JSON.parse(await env.STORE.get(REPORT_KEY) || "null"); } catch { return null; } }
 
 // Changes one row of the saved report (after an action), so the page shows it without a rebuild.
-async function saveRow(env, instance, changes) {
+async function saveRow(env, which, changes) {
   const report = await readReport(env);
-  const row = report && (report.rows || []).find((r) => r.instance === instance);
+  const row = report && (report.rows || []).find((r) => r.instance === which.instance && (r.database || "") === (which.database || ""));
   if (!row) return;
   Object.assign(row, changes);
   await env.STORE.set(REPORT_KEY, JSON.stringify(report), 30 * DAY_MS / 1000);
@@ -486,7 +510,7 @@ export function expiryDate(value) {
   return t > today && t <= today + 366 * DAY_MS ? s : null;
 }
 
-// Extend database: signs in to the test or dev copy with the logins from Knowledge (the same way the report
+// Extend database: signs in to the database with the logins from Knowledge (the same way the report
 // does) and sets the system parameter database.expiration_date, then reads it back to be sure.
 // The login needs Settings administrator rights in that database.
 async function extendDatabase(env, report, row, date) {
@@ -494,7 +518,7 @@ async function extendDatabase(env, report, row, date) {
   const prodDbs = (num) => [...new Set((report.rows || []).filter((r) => (r.section || "main") === "main" && r.num === num).flatMap((r) => [r.db, ...(r.databases || [])]).filter(Boolean))];
   const slot = slotFor(creds, { ...row, section: row.section || "main" }, prodDbs);
   if (!slot) throw new Error("There's no login for this database in Knowledge.");
-  const login = await loginToDatabase(slot, [row.db, ...(row.databases || [])].filter(Boolean), row.section);
+  const login = await loginToDatabase(slot, [row.db, ...(row.databases || [])].filter(Boolean), row.section, row.multi ? [row.database] : null);
   if (login.offline) throw new Error("The server isn't answering. Start it, then try again.");
   if (!login.loginOk) throw new Error("Couldn't sign in to this database with the logins in Knowledge.");
   const value = date + " 00:00:00";
@@ -532,15 +556,16 @@ export async function dbReportRoutes(request, env, url, me) {
     const b = (await request.json().catch(() => null)) || {};
     const instance = String(b.instance || ""), action = String(b.action || "");
     const report = await readReport(env);
-    const row = report && (report.rows || []).find((r) => r.instance === instance);
+    const database = String(b.database || "");
+    const row = report && (report.rows || []).find((r) => r.instance === instance && (!r.multi || r.database === database));
     if (!row) return fail("unknown_instance", "That instance isn't in the database report. Press Refresh now and try again.", 404);
+    if (action === "restart" && row.fromKnowledge) return fail("not_in_monitor", "This site isn't in Audit & Deploy, so it can't be restarted from here.", 400);
     if (action === "restart") return act(env, me, { action: "Restart instance", target: instance, details: "Databases page", run: () => odoo(env, "file.hosting.service", "call_api", ["/api/docker/odoo/restart", "POST", { instances: [instance] }]) });
     if (action === "extend") {
-      if ((row.section || "main") === "main") return fail("production", "Extend is for Tests and Dev copies only. A production database is renewed through its Odoo subscription.", 400);
       const date = expiryDate(b.date);
       if (!date) return fail("bad_date", "Choose a date after today, at most a year ahead.", 400);
       const res = await act(env, me, { action: "Extend database", target: instance, details: "Expiry date → " + date + " (Databases page)", run: () => extendDatabase(env, report, row, date) });
-      if (res.ok) await saveRow(env, instance, { expires: date + " 00:00:00", expired: false });
+      if (res.ok) await saveRow(env, row, { expires: date + " 00:00:00", expired: false });
       return res;
     }
     return fail("unsupported", "That action isn't available here.", 400);

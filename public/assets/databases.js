@@ -46,7 +46,7 @@ const COLUMNS = [
 ];
 // "Open" for each instance opens its page in AI1 Monitor.
 function adLinkCell(r) {
-  if (!r.instance) return el("span", "db-muted", "—");
+  if (!r.instance || r.fromKnowledge) return el("span", "db-muted", r.fromKnowledge ? "not listed" : "—");
   const a = el("a", "db-link", "Open"); a.href = monitorInstanceUrl(r.instance); a.target = "_blank"; a.rel = "noopener";
   return a;
 }
@@ -109,10 +109,11 @@ function addonCell(r) {
 
 // Instance actions. Each opens a preview with all of them; the chosen one needs its own confirm button.
 // Restart and Extend reach Odoo; start and stop are shown but not available yet.
-// Extend sets the database's expiry date (system parameter database.expiration_date), on Tests and Dev copies only.
+// Extend sets the database's expiry date (system parameter database.expiration_date). It's meant for test databases,
+// including a test database on a production server, so it's offered everywhere.
 const ACTIONS = [
-  { key: "restart", title: "Restart Instance", desc: "Restart the container", tone: "warn", icon: "↻", note: "The site is unavailable for a short time while the container restarts.", enabled: () => true },
-  { key: "extend", title: "Extend Database", desc: "Move the expiry date forward", tone: "ok", icon: "⏱", note: "Signs in to the database with the login from Knowledge and sets its expiry date (database.expiration_date). The login needs Settings administrator rights.", enabled: (r) => rowSection(r) !== "main", off: "Tests and Dev copies only", date: true },
+  { key: "restart", title: "Restart Instance", desc: "Restart the container", tone: "warn", icon: "↻", note: "The site is unavailable for a short time while the container restarts.", enabled: (r) => !r.fromKnowledge, off: "not in Audit & Deploy" },
+  { key: "extend", title: "Extend Database", desc: "Move the expiry date forward", tone: "ok", icon: "⏱", note: "Signs in to the database with the login from Knowledge and sets its expiry date (database.expiration_date). The login needs Settings administrator rights. Use it on test databases.", enabled: () => true, date: true },
   { key: "start", title: "Start Instance", desc: "Scale to 1 replica", tone: "ok", icon: "▶", note: "", enabled: () => false },
   { key: "stop", title: "Stop Instance", desc: "Scale to 0 replicas", tone: "bad", icon: "■", note: "", enabled: () => false }
 ];
@@ -158,6 +159,7 @@ function openActions(r, opener) {
     confirm.disabled = true; confirm.textContent = "Working…";
     try {
       const body = { instance: r.instance, action: picked.key };
+      if (r.multi) body.database = r.database;
       if (picked.date) body.date = date.value;
       await api("/db-report/action", { method: "POST", body });
       confirm.textContent = "Confirm";
@@ -311,7 +313,7 @@ function oneRowPerSite(rows) {
   for (const r of rows) {
     const web = String(r.url || "").toLowerCase().replace(/\/+$/, "");
     if (!web) { out.push(r); continue; }
-    const site = rowSection(r) + " " + web;
+    const site = rowSection(r) + " " + web + (r.multi ? " " + (r.database || "") : "");
     const kept = bySite.get(site);
     if (!kept) { bySite.set(site, r); out.push(r); continue; }
     const [keep, drop] = better(r, kept) ? [r, kept] : [kept, r];

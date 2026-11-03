@@ -54,9 +54,8 @@ test("Databases: POS version column, Actions preview, restart needs a confirm", 
   const dlg = page.locator("#action-dialog");
   await expect(dlg).toBeVisible();
   await expect(dlg.locator(".db-act-card")).toHaveCount(4);
-  // Extend is for Tests and Dev copies: not on a production database.
-  await expect(dlg.getByRole("button", { name: /Extend Database/ })).toBeDisabled();
-  await expect(dlg.getByRole("button", { name: /Extend Database/ })).toContainText("Tests and Dev copies only");
+  // Extend is offered on Main too (a test database can share a production server's address).
+  await expect(dlg.getByRole("button", { name: /Extend Database/ })).toBeEnabled();
   await expect(dlg.getByRole("button", { name: /Start Instance/ })).toBeDisabled();
   await expect(dlg.getByRole("button", { name: /Stop Instance/ })).toBeDisabled();
   // Nothing happens until an action is chosen, and then it needs its own Confirm.
