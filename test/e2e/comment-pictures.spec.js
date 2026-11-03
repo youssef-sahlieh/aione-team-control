@@ -152,7 +152,8 @@ test("a picture pasted into an Odoo note is uploaded and attached to the note", 
   await expect(page.locator('label[for="c-img"]')).toBeVisible();
   await page.locator("#c-img").setInputFiles({ name: "image.png", mimeType: "image/png", buffer: PNG });
   await expect(page.locator("#d-cfiles .cfile-chip")).toHaveCount(1);
-  await expect(page.locator("#d-cmsg")).toContainText("attached to the note when you send it");
+  await expect(page.locator("#d-cmsg")).toContainText("goes into the note when you send it");
+  await expect(page.locator("#d-cfiles .cfile-chip img")).toHaveAttribute("src", /^blob:/);
   expect(uploads[0]).toMatch(/^picture-\d+\.png$/);
   await page.locator("#d-send").click();
   await expect.poll(() => notes.length).toBe(1);
@@ -190,5 +191,73 @@ test("Jira tickets keep Add comment and have no Reply to customer", async ({ pag
   await page.goto("/dashboard.html#AION-101");
   await expect(page.locator("#d-send")).toHaveText("Add comment");
   await expect(page.locator("#d-reply-customer")).toBeHidden();
+  expect(mock.errors).toEqual([]);
+});
+
+// Jira: a pasted picture shows as a preview above the box (the text stays clean) and goes into the comment when sent.
+test("a picture pasted into a Jira comment shows as a preview and goes into the comment when sent", async ({ page }) => {
+  const mock = await mockDashboard(page);
+  let uploaded = "";
+  await page.route("**/jira/issue/AION-101/attachments?name=*", (r) => { uploaded = new URL(r.request().url()).searchParams.get("name"); return r.fulfill({ json: { attachments: [{ id: "900", filename: uploaded }] } }); });
+  await page.goto("/dashboard.html#AION-101");
+  await page.locator("#d-reply").fill("See the screen");
+  await page.locator("#c-img").setInputFiles({ name: "image.png", mimeType: "image/png", buffer: PNG });
+  await expect(page.locator("#d-cfiles .cfile-chip img")).toHaveAttribute("src", /^blob:/);
+  await expect(page.locator("#d-cfiles .cfile-chip")).toContainText(uploaded);
+  await expect(page.locator("#d-reply")).toHaveValue("See the screen");
+  await page.locator("#d-send").click();
+  await expect.poll(() => mock.calls.find((c) => c.path === "/jira/issue/AION-101/comment")?.body?.text).toBe("See the screen\n!" + uploaded + "|thumbnail!");
+  await expect(page.locator("#d-cfiles .cfile-chip")).toHaveCount(0);
+  expect(mock.errors).toEqual([]);
+});
+
+// The × leaves a picture out of the comment; a comment can be only a picture.
+test("a picture can be left out with ×, and a comment can be only a picture", async ({ page }) => {
+  const mock = await mockDashboard(page);
+  let n = 0;
+  await page.route("**/jira/issue/AION-101/attachments?name=*", (r) => r.fulfill({ json: { attachments: [{ id: String(900 + n), filename: "picture-" + (++n) + ".png" }] } }));
+  await page.goto("/dashboard.html#AION-101");
+  await page.locator("#c-img").setInputFiles([{ name: "a.png", mimeType: "image/png", buffer: PNG }]);
+  await page.locator("#c-img").setInputFiles([{ name: "b.png", mimeType: "image/png", buffer: PNG }]);
+  await expect(page.locator("#d-cfiles .cfile-chip")).toHaveCount(2);
+  await page.getByRole("button", { name: "Don't add picture-1.png to the comment" }).click();
+  await expect(page.locator("#d-cfiles .cfile-chip")).toHaveCount(1);
+  await page.locator("#d-send").click();
+  await expect.poll(() => mock.calls.find((c) => c.path === "/jira/issue/AION-101/comment")?.body?.text).toBe("!picture-2.png|thumbnail!");
+  expect(mock.errors).toEqual([]);
+});
+
+// Opened again, a comment's picture shows at full size (up to the comment's width), not as a small thumbnail.
+test("a comment's picture shows at full size when the ticket is opened again", async ({ page }) => {
+  const mock = await mockDashboard(page);
+  // A 1×600 tall picture: full height, not cut down to a thumbnail.
+  const tall = Buffer.from(await page.evaluate(async () => { const c = document.createElement("canvas"); c.width = 300; c.height = 600; const b = await new Promise((r) => c.toBlob(r, "image/png")); return [...new Uint8Array(await b.arrayBuffer())]; }));
+  const comment = '<p><span class="image-wrap"><img src="https://jira.invalid/rest/api/3/attachment/thumbnail/551" data-attachment-name="picture-1.png"/></span></p>';
+  const issue = { ...jiraIssue, fields: { ...jiraIssue.fields, attachment: [{ id: "551", filename: "picture-1.png", mimeType: "image/png", size: tall.length, created: "2026-11-03T08:00:00Z", author: { displayName: "Test Lead" } }],
+    comment: { comments: [{ id: "c9", author: { accountId: "test-lead", displayName: "Test Lead" }, created: "2026-11-03T08:00:00Z", body: "" }] } },
+    renderedFields: { ...jiraIssue.renderedFields, comment: { comments: [{ body: comment }] } } };
+  await page.route("**/jira/search", (r) => r.fulfill({ json: { issues: [issue], isLast: true } }));
+  await page.route("**/jira/issue/AION-101/attachments/551", (r) => r.fulfill({ contentType: "image/png", body: tall }));
+  await page.goto("/dashboard.html#AION-101");
+  const img = page.locator("#d-comments .cimg img");
+  await expect(img).toHaveAttribute("src", /^blob:/);
+  await expect.poll(async () => (await img.boundingBox())?.height).toBeGreaterThan(590);
+  expect(mock.errors).toEqual([]);
+});
+
+// Internal tickets work the same way: preview above the box, then the picture goes into the comment as !name!.
+test("a picture pasted into an internal ticket comment shows as a preview and goes into the comment when sent", async ({ page }) => {
+  const mock = await mockDashboard(page);
+  let uploaded = "";
+  await page.route("**/internal/INT-101/attachments?name=*", (r) => { uploaded = new URL(r.request().url()).searchParams.get("name");
+    return r.fulfill({ json: { ticket: { ...internalTicket, attachments: [{ id: "a1", filename: uploaded, mimeType: "image/png", size: PNG.length, created: "2026-11-03T08:00:00Z" }] } } }); });
+  await page.goto("/dashboard.html#INT-101");
+  await page.locator("#d-reply").fill("Here it is");
+  await page.locator("#c-img").setInputFiles({ name: "image.png", mimeType: "image/png", buffer: PNG });
+  await expect(page.locator("#d-cfiles .cfile-chip img")).toHaveAttribute("src", /^blob:/);
+  await expect(page.locator("#d-reply")).toHaveValue("Here it is");
+  await page.locator("#d-send").click();
+  await expect.poll(() => mock.calls.find((c) => c.path === "/internal/INT-101/comment")?.body?.text).toBe("Here it is\n!" + uploaded + "!");
+  await expect(page.locator("#d-cfiles .cfile-chip")).toHaveCount(0);
   expect(mock.errors).toEqual([]);
 });

@@ -122,7 +122,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const move=reason=>isInt(key)?internalApi.update(key,{status:id,...(reason?{overrideReason:reason}:{})}):api("/jira/issue/"+key+"/transitions",{method:"POST",body:{id,...(reason?{overrideReason:reason}:{})}});
     try{return await move();}catch(err){const reason=await business.overrideReason(err,key);if(reason)return move(reason);throw err;}
   };
-  const doComment=(key,text,mentions,toCustomer=false)=>isOdoo(key)?odooApi.note(key,text,(NOTE_FILES[key]||[]).map(f=>f.id),toCustomer).then(r=>{delete ODOO_DETAIL[key];delete NOTE_FILES[key];renderNoteFiles(key);return r;}):isInt(key)?internalApi.comment(key,text,mentions):jira.comment(key,text,mentions);
+  const doComment=(key,text,mentions,toCustomer=false)=>isOdoo(key)?odooApi.note(key,text,(NOTE_FILES[key]||[]).map(f=>f.id),toCustomer).then(r=>{delete ODOO_DETAIL[key];return r;}):isInt(key)?internalApi.comment(key,text,mentions):jira.comment(key,text,mentions);
   // Everyone in the dashboard you can @mention or send a note to on a ticket (not you), kept per ticket.
   const MENTION_PEOPLE={};
   const mentionPeople=key=>(MENTION_PEOPLE[key]=MENTION_PEOPLE[key]||api("/ticket-notes?key="+encodeURIComponent(key)).then(r=>(r.people||[]).map(p=>({name:p.name,email:String(p.email).toLowerCase(),role:p.role}))).catch(err=>{delete MENTION_PEOPLE[key];throw err;}));
@@ -1352,17 +1352,21 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // Administrators mention Jira accounts on Jira tickets (Jira notifies them). Internal tickets, and everyone
   // who isn't an administrator, mention dashboard people: they get a dashboard notification and an email.
   const commentMentions=createCommentMentions({textarea:$("d-reply"),search:q=>jira.users(q),enabled:()=>!!dz.key&&!isOdoo(dz.key),local:()=>isInt(dz.key)||!IS_ADMIN,people:()=>mentionPeople(dz.key)});
-  // Pictures in a comment: uploaded to the ticket right away (Jira or internal) and put in the text the way
-  // Jira does it (!name|thumbnail!), so they show inside the comment in Jira and here once it is sent.
-  // Paste (Ctrl+V), drag onto the comment box, or the Add picture button.
-  function insertAtCursor(ta,text){ const a=ta.selectionStart??ta.value.length, b=ta.selectionEnd??a; ta.value=ta.value.slice(0,a)+text+ta.value.slice(b); ta.selectionStart=ta.selectionEnd=a+text.length; ta.dispatchEvent(new Event("input",{bubbles:true})); ta.focus(); }
-  // Odoo: pictures added while writing a note, per ticket. Uploaded right away, attached when the note is sent.
+  // Pictures in a comment (paste with Ctrl+V, drag onto the box, or Add picture): uploaded to the ticket right
+  // away and shown as a preview above the box, per ticket. When the comment is sent they go into it: Jira and
+  // internal comments get the picture in their text (!name|thumbnail! / !name!), Odoo notes get it attached.
   const NOTE_FILES={};
   function renderNoteFiles(key){
     const box=$("d-cfiles"); if(!box) return; box.replaceChildren(); if(dz.key!==key) return;
-    for(const f of NOTE_FILES[key]||[]){ const chip=el("span","cfile-chip"); chip.append(el("span",null,"🖼 "+f.filename));
-      const x=el("button","linkbtn","×"); x.type="button"; x.setAttribute("aria-label","Don't attach "+f.filename); x.addEventListener("click",()=>{ NOTE_FILES[key]=(NOTE_FILES[key]||[]).filter(y=>y.id!==f.id); renderNoteFiles(key); }); chip.append(x); box.appendChild(chip); }
+    for(const f of NOTE_FILES[key]||[]){ const chip=el("span","cfile-chip");
+      if(f.preview){ const img=el("img"); img.src=f.preview; img.alt=""; chip.append(img); }
+      chip.append(el("span",null,f.filename));
+      const x=el("button","linkbtn","×"); x.type="button"; x.title="Not in the comment (the file stays in the ticket's attachments)"; x.setAttribute("aria-label","Don't add "+f.filename+" to the comment");
+      x.addEventListener("click",()=>{ NOTE_FILES[key]=(NOTE_FILES[key]||[]).filter(y=>y!==f); if(f.preview) URL.revokeObjectURL(f.preview); renderNoteFiles(key); }); chip.append(x); box.appendChild(chip); }
   }
+  function clearNoteFiles(key){ for(const f of NOTE_FILES[key]||[]) if(f.preview) URL.revokeObjectURL(f.preview); delete NOTE_FILES[key]; renderNoteFiles(key); }
+  // The comment text with its pictures added at the end (Jira and internal; Odoo attaches them instead).
+  const withPictures=(key,text)=>isOdoo(key)?text:[text,...(NOTE_FILES[key]||[]).map(f=>"!"+f.filename+(isInt(key)?"":"|thumbnail")+"!")].filter(Boolean).join("\n");
   async function addCommentPictures(files){
     const key=dz.key, ta=$("d-reply"); if(!key) return;
     for(const f of [...files].filter(f=>/^image\//.test(f.type))){
@@ -1375,13 +1379,13 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       try{
         const r=await apiFile((isInt(key)?"/internal/":isOdoo(key)?"/odoo/tickets/":"/jira/issue/")+key+"/attachments?name="+encodeURIComponent(name),{method:"POST",body:f,type:f.type}), data=await r.json();
         // Odoo: kept with the note (shown under the box), attached when it is sent.
-        if(isOdoo(key)){ if(dz.key!==key) return; (NOTE_FILES[key]=NOTE_FILES[key]||[]).push(data.attachment); renderNoteFiles(key); setMsg("d-cmsg","Picture added: it is attached to the note when you send it.",true); continue; }
-        let saved=name;
-        if(isInt(key)){ INT[key]=data.ticket; saved=((data.ticket.attachments||[]).at(-1)||{}).filename||name; renderIntAttachments(key); }
-        else saved=((data.attachments||[])[0]||{}).filename||name;
+        let saved={filename:name};
+        if(isOdoo(key)) saved=data.attachment;
+        else if(isInt(key)){ INT[key]=data.ticket; saved={filename:((data.ticket.attachments||[]).at(-1)||{}).filename||name}; renderIntAttachments(key); }
+        else saved={filename:((data.attachments||[])[0]||{}).filename||name};
         if(dz.key!==key) return;
-        insertAtCursor(ta,(ta.value&&!/\n$/.test(ta.value.slice(0,ta.selectionStart))?"\n":"")+"!"+saved+(isInt(key)?"":"|thumbnail")+"!\n");
-        setMsg("d-cmsg","Picture added: it shows in the comment once you send it.",true);
+        (NOTE_FILES[key]=NOTE_FILES[key]||[]).push({...saved,preview:URL.createObjectURL(f)}); renderNoteFiles(key); ta.focus();
+        setMsg("d-cmsg","Picture added: it goes into the "+(isOdoo(key)?"note":"comment")+" when you send it.",true);
       }catch(err){ setMsg("d-cmsg","Picture not added: "+errorText(err),false); }
     }
   }
@@ -1401,10 +1405,10 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   function sendLabel(key){ return isOdoo(key)?"Add internal note":"Add comment"; }
   async function sendComment(toCustomer){ if(sendingComment) return; const key=dz.key, text=isOdoo(key)?$("d-reply").value.trim():commentMentions.text(), mentions=isOdoo(key)?[]:commentMentions.mentioned().filter(id=>id.includes("@")); if(!key) return;
     if(toCustomer&&!text){ setMsg("d-cmsg","Write the reply first.",false); return; }
-    if(!text&&!(isOdoo(key)&&(NOTE_FILES[key]||[]).length)){ setMsg("d-cmsg","Write something first.",false); return; }
+    if(!text&&!(NOTE_FILES[key]||[]).length){ setMsg("d-cmsg","Write something first.",false); return; }
     if(toCustomer&&!confirm("Send this reply to the customer by email? It also goes in Odoo's chatter, and the ticket then waits for the customer (it leaves the dashboard until they answer).")) return;
     const btn=$(toCustomer?"d-reply-customer":"d-send"), label=btn.textContent; sendingComment=true; btn.disabled=true; btn.textContent="Sending…";
-    try{ const after=$("d-after").value; let notified=[]; const r=await runBatch([{key,run:()=>doComment(key,text,mentions,toCustomer).then(res=>{notified=(res&&res.notified)||[];return res;})}],toCustomer?"Reply sent to the customer":"Comment added"); if(!r.fail){$("d-reply").value="";commentMentions.reset();} setMsg("d-cmsg",r.fail?"Not sent.":toCustomer?"Sent to the customer. The ticket now waits for their answer.":notified.length?"Sent. Notified "+notified.join(", ")+".":"Sent.",!r.fail);
+    try{ const after=$("d-after").value; let notified=[]; const body=withPictures(key,text); const r=await runBatch([{key,run:()=>doComment(key,body,mentions,toCustomer).then(res=>{notified=(res&&res.notified)||[];return res;})}],toCustomer?"Reply sent to the customer":"Comment added"); if(!r.fail){$("d-reply").value="";commentMentions.reset();clearNoteFiles(key);} setMsg("d-cmsg",r.fail?"Not sent.":toCustomer?"Sent to the customer. The ticket now waits for their answer.":notified.length?"Sent. Notified "+notified.join(", ")+".":"Sent.",!r.fail);
       if(!r.fail&&isOdoo(key)&&dz.key===key) renderOdoo(key);
       if(!r.fail&&after){ const ix=after.indexOf("|"); const aid=after.slice(0,ix), aname=after.slice(ix+1); const r2=await doAssign([key],aid,aname); setMsg("d-cmsg",r2.fail?"Comment sent, but the assignee didn't change.":"Sent and assigned to "+aname+".",!r2.fail); } }
     finally{ sendingComment=false; btn.disabled=false; btn.textContent=label; } }
