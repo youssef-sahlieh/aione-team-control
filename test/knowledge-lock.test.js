@@ -117,3 +117,17 @@ test('a correct password still unlocks when Odoo fails, and the reason says what
     await assert.rejects(unlockKnowledge(env, 'long-enough-1'), e => e.status === 502 && /redirected/.test(e.message));
   } finally { globalThis.fetch = original; }
 });
+
+test('a redirect from Odoo is not followed, and the error names the address to set in ODOO_URL', async () => {
+  const env = setup();
+  const original = globalThis.fetch;
+  try {
+    await setKnowledgePassword(env, admin, 'long-enough-1');
+    globalThis.fetch = async () => new Response(null, { status: 308, headers: { Location: 'https://odoo.example.invalid/json/2/knowledge.article/search_read' } });
+    await assert.rejects(unlockKnowledge(env, 'long-enough-1'), e => e.status === 502 && e.code === 'odoo_redirect' && /Set ODOO_URL to https:\/\/odoo\.example\.invalid\b/.test(e.message));
+    const seen = [];
+    globalThis.fetch = async (url, init) => { seen.push(init.redirect); throw new TypeError('fetch failed', { cause: new Error('unexpected redirect') }); };
+    await assert.rejects(unlockKnowledge(env, 'long-enough-1'), e => /redirected/.test(e.message));
+    assert.deepEqual(seen, ['manual']);
+  } finally { globalThis.fetch = original; }
+});
