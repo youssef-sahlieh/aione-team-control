@@ -160,6 +160,9 @@ const clip = (html, n = 50000) => String(html || "").slice(0, n);
 const ticketFiles = (env, id, extra = []) => odoo(env, "ir.attachment", "search_read",
   [[["res_model", "=", "helpdesk.ticket"], ["res_id", "=", id], ["type", "=", "binary"], ...extra]],
   { fields: ["name", "mimetype", "file_size", "create_date", "create_uid"], order: "create_date desc", limit: 100 });
+// Files attached to the ticket's chatter messages (an email's attachments, a note's files), by id.
+const messageFiles = (env, ids) => !ids.length ? Promise.resolve([]) : odoo(env, "ir.attachment", "read", [ids],
+  { fields: ["name", "mimetype", "file_size", "create_date", "create_uid", "type"] }).then((rows) => rows.filter((x) => x.type !== "url"));
 // Same shape the dashboard shows for Jira and internal attachments.
 const fileView = (x) => ({
   id: x.id, filename: x.name || "attachment", mimeType: x.mimetype || "application/octet-stream", size: x.file_size || 0,
@@ -191,7 +194,7 @@ export async function odooRoutes(request, env, url, me) {
       return json({ tickets: rows.filter(mine).map((t) => view(env, t, maps, allStages)) });
     }
 
-    const m = /^\/odoo\/tickets\/(HD-\d+)(\/note|\/attachments\/\d{1,20})?$/.exec(path);
+    const m = /^\/odoo\/tickets\/(HD-\d+)(\/note|\/attachments(?:\/\d{1,20})?)?$/.exec(path);
     if (!m) return fail("not_found", "Not found.", 404);
     const [t] = await odoo(env, "helpdesk.ticket", "search_read", [byRef(m[1])], { fields: [...FIELDS, "description"], limit: 1 });
     if (!t || !mine(t)) return fail("not_found", "No such Odoo ticket.", 404);
@@ -202,7 +205,13 @@ export async function odooRoutes(request, env, url, me) {
     // Download one file of this ticket through the proxy, so the Odoo login stays on the server.
     const file = /^\/attachments\/(\d{1,20})$/.exec(m[2] || "");
     if (file && method === "GET") {
-      const [x] = await ticketFiles(env, id, [["id", "=", Number(file[1])]]);
+      const fileId = Number(file[1]);
+      let [x] = await ticketFiles(env, id, [["id", "=", fileId]]);
+      // Or a file of one of this ticket's chatter messages.
+      if (!x) {
+        const onMessage = await odoo(env, "mail.message", "search_count", [[["model", "=", "helpdesk.ticket"], ["res_id", "=", id], ["attachment_ids", "in", [fileId]]]]);
+        if (onMessage) [x] = await messageFiles(env, [fileId]);
+      }
       if (!x) return fail("not_found", "No such attachment on this ticket.", 404);
       const [{ datas }] = await odoo(env, "ir.attachment", "read", [[x.id], ["datas"]]);
       if (!datas) return fail("not_found", "The file is missing.", 404);
@@ -214,17 +223,33 @@ export async function odooRoutes(request, env, url, me) {
         "Content-Disposition": "attachment; filename*=UTF-8''" + encodeURIComponent(x.name || "attachment")
       } });
     }
+    // Upload one file to the ticket (raw body, ?name=), to attach to the note being written. Up to 4 MB.
+    if (m[2] === "/attachments" && method === "POST") {
+      const name = String(url.searchParams.get("name") || "file").replace(/[\\/\r\n"<>:|?*\x00-\x1f]/g, "_").trim().slice(0, 150) || "file";
+      const bytes = new Uint8Array(await request.arrayBuffer());
+      if (!bytes.length) return fail("bad_request", "The file is empty.", 400);
+      if (bytes.length > 4 * 1024 * 1024) return fail("too_large", "Files can be up to 4 MB.", 413);
+      const type = String(request.headers.get("Content-Type") || "application/octet-stream").split(";")[0].trim();
+      let bin = ""; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      const fileId = await odoo(env, "ir.attachment", "create", [{ name, datas: btoa(bin), res_model: "helpdesk.ticket", res_id: id, ...(/^[\w.+-]+\/[\w.+-]+$/.test(type) ? { mimetype: type } : {}) }]);
+      return json({ attachment: { id: fileId, filename: name, mimeType: type, size: bytes.length } }, 201);
+    }
     if (m[2] && m[2] !== "/note") return fail("not_found", "Not found.", 404);
 
     if (!m[2] && method === "GET") {
       const msgs = await odoo(env, "mail.message", "search_read", [[["model", "=", "helpdesk.ticket"], ["res_id", "=", id], ["message_type", "in", ["comment", "email"]]]],
-        { fields: ["body", "author_id", "email_from", "date", "subtype_id", "message_type"], order: "date asc", limit: 200 });
-      const files = await ticketFiles(env, id);
+        { fields: ["body", "author_id", "email_from", "date", "subtype_id", "message_type", "attachment_ids"], order: "date asc", limit: 200 });
+      const attachedIds = [...new Set(msgs.flatMap((x) => Array.isArray(x.attachment_ids) ? x.attachment_ids : []))].slice(0, 300);
+      const [ticketOwn, onMessages] = await Promise.all([ticketFiles(env, id), messageFiles(env, attachedIds)]);
+      const byId = new Map(onMessages.map((x) => [x.id, x]));
+      // The ticket's attachments: its own files and every message's, once each, newest first.
+      const files = [...new Map([...ticketOwn, ...onMessages].map((x) => [x.id, x])).values()].sort((a, b) => String(b.create_date || "").localeCompare(String(a.create_date || "")));
       return json({
         ticket: view(env, t, maps, allStages),
         description: clip(t.description),
         attachments: files.map(fileView),
-        messages: msgs.filter((x) => String(x.body || "").replace(/<[^>]*>/g, "").trim()).map((x) => ({
+        messages: msgs.filter((x) => String(x.body || "").replace(/<[^>]*>/g, "").trim() || (x.attachment_ids || []).length).map((x) => ({
+          attachments: (x.attachment_ids || []).map((n) => byId.get(n)).filter(Boolean).map(fileView),
           author: Array.isArray(x.author_id) ? x.author_id[1] : String(x.email_from || "Someone").replace(/<[^>]*>/g, "").replace(/"/g, "").trim(),
           when: iso(x.date), body: clip(x.body, 20000),
           note: Array.isArray(x.subtype_id) && /note/i.test(x.subtype_id[1]), email: x.message_type === "email"
@@ -273,11 +298,15 @@ export async function odooRoutes(request, env, url, me) {
 
     // Internal note in the Odoo chatter (not emailed to the customer), signed with the dashboard user.
     if (m[2] && method === "POST") {
-      const text = String(((await readJson(request)) || {}).text || "").trim();
-      if (!text || text.length > 20000) return fail("bad_request", "Write a note first.", 400);
+      const b = (await readJson(request)) || {}, text = String(b.text || "").trim();
+      // Files uploaded to this ticket for the note (only this ticket's files can be attached).
+      const fileIds = Array.isArray(b.attachmentIds) ? [...new Set(b.attachmentIds.map(Number).filter((n) => Number.isInteger(n) && n > 0))] : [];
+      if (fileIds.length > 10) return fail("bad_request", "Attach up to 10 files to a note.", 400);
+      if (fileIds.length && (await ticketFiles(env, id, [["id", "in", fileIds]])).length !== fileIds.length) return fail("bad_request", "A file isn't attached to this ticket. Add it again.", 400);
+      if ((!text && !fileIds.length) || text.length > 20000) return fail("bad_request", "Write a note first.", 400);
       const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
       const body = "<p>" + esc(text).replace(/\n/g, "<br>") + "</p><p><i>— " + esc(me.name || me.email) + ", via AION Team Control</i></p>";
-      await odoo(env, "helpdesk.ticket", "message_post", [[id]], { body, message_type: "comment", subtype_xmlid: "mail.mt_note" });
+      await odoo(env, "helpdesk.ticket", "message_post", [[id]], { body, message_type: "comment", subtype_xmlid: "mail.mt_note", ...(fileIds.length ? { attachment_ids: fileIds } : {}) });
       return json({ ok: true }, 201);
     }
   } catch (err) {

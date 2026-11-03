@@ -11,7 +11,16 @@ const TICKETS = {
 };
 const ATTACHMENTS = [
   { id: 501, name: "invoice.pdf", mimetype: "application/pdf", file_size: 5, create_date: "2026-10-03 10:00:00", create_uid: [12, "Shahd Ghayadah"], res_model: "helpdesk.ticket", res_id: 300, type: "binary", datas: Buffer.from("%PDF-").toString("base64") },
-  { id: 502, name: "other.txt", mimetype: "text/plain", file_size: 3, create_date: "2026-10-03 11:00:00", create_uid: false, res_model: "helpdesk.ticket", res_id: 293, type: "binary", datas: Buffer.from("abc").toString("base64") }
+  { id: 502, name: "other.txt", mimetype: "text/plain", file_size: 3, create_date: "2026-10-03 11:00:00", create_uid: false, res_model: "helpdesk.ticket", res_id: 293, type: "binary", datas: Buffer.from("abc").toString("base64") },
+  // Files of chatter messages: attached to the message itself (as an email's attachments are), not to the ticket.
+  { id: 503, name: "screenshot.png", mimetype: "image/png", file_size: 4, create_date: "2026-10-04 09:00:00", create_uid: [5, "Ariel Amiri"], res_model: "mail.message", res_id: 9001, type: "binary", datas: Buffer.from("PNG!").toString("base64") },
+  { id: 504, name: "elsewhere.png", mimetype: "image/png", file_size: 4, create_date: "2026-10-04 09:00:00", create_uid: false, res_model: "mail.message", res_id: 9002, type: "binary", datas: Buffer.from("NOPE").toString("base64") }
+];
+// Ticket 300's chatter: a text message, and an email whose only content is a picture. 504 is on another ticket's message.
+const MESSAGES = [
+  { id: 9000, res_id: 300, body: "<p>Hello</p>", author_id: [5, "Ariel Amiri"], date: "2026-10-03 10:00:00", subtype_id: [1, "Discussions"], message_type: "email", attachment_ids: [] },
+  { id: 9001, res_id: 300, body: "", author_id: [5, "Ariel Amiri"], date: "2026-10-04 09:00:00", subtype_id: [1, "Discussions"], message_type: "email", attachment_ids: [503] },
+  { id: 9002, res_id: 293, body: "<p>Other</p>", author_id: false, date: "2026-10-04 09:00:00", subtype_id: [1, "Discussions"], message_type: "email", attachment_ids: [504] }
 ];
 globalThis.fetch = async (url, init) => {
   const body = JSON.parse(init.body);
@@ -21,14 +30,20 @@ globalThis.fetch = async (url, init) => {
   if (service === "common" && method === "authenticate") return reply(args[2] === "good-key" ? 7 : false);
   const [, , , model, m, a, kw = {}] = args;
   if (model === "res.users") return reply([{ id: 12, name: "Shahd Ghayadah", login: "shahd@aione.biz", email: "shahd@aione.biz" }, { id: 34, name: "Bashar Bannoura", login: "bashar.b@aione.biz", email: "bashar.b@aione.biz" }, { id: 6, name: "Ireen Khair", login: "ireen@aione.biz", email: "ireen@aione.biz" }]);
-  if (model === "ir.attachment" && m === "read") return reply(ATTACHMENTS.filter((x) => a[0].includes(x.id)).map((x) => ({ id: x.id, datas: x.datas })));
+  if (model === "ir.attachment" && m === "read") return reply(ATTACHMENTS.filter((x) => a[0].includes(x.id)).map(({ datas, res_model, res_id, ...rest }) => (a[1] || []).includes("datas") ? { id: rest.id, datas } : rest));
+  if (model === "ir.attachment" && m === "create") { const id = 600 + ATTACHMENTS.length; ATTACHMENTS.push({ id, file_size: Buffer.from(a[0].datas, "base64").length, create_date: "2026-10-05 08:00:00", create_uid: [7, "API"], type: "binary", mimetype: "application/octet-stream", ...a[0] }); return reply(id); }
   if (model === "ir.attachment") {
     const byTerm = (field) => a[0].find((t) => Array.isArray(t) && t[0] === field);
-    const rows = ATTACHMENTS.filter((x) => x.res_model === byTerm("res_model")[2] && x.res_id === byTerm("res_id")[2] && x.type === "binary" && (!byTerm("id") || x.id === byTerm("id")[2]));
+    const idOk = (x) => { const t = byTerm("id"); return !t || (t[1] === "in" ? t[2].includes(x.id) : x.id === t[2]); };
+    const rows = ATTACHMENTS.filter((x) => x.res_model === byTerm("res_model")[2] && x.res_id === byTerm("res_id")[2] && x.type === "binary" && idOk(x));
     return reply(rows.map(({ datas, res_model, res_id, type, ...rest }) => ({ ...rest })));
   }
   if (model === "helpdesk.stage") return reply([{ id: 1, name: "New", fold: false, sequence: 1, team_ids: [1] }, { id: 2, name: "In Progress", fold: false, sequence: 2, team_ids: [1] }, { id: 3, name: "Solved", fold: true, sequence: 3, team_ids: [1] }, { id: 9, name: "Other team only", fold: false, sequence: 4, team_ids: [5] }]);
-  if (model === "mail.message") return reply([{ body: "<p>Hello</p>", author_id: [5, "Ariel Amiri"], date: "2026-10-03 10:00:00", subtype_id: [1, "Discussions"], message_type: "email" }]);
+  if (model === "mail.message") {
+    const onTicket = MESSAGES.filter((x) => x.res_id === a[0].find((t) => t[0] === "res_id")[2]);
+    if (m === "search_count") { const att = a[0].find((t) => t[0] === "attachment_ids"); return reply(onTicket.filter((x) => att[2].some((id) => x.attachment_ids.includes(id))).length); }
+    return reply(onTicket.map(({ res_id, ...x }) => x));
+  }
   if (model === "helpdesk.ticket" && m === "search_read") {
     const refTerm = a[0].find((t) => Array.isArray(t) && t[0] === "ticket_ref");
     const userTerm = a[0].find((t) => Array.isArray(t) && t[0] === "user_id");
@@ -87,7 +102,7 @@ test("detail: description, chatter and only this team's stages", async () => {
 test("attachments are listed on the ticket and downloaded through the proxy, only for that ticket", async () => {
   const t = await adminToken();
   const { data } = await req("/odoo/tickets/HD-302", { token: t });
-  assert.deepEqual(data.attachments.map((a) => [a.id, a.filename, a.mimeType, a.size, a.author.displayName]), [[501, "invoice.pdf", "application/pdf", 5, "Shahd Ghayadah"]]);
+  assert.deepEqual(data.attachments.map((a) => [a.id, a.filename, a.mimeType, a.size, a.author.displayName]), [[503, "screenshot.png", "image/png", 4, "Ariel Amiri"], [501, "invoice.pdf", "application/pdf", 5, "Shahd Ghayadah"]]);
   const ok = await worker.fetch(new Request("https://p/odoo/tickets/HD-302/attachments/501", { headers: { Authorization: "Bearer " + t } }), env);
   assert.equal(ok.status, 200); assert.equal(ok.headers.get("Content-Type"), "application/pdf");
   assert.match(ok.headers.get("Content-Disposition"), /invoice\.pdf/);
@@ -95,6 +110,20 @@ test("attachments are listed on the ticket and downloaded through the proxy, onl
   const other = await req("/odoo/tickets/HD-302/attachments/502", { token: t });
   assert.equal(other.status, 404, "a file on another ticket is not served under this one");
   assert.equal((await req("/odoo/tickets/HD-302/attachments/501", { method: "POST", token: t, body: {} })).status, 404);
+});
+
+test("files in the Odoo chatter show with their message and in the ticket's attachments, and download only for that ticket", async () => {
+  const t = await adminToken();
+  const { data } = await req("/odoo/tickets/HD-302", { token: t });
+  // The email with only a picture is kept (it has a file), and the picture is on it.
+  assert.equal(data.messages.length, 2);
+  assert.deepEqual(data.messages[1].attachments.map((a) => [a.id, a.filename, a.mimeType]), [[503, "screenshot.png", "image/png"]]);
+  assert.deepEqual(data.messages[0].attachments, []);
+  assert.deepEqual(data.attachments.map((a) => a.id), [503, 501], "the ticket's attachments include the chatter's, newest first");
+  const pic = await worker.fetch(new Request("https://p/odoo/tickets/HD-302/attachments/503", { headers: { Authorization: "Bearer " + t } }), env);
+  assert.equal(pic.status, 200); assert.equal(pic.headers.get("Content-Type"), "image/png"); assert.equal(await pic.text(), "PNG!");
+  // A file on another ticket's message isn't served under this ticket.
+  assert.equal((await req("/odoo/tickets/HD-302/attachments/504", { token: t })).status, 404);
 });
 
 test("admin moves the stage and changes the developer in Odoo", async () => {
@@ -133,4 +162,24 @@ test("without Odoo settings the routes say so", async () => {
   const r = await req("/odoo/tickets", { token: await adminToken() });
   env.ODOO_URL = saved;
   assert.equal(r.status, 501); assert.equal(r.data.code, "odoo_off");
+});
+
+test("a picture added to an Odoo note is uploaded to that ticket and attached to the note", async () => {
+  const t = await adminToken();
+  const up = await worker.fetch(new Request("https://p/odoo/tickets/HD-302/attachments?name=" + encodeURIComponent("picture-1.png"), { method: "POST", headers: { Authorization: "Bearer " + t, "Content-Type": "image/png" }, body: new Uint8Array([137, 80, 78, 71]) }), env);
+  assert.equal(up.status, 201);
+  const { attachment } = await up.json();
+  assert.equal(attachment.filename, "picture-1.png"); assert.equal(attachment.mimeType, "image/png");
+  const saved = ATTACHMENTS.find((x) => x.id === attachment.id);
+  assert.deepEqual([saved.res_model, saved.res_id, saved.mimetype, Buffer.from(saved.datas, "base64").length], ["helpdesk.ticket", 300, "image/png", 4]);
+  calls.length = 0;
+  assert.equal((await req("/odoo/tickets/HD-302/note", { method: "POST", token: t, body: { text: "See the picture", attachmentIds: [attachment.id] } })).status, 201);
+  const post = calls.find((c) => c.args[4] === "message_post");
+  assert.deepEqual(post.args[6].attachment_ids, [attachment.id]);
+  // A picture alone is a note too; a file of another ticket can't be attached.
+  assert.equal((await req("/odoo/tickets/HD-302/note", { method: "POST", token: t, body: { text: "", attachmentIds: [attachment.id] } })).status, 201);
+  assert.equal((await req("/odoo/tickets/HD-302/note", { method: "POST", token: t, body: { text: "x", attachmentIds: [502] } })).status, 400);
+  assert.equal((await req("/odoo/tickets/HD-302/note", { method: "POST", token: t, body: { text: "" } })).status, 400);
+  const empty = await worker.fetch(new Request("https://p/odoo/tickets/HD-302/attachments?name=x.png", { method: "POST", headers: { Authorization: "Bearer " + t }, body: new Uint8Array([]) }), env);
+  assert.equal(empty.status, 400);
 });

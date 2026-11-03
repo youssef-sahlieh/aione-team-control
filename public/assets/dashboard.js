@@ -122,7 +122,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const move=reason=>isInt(key)?internalApi.update(key,{status:id,...(reason?{overrideReason:reason}:{})}):api("/jira/issue/"+key+"/transitions",{method:"POST",body:{id,...(reason?{overrideReason:reason}:{})}});
     try{return await move();}catch(err){const reason=await business.overrideReason(err,key);if(reason)return move(reason);throw err;}
   };
-  const doComment=(key,text,mentions)=>isOdoo(key)?odooApi.note(key,text).then(r=>{delete ODOO_DETAIL[key];return r;}):isInt(key)?internalApi.comment(key,text,mentions):jira.comment(key,text,mentions);
+  const doComment=(key,text,mentions)=>isOdoo(key)?odooApi.note(key,text,(NOTE_FILES[key]||[]).map(f=>f.id)).then(r=>{delete ODOO_DETAIL[key];delete NOTE_FILES[key];renderNoteFiles(key);return r;}):isInt(key)?internalApi.comment(key,text,mentions):jira.comment(key,text,mentions);
   // Everyone in the dashboard you can @mention or send a note to on a ticket (not you), kept per ticket.
   const MENTION_PEOPLE={};
   const mentionPeople=key=>(MENTION_PEOPLE[key]=MENTION_PEOPLE[key]||api("/ticket-notes?key="+encodeURIComponent(key)).then(r=>(r.people||[]).map(p=>({name:p.name,email:String(p.email).toLowerCase(),role:p.role}))).catch(err=>{delete MENTION_PEOPLE[key];throw err;}));
@@ -189,7 +189,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     list:days=>api("/odoo/tickets?closedDays="+days),
     detail:key=>api("/odoo/tickets/"+key),
     update:(key,b)=>api("/odoo/tickets/"+key,{method:"PUT",body:b}),
-    note:(key,text)=>api("/odoo/tickets/"+key+"/note",{method:"POST",body:{text}})
+    note:(key,text,attachmentIds=[])=>api("/odoo/tickets/"+key+"/note",{method:"POST",body:{text,...(attachmentIds.length?{attachmentIds}:{})}})
   };
   async function loadOdoo(){
     if(!ODOO) return;
@@ -234,12 +234,15 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const IMAGES=new Map();
   function attachmentFor(n,ctx){
     if(!ctx||!ctx.key||!(ctx.attachments||[]).length) return null;
-    const src=n.getAttribute("src")||"", id=(/\/(?:attachment\/content|secure\/(?:attachment|thumbnail))\/(\d+)/.exec(src)||[])[1];
-    const name=n.getAttribute("data-alt")||n.getAttribute("alt")||decodeURIComponent((src.split("?")[0].split("/").pop())||"");
+    // Jira: /attachment/content/123, /attachment/thumbnail/123 (a pasted picture's preview), /secure/attachment|thumbnail/123,
+    // or the link around it (file-preview-id). Odoo: /web/image/123, /web/content/123.
+    const src=n.getAttribute("src")||"", link=n.closest&&n.closest("[file-preview-id]");
+    const id=(/\/(?:attachment\/(?:content|thumbnail)|secure\/(?:attachment|thumbnail)|web\/(?:image|content))\/(\d+)/.exec(src)||[])[1]||(link&&link.getAttribute("file-preview-id"))||"";
+    const name=n.getAttribute("data-attachment-name")||n.getAttribute("data-alt")||n.getAttribute("alt")||decodeURIComponent((src.split("?")[0].split("/").pop())||"");
     return ctx.attachments.find(a=>String(a.id)===id)||ctx.attachments.find(a=>name&&a.filename===name)||null;
   }
   function inlineImage(a,key){
-    const base=isInt(key)?"/internal/":"/jira/issue/";
+    const base=isInt(key)?"/internal/":isOdoo(key)?"/odoo/tickets/":"/jira/issue/";
     const box=el("button","cimg"); box.type="button"; box.title="Open "+a.filename; box.setAttribute("aria-label","Open image "+a.filename);
     const img=el("img"); img.alt=a.filename; img.loading="lazy"; box.appendChild(img);
     const load=()=>apiFile(base+key+"/attachments/"+a.id);
@@ -1059,7 +1062,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(location.hash!=="#"+key){ const url=location.pathname+location.search+"#"+key; if(drawerPushed) history.replaceState(history.state,"",url); else { history.pushState(history.state,"",url); drawerPushed=true; } }
     const opening=!dz.key;dz.key=key;
     if(opening){drawerUI.open();$("d-reply").value="";commentMentions.reset();$("d-newdev").value="";}
-    ticketHistory.reset();drawerUI.select("overview");$("d-aidesc-out").hidden=true;$("d-aidesc-out").replaceChildren();dateRequests.renderDrawer(key);
+    ticketHistory.reset();drawerUI.select("overview");renderNoteFiles(key);$("d-aidesc-out").hidden=true;$("d-aidesc-out").replaceChildren();dateRequests.renderDrawer(key);
     closePop(); dz.key=key; const i=issueByKey(key);
     $("drawer").hidden=false; $("scrim").hidden=false; $("drawer").classList.toggle("is-int",isInt(key)); $("drawer").classList.toggle("is-odoo",isOdoo(key));
     $("d-key").textContent=key+(isInt(key)?"":" ↗"); $("d-key").href=$("d-open").href=ticketUrl(key); if(isInt(key)) $("d-key").removeAttribute("href");
@@ -1122,10 +1125,11 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       $("d-title").textContent=t.summary; $("d-status").textContent=t.status; $("d-status").className="stbtn "+stK({status:t.status,cat:t.statusCat});
       $("d-facts").replaceChildren(fact("Type","Odoo Helpdesk"),fact("Customer",c.name&&c.email?c.name+" <"+c.email+">":(c.name||c.email)),fact("Developer",(t.devs||[]).map(x=>"ai1_"+x).join(", ")||t.developerName||"not assigned"),fact("Team",t.team),fact("Priority",t.priority),fact("Created",ago(t.created)),fact("Updated",ago(t.updated)),fact("SLA deadline",t.due?fmtDate(t.due):"none"),fact("Odoo ref","#"+t.ref));
       dz.labels=(t.devs||[]).map(x=>"ai1_"+x); dz.devs=new Set(t.devs||[]); renderDevChips();
-      $("d-desc").replaceChildren(richNode(d.description||""));
+      const pictures={key,attachments:d.attachments||[]};
+      $("d-desc").replaceChildren(richNode(d.description||"",pictures));
       const box=$("d-comments"); box.replaceChildren(); $("d-ccount").textContent="("+d.messages.length+")";
       if(!d.messages.length) box.appendChild(el("div","msg","No messages yet."));
-      d.messages.forEach(m=>{ const cd=el("div","cmt"+(m.note?" mine":" ext")); const meta=el("div","cmeta"); meta.appendChild(el("b",null,m.author)); meta.appendChild(el("span",null,ago(m.when)+(m.note?" · internal note":m.email?" · email":""))); cd.appendChild(meta); const b=richNode(m.body); b.classList.add("rich"); b.dir="auto"; cd.appendChild(b); box.appendChild(cd); });
+      d.messages.forEach(m=>{ const cd=el("div","cmt"+(m.note?" mine":" ext")); const meta=el("div","cmeta"); meta.appendChild(el("b",null,m.author)); meta.appendChild(el("span",null,ago(m.when)+(m.note?" · internal note":m.email?" · email":""))); cd.appendChild(meta); if(String(m.body||"").replace(/<[^>]*>/g,"").trim()||/<img/i.test(m.body||"")){ const b=richNode(m.body,pictures); b.classList.add("rich"); b.dir="auto"; cd.appendChild(b); } cd.appendChild(messageFiles(key,m.attachments||[])); box.appendChild(cd); });
       renderAttachments(d.attachments||[]);
       $("d-reply").placeholder="Write an internal note (saved in Odoo's chatter, not emailed to the customer)…";
     }catch(err){ if(dz.key===key) $("d-desc").replaceChildren(el("span","msg err",errorText(err))); }
@@ -1293,6 +1297,16 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       dl.disabled=false; dl.textContent="Download"; });
     acts.appendChild(dl); return acts;
   }
+  // An Odoo message's files, under the message: pictures shown, other files with Preview and Download.
+  function messageFiles(key,files){
+    const box=el("div","cfiles");
+    for(const a of files){
+      if(isImage(a)){ box.appendChild(inlineImage(a,key)); continue; }
+      const row=el("div","cfile"); const nm=el("span","nm",a.filename); nm.dir="auto"; row.appendChild(nm);
+      row.appendChild(fileActions(key,a.filename,a.mimeType,()=>apiFile("/odoo/tickets/"+key+"/attachments/"+a.id))); box.appendChild(row);
+    }
+    return box;
+  }
   function renderAttachments(atts){ const key=dz.key;
     const box=$("d-att"); box.replaceChildren(); $("d-acount").textContent="("+atts.length+")";
     if(!atts.length){ box.appendChild(el("span","msg","No attachments on this ticket.")); return; }
@@ -1342,8 +1356,15 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // Jira does it (!name|thumbnail!), so they show inside the comment in Jira and here once it is sent.
   // Paste (Ctrl+V), drag onto the comment box, or the Add picture button.
   function insertAtCursor(ta,text){ const a=ta.selectionStart??ta.value.length, b=ta.selectionEnd??a; ta.value=ta.value.slice(0,a)+text+ta.value.slice(b); ta.selectionStart=ta.selectionEnd=a+text.length; ta.dispatchEvent(new Event("input",{bubbles:true})); ta.focus(); }
+  // Odoo: pictures added while writing a note, per ticket. Uploaded right away, attached when the note is sent.
+  const NOTE_FILES={};
+  function renderNoteFiles(key){
+    const box=$("d-cfiles"); if(!box) return; box.replaceChildren(); if(dz.key!==key) return;
+    for(const f of NOTE_FILES[key]||[]){ const chip=el("span","cfile-chip"); chip.append(el("span",null,"🖼 "+f.filename));
+      const x=el("button","linkbtn","×"); x.type="button"; x.setAttribute("aria-label","Don't attach "+f.filename); x.addEventListener("click",()=>{ NOTE_FILES[key]=(NOTE_FILES[key]||[]).filter(y=>y.id!==f.id); renderNoteFiles(key); }); chip.append(x); box.appendChild(chip); }
+  }
   async function addCommentPictures(files){
-    const key=dz.key, ta=$("d-reply"); if(!key||isOdoo(key)) return;
+    const key=dz.key, ta=$("d-reply"); if(!key) return;
     for(const f of [...files].filter(f=>/^image\//.test(f.type))){
       if(f.size>4*1024*1024){ setMsg("d-cmsg",(f.name||"The picture")+" is bigger than 4 MB.",false); continue; }
       // Pasted pictures are all called image.png: a unique name keeps each one apart in the ticket.
@@ -1352,7 +1373,9 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       const name=stem+"-"+new Date().toISOString().replace(/\D/g,"").slice(0,14)+"."+ext;
       setMsg("d-cmsg","Uploading "+name+"…",true);
       try{
-        const r=await apiFile((isInt(key)?"/internal/":"/jira/issue/")+key+"/attachments?name="+encodeURIComponent(name),{method:"POST",body:f,type:f.type}), data=await r.json();
+        const r=await apiFile((isInt(key)?"/internal/":isOdoo(key)?"/odoo/tickets/":"/jira/issue/")+key+"/attachments?name="+encodeURIComponent(name),{method:"POST",body:f,type:f.type}), data=await r.json();
+        // Odoo: kept with the note (shown under the box), attached when it is sent.
+        if(isOdoo(key)){ if(dz.key!==key) return; (NOTE_FILES[key]=NOTE_FILES[key]||[]).push(data.attachment); renderNoteFiles(key); setMsg("d-cmsg","Picture added: it is attached to the note when you send it.",true); continue; }
         let saved=name;
         if(isInt(key)){ INT[key]=data.ticket; saved=((data.ticket.attachments||[]).at(-1)||{}).filename||name; renderIntAttachments(key); }
         else saved=((data.attachments||[])[0]||{}).filename||name;
@@ -1374,7 +1397,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   }
   // One comment per click: the button stays off until the comment is sent (a second click sent it twice).
   let sendingComment=false;
-  $("d-send").addEventListener("click",async()=>{ if(sendingComment) return; const key=dz.key, text=isOdoo(key)?$("d-reply").value.trim():commentMentions.text(), mentions=isOdoo(key)?[]:commentMentions.mentioned().filter(id=>id.includes("@")); if(!key) return; if(!text){ setMsg("d-cmsg","Write something first.",false); return; }
+  $("d-send").addEventListener("click",async()=>{ if(sendingComment) return; const key=dz.key, text=isOdoo(key)?$("d-reply").value.trim():commentMentions.text(), mentions=isOdoo(key)?[]:commentMentions.mentioned().filter(id=>id.includes("@")); if(!key) return; if(!text&&!(isOdoo(key)&&(NOTE_FILES[key]||[]).length)){ setMsg("d-cmsg","Write something first.",false); return; }
     const btn=$("d-send"); sendingComment=true; btn.disabled=true; btn.textContent="Sending…";
     try{ const after=$("d-after").value; let notified=[]; const r=await runBatch([{key,run:()=>doComment(key,text,mentions).then(res=>{notified=(res&&res.notified)||[];return res;})}],"Comment added"); if(!r.fail){$("d-reply").value="";commentMentions.reset();} setMsg("d-cmsg",r.fail?"Not sent.":notified.length?"Sent. Notified "+notified.join(", ")+".":"Sent.",!r.fail);
       if(!r.fail&&after){ const ix=after.indexOf("|"); const aid=after.slice(0,ix), aname=after.slice(ix+1); const r2=await doAssign([key],aid,aname); setMsg("d-cmsg",r2.fail?"Comment sent, but the assignee didn't change.":"Sent and assigned to "+aname+".",!r2.fail); } }
