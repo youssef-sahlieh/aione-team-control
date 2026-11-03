@@ -232,7 +232,7 @@ test("the page gets the saved report at once; an out-of-date one is updated in t
   const admin = { email: "boss@aione.biz", name: "Boss", role: "admin", dev: "", v: 1 };
   await saveUser(env.STORE, admin);
   const token = (await makeToken(env, admin.email, Date.now(), 1)).token;
-  const old = { builtAt: Date.now() - 3 * 3600 * 1000, count: 1, format: 2, rows: [{ instance: "odoo503", database: "RonitYamProd", posVersion: "", section: "main", online: true, monitorName: "" }] };
+  const old = { builtAt: Date.now() - 3 * 3600 * 1000, count: 1, format: 3, rows: [{ instance: "odoo503", database: "RonitYamProd", posVersion: "", section: "main", online: true, monitorName: "" }] };
   await env.STORE.set("dbreport:v1", JSON.stringify(old), 3600);
   const seen = []; const inner = globalThis.fetch;
   globalThis.fetch = (url, init) => { seen.push(String(url)); return inner(url, init); };
@@ -337,7 +337,7 @@ test("the POS version comes from Audit & Deploy's AI1 Settings (flutter_pos_api 
     assert.equal(row("odoo100").posVersion, "19.0.4.2.0", "from AI1 Settings");
     assert.equal(row("odoo503").posVersion, "19.0.3.97.2", "falls back to the add-on list");
     assert.deepEqual(asked.find((a) => a[0] === "odoo100"), ["odoo100", false], "the saved snapshot, not a forced refresh");
-    assert.equal(r.report.format, 2);
+    assert.equal(r.report.format, 3);
   } finally { globalThis.fetch = inner; }
 });
 
