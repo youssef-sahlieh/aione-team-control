@@ -215,7 +215,7 @@ test('Odoo refusing the line sends it to Needs review with the reason',async()=>
 
 test('no client, or no Odoo project: Needs setup, then the worker sends it once the ticket is set',async()=>{
   const s=await setup(),key=await s.ticket({clientId:null,subClientId:null});
-  const r=await s.log(key);assert.equal(r.data.entry.status,'setup');assert.match(r.data.entry.reason,/Choose a client/);
+  const r=await s.log(key);assert.equal(r.data.entry.status,'setup');assert.match(r.data.entry.reason,/Internal/);
   const m=await s.call('/ticket-metadata?key='+key,'GET',undefined,admin);
   assert.equal((await s.call('/ticket-metadata','PUT',{key,fields:{revision:m.data.metadata.revision,clientId:s.client.id,subClientId:s.sub.id}},admin)).status,200);
   const res=await s.cron();const out=await res.json();assert.equal(res.status,200);assert.equal(out.synced,1);

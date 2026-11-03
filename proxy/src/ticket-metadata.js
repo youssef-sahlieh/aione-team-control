@@ -353,6 +353,26 @@ export async function catalogRoutes(request,env,url,me) {
   if(!(previous===null?await store.setIfAbsent(key,JSON.stringify(next),315360000):await store.compareAndSet(key,previous,JSON.stringify(next))))problem('Catalog changed. Refresh.',409,'conflict');
   return Response.json(next,{headers:{'Cache-Control':'no-store'}});
 }
+// An internal ticket opened without a client goes under the "Internal" client and its "Internal" project. Both are
+// created when missing, and restored when archived, so new internal tickets always have a place. Anyone can change them later.
+export const INTERNAL_CLIENT='Internal';
+export async function internalDefaults(env){
+  const store=requireStore(env);
+  for(let attempt=0;;attempt++){
+    const key=catalogKey(env),previous=await store.get(key),catalog=previous?JSON.parse(previous):{revision:0,entries:[]};
+    const next=structuredClone(catalog);
+    const same=(e,parentId,name)=>(e.parentId||null)===parentId&&nameKey(e.name)===nameKey(name);
+    let client=next.entries.find(e=>same(e,null,INTERNAL_CLIENT));
+    if(!client){client={id:await idFor(null,INTERNAL_CLIENT),name:INTERNAL_CLIENT,parentId:null,archived:false,sources:[]};next.entries.push(client);}
+    let project=next.entries.find(e=>same(e,client.id,INTERNAL_CLIENT));
+    if(!project){project={id:await idFor(client.id,INTERNAL_CLIENT),name:INTERNAL_CLIENT,parentId:client.id,archived:false,sources:[]};next.entries.push(project);}
+    for(const e of [client,project])if(e.archived){e.archived=false;delete e.archivedBy;}
+    if(JSON.stringify(next.entries)===JSON.stringify(catalog.entries))return {clientId:client.id,subClientId:project.id};
+    next.revision=catalog.revision+1;
+    if(previous===null?await store.setIfAbsent(key,JSON.stringify(next),315360000):await store.compareAndSet(key,previous,JSON.stringify(next)))return {clientId:client.id,subClientId:project.id};
+    if(attempt>=2)problem('Catalog changed. Try again.',409,'conflict');
+  }
+}
 // readTickets(keys) (optional) checks many tickets at once and returns {key:true} for the ones this person may see.
 // actualHours stays the baseline (what the editor changes); totalActualHours adds the logged work.
 // agreed is the stored value (users never get it): the overage flag is added on every read, the number is not.

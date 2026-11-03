@@ -42,7 +42,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   let billingNeeded=false,enabled=false,epicMapping=false,catalog={revision:0,entries:[]},records={},editor=null;
   const reportBrowser=createReportBrowser({api,openIssue});
   const admin=()=>context().admin;
-  let odooOn=false,catalogQuery='';
+  let odooOn=false;
   const clients=()=>catalog.entries.filter(e=>!e.parentId&&!e.archived);
   const children=id=>catalog.entries.filter(e=>e.parentId===id&&!e.archived);
   async function loadCatalog(){catalog=await api('/clients');return catalog;}
@@ -190,14 +190,6 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       forms.append(customer,project);panel.append(forms);
     }else{
     const add=el('div','business-form'),name=field(add,'New client or project name',input('text','')),parent=field(add,'Parent (optional)',el('select','fsel'));option(parent,'Top-level client','');for(const c of clients())option(parent,c.name,c.id);add.append(button('Add',async()=>{try{catalog=await api('/clients',{method:'POST',body:{revision:catalog.revision,name:name.value,parentId:parent.value||null}});await onChange();target.replaceChildren();renderCatalog(target);}catch(err){message(msg,err);}}));panel.append(add);}
-    const search=el('input','inp catalog-search');search.type='search';search.placeholder='Search customers or projects…';search.setAttribute('aria-label','Search customers');search.value=catalogQuery;
-    const found=el('p','catalog-found');panel.append(search,found);const groups=[];
-    const filter=()=>{catalogQuery=search.value;const q=search.value.trim().toLowerCase();let n=0;for(const [g,text] of groups){const show=!q||text.includes(q);g.hidden=!show;if(show)n++;}found.textContent=q?n+' of '+groups.length+' customers match':groups.length+' customers';};
-    search.addEventListener('input',filter);
-    for(const c of catalog.entries.filter(e=>!e.parentId&&e.archivedBy!=='odoo').sort((a,b)=>label(a).localeCompare(label(b)))){const group=el('details','catalog-group');groups.push([group,[c.name,c.aiName||'',...catalog.entries.filter(e=>e.parentId===c.id).flatMap(e=>[e.name,e.aiName||''])].join(' ').toLowerCase()]);group.append(el('summary','',label(c)+(c.aiName?' · Odoo: '+c.name:'')+(c.archived?' (archived)':'')));
-      const card=el('div','client-card');group.append(card);group.addEventListener('toggle',()=>{if(group.open&&!card.dataset.loaded){card.dataset.loaded='1';clientCard(card,c,target);}});for(const e of [c,...catalog.entries.filter(e=>e.parentId===c.id)]){const row=el('div','catalog-entry'),nm=input('text',e.name);nm.setAttribute('aria-label','Name for '+e.name);row.append(nm,button('Rename',async()=>change(e,{name:nm.value})),button(e.archived?'Restore':'Archive',async()=>change(e,{archived:!e.archived})));group.append(row);}panel.append(group);}
-    filter();
-    async function change(e,patch){try{catalog=await api('/clients',{method:'PUT',body:{revision:catalog.revision,id:e.id,...patch}});await onChange();target.replaceChildren();renderCatalog(target);}catch(err){message(msg,err);}}
     if(epicMapping&&admin())renderEpicMap(target);
   }
   // Jira epics → Odoo projects (epic-map.js): tickets under a mapped epic take that project as their client.
@@ -224,42 +216,6 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
         catch(err){message(msg,err);select.value=data.map[ep.key]||'';}finally{select.disabled=false;}});
       row.append(label,select);list.append(row);
     }
-  }
-  // Details of one client: its Odoo contact, its projects, its tickets in the dashboard, and its AI name.
-  async function clientCard(box,c,page){
-    box.replaceChildren(el('p','msg','Loading the client from Odoo…'));
-    let d;try{d=await api('/clients/details?id='+encodeURIComponent(c.id));}catch(err){box.replaceChildren();message(box.appendChild(el('p','msg')),err);return;}
-    box.replaceChildren();
-    const section=title=>{const s=el('section','client-section');s.append(el('h4','',title));box.append(s);return s;};
-    const facts=(parent,rows)=>{const dl=el('dl','client-facts');for(const [k,v] of rows){if(v==null||v===''||(Array.isArray(v)&&!v.length))continue;dl.append(el('dt','',k));const dd=el('dd');if(v instanceof Node)dd.append(v);else dd.textContent=Array.isArray(v)?v.join(', '):String(v);dl.append(dd);}parent.append(dl);return dl;};
-    const link=(text,href)=>{const a=el('a','',text);a.href=href;if(/^https?:/.test(href)){a.target='_blank';a.rel='noopener';}return a;};
-    const date=v=>v?String(v).slice(0,10):'';
-    // Name: the Odoo name (a name chosen earlier in the dashboard can be undone).
-    const nameBox=section('Name');
-    facts(nameBox,[['Odoo name',d.client.name],...(d.client.aiName?[['Shown as',d.client.aiName]]:[])]);
-    if(d.client.aiName){const out=el('span','msg'),row=el('div','client-ai');
-      row.append(button('Show the Odoo name again',async()=>{try{catalog=await api('/clients',{method:'PUT',body:{revision:catalog.revision,id:c.id,aiName:''}});await onChange();page.replaceChildren();renderCatalog(page,'The Odoo name is shown again for '+c.name+'.');}catch(err){message(out,err);}}),out);nameBox.append(row);}
-    // Contact card from Odoo.
-    const contact=section('Contact in Odoo'),k=d.contact;
-    if(!k)contact.append(el('p','msg',c.name==='No contact'?'Projects without a contact in Odoo.':'This client is not linked to an Odoo contact.'));
-    else facts(contact,[['Email',k.email?link(k.email,'mailto:'+k.email):''],['Phone',k.phone],['Mobile',k.mobile],['Website',k.website?link(k.website,/^https?:/.test(k.website)?k.website:'https://'+k.website):''],['Address',k.address],['VAT / tax ID',k.vat],['Company registry',k.companyRegistry],['Reference',k.reference],['Industry',k.industry],['Tags',k.tags],['People in the company',k.people||''],['In Odoo since',date(k.created)],['Open in Odoo',link('Contact ↗',k.url)]]);
-    // In the dashboard: its tickets (the ones loaded: open, and closed recently).
-    const mine=(context().tickets?context().tickets():[]).filter(t=>t.clientId===c.id),open=mine.filter(t=>t.cat!=='done');
-    const sum=key=>mine.reduce((n,t)=>n+(typeof t[key]==='number'?t[key]:0),0),round=n=>Math.round(n*100)/100;
-    const last=mine.map(t=>t.updated).filter(Boolean).sort().at(-1);
-    const work=section('In the dashboard');
-    facts(work,[['Tickets',mine.length?mine.length+' ('+open.length+' open, '+(mine.length-open.length)+' closed)':'None loaded'],['Estimated hours',mine.length?round(sum('estimatedHours')):''],['Actual hours',mine.length?round(sum('actualHours')):''],
-      ...(admin()?[['Billing',mine.length?mine.filter(t=>t.billing==='billable').length+' billable, '+mine.filter(t=>t.billing==='not_billable').length+' not billable':'']]:[]),
-      ['Developers',[...new Set(mine.flatMap(t=>t.devs||[]))].sort()],['Last activity',date(last)]]);
-    if(open.length){const list=el('div','client-tickets');for(const t of open.slice(0,12)){const b=button(t.key+' · '+t.summary,()=>openIssue(t.key),'linkbtn');b.title=t.status;list.append(b);}if(open.length>12)list.append(el('span','msg','+'+(open.length-12)+' more open'));work.append(el('p','msg','Open tickets:'),list);}
-    work.append(el('p','msg','Counted from the tickets loaded in the dashboard: open ones, and those closed recently.'));
-    // Projects with their Odoo details and ticket counts.
-    const projects=section('Projects ('+d.projects.length+')');
-    if(!d.projects.length)projects.append(el('p','msg','No projects in Odoo for this contact yet.'));
-    for(const p of d.projects){const row=el('div','client-project'),pt=mine.filter(t=>t.subClientId===p.id),o=p.odoo||{};
-      row.append(el('b','',(p.aiName||p.name)+(p.archived?' (archived)':'')));
-      facts(row,[['Tickets',pt.length?pt.length+' ('+pt.filter(t=>t.cat!=='done').length+' open)':''],['Manager',o.manager],['Status',o.status],['Tasks',o.tasks??''],['Dates',[date(o.start),date(o.end)].filter(Boolean).join(' → ')],['Last update in Odoo',date(o.updated)],['Open in Odoo',o.url?link('Project ↗',o.url):'']]);
-      projects.append(row);}
   }
   return {configure:async cfg=>{reportBrowser.configure(cfg);odooOn=!!cfg.odoo;billingNeeded=cfg.billingRequired===true;enabled=cfg.capabilities?.includes('ticket-business-v1')===true;epicMapping=enabled&&cfg.capabilities?.includes('epic-map-v1')===true;if(enabled){await loadCatalog();if(cfg.odoo)api('/clients/odoo-sync',{method:'POST',body:{}}).then(r=>{if(r.changed)return loadCatalog();}).catch(()=>{});if(epicMapping)api('/epic-map/sync',{method:'POST',body:{}}).then(async r=>{if(r.changed&&Object.keys(records).length){await load(Object.keys(records));await onChange();}}).catch(()=>{});}},enabled:()=>enabled,load,decorate,canQuickEdit,quickEdit,quickLabel:name=>QUICK[name],createFields,renderEditor,dirty:key=>editor?.key===key&&editor.dirty(),reset:()=>{editor=null;},bulk,ensureBilling,overrideReason,filters,matches,renderReports,renderCatalog,loadCatalog};
 }
