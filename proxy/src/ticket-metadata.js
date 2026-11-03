@@ -166,11 +166,12 @@ function cleanName(n) {if(typeof n!=='string'||!n.trim()||n.trim().length>300)pr
 // inside one). Projects without a contact go under NO_CUSTOMER. Entries are only added (ids are stable by name), so tickets keep their client when Odoo changes.
 const odooSyncKey=env=>prefix(env)+'catalog:odoo-sync';
 export const NO_CUSTOMER='No contact';
-// The main company is the one the Odoo integration user works in. Clients and projects come only from it.
+// The main company is the second company the Odoo integration user is allowed in (its company_ids, in Odoo's order).
+// Clients and projects come only from it.
 async function mainCompanyId(env){
-  const [u]=await odoo(env,'res.users','search_read',[[['login','=',env.ODOO_LOGIN]]],{fields:['company_id'],limit:1});
-  if(!u||!Array.isArray(u.company_id))throw new Error("the Odoo user's main company is unknown");
-  return u.company_id[0];
+  const [u]=await odoo(env,'res.users','search_read',[[['login','=',env.ODOO_LOGIN]]],{fields:['company_ids'],limit:1});
+  if(!u||!Array.isArray(u.company_ids)||u.company_ids.length<2)throw new Error("the Odoo user has no second company to take clients and projects from");
+  return u.company_ids[1];
 }
 async function odooRows(env){
   const main=await mainCompanyId(env);
