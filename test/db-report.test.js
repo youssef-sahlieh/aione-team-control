@@ -388,3 +388,26 @@ test("Extend database sets database.expiration_date on a Tests or Dev copy (neve
     assert.equal(JSON.parse(await env.STORE.get("mlog:2")).result, "failure");
   } finally { globalThis.fetch = inner; }
 });
+
+test("a site whose address gives 404 counts as offline (no login attempts)", async () => {
+  const { env, call } = setup();
+  const admin = { email: "boss@aione.biz", name: "Boss", role: "admin", dev: "", v: 1 };
+  await saveUser(env.STORE, admin);
+  const token = (await makeToken(env, admin.email, Date.now(), 1)).token;
+  const inner = globalThis.fetch, hits = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url), p = (JSON.parse(init.body || "{}").params) || {};
+    if (u.includes("kadis.odoo.test") && p.args && p.args[3] === "monitor.data.snapshot" && p.args[4] === "get_instances") {
+      const r = await (await inner(url, init)).json(); r.result.payload.services.push({ instance_name: "odoo503test", domain: "503test.ai1.host", server_zone: "test" }); return Response.json({ result: r.result });
+    }
+    if (u.includes("503test.ai1.host")) { hits.push(p.method); return new Response("Not Found", { status: 404 }); }
+    return inner(url, init);
+  };
+  try {
+    let r; for (let i = 0; i < 5; i++) { r = await (await call("/db-report/refresh", { method: "POST", token })).json(); if (r.done) break; }
+    const row = r.report.rows.find((x) => x.instance === "odoo503test");
+    assert.equal(row.offline, true); assert.equal(row.loginOk, false);
+    assert.deepEqual(hits, ["version"]);
+    assert.equal(r.report.rows.find((x) => x.instance === "odoo100").offline, undefined, "online without a login: not offline");
+  } finally { globalThis.fetch = inner; }
+});

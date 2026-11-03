@@ -183,8 +183,8 @@ function openActions(r, opener) {
 }
 
 // Filters: [id, label, options [value, label, test(row)]]. The Odoo options are filled from the report.
-// (Every row shown has a working login: offline, 404 and no-access databases are left out, see showReport.)
 const FILTERS = [
+  ["access", "Access", [["", "All", null], ["ok", "With data", (r) => r.loginOk], ["none", "No access", (r) => !r.loginOk]]],
   ["version", "Odoo", [["", "All versions", null]]],
   ["expiry", "Expiry", [["", "Any", null], ["expired", "Expired", (r) => r.loginOk && r.expired === true], ["soon", "Expires in 30 days", (r) => r.loginOk && r.expired === false && time(r.expires) - Date.now() < 30 * 86400000], ["valid", "Valid", (r) => r.loginOk && r.expired === false], ["none", "No expiry", (r) => r.loginOk && r.expired === null]]],
   ["flutter", "Flutter POS", [["", "Any", null], ["yes", "Installed", (r) => r.flutter], ["no", "Not installed", (r) => !r.flutter]]],
@@ -198,7 +198,6 @@ try { Object.assign(view, JSON.parse(localStorage.getItem(PREFS_KEY) || "{}")); 
 // Main, Tests and Dev: the server's sections (Audit & Deploy's production, test and development zones).
 const SECTION_LIST = [["main", "Main"], ["tests", "Tests"], ["dev", "Dev"]];
 if (!SECTION_LIST.some(([id]) => id === view.section)) view.section = "main";
-delete view.filters.access; // the Access filter is gone: every row shown has access
 const rowSection = (r) => r.section || "main"; // reports saved before sections were added are all Main
 const saveView = () => { try { localStorage.setItem(PREFS_KEY, JSON.stringify(view)); } catch {} };
 const shownColumns = () => { const keys = view.columns || COLUMNS.map((c) => c.key); return COLUMNS.filter((c) => keys.includes(c.key)); };
@@ -283,8 +282,9 @@ function render() {
   }
   if (!rows.length) { const tr = el("tr"), td = el("td", "db-empty", "No databases match. Change the search or filters."); td.colSpan = cols.length; tr.append(td); body.append(tr); }
   const inSection = (REPORT.rows || []).filter((r) => rowSection(r) === view.section);
+  const working = inSection.filter((r) => r.loginOk).length;
   const left = (REPORT.left || []).filter((r) => rowSection(r) === view.section).length;
-  $("meta").textContent = rows.length + " of " + inSection.length + " databases" + (left ? " · " + left + " offline or without access not shown" : "") + " · built " + fmtDateTime(new Date(REPORT.builtAt).toISOString());
+  $("meta").textContent = rows.length + " of " + inSection.length + " databases · " + working + " with data" + (left ? " · " + left + " offline not shown" : "") + " · built " + fmtDateTime(new Date(REPORT.builtAt).toISOString());
 }
 
 // Main / Tests / Dev switch, with how many databases each holds.
@@ -322,9 +322,9 @@ function oneRowPerSite(rows) {
   return out;
 }
 
-// Only databases the report could sign in to are listed. Offline servers, sites that answer 404 and databases with
-// no working login are left out (counted in the line above the table) and come back once they answer a login.
-function showReport(report) { const all = oneRowPerSite(report.rows || []); REPORT = { ...report, rows: all.filter((r) => r.loginOk), left: all.filter((r) => !r.loginOk) }; $("toolbar").hidden = false; $("tablewrap").hidden = false; showState(""); renderSections(); renderFilters(); render(); explainCompanies(); }
+// Servers that don't answer (switched off, or the address gives 404) aren't listed; they're counted in the line
+// above the table and come back once they answer. Online databases are listed even without a login.
+function showReport(report) { const all = oneRowPerSite(report.rows || []); REPORT = { ...report, rows: all.filter((r) => !r.offline), left: all.filter((r) => r.offline) }; $("toolbar").hidden = false; $("tablewrap").hidden = false; showState(""); renderSections(); renderFilters(); render(); explainCompanies(); }
 
 // Says why company names are missing, instead of only showing empty cells.
 let serverHasCompanies = null, serverHasPosVersion = null;

@@ -7,8 +7,9 @@ const REPORT = {
   rows: [
     row({ company: "Ronit Yam Ltd", companySource: "database", database: "RonitYamProd", instance: "odoo503", url: "https://503.example.invalid", loginFound: true, loginOk: true, flutter: true, addons: ["flutter_pos_api", "sale"], posVersion: "19.0.3.97.2", posVersionDate: "" }),
     row({ instance: "odoo101", database: "db101", loginFound: true, loginOk: true }),
-    // No working login: not listed.
-    row({ instance: "odoo102", database: "db102", url: "https://102.example.invalid", loginFound: true })
+    // No working login: still listed. Offline: not listed.
+    row({ instance: "odoo102", database: "db102", url: "https://102.example.invalid", loginFound: true }),
+    row({ instance: "odoo103", database: "db103", url: "https://103.example.invalid", loginFound: true, offline: true })
   ]
 };
 
@@ -40,9 +41,10 @@ test("Databases: POS version column, Actions preview, restart needs a confirm", 
   // Without a company name from the database, the company is the id before the first underscore.
   await expect(page.locator("#rows tr", { hasText: "db101" }).locator("td.db-col-company")).toContainText("db101");
   await expect(page.locator("#notice")).toBeHidden();
-  // A database without access isn't listed; the line above the table says so.
-  await expect(page.locator("#rows")).not.toContainText("db102");
-  await expect(page.locator("#meta")).toContainText("2 of 2 databases · 1 offline or without access not shown");
+  // A database without access is listed; an offline one isn't, and the line above the table says so.
+  await expect(page.locator("#rows tr", { hasText: "db102" })).toContainText("no access");
+  await expect(page.locator("#rows")).not.toContainText("db103");
+  await expect(page.locator("#meta")).toContainText("3 of 3 databases · 2 with data · 1 offline not shown");
   // Open goes to the instance's page on AI1 Monitor, in a new tab.
   await expect(ronit.getByRole("link", { name: "Open" })).toHaveAttribute("href", "https://monitor.ai1.host/dashboard#instance/odoo503/info");
   await expect(ronit.getByRole("link", { name: "Open" })).toHaveAttribute("target", "_blank");
@@ -112,7 +114,7 @@ test("Databases: the saved report shows at once and updates in the background; o
   release();
   await page.getByRole("button", { name: "Tests" }).click().catch(() => {});
   await expect.poll(() => refreshes.length).toBe(2);
-  await expect(page.locator("#meta")).toContainText("0 of 0 databases · 1 offline or without access not shown");
+  await expect(page.locator("#meta")).toContainText("0 of 0 databases · 0 with data · 1 offline not shown");
   await expect(page.locator("#rows")).not.toContainText("600test");
   expect(errors).toEqual([]);
 });

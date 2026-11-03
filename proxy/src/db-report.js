@@ -204,7 +204,8 @@ async function readCredentialIndex(env) {
 }
 
 // --- Per-database read-only queries (standard Odoo models) ---------------------------------------
-// A server that doesn't answer (switched off, unreachable) throws an error marked offline.
+// A server that doesn't answer (switched off, unreachable, or the address gives 404: no Odoo there) throws an
+// error marked offline.
 const offline = (e) => Object.assign(new Error("offline"), { offline: true, cause: e });
 async function customerRpc(base, service, method, args, signal) {
   let r;
@@ -214,7 +215,7 @@ async function customerRpc(base, service, method, args, signal) {
       body: JSON.stringify({ jsonrpc: "2.0", method: "call", params: { service, method, args } }), signal
     });
   } catch (e) { throw offline(e); }
-  if ([502, 503, 504].includes(r.status)) throw offline(new Error("HTTP " + r.status));
+  if ([404, 502, 503, 504].includes(r.status)) throw offline(new Error("HTTP " + r.status));
   const d = await r.json();
   if (d.error) throw new Error(((d.error.data && d.error.data.message) || d.error.message || "rpc error").slice(0, 120));
   return d.result;
