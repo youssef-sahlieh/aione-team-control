@@ -351,19 +351,31 @@ async function reportInstances(env) {
     odoo(env, "monitor.data.snapshot", "get_instances", [false]).then(unwrap).catch(() => null),
     odoo(env, "file.hosting.service", "call_api", ["/api/docker/odoo/list"]).catch(() => null)
   ]);
-  const liveList = ((x) => (x && (x.services || x.data?.services || x.result?.services || x.payload?.services)) || [])(live);
+  const liveList = liveServices(live);
   if (!snap && !liveList.length) throw new Error("Audit & Deploy's instance list isn't available.");
   const byName = new Map();
   for (const s of (snap && snap.services) || []) byName.set(String(s.instance_name || ""), s);
-  for (const s of liveList) {
-    const name = String(s.instance_name || ""), saved = byName.get(name);
-    // A live entry without a zone this page knows keeps the saved one, or counts as production (test and dev names
-    // still go to their section).
-    const zone = SECTIONS[s.server_zone] ? s.server_zone : SECTIONS[saved?.server_zone] ? saved.server_zone : "prod";
-    byName.set(name, { ...saved, ...s, server_zone: zone, domain: String(s.domain || "").replace(/^\w+:\/\//, "").replace(/\/.*$/, "") || saved?.domain, custom_data: saved?.custom_data || s.custom_data });
-  }
+  for (const s of liveList) { const name = String(s.instance_name || ""); byName.set(name, liveEntry(s, byName.get(name))); }
   const skip = excludedNums(env);
   return [...byName.values()].filter((s) => s.instance_name && SECTIONS[s.server_zone] && !skip.has(numberOf(s)) && !skip.has(s.instance_name));
+}
+const liveServices = (x) => (x && (x.services || x.data?.services || x.result?.services || x.payload?.services)) || [];
+// A live entry without a zone this page knows keeps the saved one, or counts as production (test and dev names still
+// go to their section).
+function liveEntry(s, saved) {
+  const zone = SECTIONS[s.server_zone] ? s.server_zone : SECTIONS[saved?.server_zone] ? saved.server_zone : "prod";
+  return { ...saved, ...s, server_zone: zone, domain: String(s.domain || "").replace(/^\w+:\/\//, "").replace(/\/.*$/, "") || saved?.domain, custom_data: saved?.custom_data || s.custom_data };
+}
+// A site from Knowledge that no listed instance matched: asks AI1 Monitor for it by name, odoo507 first and then 507
+// (Monitor uses both), so its Open link goes to a page Monitor has (a wrong name lands on Monitor's home page).
+async function findInMonitor(env, site) {
+  const label = siteLabel(site.domain);
+  for (const name of /^\d{2,4}$/.test(label) ? ["odoo" + label, label] : [label]) {
+    const found = liveServices(await odoo(env, "file.hosting.service", "call_api", ["/api/docker/odoo/list?instance_name=" + encodeURIComponent(name)]).catch(() => null))
+      .find((s) => String(s.instance_name || "").replace(/^odoo-/, "") === name);
+    if (found) return liveEntry(found, { domain: site.domain });
+  }
+  return site;
 }
 
 async function instanceFacts(env, inst) {
@@ -462,7 +474,8 @@ export async function buildReport(env, { force = false } = {}) {
     const creds = await readCredentialIndex(env);
     if (force || !progress || Date.now() - (progress.startedAt || 0) > 10 * 60 * 1000) {
       const listed = await reportInstances(env);
-      const all = [...listed, ...knowledgeOnlySites(creds, listed, excludedNums(env))];
+      const unmatched = await Promise.all(knowledgeOnlySites(creds, listed, excludedNums(env)).map((s) => findInMonitor(env, s)));
+      const all = [...listed, ...unmatched];
       // Production instances first, so their database names are known when their test and dev copies are checked.
       const instances = all.sort((a, b) => (sectionOf(a.server_zone, a.instance_name, a.domain) === "main" ? 0 : 1) - (sectionOf(b.server_zone, b.instance_name, b.domain) === "main" ? 0 : 1));
       progress = { startedAt: Date.now(), rows: [], done: 0, total: instances.length, instances: instances.map((i) => ({ instance_name: i.instance_name, domain: i.domain, created: i.created, server_zone: i.server_zone, custom_data: i.custom_data, fromKnowledge: i.fromKnowledge })) };

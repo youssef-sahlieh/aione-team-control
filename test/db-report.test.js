@@ -488,3 +488,32 @@ test("a Knowledge site is in Monitor when a production instance has its address 
   ];
   assert.deepEqual(knowledgeOnlySites(creds, listed).map((s) => s.domain), ["530.ai1.host"], "only 530 (just a test copy is listed) is missing");
 });
+
+test("a site Monitor's full list doesn't match is looked up by name, odoo507 and then 507, so Open goes to a real page", async () => {
+  const { env, call, actions } = setup();
+  const admin = { email: "boss@aione.biz", name: "Boss", role: "admin", dev: "", v: 1 };
+  await saveUser(env.STORE, admin);
+  const token = (await makeToken(env, admin.email, Date.now(), 1)).token;
+  const inner = globalThis.fetch, asked = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url), p = (JSON.parse(init.body || "{}").params) || {};
+    if (u.includes("kadis.odoo.test") && p.args && p.args[3] === "file.hosting.service" && String(p.args[5][0]).startsWith("/api/docker/odoo/list?")) {
+      const name = new URL("http://x" + p.args[5][0]).searchParams.get("instance_name"); asked.push(name);
+      return Response.json({ result: { success: true, services: name === "507" ? [{ instance_name: "507", domain: "507.ai1.host" }] : [] } });
+    }
+    if (u.includes("kadis.odoo.test") && p.args && p.args[3] === "knowledge.article") {
+      return Response.json({ result: [{ name: "Synthetic Seven", body: "https://507.ai1.host<br>owner@example.invalid<br>Pass@2026" }, { name: "Synthetic Nine", body: "https://509.ai1.host<br>owner@example.invalid<br>Pass@2026" }] });
+    }
+    if (u.includes("507.ai1.host") || u.includes("509.ai1.host")) return Response.json({ result: p.service === "common" && p.method === "version" ? { server_serie: "18.0" } : false });
+    return inner(url, init);
+  };
+  try {
+    let r; for (let i = 0; i < 5; i++) { r = await (await call("/db-report/refresh", { method: "POST", token })).json(); if (r.done) break; }
+    const row = (n) => r.report.rows.find((x) => x.url === "https://" + n + ".ai1.host");
+    assert.deepEqual([row(507).instance, !!row(507).fromKnowledge], ["507", false], "Monitor knows it as 507");
+    assert.equal(row(509).fromKnowledge, true, "Monitor knows neither odoo509 nor 509: not listed, no Open link");
+    assert.deepEqual(asked.filter((n) => n.endsWith("507")), ["odoo507", "507"]);
+    assert.equal((await call("/db-report/action", { method: "POST", token, body: { instance: "507", action: "restart" } })).status, 200);
+    assert.deepEqual(actions.at(-1), { path: "/api/docker/odoo/restart", method: "POST", body: { instances: ["507"] } });
+  } finally { globalThis.fetch = inner; }
+});

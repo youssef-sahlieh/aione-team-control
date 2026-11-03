@@ -5,7 +5,7 @@
 // The table sorts by any column (click its header), filters by search and by access, Odoo version, expiry,
 // Flutter POS and order activity, and shows the columns you pick. Choices are kept in this browser.
 import { api, getSession, signOut } from "./session.js";
-import { monitorInstanceUrl, monitorOpenUrl } from "./models/monitor-links.js";
+import { monitorInstanceUrl, monitorOpenUrl, rememberMonitorPage } from "./models/monitor-links.js";
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -48,6 +48,8 @@ const COLUMNS = [
 function adLinkCell(r) {
   if (!r.instance || r.fromKnowledge) return el("span", "db-muted", r.fromKnowledge ? "not listed" : "—");
   const a = el("a", "db-link", "Open"); a.href = monitorOpenUrl(r.instance); a.target = "_blank"; a.rel = "noopener";
+  // The Monitor's sign-in passes through this dashboard (early.js), which then opens this instance's page.
+  a.addEventListener("click", () => rememberMonitorPage(r.instance));
   return a;
 }
 const WEIGHT = { company: 2.2, database: 1.6, url: 1.5, adlink: 1.1, version: 0.6, users: 0.75, pos: 0.6, branches: 0.85, created: 1, lastLogin: 1.3, lastOrder: 1.3, expired: 1.2, flutter: 0.95, posver: 1.1, addons: 2, control: 0.9 };

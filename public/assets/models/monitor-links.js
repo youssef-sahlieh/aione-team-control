@@ -6,4 +6,9 @@ export const monitorInstanceUrl = (instance) => MONITOR_ORIGIN + "/dashboard#ins
 
 // Opening that page from the dashboard: through AI1 Monitor's one-click sign-in (/auth/aione/start), the same as the
 // sidebar link, so there's no Monitor login screen. "next" is the instance page to land on afterwards.
-export const monitorOpenUrl = (instance) => MONITOR_ORIGIN + "/auth/aione/start?" + new URLSearchParams({ next: "/dashboard#instance/" + encodeURIComponent(instance) + "/info" });
+export const monitorPagePath = (instance) => "/dashboard#instance/" + encodeURIComponent(instance) + "/info";
+// Kept for the sign-in hand-off page (early.js), which opens it once signed in (within 2 minutes).
+export function rememberMonitorPage(instance) {
+  try { localStorage.setItem("aione-monitor-next", JSON.stringify({ page: monitorPagePath(instance), at: Date.now() })); } catch { /* no storage: Monitor's home page */ }
+}
+export const monitorOpenUrl =(instance) => MONITOR_ORIGIN + "/auth/aione/start?" + new URLSearchParams({ next: "/dashboard#instance/" + encodeURIComponent(instance) + "/info" });
