@@ -94,7 +94,7 @@ function devMaps(env, users) {
 let usersCache = { at: 0, users: [] };
 async function odooUsers(env) {
   if (Date.now() - usersCache.at < 10 * 60 * 1000 && usersCache.users.length) return usersCache.users;
-  const users = await odoo(env, "res.users", "search_read", [[["share", "=", false]]], { fields: ["name", "login", "email"], limit: 500 });
+  const users = await odoo(env, "res.users", "search_read", [[["share", "=", false]]], { fields: ["name", "login", "email", "partner_id"], limit: 500 });
   usersCache = { at: Date.now(), users };
   return users;
 }
@@ -169,6 +169,62 @@ const fileView = (x) => ({
   created: iso(x.create_date), author: { displayName: Array.isArray(x.create_uid) ? x.create_uid[1] : "" }
 });
 
+// New tickets start unassigned, so an administrator assigns them, even when Odoo assigned someone (e.g. the
+// project manager). Each ticket created after this started is unassigned once, the first time the dashboard
+// sees it; assigning it afterwards (here or in Odoo) sticks. Tickets that already existed keep their assignee.
+const odooNow = () => new Date().toISOString().slice(0, 19).replace("T", " ");
+export async function unassignNew(env, rows) {
+  const store = env.STORE;
+  if (!store?.setIfAbsent) return;
+  const since = await store.get("odoo:unassign-new-since");
+  if (!since) { await store.set("odoo:unassign-new-since", odooNow()); return; }
+  for (const t of rows) {
+    if (!Array.isArray(t.user_id) || String(t.create_date || "") < since) continue;
+    if (!await store.setIfAbsent("odoo:unassigned:" + t.id, "1", 400 * 86400)) continue;
+    try { await odoo(env, "helpdesk.ticket", "write", [[t.id], { user_id: false }]); t.user_id = false; }
+    catch (e) { await store.del("odoo:unassigned:" + t.id); console.log("odoo unassign failed:", e && e.message); }
+  }
+}
+
+// Who spoke last in each ticket's conversation (emails and replies; internal notes don't count):
+// - open ticket: shown until we reply; hidden while waiting for the customer; shown again when they answer.
+// - Solved or Cancelled: hidden, unless the customer wrote after it was closed: then it's moved back to
+//   In Progress in Odoo (so we close it again) and shown.
+const isNote = (x) => Array.isArray(x.subtype_id) && /note/i.test(String(x.subtype_id[1]));
+export async function conversation(env, rows, users, allStages) {
+  if (!rows.length) return [];
+  const ours = new Set(users.map((u) => (Array.isArray(u.partner_id) ? u.partner_id[0] : 0)).filter(Boolean));
+  const msgs = await odoo(env, "mail.message", "search_read", [[["model", "=", "helpdesk.ticket"], ["res_id", "in", rows.map((t) => t.id)], ["message_type", "in", ["email", "comment"]]]],
+    { fields: ["res_id", "date", "author_id", "subtype_id", "message_type"], order: "date desc", limit: 5000 });
+  const last = new Map(); // ticket id -> { customer, us }
+  for (const x of msgs) {
+    if (isNote(x)) continue;
+    const fromUs = Array.isArray(x.author_id) && ours.has(x.author_id[0]);
+    const s = last.get(x.res_id) || {}; const k = fromUs ? "us" : "customer";
+    if (!s[k] || String(x.date) > s[k]) s[k] = String(x.date);
+    last.set(x.res_id, s);
+  }
+  const shown = [];
+  for (const t of rows) {
+    const s = last.get(t.id) || {}, stage = allStages.find((x) => Array.isArray(t.stage_id) && x.id === t.stage_id[0]);
+    if (stage && stage.fold) {
+      const closedAt = String(t.close_date || t.write_date || "");
+      if (!s.customer || s.customer <= closedAt) continue;
+      // The customer answered after it was Solved or Cancelled: back to In Progress.
+      const team = Array.isArray(t.team_id) ? t.team_id[0] : 0, open = allStages.filter((x) => !x.fold && (!team || !x.team_ids.length || x.team_ids.includes(team)));
+      const target = open.find((x) => /in progress/i.test(x.name)) || open[1] || open[0];
+      if (!target) continue;
+      try { await odoo(env, "helpdesk.ticket", "write", [[t.id], { stage_id: target.id }]); t.stage_id = [target.id, target.name]; t.close_date = false; }
+      catch (e) { console.log("odoo reopen failed:", e && e.message); }
+      shown.push(t); continue;
+    }
+    // Open: hidden while our reply is the latest message.
+    if (s.us && (!s.customer || s.customer <= s.us)) continue;
+    shown.push(t);
+  }
+  return shown;
+}
+
 export async function odooRoutes(request, env, url, me) {
   const path = url.pathname, method = request.method;
   if (!odooConfigured(env)) return fail("odoo_off", "Odoo isn't connected. See SETUP.md.", 501);
@@ -180,18 +236,23 @@ export async function odooRoutes(request, env, url, me) {
     const maps = devMaps(env, users);
     const mine = (t) => isAdmin || (Array.isArray(t.user_id) && maps.toDev.get(t.user_id[0]) === me.dev);
 
-    // List: every open ticket, plus the ones closed in the last N days.
+    // List: the tickets where the customer is waiting for us (see conversation() below). Candidates are every
+    // open ticket and every ticket the customer wrote to in the last N days (it may be Solved or Cancelled).
     if (path === "/odoo/tickets" && method === "GET") {
       const days = Math.min(Math.max(Number(url.searchParams.get("closedDays")) || 30, 1), 365);
       const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 19).replace("T", " ");
-      let domain = ["|", ["stage_id.fold", "=", false], ["write_date", ">=", since]];
+      const wroteTo = [...new Set((await odoo(env, "mail.message", "search_read", [[["model", "=", "helpdesk.ticket"], ["message_type", "=", "email"], ["date", ">=", since]]], { fields: ["res_id"], limit: 3000 })).map((x) => x.res_id))];
+      let domain = wroteTo.length ? ["|", ["stage_id.fold", "=", false], ["id", "in", wroteTo]] : [["stage_id.fold", "=", false]];
       if (!isAdmin) {
         const uidFor = maps.toUser.get(me.dev);
         if (!uidFor) return json({ tickets: [] });
         domain = ["&", ["user_id", "=", uidFor], ...domain];
       }
-      const rows = await odoo(env, "helpdesk.ticket", "search_read", [domain], { fields: FIELDS, order: "write_date desc", limit: 500 });
-      return json({ tickets: rows.filter(mine).map((t) => view(env, t, maps, allStages)) });
+      const found = await odoo(env, "helpdesk.ticket", "search_read", [domain], { fields: FIELDS, order: "write_date desc", limit: 500 });
+      await unassignNew(env, found);
+      const rows = found.filter(mine);
+      const shown = await conversation(env, rows, users, allStages);
+      return json({ tickets: shown.map((t) => view(env, t, maps, allStages)) });
     }
 
     const m = /^\/odoo\/tickets\/(HD-\d+)(\/note|\/attachments(?:\/\d{1,20})?)?$/.exec(path);
@@ -305,8 +366,18 @@ export async function odooRoutes(request, env, url, me) {
       if (fileIds.length && (await ticketFiles(env, id, [["id", "in", fileIds]])).length !== fileIds.length) return fail("bad_request", "A file isn't attached to this ticket. Add it again.", 400);
       if ((!text && !fileIds.length) || text.length > 20000) return fail("bad_request", "Write a note first.", 400);
       const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+      const toCustomer = b.toCustomer === true;
+      if (toCustomer && !text) return fail("bad_request", "Write the reply first.", 400);
+      const files = fileIds.length ? { attachment_ids: fileIds } : {};
+      if (toCustomer) {
+        // Sent to the customer by Odoo (and kept in the chatter), signed with the person's name.
+        const body = "<p>" + esc(text).replace(/\n/g, "<br>") + "</p><p>— " + esc(me.name || me.email) + "</p>";
+        const customer = Array.isArray(t.partner_id) ? { partner_ids: [t.partner_id[0]] } : {};
+        await odoo(env, "helpdesk.ticket", "message_post", [[id]], { body, message_type: "comment", subtype_xmlid: "mail.mt_comment", ...customer, ...files });
+        return json({ ok: true, replied: true }, 201);
+      }
       const body = "<p>" + esc(text).replace(/\n/g, "<br>") + "</p><p><i>— " + esc(me.name || me.email) + ", via AION Team Control</i></p>";
-      await odoo(env, "helpdesk.ticket", "message_post", [[id]], { body, message_type: "comment", subtype_xmlid: "mail.mt_note", ...(fileIds.length ? { attachment_ids: fileIds } : {}) });
+      await odoo(env, "helpdesk.ticket", "message_post", [[id]], { body, message_type: "comment", subtype_xmlid: "mail.mt_note", ...files });
       return json({ ok: true }, 201);
     }
   } catch (err) {

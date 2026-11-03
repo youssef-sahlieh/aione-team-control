@@ -122,7 +122,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const move=reason=>isInt(key)?internalApi.update(key,{status:id,...(reason?{overrideReason:reason}:{})}):api("/jira/issue/"+key+"/transitions",{method:"POST",body:{id,...(reason?{overrideReason:reason}:{})}});
     try{return await move();}catch(err){const reason=await business.overrideReason(err,key);if(reason)return move(reason);throw err;}
   };
-  const doComment=(key,text,mentions)=>isOdoo(key)?odooApi.note(key,text,(NOTE_FILES[key]||[]).map(f=>f.id)).then(r=>{delete ODOO_DETAIL[key];delete NOTE_FILES[key];renderNoteFiles(key);return r;}):isInt(key)?internalApi.comment(key,text,mentions):jira.comment(key,text,mentions);
+  const doComment=(key,text,mentions,toCustomer=false)=>isOdoo(key)?odooApi.note(key,text,(NOTE_FILES[key]||[]).map(f=>f.id),toCustomer).then(r=>{delete ODOO_DETAIL[key];delete NOTE_FILES[key];renderNoteFiles(key);return r;}):isInt(key)?internalApi.comment(key,text,mentions):jira.comment(key,text,mentions);
   // Everyone in the dashboard you can @mention or send a note to on a ticket (not you), kept per ticket.
   const MENTION_PEOPLE={};
   const mentionPeople=key=>(MENTION_PEOPLE[key]=MENTION_PEOPLE[key]||api("/ticket-notes?key="+encodeURIComponent(key)).then(r=>(r.people||[]).map(p=>({name:p.name,email:String(p.email).toLowerCase(),role:p.role}))).catch(err=>{delete MENTION_PEOPLE[key];throw err;}));
@@ -189,7 +189,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     list:days=>api("/odoo/tickets?closedDays="+days),
     detail:key=>api("/odoo/tickets/"+key),
     update:(key,b)=>api("/odoo/tickets/"+key,{method:"PUT",body:b}),
-    note:(key,text,attachmentIds=[])=>api("/odoo/tickets/"+key+"/note",{method:"POST",body:{text,...(attachmentIds.length?{attachmentIds}:{})}})
+    note:(key,text,attachmentIds=[],toCustomer=false)=>api("/odoo/tickets/"+key+"/note",{method:"POST",body:{text,...(attachmentIds.length?{attachmentIds}:{}),...(toCustomer?{toCustomer:true}:{})}})
   };
   async function loadOdoo(){
     if(!ODOO) return;
@@ -1062,7 +1062,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(location.hash!=="#"+key){ const url=location.pathname+location.search+"#"+key; if(drawerPushed) history.replaceState(history.state,"",url); else { history.pushState(history.state,"",url); drawerPushed=true; } }
     const opening=!dz.key;dz.key=key;
     if(opening){drawerUI.open();$("d-reply").value="";commentMentions.reset();$("d-newdev").value="";}
-    ticketHistory.reset();drawerUI.select("overview");renderNoteFiles(key);$("d-aidesc-out").hidden=true;$("d-aidesc-out").replaceChildren();dateRequests.renderDrawer(key);
+    ticketHistory.reset();drawerUI.select("overview");renderNoteFiles(key);$("d-send").textContent=sendLabel(key);$("d-aidesc-out").hidden=true;$("d-aidesc-out").replaceChildren();dateRequests.renderDrawer(key);
     closePop(); dz.key=key; const i=issueByKey(key);
     $("drawer").hidden=false; $("scrim").hidden=false; $("drawer").classList.toggle("is-int",isInt(key)); $("drawer").classList.toggle("is-odoo",isOdoo(key));
     $("d-key").textContent=key+(isInt(key)?"":" ↗"); $("d-key").href=$("d-open").href=ticketUrl(key); if(isInt(key)) $("d-key").removeAttribute("href");
@@ -1397,11 +1397,19 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   }
   // One comment per click: the button stays off until the comment is sent (a second click sent it twice).
   let sendingComment=false;
-  $("d-send").addEventListener("click",async()=>{ if(sendingComment) return; const key=dz.key, text=isOdoo(key)?$("d-reply").value.trim():commentMentions.text(), mentions=isOdoo(key)?[]:commentMentions.mentioned().filter(id=>id.includes("@")); if(!key) return; if(!text&&!(isOdoo(key)&&(NOTE_FILES[key]||[]).length)){ setMsg("d-cmsg","Write something first.",false); return; }
-    const btn=$("d-send"); sendingComment=true; btn.disabled=true; btn.textContent="Sending…";
-    try{ const after=$("d-after").value; let notified=[]; const r=await runBatch([{key,run:()=>doComment(key,text,mentions).then(res=>{notified=(res&&res.notified)||[];return res;})}],"Comment added"); if(!r.fail){$("d-reply").value="";commentMentions.reset();} setMsg("d-cmsg",r.fail?"Not sent.":notified.length?"Sent. Notified "+notified.join(", ")+".":"Sent.",!r.fail);
+  // Odoo tickets: the comment button writes an internal note; "Reply to customer" is emailed by Odoo.
+  function sendLabel(key){ return isOdoo(key)?"Add internal note":"Add comment"; }
+  async function sendComment(toCustomer){ if(sendingComment) return; const key=dz.key, text=isOdoo(key)?$("d-reply").value.trim():commentMentions.text(), mentions=isOdoo(key)?[]:commentMentions.mentioned().filter(id=>id.includes("@")); if(!key) return;
+    if(toCustomer&&!text){ setMsg("d-cmsg","Write the reply first.",false); return; }
+    if(!text&&!(isOdoo(key)&&(NOTE_FILES[key]||[]).length)){ setMsg("d-cmsg","Write something first.",false); return; }
+    if(toCustomer&&!confirm("Send this reply to the customer by email? It also goes in Odoo's chatter, and the ticket then waits for the customer (it leaves the dashboard until they answer).")) return;
+    const btn=$(toCustomer?"d-reply-customer":"d-send"), label=btn.textContent; sendingComment=true; btn.disabled=true; btn.textContent="Sending…";
+    try{ const after=$("d-after").value; let notified=[]; const r=await runBatch([{key,run:()=>doComment(key,text,mentions,toCustomer).then(res=>{notified=(res&&res.notified)||[];return res;})}],toCustomer?"Reply sent to the customer":"Comment added"); if(!r.fail){$("d-reply").value="";commentMentions.reset();} setMsg("d-cmsg",r.fail?"Not sent.":toCustomer?"Sent to the customer. The ticket now waits for their answer.":notified.length?"Sent. Notified "+notified.join(", ")+".":"Sent.",!r.fail);
+      if(!r.fail&&isOdoo(key)&&dz.key===key) renderOdoo(key);
       if(!r.fail&&after){ const ix=after.indexOf("|"); const aid=after.slice(0,ix), aname=after.slice(ix+1); const r2=await doAssign([key],aid,aname); setMsg("d-cmsg",r2.fail?"Comment sent, but the assignee didn't change.":"Sent and assigned to "+aname+".",!r2.fail); } }
-    finally{ sendingComment=false; btn.disabled=false; btn.textContent="Add comment"; } });
+    finally{ sendingComment=false; btn.disabled=false; btn.textContent=label; } }
+  $("d-send").addEventListener("click",()=>sendComment(false));
+  $("d-reply-customer").addEventListener("click",()=>sendComment(true));
 
   setInterval(()=>{ const a=$("auto"); if(!a||!lastLoad) return; const left=Math.max(0,120-Math.round((Date.now()-lastLoad)/1000)); a.textContent="next refresh in "+(left>=60?Math.floor(left/60)+"m "+(left%60)+"s":left+"s");
     if(Date.now()-lastLoad>120000&&document.visibilityState==="visible"&&!batchBusy&&!reloading&&$("pop").hidden&&!drag){ lastLoad=Date.now(); reload(); } },1000);

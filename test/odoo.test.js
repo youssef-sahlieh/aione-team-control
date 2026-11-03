@@ -7,6 +7,12 @@ import { customerOf } from "../proxy/src/odoo.js";
 const calls = [];
 const TICKETS = {
   300: { id: 300, name: "Ready development", stage_id: [2, "In Progress"], user_id: [12, "Shahd Ghayadah"], partner_email: '"Ariel Amiri" <ariel@kadouri.co.il>', partner_name: "", partner_id: [5, "ariel@kadouri.co.il"], priority: "1", team_id: [1, "ai1 | Support"], create_date: "2026-10-01 08:00:00", write_date: "2026-10-14 09:00:00", close_date: false, sla_deadline: "2026-10-20 10:00:00", ticket_ref: "302", description: "<p>Please deploy</p>" },
+  // Conversation cases: we replied last (waiting for the customer); Solved, then the customer wrote again;
+  // Solved with nothing after; we replied, then the customer answered; a note after the customer (still theirs).
+  310: { id: 310, name: "Waiting for customer", stage_id: [2, "In Progress"], user_id: [12, "Shahd Ghayadah"], partner_email: "w@example.invalid", partner_name: "", partner_id: [40, "W"], priority: "0", team_id: [1, "ai1 | Support"], create_date: "2026-10-01 08:00:00", write_date: "2026-10-05 09:00:00", close_date: false, sla_deadline: false, ticket_ref: "310", description: "" },
+  320: { id: 320, name: "Solved, customer wrote again", stage_id: [3, "Solved"], user_id: [12, "Shahd Ghayadah"], partner_email: "s@example.invalid", partner_name: "", partner_id: [41, "S"], priority: "0", team_id: [1, "ai1 | Support"], create_date: "2026-10-01 08:00:00", write_date: "2026-10-06 09:00:00", close_date: "2026-10-06 09:00:00", sla_deadline: false, ticket_ref: "320", description: "" },
+  330: { id: 330, name: "Solved and quiet", stage_id: [3, "Solved"], user_id: [12, "Shahd Ghayadah"], partner_email: "q@example.invalid", partner_name: "", partner_id: [42, "Q"], priority: "0", team_id: [1, "ai1 | Support"], create_date: "2026-10-01 08:00:00", write_date: "2026-10-06 09:00:00", close_date: "2026-10-06 09:00:00", sla_deadline: false, ticket_ref: "330", description: "" },
+  340: { id: 340, name: "Customer answered our reply", stage_id: [2, "In Progress"], user_id: [12, "Shahd Ghayadah"], partner_email: "a@example.invalid", partner_name: "", partner_id: [43, "A"], priority: "0", team_id: [1, "ai1 | Support"], create_date: "2026-10-01 08:00:00", write_date: "2026-10-07 09:00:00", close_date: false, sla_deadline: false, ticket_ref: "340", description: "" },
   293: { id: 293, name: "Cartons order", stage_id: [2, "In Progress"], user_id: [34, "Bashar Bannoura"], partner_email: "neor@suzume.co.il", partner_name: "Neor El Hai", partner_id: false, priority: "0", team_id: [1, "ai1 | Support"], create_date: "2026-10-02 08:00:00", write_date: "2026-10-13 09:00:00", close_date: false, sla_deadline: false, ticket_ref: "293", description: "" }
 };
 const ATTACHMENTS = [
@@ -20,7 +26,15 @@ const ATTACHMENTS = [
 const MESSAGES = [
   { id: 9000, res_id: 300, body: "<p>Hello</p>", author_id: [5, "Ariel Amiri"], date: "2026-10-03 10:00:00", subtype_id: [1, "Discussions"], message_type: "email", attachment_ids: [] },
   { id: 9001, res_id: 300, body: "", author_id: [5, "Ariel Amiri"], date: "2026-10-04 09:00:00", subtype_id: [1, "Discussions"], message_type: "email", attachment_ids: [503] },
-  { id: 9002, res_id: 293, body: "<p>Other</p>", author_id: false, date: "2026-10-04 09:00:00", subtype_id: [1, "Discussions"], message_type: "email", attachment_ids: [504] }
+  { id: 9002, res_id: 293, body: "<p>Other</p>", author_id: false, date: "2026-10-04 09:00:00", subtype_id: [1, "Discussions"], message_type: "email", attachment_ids: [504] },
+  // 112 is Shahd's Odoo contact: her messages are ours.
+  { id: 9100, res_id: 310, body: "<p>Help</p>", author_id: [40, "W"], date: "2026-10-04 09:00:00", subtype_id: [1, "Discussions"], message_type: "email", attachment_ids: [] },
+  { id: 9101, res_id: 310, body: "<p>Done, please check</p>", author_id: [112, "Shahd Ghayadah"], date: "2026-10-05 09:00:00", subtype_id: [1, "Discussions"], message_type: "comment", attachment_ids: [] },
+  { id: 9200, res_id: 320, body: "<p>It broke again</p>", author_id: [41, "S"], date: "2026-10-08 09:00:00", subtype_id: [1, "Discussions"], message_type: "email", attachment_ids: [] },
+  { id: 9300, res_id: 330, body: "<p>Thanks</p>", author_id: [42, "Q"], date: "2026-10-05 09:00:00", subtype_id: [1, "Discussions"], message_type: "email", attachment_ids: [] },
+  { id: 9400, res_id: 340, body: "<p>Done</p>", author_id: [112, "Shahd Ghayadah"], date: "2026-10-06 09:00:00", subtype_id: [1, "Discussions"], message_type: "comment", attachment_ids: [] },
+  { id: 9401, res_id: 340, body: "<p>Not fixed</p>", author_id: [43, "A"], date: "2026-10-07 09:00:00", subtype_id: [1, "Discussions"], message_type: "email", attachment_ids: [] },
+  { id: 9402, res_id: 340, body: "<p>Checking</p>", author_id: [112, "Shahd Ghayadah"], date: "2026-10-07 10:00:00", subtype_id: [2, "Note"], message_type: "comment", attachment_ids: [] }
 ];
 globalThis.fetch = async (url, init) => {
   const body = JSON.parse(init.body);
@@ -29,7 +43,7 @@ globalThis.fetch = async (url, init) => {
   const reply = (result) => Response.json({ jsonrpc: "2.0", id: body.id, result });
   if (service === "common" && method === "authenticate") return reply(args[2] === "good-key" ? 7 : false);
   const [, , , model, m, a, kw = {}] = args;
-  if (model === "res.users") return reply([{ id: 12, name: "Shahd Ghayadah", login: "shahd@aione.biz", email: "shahd@aione.biz" }, { id: 34, name: "Bashar Bannoura", login: "bashar.b@aione.biz", email: "bashar.b@aione.biz" }, { id: 6, name: "Ireen Khair", login: "ireen@aione.biz", email: "ireen@aione.biz" }]);
+  if (model === "res.users") return reply([{ id: 12, name: "Shahd Ghayadah", login: "shahd@aione.biz", email: "shahd@aione.biz", partner_id: [112, "Shahd Ghayadah"] }, { id: 34, name: "Bashar Bannoura", login: "bashar.b@aione.biz", email: "bashar.b@aione.biz", partner_id: [134, "Bashar Bannoura"] }, { id: 6, name: "Ireen Khair", login: "ireen@aione.biz", email: "ireen@aione.biz", partner_id: [106, "Ireen Khair"] }]);
   if (model === "ir.attachment" && m === "read") return reply(ATTACHMENTS.filter((x) => a[0].includes(x.id)).map(({ datas, res_model, res_id, ...rest }) => (a[1] || []).includes("datas") ? { id: rest.id, datas } : rest));
   if (model === "ir.attachment" && m === "create") { const id = 600 + ATTACHMENTS.length; ATTACHMENTS.push({ id, file_size: Buffer.from(a[0].datas, "base64").length, create_date: "2026-10-05 08:00:00", create_uid: [7, "API"], type: "binary", mimetype: "application/octet-stream", ...a[0] }); return reply(id); }
   if (model === "ir.attachment") {
@@ -40,9 +54,11 @@ globalThis.fetch = async (url, init) => {
   }
   if (model === "helpdesk.stage") return reply([{ id: 1, name: "New", fold: false, sequence: 1, team_ids: [1] }, { id: 2, name: "In Progress", fold: false, sequence: 2, team_ids: [1] }, { id: 3, name: "Solved", fold: true, sequence: 3, team_ids: [1] }, { id: 9, name: "Other team only", fold: false, sequence: 4, team_ids: [5] }]);
   if (model === "mail.message") {
-    const onTicket = MESSAGES.filter((x) => x.res_id === a[0].find((t) => t[0] === "res_id")[2]);
+    // Domain terms: res_id (= / in), message_type (= / in), date (>=), attachment_ids (in).
+    const match = (x, [f, op, v]) => f === "model" || f === "attachment_ids" || (op === "in" ? v.includes(x[f]) : op === ">=" ? String(x[f]) >= v : x[f] === v);
+    const onTicket = MESSAGES.filter((x) => a[0].every((t) => match(x, t)));
     if (m === "search_count") { const att = a[0].find((t) => t[0] === "attachment_ids"); return reply(onTicket.filter((x) => att[2].some((id) => x.attachment_ids.includes(id))).length); }
-    return reply(onTicket.map(({ res_id, ...x }) => x));
+    return reply(onTicket.map((x) => ({ ...x })));
   }
   if (model === "helpdesk.ticket" && m === "search_read") {
     const refTerm = a[0].find((t) => Array.isArray(t) && t[0] === "ticket_ref");
@@ -182,4 +198,57 @@ test("a picture added to an Odoo note is uploaded to that ticket and attached to
   assert.equal((await req("/odoo/tickets/HD-302/note", { method: "POST", token: t, body: { text: "" } })).status, 400);
   const empty = await worker.fetch(new Request("https://p/odoo/tickets/HD-302/attachments?name=x.png", { method: "POST", headers: { Authorization: "Bearer " + t }, body: new Uint8Array([]) }), env);
   assert.equal(empty.status, 400);
+});
+
+test("the list follows the conversation: hidden after our reply, shown when the customer answers; a Solved ticket the customer wrote to goes back to In Progress", async () => {
+  const t = await adminToken();
+  // Solved again (an earlier list in this file may already have reopened it).
+  Object.assign(TICKETS[320], { stage_id: [3, "Solved"], close_date: "2026-10-06 09:00:00" });
+  calls.length = 0;
+  const keys = (await req("/odoo/tickets", { token: t })).data.tickets.map((x) => x.key).sort();
+  assert.ok(keys.includes("HD-293"), "the customer wrote and we haven't replied");
+  assert.ok(!keys.includes("HD-310"), "we replied last: waiting for the customer, hidden");
+  assert.ok(keys.includes("HD-340"), "the customer answered our reply (a later internal note doesn't count as a reply)");
+  assert.ok(!keys.includes("HD-330"), "Solved with nothing after: hidden");
+  assert.ok(keys.includes("HD-320"), "Solved, then the customer wrote: shown again");
+  const reopened = calls.filter((c) => c.args[3] === "helpdesk.ticket" && c.args[4] === "write");
+  assert.deepEqual(reopened.map((c) => c.args[5]), [[[320], { stage_id: 2 }]], "moved to In Progress in Odoo");
+  assert.equal(TICKETS[320].stage_id[0], 2);
+});
+
+test("Reply to customer is emailed by Odoo to the ticket's customer; an internal note isn't", async () => {
+  const t = await adminToken();
+  calls.length = 0;
+  assert.equal((await req("/odoo/tickets/HD-302/note", { method: "POST", token: t, body: { text: "We fixed it", toCustomer: true } })).status, 201);
+  const reply = calls.find((c) => c.args[4] === "message_post").args[6];
+  assert.equal(reply.subtype_xmlid, "mail.mt_comment"); assert.deepEqual(reply.partner_ids, [5]);
+  assert.match(reply.body, /We fixed it/); assert.doesNotMatch(reply.body, /AION Team Control/);
+  calls.length = 0;
+  await req("/odoo/tickets/HD-302/note", { method: "POST", token: t, body: { text: "Internal only" } });
+  const note = calls.find((c) => c.args[4] === "message_post").args[6];
+  assert.equal(note.subtype_xmlid, "mail.mt_note"); assert.equal(note.partner_ids, undefined);
+  assert.equal((await req("/odoo/tickets/HD-302/note", { method: "POST", token: t, body: { text: "", toCustomer: true } })).status, 400);
+});
+
+test("new Odoo tickets start unassigned once, even when Odoo assigned someone; older tickets keep their assignee", async () => {
+  const { memoryStore } = await import("../proxy/src/users.js");
+  env.STORE = memoryStore();
+  try {
+    const t = await adminToken();
+    calls.length = 0;
+    await req("/odoo/tickets", { token: t }); // starts now: nothing existing is touched
+    assert.deepEqual(calls.filter((c) => c.args[4] === "write" && c.args[6] === undefined && "user_id" in (c.args[5][1] || {})), []);
+    const since = await env.STORE.get("odoo:unassign-new-since");
+    TICKETS[350] = { id: 350, name: "Brand new", stage_id: [1, "New"], user_id: [12, "Shahd Ghayadah"], partner_email: "n@example.invalid", partner_name: "", partner_id: [44, "N"], priority: "0", team_id: [1, "ai1 | Support"], create_date: since.slice(0, 10) + " 23:59:59", write_date: since, close_date: false, sla_deadline: false, ticket_ref: "350", description: "" };
+    calls.length = 0;
+    const list = (await req("/odoo/tickets", { token: t })).data.tickets;
+    const unassigned = calls.filter((c) => c.args[3] === "helpdesk.ticket" && c.args[4] === "write" && "user_id" in c.args[5][1]);
+    assert.deepEqual(unassigned.map((c) => c.args[5]), [[[350], { user_id: false }]]);
+    assert.deepEqual(list.find((x) => x.key === "HD-350").devs, [], "shown unassigned");
+    assert.equal(TICKETS[300].user_id[0], 12, "an older ticket keeps its assignee");
+    // Assigned afterwards: it stays assigned.
+    TICKETS[350].user_id = [34, "Bashar Bannoura"]; calls.length = 0;
+    await req("/odoo/tickets", { token: t });
+    assert.equal(calls.filter((c) => c.args[4] === "write" && "user_id" in (c.args[5][1] || {})).length, 0);
+  } finally { delete env.STORE; delete TICKETS[350]; }
 });

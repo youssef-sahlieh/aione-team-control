@@ -160,3 +160,35 @@ test("a picture pasted into an Odoo note is uploaded and attached to the note", 
   await expect(page.locator("#d-cfiles .cfile-chip")).toHaveCount(0);
   expect(mock.errors).toEqual([]);
 });
+
+// Odoo: "Add internal note" stays internal; "Reply to customer" asks first and is sent to the customer by Odoo.
+test("Odoo tickets have Add internal note and Reply to customer (which asks first)", async ({ page }) => {
+  const mock = await mockDashboard(page, { odoo: true });
+  const notes = [];
+  await page.route("**/odoo/tickets/HD-300/note", (r) => { notes.push(r.request().postDataJSON()); return r.fulfill({ status: 201, json: { ok: true } }); });
+  await page.goto("/dashboard.html#HD-300");
+  await expect(page.locator("#d-send")).toHaveText("Add internal note");
+  await expect(page.locator("#d-reply-customer")).toBeVisible();
+  await page.locator("#d-reply").fill("We fixed it, please check");
+  page.once("dialog", (d) => d.dismiss());
+  await page.locator("#d-reply-customer").click();
+  expect(notes).toEqual([]);
+  page.once("dialog", (d) => { expect(d.message()).toContain("Send this reply to the customer by email?"); d.accept(); });
+  await page.locator("#d-reply-customer").click();
+  await expect.poll(() => notes.length).toBe(1);
+  expect(notes[0]).toEqual({ text: "We fixed it, please check", toCustomer: true });
+  await expect(page.locator("#d-cmsg")).toContainText("Sent to the customer");
+  await page.locator("#d-reply").fill("Internal only");
+  await page.locator("#d-send").click();
+  await expect.poll(() => notes.length).toBe(2);
+  expect(notes[1]).toEqual({ text: "Internal only" });
+  expect(mock.errors).toEqual([]);
+});
+
+test("Jira tickets keep Add comment and have no Reply to customer", async ({ page }) => {
+  const mock = await mockDashboard(page);
+  await page.goto("/dashboard.html#AION-101");
+  await expect(page.locator("#d-send")).toHaveText("Add comment");
+  await expect(page.locator("#d-reply-customer")).toBeHidden();
+  expect(mock.errors).toEqual([]);
+});
