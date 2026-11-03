@@ -333,8 +333,13 @@ const excludedNums = (env) => new Set(String(env.DB_REPORT_EXCLUDE || "").split(
 // Every instance Audit & Deploy lists in a zone the Databases page shows (its section is set by sectionOf).
 // Sites with logins in Knowledge that Audit & Deploy doesn't list (e.g. a server set up outside it).
 const NOT_CUSTOMER = new Set(["www", "monitor", "dashboard", "api", "mail"]);
+const siteLabel = (domain) => String(domain || "").toLowerCase().replace(/^\w+:\/\//, "").replace(/^www\./, "").replace(/\.ai1\.host.*$/, "");
+const numberOf = (s) => (String(s.domain || "").match(/(\d{2,4})/) || String(s.instance_name || "").match(/(\d{2,4})/) || [])[1] || "";
 export function knowledgeOnlySites(creds, instances, skip = new Set()) {
-  const covered = new Set(instances.map((i) => String(i.domain || "").toLowerCase().replace(/\.ai1\.host.*$/, "")));
+  // Monitor names an instance odoo503 or just 503, and its web address may carry https:// or www.: a production
+  // instance with the site's address or number covers it.
+  const covered = new Set(instances.flatMap((i) => [siteLabel(i.domain),
+    sectionOf(i.server_zone, i.instance_name, i.domain) === "main" ? numberOf(i) : ""]).filter(Boolean));
   return Object.entries(creds).filter(([label, s]) => s.site && !covered.has(label) && !NOT_CUSTOMER.has(label) && !skip.has(label) && /^[a-z0-9][\w-]*$/.test(label))
     .map(([label]) => ({ instance_name: label + ".ai1.host", domain: label + ".ai1.host", server_zone: "prod", fromKnowledge: true }));
 }
@@ -352,11 +357,13 @@ async function reportInstances(env) {
   for (const s of (snap && snap.services) || []) byName.set(String(s.instance_name || ""), s);
   for (const s of liveList) {
     const name = String(s.instance_name || ""), saved = byName.get(name);
-    byName.set(name, { ...saved, ...s, domain: s.domain || saved?.domain, custom_data: saved?.custom_data || s.custom_data });
+    // A live entry without a zone this page knows keeps the saved one, or counts as production (test and dev names
+    // still go to their section).
+    const zone = SECTIONS[s.server_zone] ? s.server_zone : SECTIONS[saved?.server_zone] ? saved.server_zone : "prod";
+    byName.set(name, { ...saved, ...s, server_zone: zone, domain: String(s.domain || "").replace(/^\w+:\/\//, "").replace(/\/.*$/, "") || saved?.domain, custom_data: saved?.custom_data || s.custom_data });
   }
   const skip = excludedNums(env);
-  const numOf = (s) => (String(s.domain || s.instance_name).match(/(\d{2,4})/) || [])[1] || "";
-  return [...byName.values()].filter((s) => s.instance_name && SECTIONS[s.server_zone] && !skip.has(numOf(s)) && !skip.has(s.instance_name));
+  return [...byName.values()].filter((s) => s.instance_name && SECTIONS[s.server_zone] && !skip.has(numberOf(s)) && !skip.has(s.instance_name));
 }
 
 async function instanceFacts(env, inst) {
