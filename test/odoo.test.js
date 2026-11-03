@@ -200,15 +200,15 @@ test("a picture added to an Odoo note is uploaded to that ticket and attached to
   assert.equal(empty.status, 400);
 });
 
-test("the list follows the conversation: hidden after our reply, shown when the customer answers; a Solved ticket the customer wrote to goes back to In Progress", async () => {
+test("every open ticket is listed, even after our reply; a Solved ticket the customer wrote to goes back to In Progress", async () => {
   const t = await adminToken();
   // Solved again (an earlier list in this file may already have reopened it).
   Object.assign(TICKETS[320], { stage_id: [3, "Solved"], close_date: "2026-10-06 09:00:00" });
   calls.length = 0;
   const keys = (await req("/odoo/tickets", { token: t })).data.tickets.map((x) => x.key).sort();
   assert.ok(keys.includes("HD-293"), "the customer wrote and we haven't replied");
-  assert.ok(!keys.includes("HD-310"), "we replied last: waiting for the customer, hidden");
-  assert.ok(keys.includes("HD-340"), "the customer answered our reply (a later internal note doesn't count as a reply)");
+  assert.ok(keys.includes("HD-310"), "we replied last: still open, still shown");
+  assert.ok(keys.includes("HD-340"), "the customer answered our reply");
   assert.ok(!keys.includes("HD-330"), "Solved with nothing after: hidden");
   assert.ok(keys.includes("HD-320"), "Solved, then the customer wrote: shown again");
   const reopened = calls.filter((c) => c.args[3] === "helpdesk.ticket" && c.args[4] === "write");
@@ -253,13 +253,11 @@ test("new Odoo tickets start unassigned once, even when Odoo assigned someone; o
   } finally { delete env.STORE; delete TICKETS[350]; }
 });
 
-test("a ticket in In Development stays in the list even when our reply is the latest message", async () => {
+test("a ticket in In Development is listed", async () => {
   const t = await adminToken();
   const was = TICKETS[310].stage_id;
   try {
     TICKETS[310].stage_id = [4, "In Development"];
     assert.ok((await req("/odoo/tickets", { token: t })).data.tickets.some((x) => x.key === "HD-310"));
-    TICKETS[310].stage_id = [2, "In Progress"];
-    assert.ok(!(await req("/odoo/tickets", { token: t })).data.tickets.some((x) => x.key === "HD-310"), "In Progress and waiting: hidden");
   } finally { TICKETS[310].stage_id = was; }
 });

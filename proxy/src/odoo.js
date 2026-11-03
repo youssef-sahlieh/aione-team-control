@@ -196,16 +196,17 @@ export async function unassignNew(env, rows) {
   }
 }
 
-// Who spoke last in each ticket's conversation (emails and replies; internal notes don't count):
-// - open ticket: shown until we reply; hidden while waiting for the customer; shown again when they answer.
-// - Solved or Cancelled: hidden, unless the customer wrote after it was closed: then it's moved back to
-//   In Progress in Odoo (so we close it again) and shown.
-// - In Development: always shown (we're working on it, whoever wrote last).
+// Which tickets the dashboard lists:
+// - open ticket (any stage that isn't folded): always shown, like Odoo's kanban.
+// - Solved or Cancelled: hidden, unless the customer wrote after it was closed (emails and replies; internal
+//   notes don't count): then it's moved back to In Progress in Odoo (so we close it again) and shown.
 const isNote = (x) => Array.isArray(x.subtype_id) && /note/i.test(String(x.subtype_id[1]));
 export async function conversation(env, rows, users, allStages) {
-  if (!rows.length) return [];
+  const stageOf = (t) => allStages.find((x) => Array.isArray(t.stage_id) && x.id === t.stage_id[0]);
+  const closed = rows.filter((t) => stageOf(t)?.fold);
+  if (!closed.length) return rows;
   const ours = new Set(users.map((u) => (Array.isArray(u.partner_id) ? u.partner_id[0] : 0)).filter(Boolean));
-  const msgs = await odoo(env, "mail.message", "search_read", [[["model", "=", "helpdesk.ticket"], ["res_id", "in", rows.map((t) => t.id)], ["message_type", "in", ["email", "comment"]]]],
+  const msgs = await odoo(env, "mail.message", "search_read", [[["model", "=", "helpdesk.ticket"], ["res_id", "in", closed.map((t) => t.id)], ["message_type", "in", ["email", "comment"]]]],
     { fields: ["res_id", "date", "author_id", "subtype_id", "message_type"], order: "date desc", limit: 5000 });
   const last = new Map(); // ticket id -> { customer, us }
   for (const x of msgs) {
@@ -217,7 +218,7 @@ export async function conversation(env, rows, users, allStages) {
   }
   const shown = [];
   for (const t of rows) {
-    const s = last.get(t.id) || {}, stage = allStages.find((x) => Array.isArray(t.stage_id) && x.id === t.stage_id[0]);
+    const s = last.get(t.id) || {}, stage = stageOf(t);
     if (stage && stage.fold) {
       const closedAt = String(t.close_date || t.write_date || "");
       if (!s.customer || s.customer <= closedAt) continue;
@@ -229,9 +230,6 @@ export async function conversation(env, rows, users, allStages) {
       catch (e) { console.log("odoo reopen failed:", e && e.message); }
       shown.push(t); continue;
     }
-    if (stage && /in development/i.test(stage.name)) { shown.push(t); continue; }
-    // Open: hidden while our reply is the latest message.
-    if (s.us && (!s.customer || s.customer <= s.us)) continue;
     shown.push(t);
   }
   return shown;
@@ -248,7 +246,7 @@ export async function odooRoutes(request, env, url, me) {
     const maps = devMaps(env, users);
     const mine = (t) => isAdmin || (Array.isArray(t.user_id) && maps.toDev.get(t.user_id[0]) === me.dev);
 
-    // List: the tickets where the customer is waiting for us (see conversation() below). Candidates are every
+    // List: every open ticket, plus closed ones the customer wrote to again (see conversation()). Candidates are every
     // open ticket and every ticket the customer wrote to in the last N days (it may be Solved or Cancelled).
     if (path === "/odoo/tickets" && method === "GET") {
       const days = Math.min(Math.max(Number(url.searchParams.get("closedDays")) || 30, 1), 365);
