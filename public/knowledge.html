@@ -18,7 +18,7 @@
   <div class="top">
     <div class="brand">
       <h1>Odoo knowledge base</h1>
-      <div class="sub">Locked with a password that administrators set. Customer logins are kept inside Odoo.</div>
+      <div class="sub">Customer logins are kept as entries in Odoo. Opening and changing them needs the knowledge password.</div>
     </div>
     <span class="db-top-actions">
       <a class="btn" href="dashboard.html">← Dashboard</a>
@@ -30,24 +30,40 @@
 
   <section class="blk" id="unlock-block" hidden>
     <h2>Unlock</h2>
-    <p class="msg" id="unlock-help">Enter the password your administrator set. It is not saved in this browser.</p>
+    <p class="msg">Enter the knowledge password your administrator set. It is kept only while this page is open.</p>
     <form id="unlock-form" class="kb-form">
-      <label class="business-field"><span>Password</span><input class="inp" id="unlock-password" type="password" autocomplete="off" required></label>
+      <label class="business-field"><span>Knowledge password</span><input class="inp" id="unlock-password" type="password" autocomplete="off" required></label>
       <button class="btn primary" id="unlock-submit" type="submit">Unlock</button>
     </form>
     <p class="msg" id="unlock-msg" role="status"></p>
-    <p id="kb-open-wrap" hidden><a class="btn primary" id="kb-open" target="_blank" rel="noopener">Open the Odoo knowledge base ↗</a></p>
   </section>
 
-  <section class="blk" id="set-block" hidden>
-    <h2>Set the password</h2>
-    <p class="msg" id="set-help"></p>
-    <form id="set-form" class="kb-form">
-      <label class="business-field"><span>New password (8 to 200 characters)</span><input class="inp" id="set-password" type="password" autocomplete="new-password" minlength="8" maxlength="200" required></label>
-      <button class="btn primary" id="set-submit" type="submit">Save password</button>
-    </form>
-    <p class="msg" id="set-msg" role="status"></p>
+  <section class="blk" id="entries-block" hidden>
+    <div class="kb-head">
+      <h2>Entries</h2>
+      <span>
+        <a class="btn" id="kb-open" target="_blank" rel="noopener">Open in Odoo ↗</a>
+        <button class="btn primary" id="kb-new" type="button">Add entry</button>
+      </span>
+    </div>
+    <ul class="kb-list" id="entries"></ul>
+    <p class="msg" id="entries-empty" hidden>No entries yet.</p>
   </section>
+
+  <section class="blk" id="edit-block" hidden>
+    <h2 id="edit-title">Add entry</h2>
+    <form id="edit-form" class="kb-form kb-edit">
+      <input type="hidden" id="edit-id">
+      <label class="business-field"><span>Name</span><input class="inp" id="edit-name" type="text" maxlength="200" required></label>
+      <label class="business-field"><span>Details</span><textarea class="inp" id="edit-text" rows="8" maxlength="20000"></textarea></label>
+      <span>
+        <button class="btn primary" id="edit-submit" type="submit">Save</button>
+        <button class="btn" id="edit-cancel" type="button">Cancel</button>
+      </span>
+    </form>
+    <p class="msg" id="edit-msg" role="status"></p>
+  </section>
+
 </div>
 
 <script src="assets/config.js"></script>

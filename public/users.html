@@ -43,6 +43,16 @@
     <div class="ulist" id="rows"></div>
     <p class="msg" id="empty" hidden>No one matches your search.</p>
   </section>
+
+  <section class="upanel" id="kb-pass" hidden>
+    <h2>Knowledge base password</h2>
+    <p class="uhelp" id="kb-help"></p>
+    <form id="kb-form" class="utools">
+      <input class="inp" id="kb-password" type="password" minlength="8" maxlength="200" autocomplete="new-password" placeholder="New password (8 to 200 characters)" aria-label="New knowledge base password" required>
+      <button class="btn primary" id="kb-submit" type="submit">Set password</button>
+    </form>
+    <p class="msg" id="kb-msg" role="status"></p>
+  </section>
 </div>
 
 <dialog class="udialog" id="person" aria-labelledby="p-title">
