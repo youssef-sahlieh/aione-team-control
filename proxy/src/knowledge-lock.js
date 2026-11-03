@@ -1,8 +1,9 @@
-// Odoo knowledge base access, locked behind a password that administrators preset. The password is stored only as
-// a PBKDF2 hash. The Odoo link is returned only after the right password is sent, and failed attempts are counted
-// and paused for 15 minutes after five misses. The page keeps the unlock in memory only, never in browser storage.
+// Odoo knowledge base, behind an extra password that administrators preset. The password is stored only as
+// a PBKDF2 hash. Every list, add and edit needs the right password again, and failed attempts are counted
+// and paused for 15 minutes after five misses. The page keeps the password in memory only, never in browser storage.
 import { BusinessError, requireStore } from './ticket-metadata.js';
 import { odooConfigured } from './odoo.js';
+import { listArticles, saveArticle } from './knowledge-articles.js';
 
 const LOCK_KEY = 'knowledge:lock:v1';
 const FAILS_KEY = 'knowledge:failures:v1';
@@ -34,7 +35,8 @@ export async function setKnowledgePassword(env, me, password) {
   return { configured: true, updatedAt: record.updatedAt };
 }
 
-export async function unlockKnowledge(env, password) {
+// Checks the extra password. Every knowledge action goes through here, so a wrong guess is always counted.
+async function verifyKnowledgePassword(env, password) {
   if (!odooConfigured(env)) throw new BusinessError('Odoo is not connected.', 503, 'odoo_unavailable');
   const store = requireStore(env);
   const record = await readLock(env);
@@ -47,7 +49,17 @@ export async function unlockKnowledge(env, password) {
     throw new BusinessError('That password is not right.', 403, 'wrong_password');
   }
   await store.del(FAILS_KEY);
-  return { url: knowledgeLink(env) };
+}
+
+export async function unlockKnowledge(env, password) {
+  await verifyKnowledgePassword(env, password);
+  return { url: knowledgeLink(env), articles: await listArticles(env) };
+}
+
+export async function saveKnowledgeEntry(env, body) {
+  await verifyKnowledgePassword(env, body.password);
+  const saved = await saveArticle(env, { id: body.id ? Number(body.id) : null, name: body.name, text: body.text });
+  return { ...saved, articles: await listArticles(env) };
 }
 
 export async function knowledgeStatus(env, me) {
@@ -55,15 +67,20 @@ export async function knowledgeStatus(env, me) {
   return { configured: !!record, updatedAt: record?.updatedAt || null, canSetPassword: me.role === 'admin', odoo: odooConfigured(env) };
 }
 
+const noStore = { 'Cache-Control': 'no-store' };
 export async function knowledgeRoutes(request, env, me, path) {
-  if (path === '/knowledge/status' && request.method === 'GET') return Response.json(await knowledgeStatus(env, me), { headers: { 'Cache-Control': 'no-store' } });
+  if (path === '/knowledge/status' && request.method === 'GET') return Response.json(await knowledgeStatus(env, me), { headers: noStore });
   if (path === '/knowledge/password' && request.method === 'POST') {
     const body = await request.json().catch(() => ({}));
-    return Response.json(await setKnowledgePassword(env, me, body.password), { headers: { 'Cache-Control': 'no-store' } });
+    return Response.json(await setKnowledgePassword(env, me, body.password), { headers: noStore });
   }
   if (path === '/knowledge/unlock' && request.method === 'POST') {
     const body = await request.json().catch(() => ({}));
-    return Response.json(await unlockKnowledge(env, body.password), { headers: { 'Cache-Control': 'no-store' } });
+    return Response.json(await unlockKnowledge(env, body.password), { headers: noStore });
+  }
+  if (path === '/knowledge/save' && request.method === 'POST') {
+    const body = await request.json().catch(() => ({}));
+    return Response.json(await saveKnowledgeEntry(env, body), { headers: noStore });
   }
   throw new BusinessError('Not found.', 404, 'not_found');
 }
