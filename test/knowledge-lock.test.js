@@ -1,5 +1,5 @@
 // Odoo knowledge base: only admins set the extra password, it is stored hashed, wrong guesses are counted and paused,
-// and entries are read and written through Odoo's JSON-2 API only with the right password.
+// and entries are read and written through the shared Odoo API only with the right password.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { memoryStore } from '../proxy/src/users.js';
@@ -11,20 +11,24 @@ const user = { email: 'user@example.invalid', name: 'Developer', role: 'user' };
 const setup = () => ({ STORE: memoryStore(), ODOO_URL: 'https://odoo.example.invalid/', ODOO_DB: 'db', ODOO_LOGIN: 'bot', ODOO_API_KEY: 'key' });
 const code = (status, errorCode) => e => e.status === status && e.code === errorCode;
 
-// A fake Odoo JSON-2 endpoint that keeps knowledge articles in memory.
+// A fake Odoo JSON-RPC server (the same endpoint the rest of the app uses) that keeps knowledge articles in memory.
 function fakeOdoo() {
   const calls = [];
   const articles = [{ id: 7, name: 'Customer 554', body: '<p>login: shop<br>pass: a &amp; b</p>', write_date: '2026-11-01 10:00:00' }];
   const original = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
-    if (!String(url).startsWith('https://odoo.example.invalid/json/2/knowledge.article/')) return original(url, init);
-    const method = String(url).split('/').pop();
+    if (!String(url).startsWith('https://odoo.example.invalid/jsonrpc')) return original(url, init);
     const body = JSON.parse(init.body);
-    calls.push({ method, body, headers: init.headers });
-    if (method === 'search_read') return Response.json(articles);
-    if (method === 'create') { const id = 8; articles.push({ id, name: body.vals_list[0].name, body: body.vals_list[0].body, write_date: '2026-11-02 09:00:00' }); return Response.json([id]); }
-    if (method === 'write') { Object.assign(articles.find(a => a.id === body.ids[0]), body.vals); return Response.json(true); }
-    return Response.json({ message: 'unknown' }, { status: 404 });
+    const { service, method, args } = body.params;
+    const reply = (result) => Response.json({ jsonrpc: '2.0', id: body.id, result });
+    if (service === 'common' && method === 'authenticate') return reply(args[2] === 'key' ? 7 : false);
+    const [db, , key, model, m, a, kw = {}] = args;
+    if (model !== 'knowledge.article') return reply(false);
+    calls.push({ method: m, db, key, args: a, kwargs: kw });
+    if (m === 'search_read') return reply(articles);
+    if (m === 'create') { const id = 8; articles.push({ id, name: a[0][0].name, body: a[0][0].body, write_date: '2026-11-02 09:00:00' }); return reply([id]); }
+    if (m === 'write') { Object.assign(articles.find(x => x.id === a[0][0]), a[1]); return reply(true); }
+    return reply(false);
   };
   return { calls, articles, restore: () => { globalThis.fetch = original; } };
 }
@@ -46,7 +50,7 @@ test('the password is stored only as a hash', async () => {
   assert.ok(!raw.includes('long-enough-1'));
 });
 
-test('unlocking returns the Odoo link and the entries read through the JSON-2 API', async () => {
+test('unlocking returns the Odoo link and the entries read through the shared Odoo API', async () => {
   const env = setup(); const odoo = fakeOdoo();
   try {
     await setKnowledgePassword(env, admin, 'long-enough-1');
@@ -55,8 +59,8 @@ test('unlocking returns the Odoo link and the entries read through the JSON-2 AP
     assert.equal(result.url, 'https://odoo.example.invalid/odoo/knowledge');
     assert.deepEqual(result.articles, [{ id: 7, name: 'Customer 554', text: 'login: shop\npass: a & b', updatedAt: '2026-11-01 10:00:00' }]);
     assert.equal(odoo.calls[0].method, 'search_read');
-    assert.equal(odoo.calls[0].headers.Authorization, 'bearer key');
-    assert.equal(odoo.calls[0].headers['X-Odoo-Database'], 'db');
+    assert.equal(odoo.calls[0].db, 'db');
+    assert.equal(odoo.calls[0].key, 'key');
   } finally { odoo.restore(); }
 });
 
@@ -77,11 +81,11 @@ test('adding and editing entries needs the right password and never reaches Odoo
     const added = await saveKnowledgeEntry(env, { password: 'long-enough-1', name: ' New customer ', text: 'pass: <b>1</b>\nnext' });
     assert.equal(added.id, 8);
     const created = odoo.calls.find(c => c.method === 'create');
-    assert.equal(created.body.vals_list[0].name, 'New customer');
-    assert.equal(created.body.vals_list[0].body, '<p>pass: &lt;b&gt;1&lt;/b&gt;<br>next</p>');
+    assert.equal(created.args[0][0].name, 'New customer');
+    assert.equal(created.args[0][0].body, '<p>pass: &lt;b&gt;1&lt;/b&gt;<br>next</p>');
     const edited = await saveKnowledgeEntry(env, { password: 'long-enough-1', id: 7, name: 'Customer 554', text: 'login: changed' });
     assert.equal(edited.id, 7);
-    assert.deepEqual(odoo.calls.find(c => c.method === 'write').body.ids, [7]);
+    assert.deepEqual(odoo.calls.find(c => c.method === 'write').args[0], [7]);
     assert.equal(edited.articles.find(a => a.id === 7).text, 'login: changed');
     await assert.rejects(saveKnowledgeEntry(env, { password: 'long-enough-1', name: '  ', text: 'x' }), code(400, 'invalid_name'));
   } finally { odoo.restore(); }
@@ -103,31 +107,26 @@ test('HTML text round trips: tags are dropped and line breaks and special charac
   assert.equal(toText('<p>x<br>y &amp;amp; &lt;z&gt;</p><p>w</p>'), 'x\ny &amp; <z>\nw');
 });
 
-test('a correct password still unlocks when Odoo fails, and the reason says what went wrong', async () => {
+test('when Odoo cannot be reached, the right password still passes and the error says so', async () => {
   const env = setup();
   const original = globalThis.fetch;
-  const failWith = (error) => { globalThis.fetch = async () => { throw error; }; };
   try {
     await setKnowledgePassword(env, admin, 'long-enough-1');
-    failWith(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }));
-    await assert.rejects(unlockKnowledge(env, 'long-enough-1'), e => e.status === 502 && /took too long/.test(e.message));
-    failWith(new TypeError('fetch failed', { cause: { code: 'ENOTFOUND' } }));
-    await assert.rejects(unlockKnowledge(env, 'long-enough-1'), e => e.status === 502 && /Could not reach Odoo/.test(e.message));
-    failWith(new TypeError('redirect mode is set to error'));
-    await assert.rejects(unlockKnowledge(env, 'long-enough-1'), e => e.status === 502 && /redirected/.test(e.message));
+    globalThis.fetch = async () => { throw new TypeError('fetch failed', { cause: { code: 'ENOTFOUND' } }); };
+    await assert.rejects(unlockKnowledge(env, 'long-enough-1'), e => e.status === 502 && e.code === 'odoo_unavailable' && /didn't answer/.test(e.message));
   } finally { globalThis.fetch = original; }
 });
 
-test('a redirect from Odoo is not followed, and the error names the address to set in ODOO_URL', async () => {
+test('an error Odoo returns for the request is passed on as Odoo\'s own message', async () => {
   const env = setup();
   const original = globalThis.fetch;
   try {
     await setKnowledgePassword(env, admin, 'long-enough-1');
-    globalThis.fetch = async () => new Response(null, { status: 308, headers: { Location: 'https://odoo.example.invalid/json/2/knowledge.article/search_read' } });
-    await assert.rejects(unlockKnowledge(env, 'long-enough-1'), e => e.status === 502 && e.code === 'odoo_redirect' && /Set ODOO_URL to https:\/\/odoo\.example\.invalid\b/.test(e.message));
-    const seen = [];
-    globalThis.fetch = async (url, init) => { seen.push(init.redirect); throw new TypeError('fetch failed', { cause: new Error('unexpected redirect') }); };
-    await assert.rejects(unlockKnowledge(env, 'long-enough-1'), e => /redirected/.test(e.message));
-    assert.deepEqual(seen, ['manual']);
+    globalThis.fetch = async (url, init) => {
+      const body = JSON.parse(init.body);
+      if (body.params.service === 'common') return Response.json({ jsonrpc: '2.0', id: body.id, result: 7 });
+      return Response.json({ jsonrpc: '2.0', id: body.id, error: { message: 'Access Denied', data: { message: 'You are not allowed to read knowledge articles.', name: 'odoo.exceptions.AccessError' } } });
+    };
+    await assert.rejects(unlockKnowledge(env, 'long-enough-1'), e => e.status === 502 && e.code === 'odoo_error' && e.message === 'You are not allowed to read knowledge articles.');
   } finally { globalThis.fetch = original; }
 });
