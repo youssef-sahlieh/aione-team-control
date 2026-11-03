@@ -102,3 +102,18 @@ test('HTML text round trips: tags are dropped and line breaks and special charac
   assert.equal(toHtml('a <b> & "c"\nd'), '<p>a &lt;b&gt; &amp; &quot;c&quot;<br>d</p>');
   assert.equal(toText('<p>x<br>y &amp;amp; &lt;z&gt;</p><p>w</p>'), 'x\ny &amp; <z>\nw');
 });
+
+test('a correct password still unlocks when Odoo fails, and the reason says what went wrong', async () => {
+  const env = setup();
+  const original = globalThis.fetch;
+  const failWith = (error) => { globalThis.fetch = async () => { throw error; }; };
+  try {
+    await setKnowledgePassword(env, admin, 'long-enough-1');
+    failWith(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }));
+    await assert.rejects(unlockKnowledge(env, 'long-enough-1'), e => e.status === 502 && /took too long/.test(e.message));
+    failWith(new TypeError('fetch failed', { cause: { code: 'ENOTFOUND' } }));
+    await assert.rejects(unlockKnowledge(env, 'long-enough-1'), e => e.status === 502 && /Could not reach Odoo/.test(e.message));
+    failWith(new TypeError('redirect mode is set to error'));
+    await assert.rejects(unlockKnowledge(env, 'long-enough-1'), e => e.status === 502 && /redirected/.test(e.message));
+  } finally { globalThis.fetch = original; }
+});
