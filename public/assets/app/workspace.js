@@ -11,6 +11,7 @@ const icons = {
   workload: "M4 20V10 M10 20V4 M16 20v-7 M22 20H2",
   calendar: "M4 5h16v16H4z M8 2v6 M16 2v6 M4 10h16 M8 14h2 M14 14h2",
   reports: "M4 3h16v18H4z M8 8h8 M8 12h8 M8 16h5",
+  analytics: "M3 20h18 M6 16v-5 M11 16V6 M16 16v-8 M21 16v-3",
   clients: "M3 6h18v15H3z M7 6V3h10v3 M7 11h10",
   requests: "M3 5v6h6 M3 11a9 9 0 1 1 2 7 M12 7v5l3 2",
   audit: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z M9 12l2 2 4-4",
@@ -24,6 +25,7 @@ const pages = [
   ["calendar", "Calendar", "Make space for what's next. Plan around your ticket due dates."],
   ["requests", "Date requests", "Review and decide proposed date changes."],
   ["reports", "Checks & Reports", "Run ticket checks and review management reports."],
+  ["analytics", "Analytics", "How much work comes in, gets done and takes time, over the period you choose."],
   ["clients", "Clients", "Manage clients (Odoo contacts) and their projects."],
   ["worklog", "Work log", "Time logged on tickets and sent to Odoo timesheets."],
   ["errors", "Sync errors","Changes that didn't reach Jira, Odoo or the dashboard, ready to retry, and the state of the API keys."]
@@ -91,7 +93,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     $("page-heading").focus();
   }
   // Back/Forward between dashboard pages; a step that only opens or closes a ticket (#KEY) leaves the page as it is.
-  window.addEventListener("popstate", () => { const next = readRoute(new URL(location.href), context().admin); if (next.page === route.page && next.mode === route.mode) return; route = next; synchronize(); render(); });
+  window.addEventListener("popstate", () => { const next = readRoute(new URL(location.href), context().admin); if (next.page === route.page && next.mode === route.mode) { if (next.page === "analytics") context().syncAnalytics(); return; } route = next; synchronize(); render(); });
   const nav = $("main-nav");
   for (const [id, label] of pages) {
     const a = node("a", "nav-link"); a.href = `dashboard.html?page=${id}`; a.dataset.page = id; a.title = label;
@@ -114,14 +116,20 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
   const knowledge = node("a", "nav-link"); knowledge.id = "knowledge-link"; knowledge.href = "knowledge.html"; knowledge.dataset.link = "knowledge"; knowledge.title = "Odoo knowledge base"; knowledge.hidden = true;
   knowledge.append(icon("audit"), node("span", "", "Knowledge base"));
   nav.insertBefore(knowledge, monitor.nextSibling);
-  const navOrder = ["overview", "tickets", "databases", "monitor", "requests", "workload", "calendar", "reports", "clients", "worklog", "errors"];
-  const navItem = id => nav.querySelector(id === "databases" ? "#dbreport-link" : id === "monitor" ? "#ai1-monitor-link" : `[data-page="${id}"]`);
+  // Work pages first, then the administrator pages under their own label (hidden for users).
+  const navOrder = ["overview", "tickets", "requests", "calendar", "worklog", "errors", "monitor", "knowledge", "workload", "reports", "analytics", "clients", "databases"];
+  const navItem = id => nav.querySelector(id === "databases" ? "#dbreport-link" : id === "monitor" ? "#ai1-monitor-link" : id === "knowledge" ? "#knowledge-link" : `[data-page="${id}"]`);
+  const adminLabel = node("p", "nav-label nav-group", "ADMIN"); adminLabel.id = "nav-admin-label";
+  // Pages only administrators see; the breadcrumb names the section they belong to.
+  const adminPages = new Set(["workload", "reports", "analytics", "clients"]);
   function configure() {
     route = readRoute(new URL(location.href), context().admin);
     document.body.dataset.workspaceRole=context().admin?"manager":"user";
-    for (const id of navOrder) nav.appendChild(navItem(id));
+    adminLabel.hidden = !context().admin;
+    for (const id of navOrder) { if (id === "workload") nav.appendChild(adminLabel); nav.appendChild(navItem(id)); }
     nav.querySelector('[data-page="reports"]').hidden=!context().admin;
     nav.querySelector('[data-page="clients"]').hidden=!context().admin;
+    nav.querySelector('[data-page="analytics"]').hidden=!context().admin;
     nav.querySelector('[data-page="requests"]').hidden = false;
     nav.querySelector("#ai1-monitor-link").hidden = false;
     nav.querySelector('[data-page="workload"]').hidden = !context().admin;
@@ -245,20 +253,21 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     if (!ready) return false;
     const page = pages.find(p => p[0] === route.page);
     document.body.dataset.workspacePage = route.page;
-    $("page-heading").textContent = page[1]; $("page-description").textContent = route.page==="tickets"&&!context().admin?"The tickets you’re authorized to work on.":page[2]; $("breadcrumbs").textContent = page[1];
+    $("page-heading").textContent = page[1]; $("page-description").textContent = route.page==="tickets"&&!context().admin?"The tickets you’re authorized to work on.":page[2]; $("breadcrumbs").textContent = adminPages.has(route.page) ? "Admin" : "Workspace";
     for (const link of nav.querySelectorAll("a[data-page]")) { if (link.dataset.page === route.page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); }
     if(context().admin&&route.page==="history")moreNav.open=true;
     $("nav-date-count").textContent=String(context().pendingDates||0);
     $("nav-ticket-count").textContent = String(state.issues?.length || 0);
-    const custom = ["overview", "requests", "workload", "calendar", "reports", "clients", "worklog", "errors"].includes(route.page);
+    const custom = ["overview", "requests", "workload", "calendar", "reports", "analytics", "clients", "worklog", "errors"].includes(route.page);
     $("tickets-area").hidden = custom; $("workspace-content").hidden = !custom;
     if (!custom) return false;
     const target = $("workspace-content");
     target.replaceChildren();
-    if(context().filterCount&&!["requests","reports","clients","worklog","errors","calendar"].includes(route.page)){const info=node("div","summary-filter-info");info.append(node("span","","Using your current ticket filters"),button("Adjust filters →","linkbtn",()=>navigate("tickets")));target.appendChild(info);}
+    if(context().filterCount&&!["requests","reports","analytics","clients","worklog","errors","calendar"].includes(route.page)){const info=node("div","summary-filter-info");info.append(node("span","","Using your current ticket filters"),button("Adjust filters →","linkbtn",()=>navigate("tickets")));target.appendChild(info);}
     // Respect all active filters but include closed tickets for summary metrics.
     const data = allowedItems();
     if(route.page==="reports"&&context().admin)context().renderReports(target);
+    if(route.page==="analytics"&&context().admin)context().renderAnalytics(target);
     if(route.page==="clients"&&context().admin)context().renderCatalog(target);
     if(route.page==="errors")context().renderErrors(target);
     if(route.page==="worklog")context().renderWorkLog(target);

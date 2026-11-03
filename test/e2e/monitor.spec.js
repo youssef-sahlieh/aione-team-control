@@ -90,13 +90,13 @@ test("dashboard sidebar has no Audit & Deploy link when Odoo is connected", asyn
     return route.fulfill({ status: 403, json: { code: "forbidden", error: "x" } });
   });
   await page.goto("/dashboard.html");
-  // Audit & Deploy is no longer in the sidebar; Databases stays right after All tickets.
+  // Audit & Deploy is no longer in the sidebar; Databases stays right after the AI1 Monitor link.
   await expect(page.locator("#monitor-link")).toHaveCount(0);
   await expect(page.locator("#manager-more-nav")).toHaveCount(0);
   const order = await page.locator("#main-nav > a:visible").evaluateAll((links) => links.map((a) => a.textContent.replace(/[—\d]+$/, "").trim()));
   expect(order).not.toContain("Audit & Deploy");
   expect(order).not.toContain("Boards");
-  expect(order.indexOf("Databases")).toBe(order.indexOf("All tickets") + 1);
+  expect(order.indexOf("Databases")).toBe(order.findIndex((label) => label.startsWith("AI1 Monitor")) + 1);
 });
 
 test("a second visit shows the saved tickets at once, and signing out removes them", async ({ page }) => {

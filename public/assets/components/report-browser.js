@@ -1,6 +1,8 @@
 import {selectReport,unifiedCsv,groupByEmployee,parseAgreedCsv,flagLabel} from '../models/report-view.js';
 import {EMPTY_SELECTION,applySelection,jerusalemDay,knownSum,formatHours} from '../models/report-stats.js';
 import {dashboard} from './report-dashboard.js';
+import {importPanel as bulkImportPanel,download} from './report-import.js';
+import {buildReportWorkbook} from '../models/report-workbook.js';
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
 const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.addEventListener('click',fn);return b;};
 const field=(parent,label,node)=>{node.setAttribute('aria-label',label);const l=el('label','business-field');l.append(el('span','',label),node);parent.append(l);return node;};
@@ -12,7 +14,7 @@ const TABLE_HEADERS=['Ticket','Title','Status','Client','Project','Billing','Dev
 const PAGE=50;
 const sameSelection=(a,b)=>a===b||(!!a&&!!b&&typeof a==='object'&&a.employee===b.employee&&a.client===b.client);
 export function createReportBrowser({api,openIssue}){
- let supported=false,agreedSupported=false,snapshot=null,pending=false,page=0,generation=0,refreshCurrent=null,attempted=false,snapshotInfo={},view='employee';
+ let supported=false,agreedSupported=false,bulkSupported=false,isAdmin=false,snapshot=null,pending=false,page=0,generation=0,refreshCurrent=null,attempted=false,snapshotInfo={},view='employee';
  // Chart selection and dashboard state live here so they survive re-renders.
  const selection={...EMPTY_SELECTION};
  const dash={tab:'overview',effort:{state:'idle'},ui:{group:'client',sort:'excess',zoom:'all',people:10,clients:8,effortGroup:'employee'}};
@@ -20,11 +22,14 @@ export function createReportBrowser({api,openIssue}){
  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Jerusalem',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),startDate=new Date(today+'T12:00:00Z');startDate.setUTCDate(startDate.getUTCDate()-6);
  const filters={source:'all',start:startDate.toISOString().slice(0,10),end:today,period:'all',flag:'',employee:'',clientId:'',subClientId:'',status:'',text:''};
  const resetFilters=()=>Object.assign(filters,{source:'all',start:startDate.toISOString().slice(0,10),end:today,period:'all',flag:'',employee:'',clientId:'',subClientId:'',status:'',text:''});
- return {configure:cfg=>{const caps=cfg.capabilities||[];supported=caps.includes('reports-saved-v1')===true;agreedSupported=caps.includes('agreed-hours-v1')===true;},render(target){
+ return {configure:cfg=>{const caps=cfg.capabilities||[];supported=caps.includes('reports-saved-v1')===true;agreedSupported=caps.includes('agreed-hours-v1')===true;bulkSupported=caps.includes('ticket-bulk-import-v1')===true;isAdmin=cfg.role==='admin';},render(target){
  const turn=++generation,panel=el('section','panel business-panel');target.append(panel);
  panel.append(el('h2','','Checks & Reports'),el('p','msg','The business report: one row per ticket, with agreed hours, logged hours and whether the ticket needs a checkup. Your latest saved report opens automatically; use Refresh report for current source data.'));
  if(!supported){panel.append(el('p','msg err','Saved reports require the updated backend (reports-saved-v1). Deploy the compatible backend first.'));return;}
  const form=el('div','business-form report-filter-form'),msg=el('p','msg'),output=el('div','report-results');panel.append(form,msg,output);
+ // The import panel is built once per render, outside output, so filters, search, paging and tabs keep its file and preview.
+ const importNode=bulkSupported&&isAdmin?bulkImportPanel({api,onApplied:async text=>{await load(true);if(turn===generation)msg.textContent=text+' The report was refreshed.';}}):agreedSupported&&isAdmin?importPanel():null;
+ if(importNode)panel.append(importNode);
  const controls=[];
  function select(label,options,key){const n=field(form,label,el('select','fsel'));choices(n,options,filters[key]);controls.push([n,key]);n.addEventListener('change',()=>{filters[key]=n.value;if(key==='clientId'){filters.subClientId='';populateSub();}page=0;show();});return n;}
  const start=field(form,'From',dateInput(filters.start)),end=field(form,'Through',dateInput(filters.end));
@@ -35,7 +40,7 @@ export function createReportBrowser({api,openIssue}){
  select('Period',[['all','All tickets'],['period','Created or completed in period']],'period');
  const search=field(form,'Search report tickets',el('input','inp'));search.type='search';search.placeholder='Ticket, title, developer or employee';search.value=filters.text;let searchTimer;search.addEventListener('input',()=>{clearTimeout(searchTimer);filters.text=search.value;page=0;searchTimer=setTimeout(()=>{if(turn===generation&&target.isConnected)show();},150);});
  const run=button('Refresh report',()=>load(true));
- form.append(run,button('Export CSV',exportCsv),button('Clear report filters',()=>{resetFilters();Object.assign(selection,EMPTY_SELECTION);start.value=filters.start;end.value=filters.end;search.value='';for(const [node,key] of controls)node.value=filters[key]||'';page=0;populateSub();show();}));
+ form.append(run,button('Export Excel',exportExcel),button('Export CSV',exportCsv),button('Clear report filters',()=>{resetFilters();Object.assign(selection,EMPTY_SELECTION);start.value=filters.start;end.value=filters.end;search.value='';for(const [node,key] of controls)node.value=filters[key]||'';page=0;populateSub();show();}));
  async function load(refresh=false){if(pending)return;pending=true;attempted=true;run.disabled=true;msg.textContent=refresh?'Refreshing the saved report…':'Opening your saved report…';try{
  const result=await api(refresh?'/reports/refresh':'/reports/latest',refresh?{method:'POST',body:{}}:undefined);
  if(result.report?.workflow!=='all'||!Array.isArray(result.report.tickets))throw new Error('The backend did not return a valid saved report.');
@@ -70,6 +75,12 @@ export function createReportBrowser({api,openIssue}){
   for(const r of report.rows||[]){const tr=body.insertRow();tr.append(el('td','',r.date),el('td','',r.user),el('td','',r.ticket),el('td','',r.clientName||''),el('td','',r.subClientName||''),el('td','num',num(Math.round(r.minutes/60*100)/100)),el('td','',report.statuses?.[r.status]||r.status));}
   return table;}
  function exportCsv(){if(!snapshot||!validPeriod())return;const url=URL.createObjectURL(new Blob(['﻿'+unifiedCsv(shownRows())],{type:'text/csv;charset=utf-8'})),a=el('a');a.href=url;a.download='aion-business-report-'+filters.end+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+ async function exportExcel(){if(!snapshot||!validPeriod())return;msg.textContent='Preparing the Excel file…';try{
+  const rows=shownRows(),pick=(label,id,name)=>[label,id?name(id):''];
+  const bytes=await buildReportWorkbook(rows,{generatedAt:new Date(snapshot.generatedAt).toLocaleString('en-GB',{timeZone:'Asia/Jerusalem'})+' (Asia/Jerusalem)',period:{start:filters.start,end:filters.end},warnings:snapshot.warnings,
+   filters:[pick('Client',filters.clientId,clientName),pick('Project',filters.subClientId,projectName),['Employee',filters.employee],['Flag',FLAGS.find(([v])=>v===filters.flag)?.[1]&&filters.flag?FLAGS.find(([v])=>v===filters.flag)[1]:''],['Source',filters.source==='all'?'':filters.source],['Search',filters.text],['Created or completed in period only',filters.period==='period'?'Yes':'']]});
+  download('aion-business-report-'+filters.end+'.xlsx',[bytes],'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');msg.textContent=rows.length+' tickets exported.';
+ }catch(err){msg.textContent=err.message||'Could not build the Excel file.';}}
  function importPanel(){
   const box=el('details','report-import'),file=el('input'),previewOut=el('div'),preview=button('Preview',()=>runPreview()),apply=button('Apply agreed hours',()=>runApply(),'btn primary');
   let rowsIn=null;apply.disabled=true;file.type='file';file.accept='.csv,text/csv';file.setAttribute('aria-label','Agreed hours CSV file');
@@ -140,7 +151,6 @@ export function createReportBrowser({api,openIssue}){
   const entries=el('details','report-entries');entries.append(el('summary','','Work entries in this period'));let loaded=false;
   entries.addEventListener('toggle',async()=>{if(!entries.open||loaded)return;loaded=true;const wait=el('p','msg','Loading…');entries.append(wait);try{const r=await api('/time-entries/report?from='+filters.start+'&to='+filters.end);wait.replaceWith(entriesTable(r));}catch(err){wait.textContent=err.message||'Could not load the work entries.';}});
   output.append(entries);
-  if(agreedSupported)output.append(importPanel());
   if(restoreFocus){output.querySelector(restoreFocus)?.focus({preventScroll:true});restoreFocus=null;}
  }
  refreshCurrent=()=>{if(turn===generation&&target.isConnected){run.disabled=pending;populate();show();}};

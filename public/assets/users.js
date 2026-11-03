@@ -190,8 +190,19 @@ function visible() {
     return !q || (u.name + " " + u.email + " " + (u.dev || "")).toLowerCase().includes(q);
   });
 }
+// Totals for everyone, whatever the search or filter shows.
+function renderStats() {
+  const admins = users.filter((u) => u.role === "admin").length;
+  const stat = (value, label) => { const s = el("div", "ustat"); s.append(el("strong", null, String(value)), el("span", null, label)); return s; };
+  $("stats").replaceChildren(
+    stat(users.length - admins, "Users"),
+    stat(admins, "Administrators"),
+    stat(users.filter(isPending).length, "Invitations not used yet"),
+  );
+}
 function render() {
   const shown = visible();
+  renderStats();
   $("rows").replaceChildren(...shown.map(row));
   $("count").textContent = shown.length === users.length ? users.length + (users.length === 1 ? " person" : " people") : shown.length + " of " + users.length;
   $("empty").hidden = shown.length > 0;

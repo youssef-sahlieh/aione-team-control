@@ -543,19 +543,25 @@ async function syncAction(env,me,id,b,readTicket){
 }
 
 // Work entries in a date range, for the report (users: their own; administrators: everyone's).
+// Every work entry dated from..to (inclusive), read through the month index; the agreed-hours line is in no month.
+export async function entriesBetween(env,from,to){
+  const months=[];for(let d=new Date(from.slice(0,7)+'-01T00:00:00Z');d.toISOString().slice(0,7)<=to.slice(0,7);d.setUTCMonth(d.getUTCMonth()+1))months.push(d.toISOString().slice(0,7));
+  const store=requireStore(env),ids=[...new Set((await Promise.all(months.map(m=>store.smembers(K.month(env,m))))).flat())];
+  let entries=[];for(let i=0;i<ids.length;i+=200)entries.push(...(await mget(store,ids.slice(i,i+200).map(id=>K.entry(env,id)))).filter(Boolean).map(r=>JSON.parse(r)));
+  return entries.filter(e=>e.date>=from&&e.date<=to);
+}
 async function report(env,me,url){
   const today=todayIn(),from=url.searchParams.get('from')||today.slice(0,8)+'01',to=url.searchParams.get('to')||today;
   for(const d of [from,to])if(!/^\d{4}-\d{2}-\d{2}$/.test(d))problem('Choose valid dates.');
   if(from>to)problem('The start date is after the end date.');
   if(Date.parse(to)-Date.parse(from)>400*86400000)problem('Choose at most about a year.');
-  const months=[];for(let d=new Date(from.slice(0,7)+'-01T00:00:00Z');d.toISOString().slice(0,7)<=to.slice(0,7);d.setUTCMonth(d.getUTCMonth()+1))months.push(d.toISOString().slice(0,7));
-  const store=requireStore(env),ids=[...new Set((await Promise.all(months.map(m=>store.smembers(K.month(env,m))))).flat())];
-  let entries=[];for(let i=0;i<ids.length;i+=200)entries.push(...(await mget(store,ids.slice(i,i+200).map(id=>K.entry(env,id)))).filter(Boolean).map(r=>JSON.parse(r)));
-  entries=entries.filter(e=>e.date>=from&&e.date<=to&&(me.role==='admin'||e.author.email===normEmail(me.email))).sort((a,b)=>a.date.localeCompare(b.date)||a.createdAt.localeCompare(b.createdAt));
+  const store=requireStore(env);
+  let entries=(await entriesBetween(env,from,to)).filter(e=>me.role==='admin'||e.author.email===normEmail(me.email)).sort((a,b)=>a.date.localeCompare(b.date)||a.createdAt.localeCompare(b.createdAt));
   const tickets=[...new Set(entries.filter(e=>e.source!=='odoo').map(e=>e.ticket))],catalog=await readCatalog(env);
   const metas=await mget(store,tickets.map(k=>metadataKey(env,k))),meta={};tickets.forEach((k,n)=>{meta[k]=JSON.parse(metas[n]||'{}');});
   const name=id=>shownName(catalog.entries.find(e=>e.id===id));
-  return {from,to,timeZone:TIME_ZONE,statuses:STATUS,
+  // canLog: the Work log page offers "Log work" only to people who may log (the ticket itself is checked when saving).
+  return {from,to,timeZone:TIME_ZONE,statuses:STATUS,canLog:canLog(await readConfig(env),me),
     rows:entries.map(e=>{const m=meta[e.ticket]||{};return {...publicEntry(e,me),user:e.author.name,clientId:m.clientId||null,clientName:name(m.clientId),subClientId:m.subClientId||null,subClientName:name(m.subClientId)};}),
     // The hours entered before the work log (per ticket), kept apart from the logged entries.
     baselines:tickets.map(k=>({ticket:k,hours:meta[k].actualHours??null})).filter(b=>b.hours!=null)};

@@ -65,6 +65,13 @@
 .wl-map-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:10px;align-items:center;font-size:13px}
 .wl-map-row .inp{width:100%;box-sizing:border-box}
 .business-total{margin:4px 0 0}
+.wl-log-btn{margin-left:auto}
+.wl-ticket-list{display:flex;flex-direction:column;gap:4px;max-height:320px;overflow:auto}
+.wl-ticket-opt{display:flex;gap:10px;align-items:baseline;text-align:left;width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:inherit;font:inherit;font-size:13px;cursor:pointer}
+.wl-ticket-opt:hover:not(:disabled){background:var(--accent-soft)}
+.wl-ticket-opt:disabled{opacity:.6;cursor:default}
+.wl-ticket-key{font-family:var(--mono);font-weight:500;white-space:nowrap}
+.wl-ticket-title{min-width:0;overflow-wrap:anywhere}
 
 @media (max-width:640px){
   .wl-row,.wl-grid,.wl-map-row{grid-template-columns:1fr}
