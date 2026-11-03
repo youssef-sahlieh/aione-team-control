@@ -261,3 +261,35 @@ test("a picture pasted into an internal ticket comment shows as a preview and go
   await expect(page.locator("#d-cfiles .cfile-chip")).toHaveCount(0);
   expect(mock.errors).toEqual([]);
 });
+
+// ---- Before anything is drawn (assets/early.js) ----
+// Not signed in (a private window): straight to the sign-in page, keeping the ticket link; the dashboard never loads.
+test("not signed in, the dashboard goes straight to the sign-in page without showing itself", async ({ page }) => {
+  const mock = await mockDashboard(page, { expired: true });
+  await page.goto("/dashboard.html?page=tickets#AION-101");
+  await expect(page).toHaveURL(/\/index\.html\?page=tickets#AION-101$/);
+  expect(mock.calls.some((c) => c.path === "/config" || c.path === "/jira/search")).toBe(false);
+  expect(mock.errors).toEqual([]);
+});
+
+// AI1 Monitor's sign-in: nothing of the dashboard is drawn; the code is fetched once and the browser goes on.
+test("AI1 Monitor's sign-in goes straight on to the Monitor without drawing the dashboard", async ({ page }) => {
+  const mock = await mockDashboard(page);
+  const state = "synthetic-state-0000000009", seen = [];
+  await page.route("**/sso/monitor/code", (r) => { seen.push(r.request().postDataJSON()); return r.fulfill({ json: { code: "synthetic-code-000000000009", callback: "https://monitor.ai1.host/auth/aione/callback" } }); });
+  await page.route("https://monitor.ai1.host/**", (r) => r.fulfill({ contentType: "text/html", body: "<!doctype html><title>AI1 Monitor</title><p>Monitor</p>" }));
+  await page.goto("/dashboard.html?ai1-monitor=" + state);
+  await expect(page).toHaveURL("https://monitor.ai1.host/auth/aione/callback?code=synthetic-code-000000000009&state=" + state);
+  expect(seen).toEqual([{ state }]);
+  expect(mock.calls.some((c) => c.path === "/jira/search")).toBe(false);
+});
+
+test("a Monitor sign-in that Team Control refuses shows the dashboard and says why", async ({ page }) => {
+  const mock = await mockDashboard(page);
+  await page.route("**/sso/monitor/code", (r) => r.fulfill({ status: 403, json: { code: "forbidden", error: "This account can't use AI1 Monitor." } }));
+  await page.goto("/dashboard.html?ai1-monitor=synthetic-state-0000000010");
+  await expect(page.locator("#updated")).toHaveText("not connected");
+  await expect(page.locator("body")).toContainText("This account can't use AI1 Monitor.");
+  expect(await page.evaluate(() => document.documentElement.style.visibility)).toBe("");
+  expect(page.url()).toContain("/dashboard.html?ai1-monitor=");
+});

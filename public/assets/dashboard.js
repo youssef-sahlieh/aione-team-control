@@ -1452,6 +1452,9 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     // Reached again with Back or Forward: show the dashboard, never send the person on to the Monitor again.
     let monitorState=monitorStateFromUrl();
     if(monitorState&&reachedWithBackOrForward()){ history.replaceState(history.state,"",withoutMonitorState()); monitorState=null; }
+    // The page's first script (early.js) already started the hand-off before anything was drawn: only its
+    // failure comes back here, to be shown.
+    if(monitorState&&window.AION_MONITOR_HANDOFF){ const problem=await window.AION_MONITOR_HANDOFF; showState(problem,true); $("updated").textContent="not connected"; return; }
     if(monitorState){ try{ await completeMonitorSignIn(monitorState); }catch(err){ showState(errorText(err),true); $("updated").textContent="not connected"; } return; }
     $("me").textContent=s.email; ME=s.email.split("@")[0].replace(/^./,c=>c.toUpperCase());
     $("today").textContent=fmtDate(todayStr())+" "+todayStr().slice(0,4);
