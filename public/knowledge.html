@@ -11,6 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="assets/dashboard.css">
+<link rel="stylesheet" href="assets/knowledge.css">
 <link rel="stylesheet" href="assets/styles/mobile.css">
 </head>
 <body>
@@ -28,35 +29,45 @@
 
   <div id="state" class="state">Loading…</div>
 
-  <section class="blk" id="unlock-block" hidden>
+  <section class="kb-card kb-unlock" id="unlock-block" hidden>
     <h2>Unlock</h2>
-    <p class="msg">Enter the knowledge password your administrator set. It is kept only while this page is open.</p>
+    <p class="msg">Enter the knowledge password your administrator set. It stays only on this page and is cleared when you lock or leave.</p>
     <form id="unlock-form" class="kb-form">
-      <label class="business-field"><span>Knowledge password</span><input class="inp" id="unlock-password" type="password" autocomplete="off" required></label>
+      <label class="business-field kb-grow"><span>Knowledge password</span>
+        <span class="kb-pass">
+          <input class="inp" id="unlock-password" type="password" autocomplete="off" required>
+          <button class="btn" id="unlock-toggle" type="button" aria-pressed="false" aria-controls="unlock-password">Show</button>
+        </span>
+      </label>
       <button class="btn primary" id="unlock-submit" type="submit">Unlock</button>
     </form>
     <p class="msg" id="unlock-msg" role="status"></p>
   </section>
 
   <section class="blk" id="entries-block" hidden>
-    <div class="kb-head">
-      <h2>Entries</h2>
-      <span>
+    <div class="kb-toolbar">
+      <input class="inp kb-search" id="kb-search" type="search" placeholder="Search by name or text" aria-label="Search entries" autocomplete="off">
+      <span class="msg" id="kb-count" aria-live="polite"></span>
+      <span class="kb-actions">
         <a class="btn" id="kb-open" target="_blank" rel="noopener">Open in Odoo ↗</a>
         <button class="btn primary" id="kb-new" type="button">Add entry</button>
+        <button class="btn" id="kb-lock" type="button">Lock</button>
       </span>
     </div>
+    <p class="msg" id="kb-note" role="status"></p>
     <ul class="kb-list" id="entries"></ul>
-    <p class="msg" id="entries-empty" hidden>No entries yet.</p>
+    <p class="msg kb-empty" id="entries-empty" hidden></p>
   </section>
 
-  <section class="blk" id="edit-block" hidden>
+  <section class="kb-card kb-edit-card" id="edit-block" hidden>
     <h2 id="edit-title">Add entry</h2>
     <form id="edit-form" class="kb-form kb-edit">
       <input type="hidden" id="edit-id">
-      <label class="business-field"><span>Name</span><input class="inp" id="edit-name" type="text" maxlength="200" required></label>
-      <label class="business-field"><span>Details</span><textarea class="inp" id="edit-text" rows="8" maxlength="20000"></textarea></label>
-      <span>
+      <label class="business-field kb-grow"><span>Name</span><input class="inp" id="edit-name" type="text" maxlength="200" required></label>
+      <label class="business-field kb-full"><span>Details</span><textarea class="inp" id="edit-text" rows="10" maxlength="20000"></textarea>
+        <span class="msg kb-count" id="edit-count" aria-live="polite"></span>
+      </label>
+      <span class="kb-actions kb-full">
         <button class="btn primary" id="edit-submit" type="submit">Save</button>
         <button class="btn" id="edit-cancel" type="button">Cancel</button>
       </span>
