@@ -29,16 +29,23 @@ export function parseDuration(text){
 }
 function badge(e){const b=el('span','wl-status wl-'+(STATUS_CLASS[e.status]||'busy'),e.statusLabel);if(e.reason)b.title=e.reason;return b;}
 
-export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,onLogged=()=>{}}){
+// The tickets matching a search: every word must appear in the key or the title. At most 50 are shown.
+export function ticketMatches(tickets,query){
+  const words=String(query||'').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return tickets.filter(t=>{const text=(t.key+' '+(t.title||'')).toLowerCase();return words.every(w=>text.includes(w));}).slice(0,50);
+}
+
+export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTickets=()=>[],onLogged=()=>{}}){
   const views={};
   function dialog(title){
-    const d=el('dialog','business-dialog wl-dialog'),head=el('div','business-dialog-head'),body=el('div','wl-form'),msg=el('p','msg');msg.setAttribute('role','status');
+    const d=el('dialog','business-dialog wl-dialog'),head=el('div','business-dialog-head'),body=el('div','wl-form'),msg=el('p','msg');msg.setAttribute('role','status');d.setAttribute('aria-label',title);
     head.append(el('h2','',title),button('Close',()=>d.close()));d.append(head,body,msg);document.body.append(d);d.addEventListener('close',()=>d.remove());d.showModal();return {d,body,msg};
   }
   const fail=(msg,err)=>{msg.className='msg err';msg.textContent=errorText?errorText(err):err.message||String(err);};
 
   // ---- Log work ----
-  function openForm(key,title,view){
+  // afterSave (optional) runs after each saved entry; the Work log page uses it to reload its report.
+  function openForm(key,title,view,afterSave){
     const {d,body,msg}=dialog('Log work · '+key);
     const facts=el('dl','wl-facts');
     const fact=(k,v)=>{facts.append(el('dt','',k));const dd=el('dd');if(v instanceof Node)dd.append(v);else dd.textContent=v;facts.append(dd);};
@@ -77,7 +84,7 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,onLogged
         const r=await api('/time-entries',{method:'POST',body:{id,ticket:key,date:date.value,minutes,description}});
         id=crypto.randomUUID();
         const note=formatMinutes(minutes)+' logged on '+key+(r.entry.status==='synced'?' and saved in Odoo.':' · '+r.entry.statusLabel+(r.entry.reason?': '+r.entry.reason:''));
-        onLogged(key);render(key);
+        onLogged(key);render(key);if(afterSave)afterSave();
         if(again){hoursBox.value='';minutesBox.value='';desc.value='';update();msg.className='msg ok';msg.textContent=note+' Add the next one.';hoursBox.focus();}
         else{d.close();if(toast)toast(note);}
       }catch(err){fail(msg,err);}
@@ -86,6 +93,34 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,onLogged
     const actions=el('div','wl-actions');actions.append(button('Save',()=>save(false),'btn primary'),button('Save and add another',()=>save(true)),button('Cancel',()=>d.close()));body.append(actions);
     body.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();save(false);}});
     hoursBox.focus();
+  }
+
+  // ---- Log work from the Work log page: choose the ticket first, then the time ----
+  // Only open tickets the dashboard has loaded for this person. The server checks visibility and status again.
+  function openTicketPicker(afterSave){
+    const tickets=myTickets().filter(t=>!t.closed);
+    const {d,body,msg}=dialog('Log work');
+    body.append(el('p','msg','Choose one of your open tickets, then enter the time you spent on it.'));
+    const search=input('search','');search.placeholder='Search by key or title…';search.autocomplete='off';search.setAttribute('aria-label','Ticket');
+    field(body,'Ticket',search);
+    const list=el('div','wl-ticket-list');body.append(list);
+    const enable=on=>{for(const b of list.querySelectorAll('button'))b.disabled=!on;};
+    const choose=async t=>{
+      enable(false);msg.className='msg';msg.textContent='Opening '+t.key+'…';
+      let view;
+      try{view=await api('/time-entries?ticket='+encodeURIComponent(t.key));}
+      catch(err){fail(msg,err);enable(true);return;}
+      if(!view.canLog){fail(msg,new Error(view.closed?'This ticket is closed. Reopen it before logging work.':"Work logging isn't switched on for you yet."));enable(true);return;}
+      views[t.key]=view;d.close();openForm(t.key,t.title,view,afterSave);
+    };
+    const draw=()=>{
+      const shown=ticketMatches(tickets,search.value);
+      list.replaceChildren(...(shown.length?shown.map(t=>{const b=button('',()=>choose(t),'wl-ticket-opt');b.dir='auto';b.append(el('b','wl-ticket-key',t.key),el('span','wl-ticket-title',t.title||''));return b;})
+        :[el('p','msg',tickets.length?'No open ticket matches.':'No open tickets are loaded for you. Open the Tickets page, then try again.')]));
+    };
+    search.addEventListener('input',draw);
+    search.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();const [first]=ticketMatches(tickets,search.value);if(first)choose(first);}});
+    draw();search.focus();
   }
 
   // ---- Correction (administrators) ----
@@ -174,10 +209,10 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,onLogged
   const SOURCES={jira:'Jira',internal:'Internal',odoo:'Odoo Helpdesk'};
   // The dashboard redraws its pages whenever data refreshes: the page shown is kept as it is (no reload, no
   // flashing). It is rebuilt only for a tab change or after saving (fresh).
-  let pageNode=null;
+  let pageNode=null,pageTarget=null;
   function renderPage(target,fresh=false){
     if(pageNode&&!fresh){if(pageNode.parentNode!==target)target.replaceChildren(pageNode);return;}
-    const wrap=el('div','wl-page');pageNode=wrap;target.replaceChildren(wrap);
+    const wrap=el('div','wl-page');pageNode=wrap;pageTarget=target;target.replaceChildren(wrap);
     // Reports moved to Checks & Reports (the unified business report); administrators get setup only here.
     if(isAdmin())return renderSetup(wrap);
     renderReport(wrap);
@@ -187,10 +222,13 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,onLogged
     const bar=el('div','wl-report-bar'),from=input('date',report?.from||today.slice(0,8)+'01'),to=input('date',report?.to||today),msg=el('span','msg');
     from.setAttribute('aria-label','From');to.setAttribute('aria-label','To');
     const out=el('div','wl-report');
+    // Shown once the report says this person may log work. Saving reloads the report (the new entry is in it).
+    const logButton=button('+ Log work',()=>openTicketPicker(()=>{report=null;if(pageTarget)renderPage(pageTarget,true);}),'btn primary wl-log-btn');logButton.hidden=true;
     const load=async()=>{msg.className='msg';msg.textContent='Loading…';try{report=await api('/time-entries/report?from='+from.value+'&to='+to.value);msg.textContent='';draw();}catch(err){fail(msg,err);}};
-    bar.append(el('span','','From'),from,el('span','','to'),to,button('Show',load,'btn primary'),msg);
+    bar.append(el('span','','From'),from,el('span','','to'),to,button('Show',load,'btn primary'),msg,logButton);
     wrap.append(el('p','msg',isAdmin()?'Everyone\'s logged work by work date (Israel time). Filters apply on this page.':'Your logged work by work date (Israel time).'),bar,out);
     const draw=()=>{
+      logButton.hidden=!report?.canLog;
       out.replaceChildren();if(!report)return;
       const rows=report.rows;
       const options=(key,label,name=r=>r[key])=>{const s=el('select','fsel');s.setAttribute('aria-label',label);s.append(new Option('All '+label.toLowerCase(),''));for(const v of key==='status'?Object.keys(report.statuses):key==='source'?Object.keys(SOURCES):[...new Set(rows.map(name).filter(Boolean))].sort())s.append(new Option(key==='source'?SOURCES[v]||v:key==='status'?report.statuses[v]||v:v,v));s.value=filters[key]&&[...s.options].some(o=>o.value===filters[key])?filters[key]:'';s.addEventListener('change',()=>{filters[key]=s.value;draw();});return s;};

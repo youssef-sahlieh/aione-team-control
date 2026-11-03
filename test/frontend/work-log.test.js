@@ -1,6 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {parseDuration,formatMinutes,boxesMinutes} from '../../public/assets/components/work-log.js';
+import {parseDuration,formatMinutes,boxesMinutes,ticketMatches} from '../../public/assets/components/work-log.js';
+
+// The ticket picker on the Work log page: every word must match the key or the title.
+test('the ticket picker matches on key and title, every word must match',()=>{
+  const tickets=[{key:'AION-12',title:'Fix login redirect'},{key:'INT-3',title:'Office Wi-Fi'},{key:'HD-99',title:'Login help desk'}];
+  assert.deepEqual(ticketMatches(tickets,'').map(t=>t.key),['AION-12','INT-3','HD-99']);
+  assert.deepEqual(ticketMatches(tickets,'aion-12').map(t=>t.key),['AION-12']);
+  assert.deepEqual(ticketMatches(tickets,'  LOGIN  redirect ').map(t=>t.key),['AION-12']);
+  assert.deepEqual(ticketMatches(tickets,'login hd').map(t=>t.key),['HD-99']);
+  assert.deepEqual(ticketMatches(tickets,'nothing here'),[]);
+  const many=Array.from({length:80},(_,i)=>({key:'AION-'+i,title:'Same'}));
+  assert.equal(ticketMatches(many,'same').length,50,'at most 50 are shown');
+});
 
 test('durations are read as whole minutes',()=>{
   for(const [text,minutes] of [['90',90],['1:30',90],['1h 30m',90],['1h30m',90],['1.5h',90],['45m',45],['2h',120],['24h',1440],['15 min',15]])assert.equal(parseDuration(text),minutes,text);

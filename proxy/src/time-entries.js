@@ -560,7 +560,8 @@ async function report(env,me,url){
   const tickets=[...new Set(entries.filter(e=>e.source!=='odoo').map(e=>e.ticket))],catalog=await readCatalog(env);
   const metas=await mget(store,tickets.map(k=>metadataKey(env,k))),meta={};tickets.forEach((k,n)=>{meta[k]=JSON.parse(metas[n]||'{}');});
   const name=id=>shownName(catalog.entries.find(e=>e.id===id));
-  return {from,to,timeZone:TIME_ZONE,statuses:STATUS,
+  // canLog: the Work log page offers "Log work" only to people who may log (the ticket itself is checked when saving).
+  return {from,to,timeZone:TIME_ZONE,statuses:STATUS,canLog:canLog(await readConfig(env),me),
     rows:entries.map(e=>{const m=meta[e.ticket]||{};return {...publicEntry(e,me),user:e.author.name,clientId:m.clientId||null,clientName:name(m.clientId),subClientId:m.subClientId||null,subClientName:name(m.subClientId)};}),
     // The hours entered before the work log (per ticket), kept apart from the logged entries.
     baselines:tickets.map(k=>({ticket:k,hours:meta[k].actualHours??null})).filter(b=>b.hours!=null)};
