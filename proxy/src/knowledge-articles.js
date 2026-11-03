@@ -12,18 +12,19 @@ const base = env => String(env.ODOO_URL).replace(/\/+$/, '');
 // Why a call to Odoo failed before any answer came back. Logged for administrators (never the key or the data).
 function noAnswerReason(e) {
   if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) return 'timeout';
-  if (/redirect/i.test(String(e && e.message))) return 'redirect';
+  if (/redirect/i.test(`${e && e.message} ${e && e.cause && e.cause.message}`)) return 'redirect';
   return String((e && e.cause && e.cause.code) || (e && e.code) || (e && e.name) || 'network');
 }
 
 async function call(env, method, kwargs) {
   let res;
   try {
+    // Redirects are not followed: the API key must only go to the address set in ODOO_URL.
     res = await fetch(`${base(env)}/json/2/knowledge.article/${method}`, {
       method: 'POST',
       headers: { Authorization: 'bearer ' + env.ODOO_API_KEY, 'X-Odoo-Database': env.ODOO_DB, 'Content-Type': 'application/json' },
       body: JSON.stringify(kwargs),
-      redirect: 'error',
+      redirect: 'manual',
       signal: AbortSignal.timeout(25000),
     });
   } catch (e) {
@@ -32,6 +33,12 @@ async function call(env, method, kwargs) {
     if (reason === 'timeout') throw new BusinessError('Odoo took too long to answer. Try again.', 502, 'odoo_unavailable');
     if (reason === 'redirect') throw new BusinessError('Odoo redirected the request. ODOO_URL must be the exact https address of Odoo.', 502, 'odoo_unavailable');
     throw new BusinessError('Could not reach Odoo. Check ODOO_URL and that Odoo is online.', 502, 'odoo_unavailable');
+  }
+  if (res.status >= 300 && res.status < 400) {
+    let target = 'another address';
+    try { target = new URL(res.headers.get('location') || '', base(env)).origin; } catch {}
+    console.warn('knowledge_odoo_redirect', method, res.status, target);
+    throw new BusinessError(`Odoo redirects ODOO_URL to ${target}. Set ODOO_URL to ${target} and try again.`, 502, 'odoo_redirect');
   }
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new BusinessError(data?.message || data?.error?.message || `Odoo answered ${res.status}.`, 502, 'odoo_error');
