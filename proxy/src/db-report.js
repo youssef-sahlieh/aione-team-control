@@ -338,12 +338,25 @@ export function knowledgeOnlySites(creds, instances, skip = new Set()) {
   return Object.entries(creds).filter(([label, s]) => s.site && !covered.has(label) && !NOT_CUSTOMER.has(label) && !skip.has(label) && /^[a-z0-9][\w-]*$/.test(label))
     .map(([label]) => ({ instance_name: label + ".ai1.host", domain: label + ".ai1.host", server_zone: "prod", fromKnowledge: true }));
 }
+// Audit & Deploy's saved list, plus AI1 Monitor's live list (/api/docker/odoo/list, what its Instances page shows),
+// so an instance missing from the saved list still gets its Monitor link and Restart. The live entry wins; the
+// saved one keeps its Monitor name (custom_data). Either list may fail on its own.
 async function reportInstances(env) {
-  const snap = unwrap(await odoo(env, "monitor.data.snapshot", "get_instances", [false]));
-  const services = (snap && snap.services) || [];
+  const [snap, live] = await Promise.all([
+    odoo(env, "monitor.data.snapshot", "get_instances", [false]).then(unwrap).catch(() => null),
+    odoo(env, "file.hosting.service", "call_api", ["/api/docker/odoo/list"]).catch(() => null)
+  ]);
+  const liveList = ((x) => (x && (x.services || x.data?.services || x.result?.services || x.payload?.services)) || [])(live);
+  if (!snap && !liveList.length) throw new Error("Audit & Deploy's instance list isn't available.");
+  const byName = new Map();
+  for (const s of (snap && snap.services) || []) byName.set(String(s.instance_name || ""), s);
+  for (const s of liveList) {
+    const name = String(s.instance_name || ""), saved = byName.get(name);
+    byName.set(name, { ...saved, ...s, domain: s.domain || saved?.domain, custom_data: saved?.custom_data || s.custom_data });
+  }
   const skip = excludedNums(env);
   const numOf = (s) => (String(s.domain || s.instance_name).match(/(\d{2,4})/) || [])[1] || "";
-  return services.filter((s) => SECTIONS[s.server_zone] && !skip.has(numOf(s)) && !skip.has(s.instance_name));
+  return [...byName.values()].filter((s) => s.instance_name && SECTIONS[s.server_zone] && !skip.has(numOf(s)) && !skip.has(s.instance_name));
 }
 
 async function instanceFacts(env, inst) {

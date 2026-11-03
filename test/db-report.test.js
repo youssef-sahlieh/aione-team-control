@@ -80,6 +80,7 @@ function setup() {
       if (model === "monitor.data.snapshot" && method === "get_instances") return Response.json({ result: { payload: instances } });
       if (model === "monitor.data.snapshot" && method === "get_instance_config") return Response.json({ result: { payload: config[args[0]] || {} } });
       if (model === "monitor.data.snapshot" && method === "get_instance_addons") return Response.json({ result: { payload: addons[args[0]] || { addons: [] } } });
+      if (model === "file.hosting.service" && method === "call_api" && args.length === 1) return Response.json({ result: { success: true, services: [] } }); // the live instance list (a read)
       if (model === "file.hosting.service" && method === "call_api") { actions.push({ path: args[0], method: args[1], body: args[2] }); return Response.json({ result: { success: true } }); }
       if (model === "knowledge.article" && method === "search_read") {
         const dom = args[0];
@@ -447,5 +448,32 @@ test("a server with several databases gets a row for each (a test database goes 
     assert.equal(ok.status, 200);
     assert.deepEqual(params, { test2: d + " 00:00:00" });
     assert.equal((await call("/db-report/action", { method: "POST", token, body: { instance: "515.ai1.host", database: "test2", action: "restart" } })).status, 400);
+  } finally { globalThis.fetch = inner; }
+});
+
+test("instances in AI1 Monitor's live list but missing from Audit & Deploy's saved list get a normal row (Monitor link, restart)", async () => {
+  const { env, call, actions } = setup();
+  const admin = { email: "boss@aione.biz", name: "Boss", role: "admin", dev: "", v: 1 };
+  await saveUser(env.STORE, admin);
+  const token = (await makeToken(env, admin.email, Date.now(), 1)).token;
+  const inner = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url), p = (JSON.parse(init.body || "{}").params) || {};
+    if (u.includes("kadis.odoo.test") && p.args && p.args[3] === "file.hosting.service" && p.args[5][0] === "/api/docker/odoo/list") {
+      return Response.json({ result: { success: true, services: [{ instance_name: "odoo510", domain: "510.ai1.host", server_zone: "prod" }, { instance_name: "odoo503", domain: "503.ai1.host", server_zone: "prod" }] } });
+    }
+    if (u.includes("kadis.odoo.test") && p.args && p.args[3] === "knowledge.article") {
+      return Response.json({ result: [{ name: "Ronit Yam", body: "URL: https://503.ai1.host/web User: admin Password: pw123" }, { name: "Nayax", body: "https://510.ai1.host<br>owner@example.invalid<br>Pass@2026" }] });
+    }
+    if (u.includes("510.ai1.host")) return Response.json({ result: p.service === "common" && p.method === "version" ? { server_serie: "18.0" } : false });
+    return inner(url, init);
+  };
+  try {
+    let r; for (let i = 0; i < 5; i++) { r = await (await call("/db-report/refresh", { method: "POST", token })).json(); if (r.done) break; }
+    const rows = r.report.rows.filter((x) => x.url === "https://510.ai1.host");
+    assert.deepEqual(rows.map((x) => [x.instance, !!x.fromKnowledge]), [["odoo510", false]], "one row, from Monitor, not a Knowledge-only one");
+    assert.equal(r.report.rows.find((x) => x.instance === "odoo503").monitorName, "Ronit Yam", "the saved list's Monitor name is kept");
+    assert.equal((await call("/db-report/action", { method: "POST", token, body: { instance: "odoo510", action: "restart" } })).status, 200);
+    assert.deepEqual(actions.at(-1), { path: "/api/docker/odoo/restart", method: "POST", body: { instances: ["odoo510"] } });
   } finally { globalThis.fetch = inner; }
 });
