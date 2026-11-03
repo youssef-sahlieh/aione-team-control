@@ -110,3 +110,19 @@ test('authenticated handler checks Jira scope and never writes a Jira comment',a
   globalThis.fetch=async()=>Response.json({key:'AION-1',fields:{summary:'Task',project:{key:'AION'},labels:['ai1_other']}});
   assert.equal((await call('Bearer '+token)).status,404);
 });
+
+test('an internal note on an Odoo ticket is also posted to Odoo\'s chatter (once); Jira tickets are untouched',async()=>{
+  const f=await fixture(),posted=[];
+  const deps={sendMail:async()=>Response.json({ok:true}),readTicket:async key=>['AION-1','HD-302'].includes(key)?{title:'Ticket',devs:['builder']}:null,postToOdoo:async(key,text)=>{posted.push([key,text]);}};
+  const call=async(body,key)=>{const url=new URL('https://proxy.test/ticket-notes?key='+key);const res=await ticketNoteRoutes(new Request(url,{method:'POST',body:JSON.stringify(body)}),f.env,url,f.builder,deps);return {status:res.status,data:await res.json()};};
+  const n=f.note('Customer DB checked','HD-302');
+  const r=await call(n,'HD-302');assert.equal(r.status,201);assert.equal(r.data.odoo,true);
+  assert.deepEqual(posted,[['HD-302','Customer DB checked']]);
+  // A retried submission doesn't post it twice.
+  assert.equal((await call(n,'HD-302')).status,200);assert.equal(posted.length,1);
+  await call(f.note('Jira only','AION-1'),'AION-1');assert.equal(posted.length,1);
+  // Odoo down: the note is still saved in the dashboard, with a warning.
+  deps.postToOdoo=async()=>{throw new Error('down');};
+  const down=await call(f.note('Second','HD-302'),'HD-302');
+  assert.equal(down.status,201);assert.equal(down.data.odoo,false);assert.match(down.data.warning,/couldn't be added to Odoo/);
+});

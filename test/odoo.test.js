@@ -52,7 +52,7 @@ globalThis.fetch = async (url, init) => {
     const rows = ATTACHMENTS.filter((x) => x.res_model === byTerm("res_model")[2] && x.res_id === byTerm("res_id")[2] && x.type === "binary" && idOk(x));
     return reply(rows.map(({ datas, res_model, res_id, type, ...rest }) => ({ ...rest })));
   }
-  if (model === "helpdesk.stage") return reply([{ id: 1, name: "New", fold: false, sequence: 1, team_ids: [1] }, { id: 2, name: "In Progress", fold: false, sequence: 2, team_ids: [1] }, { id: 3, name: "Solved", fold: true, sequence: 3, team_ids: [1] }, { id: 9, name: "Other team only", fold: false, sequence: 4, team_ids: [5] }]);
+  if (model === "helpdesk.stage") return reply([{ id: 1, name: "New", fold: false, sequence: 1, team_ids: [1] }, { id: 2, name: "In Progress", fold: false, sequence: 2, team_ids: [1] }, { id: 3, name: "Solved", fold: true, sequence: 3, team_ids: [1] }, { id: 4, name: "In Development", fold: false, sequence: 5, team_ids: [1] }, { id: 9, name: "Other team only", fold: false, sequence: 4, team_ids: [5] }]);
   if (model === "mail.message") {
     // Domain terms: res_id (= / in), message_type (= / in), date (>=), attachment_ids (in).
     const match = (x, [f, op, v]) => f === "model" || f === "attachment_ids" || (op === "in" ? v.includes(x[f]) : op === ">=" ? String(x[f]) >= v : x[f] === v);
@@ -112,7 +112,7 @@ test("detail: description, chatter and only this team's stages", async () => {
   const { data } = await req("/odoo/tickets/HD-302", { token: await adminToken() });
   assert.equal(data.description, "<p>Please deploy</p>");
   assert.equal(data.messages[0].author, "Ariel Amiri"); assert.equal(data.messages[0].email, true);
-  assert.deepEqual(data.stages.map((s) => s.name), ["New", "In Progress", "Solved"]);
+  assert.deepEqual(data.stages.map((s) => s.name), ["New", "In Progress", "Solved", "In Development"]);
 });
 
 test("attachments are listed on the ticket and downloaded through the proxy, only for that ticket", async () => {
@@ -251,4 +251,15 @@ test("new Odoo tickets start unassigned once, even when Odoo assigned someone; o
     await req("/odoo/tickets", { token: t });
     assert.equal(calls.filter((c) => c.args[4] === "write" && "user_id" in (c.args[5][1] || {})).length, 0);
   } finally { delete env.STORE; delete TICKETS[350]; }
+});
+
+test("a ticket in In Development stays in the list even when our reply is the latest message", async () => {
+  const t = await adminToken();
+  const was = TICKETS[310].stage_id;
+  try {
+    TICKETS[310].stage_id = [4, "In Development"];
+    assert.ok((await req("/odoo/tickets", { token: t })).data.tickets.some((x) => x.key === "HD-310"));
+    TICKETS[310].stage_id = [2, "In Progress"];
+    assert.ok(!(await req("/odoo/tickets", { token: t })).data.tickets.some((x) => x.key === "HD-310"), "In Progress and waiting: hidden");
+  } finally { TICKETS[310].stage_id = was; }
 });

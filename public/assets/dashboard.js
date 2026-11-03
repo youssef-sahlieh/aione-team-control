@@ -1131,7 +1131,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       if(!d.messages.length) box.appendChild(el("div","msg","No messages yet."));
       d.messages.forEach(m=>{ const cd=el("div","cmt"+(m.note?" mine":" ext")); const meta=el("div","cmeta"); meta.appendChild(el("b",null,m.author)); meta.appendChild(el("span",null,ago(m.when)+(m.note?" · internal note":m.email?" · email":""))); cd.appendChild(meta); if(String(m.body||"").replace(/<[^>]*>/g,"").trim()||/<img/i.test(m.body||"")){ const b=richNode(m.body,pictures); b.classList.add("rich"); b.dir="auto"; cd.appendChild(b); } cd.appendChild(messageFiles(key,m.attachments||[])); box.appendChild(cd); });
       renderAttachments(d.attachments||[]);
-      $("d-reply").placeholder="Write an internal note (saved in Odoo's chatter, not emailed to the customer)…";
+      $("d-reply").placeholder="Write a reply to the customer (Odoo emails it to them). For the team, use Internal note.";
     }catch(err){ if(dz.key===key) $("d-desc").replaceChildren(el("span","msg err",errorText(err))); }
   }
   function renderInternal(key){
@@ -1385,7 +1385,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
         else saved={filename:((data.attachments||[])[0]||{}).filename||name};
         if(dz.key!==key) return;
         (NOTE_FILES[key]=NOTE_FILES[key]||[]).push({...saved,preview:URL.createObjectURL(f)}); renderNoteFiles(key); ta.focus();
-        setMsg("d-cmsg","Picture added: it goes into the "+(isOdoo(key)?"note":"comment")+" when you send it.",true);
+        setMsg("d-cmsg","Picture added: it goes into the "+(isOdoo(key)?"reply":"comment")+" when you send it.",true);
       }catch(err){ setMsg("d-cmsg","Picture not added: "+errorText(err),false); }
     }
   }

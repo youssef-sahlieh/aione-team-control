@@ -23,7 +23,7 @@ import { dateRequestRoutes } from "./date-requests.js";
 import { ticketNoteRoutes } from "./ticket-notes.js";
 import { internalRoutes } from "./internal.js";
 import { inboxRoutes, notifyMentions, jiraMentionEmails, addToInbox } from "./inbox.js";
-import { odooConfigured, odooRoutes, odooTicketInfo, odooTicketForTime } from "./odoo.js";
+import { odooConfigured, odooRoutes, odooTicketInfo, odooTicketForTime, postOdooNote } from "./odoo.js";
 import { timeRoutes, timeSyncCron } from "./time-entries.js";
 import { monitorRoutes } from "./monitor.js";
 import { dbReportRoutes, dbReportCron } from "./db-report.js";
@@ -567,6 +567,7 @@ async function route(request, env, url) {
 
   if (path === "/users" || path.startsWith("/users/")) return accountRoutes(request, env, url, me);
   if (path === "/ticket-notes") return ticketNoteRoutes(request, env, url, me, {
+    postToOdoo:(key, text) => postOdooNote(env, key, me, text),
     readTicket:async key => {
       if (key.startsWith("HD-")) return odooTicketInfo(env, key);
       if (/^INT-\d+$/.test(key)) {

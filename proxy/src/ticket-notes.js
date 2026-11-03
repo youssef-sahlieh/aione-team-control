@@ -6,7 +6,8 @@ const fail = (error, status = 400) => json({code:'ticket_notes', error}, status)
 
 // Internal notes are kept inside AION, like Jira comments: everyone who can open a ticket reads its notes, and
 // anyone @mentioned gets an entry in their notification inbox and an email. Nothing is posted to Jira.
-export async function ticketNoteRoutes(request, env, url, me, {readTicket, sendMail}) {
+// On an Odoo Helpdesk ticket the note is also posted to Odoo's chatter as an internal note (postToOdoo).
+export async function ticketNoteRoutes(request, env, url, me, {readTicket, sendMail, postToOdoo}) {
   const store = env.STORE;
   if (!store?.compareAndSet || !store?.setIfAbsent) return fail('Internal notes need the account database.', 503);
   if (!['GET','POST'].includes(request.method)) return fail('Use GET or POST for internal notes.', 405);
@@ -45,6 +46,11 @@ export async function ticketNoteRoutes(request, env, url, me, {readTicket, sendM
     if (mentioned.length) {
       try { await notifyMentions(env, me, {emails:mentioned.map(p => p.email), key, title:ticket.title, text, sendMail, type:'note'}); }
       catch { console.warn('Mention notification failed.'); }
+    }
+    // Odoo ticket: also in Odoo's chatter as an internal note. The note is saved here either way.
+    if (key.startsWith('HD-') && postToOdoo) {
+      try { await postToOdoo(key, text); return json({note, odoo:true}, 201); }
+      catch { console.warn('Odoo note copy failed.'); return json({note, odoo:false, warning:"Saved in the dashboard, but it couldn't be added to Odoo's chatter."}, 201); }
     }
     return json({note}, 201);
   } finally { await store.deleteIfValue(lock, owner); }

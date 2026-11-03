@@ -153,6 +153,16 @@ export async function odooTicketForTime(env, key) {
   return { key, title: t.name || "", devs: dev ? [dev] : [], closed: !!(stage && stage.fold), projectId: Array.isArray(t.project_id) ? t.project_id[0] : null };
 }
 
+// A dashboard internal note, copied into the Odoo ticket's chatter as an internal note (not emailed).
+export async function postOdooNote(env, key, me, text) {
+  if (!odooConfigured(env) || !refOf(key)) throw new Error("Not an Odoo ticket.");
+  const [t] = await odoo(env, "helpdesk.ticket", "search_read", [byRef(key)], { fields: ["id"], limit: 1 });
+  if (!t) throw new Error("The Odoo ticket wasn't found.");
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const body = "<p>" + esc(text).replace(/\n/g, "<br>") + "</p><p><i>— " + esc(me.name || me.email) + ", internal note via AION Team Control</i></p>";
+  await odoo(env, "helpdesk.ticket", "message_post", [[t.id]], { body, message_type: "comment", subtype_xmlid: "mail.mt_note" });
+}
+
 // Odoo HTML (descriptions, chatter) is shown as text by the dashboard's own sanitizer; this only trims size.
 const clip = (html, n = 50000) => String(html || "").slice(0, n);
 
@@ -190,6 +200,7 @@ export async function unassignNew(env, rows) {
 // - open ticket: shown until we reply; hidden while waiting for the customer; shown again when they answer.
 // - Solved or Cancelled: hidden, unless the customer wrote after it was closed: then it's moved back to
 //   In Progress in Odoo (so we close it again) and shown.
+// - In Development: always shown (we're working on it, whoever wrote last).
 const isNote = (x) => Array.isArray(x.subtype_id) && /note/i.test(String(x.subtype_id[1]));
 export async function conversation(env, rows, users, allStages) {
   if (!rows.length) return [];
@@ -218,6 +229,7 @@ export async function conversation(env, rows, users, allStages) {
       catch (e) { console.log("odoo reopen failed:", e && e.message); }
       shown.push(t); continue;
     }
+    if (stage && /in development/i.test(stage.name)) { shown.push(t); continue; }
     // Open: hidden while our reply is the latest message.
     if (s.us && (!s.customer || s.customer <= s.us)) continue;
     shown.push(t);

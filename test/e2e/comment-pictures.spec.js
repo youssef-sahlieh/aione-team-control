@@ -142,8 +142,8 @@ test("Odoo tickets show their attachments and each chatter message's files", asy
   expect(mock.errors).toEqual([]);
 });
 
-// Odoo: a pasted picture is uploaded to the ticket and attached to the note when it is sent; a note can be only pictures.
-test("a picture pasted into an Odoo note is uploaded and attached to the note", async ({ page }) => {
+// Odoo: a pasted picture is uploaded to the ticket and attached to the reply to the customer.
+test("a picture pasted on an Odoo ticket is uploaded and attached to the reply", async ({ page }) => {
   const mock = await mockDashboard(page, { odoo: true });
   const uploads = [], notes = [];
   await page.route("**/odoo/tickets/HD-300/attachments?name=*", async (r) => { uploads.push(new URL(r.request().url()).searchParams.get("name")); return r.fulfill({ status: 201, json: { attachment: { id: 777, filename: uploads.at(-1), mimeType: "image/png", size: 68 } } }); });
@@ -152,24 +152,28 @@ test("a picture pasted into an Odoo note is uploaded and attached to the note", 
   await expect(page.locator('label[for="c-img"]')).toBeVisible();
   await page.locator("#c-img").setInputFiles({ name: "image.png", mimeType: "image/png", buffer: PNG });
   await expect(page.locator("#d-cfiles .cfile-chip")).toHaveCount(1);
-  await expect(page.locator("#d-cmsg")).toContainText("goes into the note when you send it");
+  await expect(page.locator("#d-cmsg")).toContainText("goes into the reply when you send it");
   await expect(page.locator("#d-cfiles .cfile-chip img")).toHaveAttribute("src", /^blob:/);
   expect(uploads[0]).toMatch(/^picture-\d+\.png$/);
-  await page.locator("#d-send").click();
+  await page.locator("#d-reply").fill("Here is the screen");
+  page.once("dialog", (d) => d.accept());
+  await page.locator("#d-reply-customer").click();
   await expect.poll(() => notes.length).toBe(1);
-  expect(notes[0]).toEqual({ text: "", attachmentIds: [777] });
+  expect(notes[0]).toEqual({ text: "Here is the screen", attachmentIds: [777], toCustomer: true });
   await expect(page.locator("#d-cfiles .cfile-chip")).toHaveCount(0);
   expect(mock.errors).toEqual([]);
 });
 
-// Odoo: "Add internal note" stays internal; "Reply to customer" asks first and is sent to the customer by Odoo.
-test("Odoo tickets have Add internal note and Reply to customer (which asks first)", async ({ page }) => {
+// Odoo: Reply to customer asks first and is sent to the customer by Odoo; there is no separate "Add internal
+// note" (the Internal note button writes the team note, in the dashboard and in Odoo's chatter).
+test("Odoo tickets have Reply to customer (which asks first) and Internal note, not Add internal note", async ({ page }) => {
   const mock = await mockDashboard(page, { odoo: true });
   const notes = [];
   await page.route("**/odoo/tickets/HD-300/note", (r) => { notes.push(r.request().postDataJSON()); return r.fulfill({ status: 201, json: { ok: true } }); });
   await page.goto("/dashboard.html#HD-300");
-  await expect(page.locator("#d-send")).toHaveText("Add internal note");
   await expect(page.locator("#d-reply-customer")).toBeVisible();
+  await expect(page.locator("#d-send")).toBeHidden();
+  await expect(page.locator("#d-comment-note")).toBeVisible();
   await page.locator("#d-reply").fill("We fixed it, please check");
   page.once("dialog", (d) => d.dismiss());
   await page.locator("#d-reply-customer").click();
@@ -179,10 +183,6 @@ test("Odoo tickets have Add internal note and Reply to customer (which asks firs
   await expect.poll(() => notes.length).toBe(1);
   expect(notes[0]).toEqual({ text: "We fixed it, please check", toCustomer: true });
   await expect(page.locator("#d-cmsg")).toContainText("Sent to the customer");
-  await page.locator("#d-reply").fill("Internal only");
-  await page.locator("#d-send").click();
-  await expect.poll(() => notes.length).toBe(2);
-  expect(notes[1]).toEqual({ text: "Internal only" });
   expect(mock.errors).toEqual([]);
 });
 
