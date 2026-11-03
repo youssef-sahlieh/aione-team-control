@@ -9,6 +9,13 @@ const MAX_TEXT = 20000;
 
 const base = env => String(env.ODOO_URL).replace(/\/+$/, '');
 
+// Why a call to Odoo failed before any answer came back. Logged for administrators (never the key or the data).
+function noAnswerReason(e) {
+  if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) return 'timeout';
+  if (/redirect/i.test(String(e && e.message))) return 'redirect';
+  return String((e && e.cause && e.cause.code) || (e && e.code) || (e && e.name) || 'network');
+}
+
 async function call(env, method, kwargs) {
   let res;
   try {
@@ -17,9 +24,15 @@ async function call(env, method, kwargs) {
       headers: { Authorization: 'bearer ' + env.ODOO_API_KEY, 'X-Odoo-Database': env.ODOO_DB, 'Content-Type': 'application/json' },
       body: JSON.stringify(kwargs),
       redirect: 'error',
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(25000),
     });
-  } catch { throw new BusinessError('Odoo did not answer. Try again.', 502, 'odoo_unavailable'); }
+  } catch (e) {
+    const reason = noAnswerReason(e);
+    console.warn('knowledge_odoo_no_answer', method, reason);
+    if (reason === 'timeout') throw new BusinessError('Odoo took too long to answer. Try again.', 502, 'odoo_unavailable');
+    if (reason === 'redirect') throw new BusinessError('Odoo redirected the request. ODOO_URL must be the exact https address of Odoo.', 502, 'odoo_unavailable');
+    throw new BusinessError('Could not reach Odoo. Check ODOO_URL and that Odoo is online.', 502, 'odoo_unavailable');
+  }
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new BusinessError(data?.message || data?.error?.message || `Odoo answered ${res.status}.`, 502, 'odoo_error');
   return data;
