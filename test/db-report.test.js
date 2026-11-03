@@ -340,3 +340,51 @@ test("the POS version comes from Audit & Deploy's AI1 Settings (flutter_pos_api 
     assert.equal(r.report.format, 2);
   } finally { globalThis.fetch = inner; }
 });
+
+test("Extend database sets database.expiration_date on a Tests or Dev copy (never production), checks it, and logs it", async () => {
+  const { env, call } = setup();
+  const admin = { email: "boss@aione.biz", name: "Boss", role: "admin", dev: "", v: 1 };
+  await saveUser(env.STORE, admin);
+  const token = (await makeToken(env, admin.email, Date.now(), 1)).token;
+  const inner = globalThis.fetch, params = { "database.expiration_date": "2026-10-01 00:00:00" };
+  let canWrite = true;
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url), p = (JSON.parse(init.body || "{}").params) || {};
+    if (u.includes("kadis.odoo.test") && p.args && p.args[3] === "monitor.data.snapshot" && p.args[4] === "get_instances") {
+      const r = await (await inner(url, init)).json(); r.result.payload.services.push({ instance_name: "odoo503test", domain: "503test.ai1.host", server_zone: "test" }); return Response.json({ result: r.result });
+    }
+    if (u.includes("503test.ai1.host")) {
+      if (p.service === "db") return Response.json({ error: { message: "Access denied" } });
+      if (p.service === "common" && p.method === "version") return Response.json({ result: { server_serie: "18.0" } });
+      if (p.service === "common") return Response.json({ result: p.args[0] === "RonitYamProd_test" && p.args[2] === "pw123" ? 9 : false });
+      const [, , , model, method, args] = p.args;
+      if (model === "ir.config_parameter" && method === "set_param") { if (!canWrite) return Response.json({ error: { message: "Access Denied", data: { message: "You are not allowed to modify System Parameter" } } }); params[args[0]] = args[1]; return Response.json({ result: true }); }
+      if (model === "ir.config_parameter" && method === "get_param") return Response.json({ result: params[args[0]] || false });
+      if (model === "ir.config_parameter") return Response.json({ result: [{ value: params["database.expiration_date"] }] });
+      return Response.json({ result: method === "search_count" ? 1 : [] });
+    }
+    return inner(url, init);
+  };
+  try {
+    for (let i = 0; i < 5; i++) { const r = await (await call("/db-report/refresh", { method: "POST", token })).json(); if (r.done) break; }
+    const d = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+    const extend = (instance, date) => call("/db-report/action", { method: "POST", token, body: { instance, action: "extend", date } });
+    assert.equal((await extend("odoo503", d)).status, 400, "production is never extended");
+    assert.equal((await extend("odoo503test", "2020-01-01")).status, 400, "a past date is refused");
+    assert.equal((await extend("odoo503test", "not-a-date")).status, 400);
+    assert.equal(params["database.expiration_date"], "2026-10-01 00:00:00", "refused calls change nothing");
+    const ok = await extend("odoo503test", d);
+    assert.equal(ok.status, 200);
+    assert.equal(params["database.expiration_date"], d + " 00:00:00");
+    const row = (await (await call("/db-report", { token })).json()).report.rows.find((r) => r.instance === "odoo503test");
+    assert.equal(row.expires, d + " 00:00:00"); assert.equal(row.expired, false);
+    const logged = JSON.parse(await env.STORE.get("mlog:1"));
+    assert.equal(logged.action, "Extend database"); assert.equal(logged.target, "odoo503test"); assert.equal(logged.result, "success");
+    // A login without Settings administrator rights: refused, explained, and logged as a failure.
+    canWrite = false;
+    const no = await extend("odoo503test", d);
+    assert.equal(no.status, 502);
+    assert.match((await no.json()).error, /administrator rights/);
+    assert.equal(JSON.parse(await env.STORE.get("mlog:2")).result, "failure");
+  } finally { globalThis.fetch = inner; }
+});

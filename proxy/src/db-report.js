@@ -5,7 +5,8 @@
 // The production list comes from Audit & Deploy (no customer login needed), so new clients appear on
 // their own. The six in-database numbers need a login to that database; those logins live in the Odoo
 // knowledge base ("Our Customers") and are read server-side at build time only. A password is NEVER
-// stored and NEVER sent to the browser - the proxy connects read-only and keeps only the numbers.
+// stored and NEVER sent to the browser - the report connects read-only and keeps only the numbers.
+// The one write is the "Extend database" action on Tests and Dev copies (database.expiration_date).
 //
 // The whole report is cached in the store. A build runs incrementally (resumable) to stay within the
 // function's time limit, refreshes at most once a day on view (stale-while-revalidate), can be forced by
@@ -221,7 +222,8 @@ async function customerRpc(base, service, method, args, signal) {
 
 // section: "main", "tests" or "dev". Test and dev servers use their production instance's logins, and their own
 // database names (from Audit & Deploy, or the server's list) are tried before the production ones.
-async function readInsideDatabase(slot, dbHint, section = "main") {
+// Signs in and returns { loginOk, db, kw } (kw calls the database's models), or why it couldn't.
+async function loginToDatabase(slot, dbHint, section = "main") {
   const base = (slot.url.match(/^https?:\/\/[^/]+/) || [])[0];
   if (!base) return { loginOk: false, error: "no url" };
   // Short per-request timeout so one slow/unreachable server can't stall the whole build.
@@ -274,6 +276,13 @@ async function readInsideDatabase(slot, dbHint, section = "main") {
   }
   if (!uid) return { loginOk: false, loginFound: true };
   const kw = (model, method, args, k = {}) => customerRpc(base, "object", "execute_kw", [db, uid, password, model, method, args, k], signal());
+  return { loginOk: true, loginFound: true, db, kw };
+}
+
+async function readInsideDatabase(slot, dbHint, section = "main") {
+  const login = await loginToDatabase(slot, dbHint, section);
+  if (!login.loginOk) return login;
+  const { db, kw } = login;
   const one = async (p, dflt) => { try { return await p; } catch { return dflt; } };
   // active_test:false so a login by a since-deactivated user still counts (last login by ANY user).
   const allUsers = { context: { active_test: false } };
@@ -394,6 +403,15 @@ export function oneRowPerSite(rows) {
   return out;
 }
 
+// The logins to try for one instance (null when Knowledge has none). Test and dev instances (503test, 503t,
+// 503.test, 503dev1, …) use the logins of production instance 503, and its database names.
+function slotFor(creds, facts, prodDbs) {
+  const main = facts.section === "main";
+  const slot = main ? (creds[facts.label] || creds[facts.num]) : (creds[facts.num] || creds[facts.label]);
+  if (!(slot && slot.candidates.length)) return null;
+  return { url: main ? (slot.url || facts.url) : (facts.url || slot.url), candidates: slot.candidates, titles: slot.titles, dbs: main ? slot.dbs : [...prodDbs(facts.num), ...(slot.dbs || [])] };
+}
+
 const pool = async (items, n, fn) => { const q = items.map((x, i) => [x, i]); const out = []; await Promise.all(Array.from({ length: Math.min(n, q.length) }, async () => { while (q.length) { const [x, i] = q.shift(); out[i] = await fn(x); } })); return out; };
 
 // Build (or continue building) the report. Resumable: saves progress and returns within the budget.
@@ -423,12 +441,11 @@ export async function buildReport(env, { force = false } = {}) {
       if (cut > 0) batch = batch.slice(0, cut);
       const rows = await pool(batch, POOL, async (inst) => {
         const facts = await instanceFacts(env, inst);
-        // Test and dev instances (503test, 503t, 503.test, 503dev1, …) use the logins of production instance 503.
-        const slot = facts.section === "main" ? (creds[facts.label] || creds[facts.num]) : (creds[facts.num] || creds[facts.label]);
-        let inside = { loginOk: false, loginFound: !!(slot && slot.candidates.length) };
+        const slot = slotFor(creds, facts, prodDbs);
+        let inside = { loginOk: false, loginFound: !!slot };
         // A server that didn't answer is shown as offline, without waiting on login attempts.
         if (!facts.online) inside = { ...inside, offline: true };
-        else if (inside.loginFound) { try { inside = await readInsideDatabase({ url: facts.section === "main" ? (slot.url || facts.url) : (facts.url || slot.url), candidates: slot.candidates, titles: slot.titles, dbs: facts.section === "main" ? slot.dbs : [...prodDbs(facts.num), ...(slot.dbs || [])] }, facts.databases, facts.section); } catch (e) { inside = { loginFound: true, loginOk: false, error: String(e.message || e).slice(0, 80) }; } }
+        else if (inside.loginFound) { try { inside = await readInsideDatabase(slot, facts.databases, facts.section); } catch (e) { inside = { loginFound: true, loginOk: false, error: String(e.message || e).slice(0, 80) }; } }
         // The company name only ever comes from inside the database (never from Knowledge text).
         return { ...facts, ...inside, company: inside.company || "", companySource: inside.company ? "database" : "" };
       });
@@ -448,6 +465,44 @@ export async function buildReport(env, { force = false } = {}) {
 }
 
 async function readReport(env) { try { return JSON.parse(await env.STORE.get(REPORT_KEY) || "null"); } catch { return null; } }
+
+// Changes one row of the saved report (after an action), so the page shows it without a rebuild.
+async function saveRow(env, instance, changes) {
+  const report = await readReport(env);
+  const row = report && (report.rows || []).find((r) => r.instance === instance);
+  if (!row) return;
+  Object.assign(row, changes);
+  await env.STORE.set(REPORT_KEY, JSON.stringify(report), 30 * DAY_MS / 1000);
+}
+
+// A new expiry date: YYYY-MM-DD, after today and at most a year ahead. Anything else is null.
+export function expiryDate(value) {
+  const s = String(value || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const t = Date.parse(s + "T00:00:00Z");
+  if (!Number.isFinite(t) || new Date(t).toISOString().slice(0, 10) !== s) return null;
+  const today = Date.parse(new Date().toISOString().slice(0, 10) + "T00:00:00Z");
+  return t > today && t <= today + 366 * DAY_MS ? s : null;
+}
+
+// Extend database: signs in to the test or dev copy with the logins from Knowledge (the same way the report
+// does) and sets the system parameter database.expiration_date, then reads it back to be sure.
+// The login needs Settings administrator rights in that database.
+async function extendDatabase(env, report, row, date) {
+  const creds = await readCredentialIndex(env);
+  const prodDbs = (num) => [...new Set((report.rows || []).filter((r) => (r.section || "main") === "main" && r.num === num).flatMap((r) => [r.db, ...(r.databases || [])]).filter(Boolean))];
+  const slot = slotFor(creds, { ...row, section: row.section || "main" }, prodDbs);
+  if (!slot) throw new Error("There's no login for this database in Knowledge.");
+  const login = await loginToDatabase(slot, [row.db, ...(row.databases || [])].filter(Boolean), row.section);
+  if (login.offline) throw new Error("The server isn't answering. Start it, then try again.");
+  if (!login.loginOk) throw new Error("Couldn't sign in to this database with the logins in Knowledge.");
+  const value = date + " 00:00:00";
+  try { await login.kw("ir.config_parameter", "set_param", ["database.expiration_date", value]); }
+  catch (e) { throw new Error("Signed in, but this login can't change system parameters (it needs Settings administrator rights). " + String(e.message || "").slice(0, 120)); }
+  const now = await login.kw("ir.config_parameter", "get_param", ["database.expiration_date"]);
+  if (now !== value) throw new Error("The new date didn't stick: the database still says " + (now || "nothing") + ".");
+  return { db: login.db, expires: value };
+}
 
 // GET /db-report  (admin) - returns the cached report; rebuilds in the background when stale or missing.
 // POST /db-report/refresh (admin) - runs one build slice now (call again until done:true).
@@ -471,14 +526,23 @@ export async function dbReportRoutes(request, env, url, me) {
     return json({ done: !!r.done, progress: r.progress || null, report: r.report || await readReport(env) });
   }
   // POST /db-report/action {instance, action} - instance actions from the Databases page. Only instances in the
-  // report; only restart for now. Recorded in the action log with the signed-in person's name.
+  // report: restart, and extend (Tests and Dev copies). Recorded in the action log with the signed-in person's name.
   if (path === "/db-report/action" && request.method === "POST") {
     const b = (await request.json().catch(() => null)) || {};
     const instance = String(b.instance || ""), action = String(b.action || "");
     const report = await readReport(env);
-    if (!(report && (report.rows || []).some((r) => r.instance === instance))) return fail("unknown_instance", "That instance isn't in the database report. Press Refresh now and try again.", 404);
-    if (action !== "restart") return fail("unsupported", "Only restart is available here.", 400);
-    return act(env, me, { action: "Restart instance", target: instance, details: "Databases page", run: () => odoo(env, "file.hosting.service", "call_api", ["/api/docker/odoo/restart", "POST", { instances: [instance] }]) });
+    const row = report && (report.rows || []).find((r) => r.instance === instance);
+    if (!row) return fail("unknown_instance", "That instance isn't in the database report. Press Refresh now and try again.", 404);
+    if (action === "restart") return act(env, me, { action: "Restart instance", target: instance, details: "Databases page", run: () => odoo(env, "file.hosting.service", "call_api", ["/api/docker/odoo/restart", "POST", { instances: [instance] }]) });
+    if (action === "extend") {
+      if ((row.section || "main") === "main") return fail("production", "Extend is for Tests and Dev copies only. A production database is renewed through its Odoo subscription.", 400);
+      const date = expiryDate(b.date);
+      if (!date) return fail("bad_date", "Choose a date after today, at most a year ahead.", 400);
+      const res = await act(env, me, { action: "Extend database", target: instance, details: "Expiry date → " + date + " (Databases page)", run: () => extendDatabase(env, report, row, date) });
+      if (res.ok) await saveRow(env, instance, { expires: date + " 00:00:00", expired: false });
+      return res;
+    }
+    return fail("unsupported", "That action isn't available here.", 400);
   }
   return fail("not_found", "Not found.", 404);
 }

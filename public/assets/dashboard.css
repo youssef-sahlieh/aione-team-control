@@ -459,6 +459,8 @@ button.key.odoo:hover{text-decoration:underline}
 .db-act-warn .db-act-icon,.db-act-warn .db-act-title{color:#b45309}
 .db-act-ok .db-act-icon,.db-act-ok .db-act-title{color:#15803d}
 .db-act-bad .db-act-icon,.db-act-bad .db-act-title{color:#dc2626}
+.db-act-date{display:flex;flex-direction:column;gap:4px;margin:0 0 12px;font-size:13px;color:var(--muted)}
+.db-act-date input{font:inherit;color:var(--ink,inherit);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 10px;max-width:220px}
 .db-act-note{margin:0 0 14px;color:var(--muted);font-size:13px;min-height:1.4em}
 .db-dlg-foot{display:flex;justify-content:flex-end;gap:8px}.db-strong{font-weight:600}.db-ago{color:var(--muted)}
 .db-count{color:var(--muted);font-family:var(--mono,monospace)}

@@ -107,13 +107,18 @@ function addonCell(r) {
   return box;
 }
 
-// Instance actions. Each opens a preview with all three; the chosen one needs its own confirm button.
-// Only restart reaches Odoo for now; start and stop are shown but not available yet.
+// Instance actions. Each opens a preview with all of them; the chosen one needs its own confirm button.
+// Restart and Extend reach Odoo; start and stop are shown but not available yet.
+// Extend sets the database's expiry date (system parameter database.expiration_date), on Tests and Dev copies only.
 const ACTIONS = [
-  { key: "restart", title: "Restart Instance", desc: "Restart the container", tone: "warn", icon: "↻", note: "The site is unavailable for a short time while the container restarts.", enabled: true },
-  { key: "start", title: "Start Instance", desc: "Scale to 1 replica", tone: "ok", icon: "▶", note: "", enabled: false },
-  { key: "stop", title: "Stop Instance", desc: "Scale to 0 replicas", tone: "bad", icon: "■", note: "", enabled: false }
+  { key: "restart", title: "Restart Instance", desc: "Restart the container", tone: "warn", icon: "↻", note: "The site is unavailable for a short time while the container restarts.", enabled: () => true },
+  { key: "extend", title: "Extend Database", desc: "Move the expiry date forward", tone: "ok", icon: "⏱", note: "Signs in to the database with the login from Knowledge and sets its expiry date (database.expiration_date). The login needs Settings administrator rights.", enabled: (r) => rowSection(r) !== "main", off: "Tests and Dev copies only", date: true },
+  { key: "start", title: "Start Instance", desc: "Scale to 1 replica", tone: "ok", icon: "▶", note: "", enabled: () => false },
+  { key: "stop", title: "Stop Instance", desc: "Scale to 0 replicas", tone: "bad", icon: "■", note: "", enabled: () => false }
 ];
+// The date picker's range: tomorrow to a year ahead; it starts 30 days ahead.
+const isoDay = (d) => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+const daysAhead = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return isoDay(d); };
 function actionCell(r) {
   if (!r.instance) return el("span", "db-muted", "—");
   const b = el("button", "btn db-act-open", "Actions"); b.type = "button"; b.setAttribute("aria-haspopup", "dialog");
@@ -129,15 +134,22 @@ function openActions(r, opener) {
   const note = el("p", "db-act-note", "Choose an action to see what it does.");
   const cancel = el("button", "btn", "Cancel"); cancel.type = "button";
   const confirm = el("button", "btn primary", "Confirm"); confirm.type = "button"; confirm.disabled = true;
+  // Extend: the new expiry date.
+  const dateBox = el("label", "db-act-date"), date = el("input"); date.type = "date"; date.id = "extend-date";
+  date.min = daysAhead(1); date.max = daysAhead(365); date.value = daysAhead(30);
+  dateBox.append(el("span", "", "New expiry date" + (r.expires ? " (now " + fmtDate(r.expires) + ")" : "")), date); dateBox.hidden = true;
+  date.addEventListener("input", () => { confirm.disabled = !(date.value && date.value >= date.min && date.value <= date.max); });
   for (const a of ACTIONS) {
-    const card = el("button", "db-act-card db-act-" + a.tone); card.type = "button"; card.disabled = !a.enabled;
+    const on = a.enabled(r);
+    const card = el("button", "db-act-card db-act-" + a.tone); card.type = "button"; card.disabled = !on; card.dataset.action = a.key;
     card.setAttribute("aria-pressed", "false");
-    card.append(el("span", "db-act-icon", a.icon), el("span", "db-act-title", a.title), el("span", "db-act-desc", a.enabled ? a.desc : a.desc + " · not available yet"));
+    card.append(el("span", "db-act-icon", a.icon), el("span", "db-act-title", a.title), el("span", "db-act-desc", on ? a.desc : a.desc + " · " + (a.off || "not available yet")));
     card.addEventListener("click", () => {
       picked = a;
       for (const c of cards.children) c.setAttribute("aria-pressed", String(c === card));
       note.textContent = a.note + " Press Confirm to continue.";
-      confirm.disabled = false;
+      dateBox.hidden = !a.date;
+      confirm.disabled = !!a.date && !date.value;
     });
     cards.append(card);
   }
@@ -145,10 +157,16 @@ function openActions(r, opener) {
     if (!picked) return;
     confirm.disabled = true; confirm.textContent = "Working…";
     try {
-      await api("/db-report/action", { method: "POST", body: { instance: r.instance, action: picked.key } });
+      const body = { instance: r.instance, action: picked.key };
+      if (picked.date) body.date = date.value;
+      await api("/db-report/action", { method: "POST", body });
       confirm.textContent = "Confirm";
       dlg.close();
-      toast(picked.title + " sent to " + r.instance + ". It can take a minute.");
+      if (picked.date) {
+        Object.assign(r, { expires: date.value + " 00:00:00", expired: false });
+        render();
+        toast((r.database || r.instance) + " now expires on " + date.value + ".");
+      } else toast(picked.title + " sent to " + r.instance + ". It can take a minute.");
     } catch (err) {
       if (err && err.code === "session") { signOut(true); return; }
       confirm.disabled = false; confirm.textContent = "Confirm";
@@ -157,7 +175,7 @@ function openActions(r, opener) {
   });
   cancel.addEventListener("click", () => dlg.close());
   const foot = el("div", "db-dlg-foot"); foot.append(cancel, confirm);
-  const body = el("div", "db-dlg-body"); body.append(title, who, cards, note, foot);
+  const body = el("div", "db-dlg-body"); body.append(title, who, cards, dateBox, note, foot);
   dlg.replaceChildren(body);
   dlg.onclose = () => opener && opener.focus();
   dlg.showModal();

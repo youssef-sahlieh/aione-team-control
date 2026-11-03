@@ -46,7 +46,10 @@ test("Databases: POS version column, Actions preview, restart needs a confirm", 
   await ronit.getByRole("button", { name: "Actions" }).click();
   const dlg = page.locator("#action-dialog");
   await expect(dlg).toBeVisible();
-  await expect(dlg.locator(".db-act-card")).toHaveCount(3);
+  await expect(dlg.locator(".db-act-card")).toHaveCount(4);
+  // Extend is for Tests and Dev copies: not on a production database.
+  await expect(dlg.getByRole("button", { name: /Extend Database/ })).toBeDisabled();
+  await expect(dlg.getByRole("button", { name: /Extend Database/ })).toContainText("Tests and Dev copies only");
   await expect(dlg.getByRole("button", { name: /Start Instance/ })).toBeDisabled();
   await expect(dlg.getByRole("button", { name: /Stop Instance/ })).toBeDisabled();
   // Nothing happens until an action is chosen, and then it needs its own Confirm.
@@ -105,5 +108,49 @@ test("Databases: the saved report shows at once and updates in the background; o
   await page.getByRole("button", { name: "Tests" }).click().catch(() => {});
   await expect.poll(() => refreshes.length).toBe(2);
   await expect(page.locator("#rows")).toContainText("offline");
+  expect(errors).toEqual([]);
+});
+
+test("Databases: Extend Database on a test copy picks a date, needs a confirm, and shows the new expiry", async ({ page }) => {
+  const posts = [], errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("aion-test-initialized")) return;
+    sessionStorage.setItem("aion-test-initialized", "1");
+    localStorage.clear();
+    localStorage.setItem("aione-session", JSON.stringify({ token: "synthetic-token", email: "boss@example.invalid", expiresAt: Date.now() + 3600000, role: "admin" }));
+    localStorage.setItem("aion.dbreport.view", JSON.stringify({ section: "tests" }));
+  });
+  const copy = row({ database: "RonitYamProd_test", instance: "odoo503test", url: "https://503test.example.invalid", section: "tests", loginFound: true, loginOk: true, expires: "2026-01-01 00:00:00", expired: true });
+  await page.route("**/*", async (route) => {
+    const req = route.request(), url = new URL(req.url());
+    if (url.origin === "http://127.0.0.1:4173") return route.continue();
+    if (url.hostname !== "aione-team-proxy.vercel.app") return route.abort();
+    const json = (v) => route.fulfill({ json: v });
+    if (url.pathname === "/config") return json({ role: "admin", odoo: true, email: "boss@example.invalid", people: {}, devs: [], capabilities: ["db-report-company-v1", "db-report-pos-version-v1"] });
+    if (url.pathname === "/db-report") return json({ report: { ...REPORT, rows: [...REPORT.rows, copy] } });
+    if (url.pathname === "/db-report/action" && req.method() === "POST") { posts.push(req.postDataJSON()); return json({ ok: true, result: null }); }
+    return route.fulfill({ status: 403, json: { code: "forbidden", error: "Unconfigured test request" } });
+  });
+  await page.goto("http://127.0.0.1:4173/databases.html");
+  const tr = page.locator("#rows tr", { hasText: "RonitYamProd_test" });
+  await expect(tr.locator("td.db-col-expired")).toContainText("Expired");
+  await tr.getByRole("button", { name: "Actions" }).click();
+  const dlg = page.locator("#action-dialog");
+  await expect(dlg.locator("#extend-date")).toBeHidden();
+  await dlg.getByRole("button", { name: /Extend Database/ }).click();
+  const date = dlg.locator("#extend-date");
+  await expect(date).toBeVisible();
+  await expect(dlg).toContainText("now 2026-01-01");
+  const d = new Date(); d.setDate(d.getDate() + 60);
+  const picked = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  await date.fill(picked);
+  await page.screenshot({ path: "test-results/databases-extend.png" });
+  expect(posts).toEqual([]);
+  await dlg.getByRole("button", { name: "Confirm" }).click();
+  await expect(dlg).toBeHidden();
+  expect(posts).toEqual([{ instance: "odoo503test", action: "extend", date: picked }]);
+  await expect(page.locator("#toast")).toContainText("now expires on " + picked);
+  await expect(tr.locator("td.db-col-expired")).toContainText("Valid " + picked);
   expect(errors).toEqual([]);
 });
