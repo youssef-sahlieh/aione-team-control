@@ -1,48 +1,22 @@
-// Odoo Knowledge articles, read and written through Odoo's JSON-2 API (Odoo 19 and later):
-// POST <ODOO_URL>/json/2/<model>/<method> with the API key as a bearer token and the database in X-Odoo-Database.
+// Odoo Knowledge articles, read and written through the same Odoo API as the rest of the app (proxy/src/odoo.js).
 // Credentials are kept as article text inside Odoo. The proxy stores nothing about them.
 import { BusinessError } from './ticket-metadata.js';
+import { odoo } from './odoo.js';
 
 const ARTICLE_FIELDS = ['name', 'body', 'write_date'];
 const MAX_NAME = 200;
 const MAX_TEXT = 20000;
 
-const base = env => String(env.ODOO_URL).replace(/\/+$/, '');
-
-// Why a call to Odoo failed before any answer came back. Logged for administrators (never the key or the data).
-function noAnswerReason(e) {
-  if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) return 'timeout';
-  if (/redirect/i.test(`${e && e.message} ${e && e.cause && e.cause.message}`)) return 'redirect';
-  return String((e && e.cause && e.cause.code) || (e && e.code) || (e && e.name) || 'network');
-}
-
-async function call(env, method, kwargs) {
-  let res;
+// Odoo's own message is passed on (it says what went wrong, and holds no secrets). Anything that stops the call
+// before Odoo answers is logged for administrators.
+async function call(env, method, args, kwargs = {}) {
   try {
-    // Redirects are not followed: the API key must only go to the address set in ODOO_URL.
-    res = await fetch(`${base(env)}/json/2/knowledge.article/${method}`, {
-      method: 'POST',
-      headers: { Authorization: 'bearer ' + env.ODOO_API_KEY, 'X-Odoo-Database': env.ODOO_DB, 'Content-Type': 'application/json' },
-      body: JSON.stringify(kwargs),
-      redirect: 'manual',
-      signal: AbortSignal.timeout(25000),
-    });
+    return await odoo(env, 'knowledge.article', method, args, kwargs);
   } catch (e) {
-    const reason = noAnswerReason(e);
-    console.warn('knowledge_odoo_no_answer', method, reason);
-    if (reason === 'timeout') throw new BusinessError('Odoo took too long to answer. Try again.', 502, 'odoo_unavailable');
-    if (reason === 'redirect') throw new BusinessError('Odoo redirected the request. ODOO_URL must be the exact https address of Odoo.', 502, 'odoo_unavailable');
-    throw new BusinessError('Could not reach Odoo. Check ODOO_URL and that Odoo is online.', 502, 'odoo_unavailable');
+    if (e instanceof BusinessError) throw e;
+    console.warn('knowledge_odoo_failed', method, String(e && e.message).slice(0, 200));
+    throw new BusinessError(String((e && e.message) || 'Odoo did not answer. Try again.'), 502, e && e.definite ? 'odoo_error' : 'odoo_unavailable');
   }
-  if (res.status >= 300 && res.status < 400) {
-    let target = 'another address';
-    try { target = new URL(res.headers.get('location') || '', base(env)).origin; } catch {}
-    console.warn('knowledge_odoo_redirect', method, res.status, target);
-    throw new BusinessError(`Odoo redirects ODOO_URL to ${target}. Set ODOO_URL to ${target} and try again.`, 502, 'odoo_redirect');
-  }
-  const data = await res.json().catch(() => null);
-  if (!res.ok) throw new BusinessError(data?.message || data?.error?.message || `Odoo answered ${res.status}.`, 502, 'odoo_error');
-  return data;
 }
 
 const escapeHtml = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -54,7 +28,7 @@ export const toText = html => String(html || '')
   .trim();
 
 export async function listArticles(env) {
-  const rows = await call(env, 'search_read', { domain: [], fields: ARTICLE_FIELDS, order: 'write_date desc', limit: 500 });
+  const rows = await call(env, 'search_read', [[]], { fields: ARTICLE_FIELDS, order: 'write_date desc', limit: 500 });
   return (Array.isArray(rows) ? rows : []).map(r => ({ id: r.id, name: r.name || '', text: toText(r.body), updatedAt: r.write_date || '' }));
 }
 
@@ -64,10 +38,10 @@ export async function saveArticle(env, { id, name, text }) {
   const vals = { name: name.trim(), body: toHtml(text) };
   if (id) {
     if (!Number.isInteger(id) || id < 1) throw new BusinessError('Unknown entry.', 400, 'invalid_id');
-    await call(env, 'write', { ids: [id], vals });
+    await call(env, 'write', [[id], vals]);
     return { id };
   }
-  const created = await call(env, 'create', { vals_list: [vals] });
+  const created = await call(env, 'create', [[vals]]);
   const newId = Array.isArray(created) ? created[0] : created;
   return { id: typeof newId === 'number' ? newId : (newId?.id ?? null) };
 }
