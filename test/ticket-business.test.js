@@ -51,7 +51,8 @@ test('internal creation defaults to shared assignee, stores fields separately an
  const list=await (await s.call('/internal')).json();assert.deepEqual(list.tickets.map(t=>t.key),[ticket.key]);assert.equal((await s.call('/ticket-metadata?key=INT-99')).status,404);
  const batch=await (await s.call('/ticket-metadata/batch','POST',{keys:[ticket.key,'INT-99']})).json();assert.deepEqual(Object.keys(batch.records),[ticket.key]);
  const noClient=await s.call('/internal','POST',{summary:'No client yet'},user);assert.equal(noClient.status,201);
- assert.equal((await readMetadata(s.env,(await noClient.json()).ticket.key)).clientId,null);
+ const internal=(await readCatalog(s.env)).entries.find(e=>e.name==='Internal'&&!e.parentId),project=(await readCatalog(s.env)).entries.find(e=>e.name==='Internal'&&e.parentId===internal.id);
+ const defaulted=await readMetadata(s.env,(await noClient.json()).ticket.key);assert.equal(defaulted.clientId,internal.id);assert.equal(defaulted.subClientId,project.id);
 });
 test('client selection requires an active client and locks administrator-only changes; any project can go with it',async()=>{
  const s=await setup();assert.equal((await s.call('/internal','POST',{summary:'Task',metadata:{clientId:s.parent.id}},user)).status,400);
@@ -59,12 +60,12 @@ test('client selection requires an active client and locks administrator-only ch
  assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,clientId:s.client.id,subClientId:null}},user)).status,403);
  assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,clientId:s.client.id,subClientId:s.sub.id}},admin)).status,200);
 });
-test('anyone can choose a client and project while they are empty; after that only administrators change them',async()=>{
+test('internal tickets without a client start under Internal; only administrators change the client afterwards',async()=>{
  const s=await setup(),t=await s.create(user,{metadata:{clientId:null,subClientId:null}});
- assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,clientId:s.client.id,subClientId:s.sub.id}},user)).status,200);
- assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:2,clientId:s.client.id,subClientId:s.sub.id,workDone:'Done'}},user)).status,200);
- assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:3,clientId:s.client.id,subClientId:null}},user)).status,403);
- assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:3,clientId:s.client.id,subClientId:null}},admin)).status,200);
+ const internal=(await readCatalog(s.env)).entries.find(e=>e.name==='Internal'&&!e.parentId),project=(await readCatalog(s.env)).entries.find(e=>e.name==='Internal'&&e.parentId===internal.id);
+ assert.equal((await readMetadata(s.env,t.key)).subClientId,project.id);
+ assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,clientId:s.client.id,subClientId:s.sub.id}},user)).status,403);
+ assert.equal((await s.call('/ticket-metadata','PUT',{key:t.key,fields:{revision:1,clientId:s.client.id,subClientId:s.sub.id}},admin)).status,200);
 });
 test('billing never reaches user metadata, history or batch reads and forged writes fail',async()=>{
  const s=await setup(),t=await s.create(admin,{metadata:{clientId:s.client.id,billing:'billable'}});

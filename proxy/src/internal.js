@@ -5,7 +5,7 @@
 // Store keys: "it:<KEY>" ticket (JSON), "itickets" set of keys, "it:seq" counter for the next number,
 // "ia:<attachment id>:<n>" the attachment's bytes in base64 chunks (files are listed on the ticket).
 
-import { INTERNAL_ASSIGNEE, requireBilling, readMetadata, withTicketLock, guardedTransition, saveMetadata, readCatalog, selectionErrors, BusinessError } from "./ticket-metadata.js";
+import { INTERNAL_ASSIGNEE, requireBilling, readMetadata, withTicketLock, guardedTransition, saveMetadata, readCatalog, selectionErrors, internalDefaults, BusinessError } from "./ticket-metadata.js";
 
 export const MAX_FILE = 4 * 1024 * 1024; // Vercel accepts request bodies up to 4.5 MB
 export const MAX_FILES = 20;
@@ -142,8 +142,9 @@ export async function internalRoutes(request, env, url, me, deps = {}) {
     const people = teamPeople(env);
     if(me.role==="admin")requireBilling(b.metadata,env);
     if(b.assignee===undefined)b.assignee=INTERNAL_ASSIGNEE;
-    // The client is optional when opening an internal ticket; one that is chosen must be valid.
-    const chosen=b.metadata||{};if(chosen.clientId||chosen.subClientId){const selection=selectionErrors(await readCatalog(env),chosen,{active:true});if(selection.length)throw new BusinessError(selection.join(". "));}
+    // Without a client, the ticket goes under the "Internal" client and project; one that is chosen must be valid.
+    const chosen=b.metadata||{},metadata=chosen.clientId||chosen.subClientId?chosen:{...chosen,...(await internalDefaults(env))};
+    if(metadata.clientId||metadata.subClientId){const selection=selectionErrors(await readCatalog(env),metadata,{active:true});if(selection.length)throw new BusinessError(selection.join(". "));}
     if (people.length && b.assignee === undefined) return fail("bad_request", "Choose the assignee: " + people.join(", ") + ".", 400);
     const err = applyFields(t, { ...b, status: undefined, devs: me.role === "admin" ? b.devs || [] : [me.dev] }, me, true, people);
     if (err) return fail("bad_request", err, 400);
@@ -152,7 +153,7 @@ export async function internalRoutes(request, env, url, me, deps = {}) {
     t.key = "INT-" + (await store.incr("it:seq"));
     t.created = t.updated = now();
     t.createdBy = by(me);
-    await saveMetadata(env,t.key,{...b.metadata,revision:0},me,{creating:true});
+    await saveMetadata(env,t.key,{...metadata,revision:0},me,{creating:true});
     await saveTicket(store, t);
     await store.sadd("itickets", t.key);
     await recordTicketEvent(env, t.key, me, { action: "created", changes: { status: { from: null, to: t.status }, assignee: { from: null, to: t.assignee }, developers: { from: null, to: t.devs.join(", ") } } });
