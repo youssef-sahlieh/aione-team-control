@@ -198,22 +198,31 @@ export async function unassignNew(env, rows) {
 
 // Which tickets the dashboard lists:
 // - open ticket (any stage that isn't folded): always shown, like Odoo's kanban.
-// - Solved or Cancelled: hidden, unless the customer wrote after it was closed (emails and replies; internal
-//   notes don't count): then it's moved back to In Progress in Odoo (so we close it again) and shown.
+// - Solved or Cancelled: hidden, unless the ticket's own customer wrote after it was closed (emails and replies;
+//   internal notes don't count): then it's shown with its real stage. The dashboard never changes the stage itself.
+//   Only the ticket's customer (its contact, or its email address) counts: Odoo's automatic emails (solved,
+//   rating requests), OdooBot, archived staff and people in copy don't.
 const isNote = (x) => Array.isArray(x.subtype_id) && /note/i.test(String(x.subtype_id[1]));
 export async function conversation(env, rows, users, allStages) {
   const stageOf = (t) => allStages.find((x) => Array.isArray(t.stage_id) && x.id === t.stage_id[0]);
   const closed = rows.filter((t) => stageOf(t)?.fold);
   if (!closed.length) return rows;
   const ours = new Set(users.map((u) => (Array.isArray(u.partner_id) ? u.partner_id[0] : 0)).filter(Boolean));
+  const byId = new Map(closed.map((t) => [t.id, t]));
+  const fromCustomer = (x) => {
+    const t = byId.get(x.res_id);
+    if (!t || (Array.isArray(x.author_id) && ours.has(x.author_id[0]))) return false;
+    if (Array.isArray(x.author_id) && Array.isArray(t.partner_id) && x.author_id[0] === t.partner_id[0]) return true;
+    const email = customerOf(t).email.toLowerCase();
+    return !!email && String(x.email_from || "").toLowerCase().includes(email);
+  };
   const msgs = await odoo(env, "mail.message", "search_read", [[["model", "=", "helpdesk.ticket"], ["res_id", "in", closed.map((t) => t.id)], ["message_type", "in", ["email", "comment"]]]],
-    { fields: ["res_id", "date", "author_id", "subtype_id", "message_type"], order: "date desc", limit: 5000 });
-  const last = new Map(); // ticket id -> { customer, us }
+    { fields: ["res_id", "date", "author_id", "email_from", "subtype_id", "message_type"], order: "date desc", limit: 5000 });
+  const last = new Map(); // ticket id -> { customer }
   for (const x of msgs) {
-    if (isNote(x)) continue;
-    const fromUs = Array.isArray(x.author_id) && ours.has(x.author_id[0]);
-    const s = last.get(x.res_id) || {}; const k = fromUs ? "us" : "customer";
-    if (!s[k] || String(x.date) > s[k]) s[k] = String(x.date);
+    if (isNote(x) || !fromCustomer(x)) continue;
+    const s = last.get(x.res_id) || {};
+    if (!s.customer || String(x.date) > s.customer) s.customer = String(x.date);
     last.set(x.res_id, s);
   }
   const shown = [];
@@ -222,13 +231,6 @@ export async function conversation(env, rows, users, allStages) {
     if (stage && stage.fold) {
       const closedAt = String(t.close_date || t.write_date || "");
       if (!s.customer || s.customer <= closedAt) continue;
-      // The customer answered after it was Solved or Cancelled: back to In Progress.
-      const team = Array.isArray(t.team_id) ? t.team_id[0] : 0, open = allStages.filter((x) => !x.fold && (!team || !x.team_ids.length || x.team_ids.includes(team)));
-      const target = open.find((x) => /in progress/i.test(x.name)) || open[1] || open[0];
-      if (!target) continue;
-      try { await odoo(env, "helpdesk.ticket", "write", [[t.id], { stage_id: target.id }]); t.stage_id = [target.id, target.name]; t.close_date = false; }
-      catch (e) { console.log("odoo reopen failed:", e && e.message); }
-      shown.push(t); continue;
     }
     shown.push(t);
   }

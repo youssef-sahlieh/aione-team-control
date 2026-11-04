@@ -13,6 +13,8 @@ const TICKETS = {
   320: { id: 320, name: "Solved, customer wrote again", stage_id: [3, "Solved"], user_id: [12, "Shahd Ghayadah"], partner_email: "s@example.invalid", partner_name: "", partner_id: [41, "S"], priority: "0", team_id: [1, "ai1 | Support"], create_date: "2026-10-01 08:00:00", write_date: "2026-10-06 09:00:00", close_date: "2026-10-06 09:00:00", sla_deadline: false, ticket_ref: "320", description: "" },
   330: { id: 330, name: "Solved and quiet", stage_id: [3, "Solved"], user_id: [12, "Shahd Ghayadah"], partner_email: "q@example.invalid", partner_name: "", partner_id: [42, "Q"], priority: "0", team_id: [1, "ai1 | Support"], create_date: "2026-10-01 08:00:00", write_date: "2026-10-06 09:00:00", close_date: "2026-10-06 09:00:00", sla_deadline: false, ticket_ref: "330", description: "" },
   340: { id: 340, name: "Customer answered our reply", stage_id: [2, "In Progress"], user_id: [12, "Shahd Ghayadah"], partner_email: "a@example.invalid", partner_name: "", partner_id: [43, "A"], priority: "0", team_id: [1, "ai1 | Support"], create_date: "2026-10-01 08:00:00", write_date: "2026-10-07 09:00:00", close_date: false, sla_deadline: false, ticket_ref: "340", description: "" },
+  350: { id: 350, name: "Solved, then only Odoo wrote", stage_id: [3, "Solved"], user_id: [12, "Shahd Ghayadah"], partner_email: "o@example.invalid", partner_name: "", partner_id: [44, "O"], priority: "0", team_id: [1, "ai1 | Support"], create_date: "2026-10-01 08:00:00", write_date: "2026-10-06 09:00:00", close_date: "2026-10-06 09:00:00", sla_deadline: false, ticket_ref: "350", description: "" },
+  360: { id: 360, name: "Solved, customer wrote from another contact", stage_id: [3, "Solved"], user_id: [12, "Shahd Ghayadah"], partner_email: "e@example.invalid", partner_name: "", partner_id: [45, "E"], priority: "0", team_id: [1, "ai1 | Support"], create_date: "2026-10-01 08:00:00", write_date: "2026-10-06 09:00:00", close_date: "2026-10-06 09:00:00", sla_deadline: false, ticket_ref: "360", description: "" },
   293: { id: 293, name: "Cartons order", stage_id: [2, "In Progress"], user_id: [34, "Bashar Bannoura"], partner_email: "neor@suzume.co.il", partner_name: "Neor El Hai", partner_id: false, priority: "0", team_id: [1, "ai1 | Support"], create_date: "2026-10-02 08:00:00", write_date: "2026-10-13 09:00:00", close_date: false, sla_deadline: false, ticket_ref: "293", description: "" }
 };
 const ATTACHMENTS = [
@@ -34,7 +36,12 @@ const MESSAGES = [
   { id: 9300, res_id: 330, body: "<p>Thanks</p>", author_id: [42, "Q"], date: "2026-10-05 09:00:00", subtype_id: [1, "Discussions"], message_type: "email", attachment_ids: [] },
   { id: 9400, res_id: 340, body: "<p>Done</p>", author_id: [112, "Shahd Ghayadah"], date: "2026-10-06 09:00:00", subtype_id: [1, "Discussions"], message_type: "comment", attachment_ids: [] },
   { id: 9401, res_id: 340, body: "<p>Not fixed</p>", author_id: [43, "A"], date: "2026-10-07 09:00:00", subtype_id: [1, "Discussions"], message_type: "email", attachment_ids: [] },
-  { id: 9402, res_id: 340, body: "<p>Checking</p>", author_id: [112, "Shahd Ghayadah"], date: "2026-10-07 10:00:00", subtype_id: [2, "Note"], message_type: "comment", attachment_ids: [] }
+  { id: 9402, res_id: 340, body: "<p>Checking</p>", author_id: [112, "Shahd Ghayadah"], date: "2026-10-07 10:00:00", subtype_id: [2, "Note"], message_type: "comment", attachment_ids: [] },
+  // After 350 was Solved only others wrote: the company (Odoo's automatic email), OdooBot, someone in copy.
+  { id: 9500, res_id: 350, body: "<p>Your ticket is solved</p>", author_id: [1, "Company"], email_from: "support@example.invalid", date: "2026-10-06 09:00:05", subtype_id: [1, "Discussions"], message_type: "comment", attachment_ids: [] },
+  { id: 9501, res_id: 350, body: "<p>Rate us</p>", author_id: [2, "OdooBot"], email_from: "bot@example.invalid", date: "2026-10-06 09:01:00", subtype_id: [1, "Discussions"], message_type: "email", attachment_ids: [] },
+  { id: 9502, res_id: 350, body: "<p>FYI</p>", author_id: [77, "Colleague"], email_from: "colleague@example.invalid", date: "2026-10-07 09:00:00", subtype_id: [1, "Discussions"], message_type: "email", attachment_ids: [] },
+  { id: 9600, res_id: 360, body: "<p>Still broken</p>", author_id: [78, "E (second contact)"], email_from: '"E" <E@example.invalid>', date: "2026-10-07 09:00:00", subtype_id: [1, "Discussions"], message_type: "email", attachment_ids: [] }
 ];
 globalThis.fetch = async (url, init) => {
   const body = JSON.parse(init.body);
@@ -200,10 +207,8 @@ test("a picture added to an Odoo note is uploaded to that ticket and attached to
   assert.equal(empty.status, 400);
 });
 
-test("every open ticket is listed, even after our reply; a Solved ticket the customer wrote to goes back to In Progress", async () => {
+test("every open ticket is listed, even after our reply; a Solved ticket the customer wrote to is listed but stays Solved", async () => {
   const t = await adminToken();
-  // Solved again (an earlier list in this file may already have reopened it).
-  Object.assign(TICKETS[320], { stage_id: [3, "Solved"], close_date: "2026-10-06 09:00:00" });
   calls.length = 0;
   const keys = (await req("/odoo/tickets", { token: t })).data.tickets.map((x) => x.key).sort();
   assert.ok(keys.includes("HD-293"), "the customer wrote and we haven't replied");
@@ -211,9 +216,11 @@ test("every open ticket is listed, even after our reply; a Solved ticket the cus
   assert.ok(keys.includes("HD-340"), "the customer answered our reply");
   assert.ok(!keys.includes("HD-330"), "Solved with nothing after: hidden");
   assert.ok(keys.includes("HD-320"), "Solved, then the customer wrote: shown again");
-  const reopened = calls.filter((c) => c.args[3] === "helpdesk.ticket" && c.args[4] === "write");
-  assert.deepEqual(reopened.map((c) => c.args[5]), [[[320], { stage_id: 2 }]], "moved to In Progress in Odoo");
-  assert.equal(TICKETS[320].stage_id[0], 2);
+  assert.ok(!keys.includes("HD-350"), "only Odoo, OdooBot or someone in copy wrote: stays hidden");
+  assert.ok(keys.includes("HD-360"), "the customer wrote from another contact with the same email");
+  assert.equal(calls.filter((c) => c.args[3] === "helpdesk.ticket" && c.args[4] === "write").length, 0, "the stage in Odoo is never changed");
+  const t320 = (await req("/odoo/tickets", { token: t })).data.tickets.find((x) => x.key === "HD-320");
+  assert.equal(t320.status, "Solved");
 });
 
 test("Reply to customer is emailed by Odoo to the ticket's customer; an internal note isn't", async () => {
