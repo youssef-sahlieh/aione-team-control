@@ -3,18 +3,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { memoryStore } from '../proxy/src/users.js';
-import { setKnowledgePassword, unlockKnowledge, saveKnowledgeEntry, knowledgeStatus } from '../proxy/src/knowledge-lock.js';
-import { toHtml, toText } from '../proxy/src/knowledge-articles.js';
+import { setKnowledgePassword, unlockKnowledge, saveKnowledgeEntry, knowledgeStatus, knowledgeRoutes } from '../proxy/src/knowledge-lock.js';
+import { toHtml, toText, resetFieldCache, pictureIds } from '../proxy/src/knowledge-articles.js';
 
 const admin = { email: 'admin@example.invalid', name: 'Admin', role: 'admin' };
 const user = { email: 'user@example.invalid', name: 'Developer', role: 'user' };
 const setup = () => ({ STORE: memoryStore(), ODOO_URL: 'https://odoo.example.invalid/', ODOO_DB: 'db', ODOO_LOGIN: 'bot', ODOO_API_KEY: 'key' });
 const code = (status, errorCode) => e => e.status === status && e.code === errorCode;
 
-// A fake Odoo JSON-RPC server (the same endpoint the rest of the app uses) that keeps knowledge articles in memory.
+// A fake Odoo JSON-RPC server (the same endpoint the rest of the app uses) that keeps knowledge articles and their
+// picture attachments in memory.
 function fakeOdoo() {
+  resetFieldCache();
   const calls = [];
-  const articles = [{ id: 7, name: 'Customer 554', body: '<p>login: shop<br>pass: a &amp; b</p>', write_date: '2026-11-01 10:00:00' }];
+  const articles = [
+    { id: 7, name: 'Customer 554', body: '<p>login: shop<br>pass: a &amp; b</p>', write_date: '2026-11-01 10:00:00', parent_id: false, sequence: 2, icon: '🏪', category: 'workspace', is_article_item: false },
+    { id: 9, name: 'Workflow', body: '<p>Steps</p><img src="/web/image/41?access_token=t1"><img src="/web/image/42-ab12/x.png"><img src="/web/content/43">', write_date: '2026-11-01 11:00:00', parent_id: [7, 'Customer 554'], sequence: 1, icon: false, category: 'workspace', is_article_item: false },
+    { id: 10, name: 'Row of a list', body: '', write_date: '2026-11-01 11:00:00', parent_id: [9, 'Workflow'], sequence: 1, icon: false, category: 'workspace', is_article_item: true }
+  ];
+  const files = [
+    { id: 41, res_model: 'knowledge.article', mimetype: 'image/png', file_size: 3, datas: 'AAAA' },
+    { id: 42, res_model: 'knowledge.article', mimetype: 'image/jpeg', file_size: 3, datas: 'BBBB' },
+    { id: 43, res_model: 'account.move', mimetype: 'image/png', file_size: 3, datas: 'SECRET' }
+  ];
   const original = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
     if (!String(url).startsWith('https://odoo.example.invalid/jsonrpc')) return original(url, init);
@@ -23,14 +34,25 @@ function fakeOdoo() {
     const reply = (result) => Response.json({ jsonrpc: '2.0', id: body.id, result });
     if (service === 'common' && method === 'authenticate') return reply(args[2] === 'key' ? 7 : false);
     const [db, , key, model, m, a, kw = {}] = args;
+    calls.push({ model, method: m, db, key, args: a, kwargs: kw });
+    const pick = (row, fields) => Object.fromEntries([['id', row.id], ...fields.filter(f => f in row).map(f => [f, row[f]])]);
+    if (model === 'ir.attachment') {
+      if (m === 'read') return reply(files.filter(x => a[0].includes(x.id)).map(x => pick(x, a[1])));
+      if (m === 'create') { files.push({ id: 50, ...a[0], file_size: 3 }); return reply(50); }
+      if (m === 'generate_access_token') return reply(['tok50']);
+      return reply(false);
+    }
     if (model !== 'knowledge.article') return reply(false);
-    calls.push({ method: m, db, key, args: a, kwargs: kw });
-    if (m === 'search_read') return reply(articles);
-    if (m === 'create') { const id = 8; articles.push({ id, name: a[0][0].name, body: a[0][0].body, write_date: '2026-11-02 09:00:00' }); return reply([id]); }
-    if (m === 'write') { Object.assign(articles.find(x => x.id === a[0][0]), a[1]); return reply(true); }
+    if (m === 'fields_get') return reply({ name: {}, body: {}, parent_id: {}, sequence: {}, icon: {}, category: {}, is_article_item: {}, write_date: {} });
+    if (m === 'search_read') return reply((a[0].length ? articles.filter(x => x.id === 9) : articles).map(x => pick(x, kw.fields)));
+    if (m === 'read') return reply(articles.filter(x => a[0].includes(x.id)).map(x => pick(x, a[1])));
+    if (m === 'create') { const id = articles.some(x => x.id === 8) ? 11 : 8; articles.push({ id, ...a[0][0], parent_id: a[0][0].parent_id ? [a[0][0].parent_id, ''] : false, write_date: '2026-11-02 09:00:00', is_article_item: false }); return reply([id]); }
+    if (m === 'write') { Object.assign(articles.find(x => x.id === a[0][0]), a[1], { write_date: '2026-11-03 08:00:00' }); return reply(true); }
+    if (m === 'move_to') { articles.find(x => x.id === a[0][0]).parent_id = kw.parent_id ? [kw.parent_id, ''] : false; return reply(true); }
+    if (m === 'action_send_to_trash') { articles.splice(articles.findIndex(x => x.id === a[0][0]), 1); return reply(true); }
     return reply(false);
   };
-  return { calls, articles, restore: () => { globalThis.fetch = original; } };
+  return { calls, articles, files, restore: () => { globalThis.fetch = original; } };
 }
 
 test('only administrators set the knowledge password, and it must be a usable length', async () => {
@@ -57,8 +79,11 @@ test('unlocking returns the Odoo link and the entries read through the shared Od
     await assert.rejects(unlockKnowledge(env, 'wrong-password'), code(403, 'wrong_password'));
     const result = await unlockKnowledge(env, 'long-enough-1');
     assert.equal(result.url, 'https://odoo.example.invalid/odoo/knowledge');
-    assert.deepEqual(result.articles, [{ id: 7, name: 'Customer 554', text: 'login: shop\npass: a & b', updatedAt: '2026-11-01 10:00:00' }]);
-    assert.equal(odoo.calls[0].method, 'search_read');
+    assert.deepEqual(result.articles, [
+      { id: 7, name: 'Customer 554', parentId: null, sequence: 2, icon: '🏪', category: 'workspace', updatedAt: '2026-11-01 10:00:00' },
+      { id: 9, name: 'Workflow', parentId: 7, sequence: 1, icon: '', category: 'workspace', updatedAt: '2026-11-01 11:00:00' }
+    ], 'the tree, without article items');
+    assert.equal(odoo.calls[0].method, 'fields_get');
     assert.equal(odoo.calls[0].db, 'db');
     assert.equal(odoo.calls[0].key, 'key');
   } finally { odoo.restore(); }
@@ -86,7 +111,7 @@ test('adding and editing entries needs the right password and never reaches Odoo
     const edited = await saveKnowledgeEntry(env, { password: 'long-enough-1', id: 7, name: 'Customer 554', text: 'login: changed' });
     assert.equal(edited.id, 7);
     assert.deepEqual(odoo.calls.find(c => c.method === 'write').args[0], [7]);
-    assert.equal(edited.articles.find(a => a.id === 7).text, 'login: changed');
+    assert.equal(odoo.articles.find(a => a.id === 7).body, '<p>login: changed</p>');
     await assert.rejects(saveKnowledgeEntry(env, { password: 'long-enough-1', name: '  ', text: 'x' }), code(400, 'invalid_name'));
   } finally { odoo.restore(); }
 });
@@ -129,4 +154,67 @@ test('an error Odoo returns for the request is passed on as Odoo\'s own message'
     };
     await assert.rejects(unlockKnowledge(env, 'long-enough-1'), e => e.status === 502 && e.code === 'odoo_error' && e.message === 'You are not allowed to read knowledge articles.');
   } finally { globalThis.fetch = original; }
+});
+
+// Calls a knowledge route the way the page does. A refusal comes back as the BusinessError it throws.
+const post = (env, path, body) => knowledgeRoutes(new Request('https://proxy.example.invalid' + path, { method: 'POST', body: JSON.stringify(body) }), env, user, path)
+  .then(r => r.json());
+
+test('an article opens with its pictures, and only Knowledge pictures are given out', async () => {
+  const env = setup(); const odoo = fakeOdoo();
+  try {
+    await setKnowledgePassword(env, admin, 'long-enough-1');
+    await assert.rejects(post(env, '/knowledge/article', { password: 'nope-nope-nope', id: 9 }), code(403, 'wrong_password'));
+    const r = await post(env, '/knowledge/article', { password: 'long-enough-1', id: 9 });
+    assert.equal(r.article.name, 'Workflow');
+    assert.equal(r.article.parentId, 7);
+    assert.match(r.article.body, /<img src="\/web\/image\/41/);
+    assert.deepEqual(r.pictures, { 41: 'data:image/png;base64,AAAA', 42: 'data:image/jpeg;base64,BBBB' }, 'not the accounting file (43)');
+    assert.deepEqual(pictureIds('<img alt="x" src="https://odoo.example.invalid/web/image/5?unique=1"><img src="/web/image/x">'), [5]);
+  } finally { odoo.restore(); }
+});
+
+test('a nested article is added under its parent, edited with HTML, and refused if Odoo changed it meanwhile', async () => {
+  const env = setup(); const odoo = fakeOdoo();
+  try {
+    await setKnowledgePassword(env, admin, 'long-enough-1');
+    const added = await saveKnowledgeEntry(env, { password: 'long-enough-1', name: 'Step 2', body: '<h2>Two</h2>', parentId: 9 });
+    assert.equal(added.id, 8);
+    assert.equal(added.articles.find(a => a.id === 8).parentId, 9);
+    assert.equal(odoo.calls.filter(c => c.method === 'create').at(-1).args[0][0].internal_permission, undefined, "a nested article takes its parent's access");
+    await saveKnowledgeEntry(env, { password: 'long-enough-1', name: 'Root', body: '<p>x</p>' });
+    assert.equal(odoo.calls.filter(c => c.method === 'create').at(-1).args[0][0].internal_permission, 'write', 'a top-level article goes to the Workspace');
+
+    const saved = await saveKnowledgeEntry(env, { password: 'long-enough-1', id: 9, name: 'Workflow', body: '<p>New <b>steps</b></p>', icon: '📦', updatedAt: '2026-11-01 11:00:00' });
+    assert.equal(saved.updatedAt, '2026-11-03 08:00:00');
+    assert.equal(odoo.articles.find(a => a.id === 9).body, '<p>New <b>steps</b></p>');
+    assert.equal(odoo.articles.find(a => a.id === 9).icon, '📦');
+    await assert.rejects(saveKnowledgeEntry(env, { password: 'long-enough-1', id: 9, name: 'Workflow', body: '<p>old copy</p>', updatedAt: '2026-11-01 11:00:00' }), code(409, 'changed'));
+    assert.equal(odoo.articles.find(a => a.id === 9).body, '<p>New <b>steps</b></p>');
+  } finally { odoo.restore(); }
+});
+
+test('a picture added in the editor is attached to the article in Odoo with an access token', async () => {
+  const env = setup(); const odoo = fakeOdoo();
+  try {
+    await setKnowledgePassword(env, admin, 'long-enough-1');
+    const r = await post(env, '/knowledge/picture', { password: 'long-enough-1', articleId: 9, name: 'shot.png', type: 'image/png', data: 'iVBORw0K' });
+    assert.deepEqual(r, { id: 50, src: '/web/image/50?access_token=tok50', picture: 'data:image/png;base64,iVBORw0K' });
+    assert.deepEqual(odoo.files.at(-1), { id: 50, name: 'shot.png', datas: 'iVBORw0K', mimetype: 'image/png', res_model: 'knowledge.article', res_id: 9, file_size: 3 });
+    await assert.rejects(post(env, '/knowledge/picture', { password: 'long-enough-1', articleId: 9, name: 'x.svg', type: 'image/svg+xml', data: 'AAAA' }), code(400, 'invalid_type'));
+  } finally { odoo.restore(); }
+});
+
+test('articles are found by their text, moved and sent to the trash in Odoo', async () => {
+  const env = setup(); const odoo = fakeOdoo();
+  try {
+    await setKnowledgePassword(env, admin, 'long-enough-1');
+    assert.deepEqual((await post(env, '/knowledge/search', { password: 'long-enough-1', query: 'steps' })).ids, [9]);
+    const moved = await post(env, '/knowledge/move', { password: 'long-enough-1', id: 9, parentId: null });
+    assert.equal(moved.articles.find(a => a.id === 9).parentId, null);
+    await assert.rejects(post(env, '/knowledge/move', { password: 'long-enough-1', id: 9, parentId: 9 }), code(400, 'invalid_parent'));
+    const trashed = await post(env, '/knowledge/trash', { password: 'long-enough-1', id: 9 });
+    assert.ok(!trashed.articles.some(a => a.id === 9));
+    assert.equal(odoo.calls.find(c => c.method === 'action_send_to_trash').args[0][0], 9);
+  } finally { odoo.restore(); }
 });

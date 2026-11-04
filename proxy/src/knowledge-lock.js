@@ -1,9 +1,9 @@
 // Odoo knowledge base, behind an extra password that administrators preset. The password is stored only as
-// a PBKDF2 hash. Every list, add and edit needs the right password again, and failed attempts are counted
+// a PBKDF2 hash. Every read and change needs the right password again, and failed attempts are counted
 // and paused for 15 minutes after five misses. The page keeps the password in memory only, never in browser storage.
 import { BusinessError, requireStore } from './ticket-metadata.js';
 import { odooConfigured } from './odoo.js';
-import { listArticles, saveArticle } from './knowledge-articles.js';
+import { listArticles, saveArticle, readArticle, searchArticles, readPictures, addPicture, moveArticle, trashArticle } from './knowledge-articles.js';
 
 const LOCK_KEY = 'knowledge:lock:v1';
 const FAILS_KEY = 'knowledge:failures:v1';
@@ -58,9 +58,23 @@ export async function unlockKnowledge(env, password) {
 
 export async function saveKnowledgeEntry(env, body) {
   await verifyKnowledgePassword(env, body.password);
-  const saved = await saveArticle(env, { id: body.id ? Number(body.id) : null, name: body.name, text: body.text });
+  const saved = await saveArticle(env, {
+    id: body.id ? Number(body.id) : null, name: body.name, text: body.text, body: body.body, icon: body.icon,
+    parentId: body.parentId ? Number(body.parentId) : null, updatedAt: typeof body.updatedAt === 'string' ? body.updatedAt : ''
+  });
   return { ...saved, articles: await listArticles(env) };
 }
+
+// One article with its pictures, a search, more pictures, a new picture, a move, or the trash. Each one checks the
+// knowledge password again.
+const ACTIONS = {
+  article: (env, b) => readArticle(env, Number(b.id)),
+  search: async (env, b) => ({ ids: await searchArticles(env, b.query) }),
+  pictures: (env, b) => readPictures(env, Array.isArray(b.ids) ? b.ids.slice(0, 20) : []),
+  picture: (env, b) => addPicture(env, { articleId: Number(b.articleId), name: b.name, type: b.type, data: b.data }),
+  move: async (env, b) => ({ ...(await moveArticle(env, { id: Number(b.id), parentId: b.parentId ? Number(b.parentId) : null })), articles: await listArticles(env) }),
+  trash: async (env, b) => ({ ...(await trashArticle(env, { id: Number(b.id) })), articles: await listArticles(env) })
+};
 
 export async function knowledgeStatus(env, me) {
   const record = await readLock(env);
@@ -81,6 +95,12 @@ export async function knowledgeRoutes(request, env, me, path) {
   if (path === '/knowledge/save' && request.method === 'POST') {
     const body = await request.json().catch(() => ({}));
     return Response.json(await saveKnowledgeEntry(env, body), { headers: noStore });
+  }
+  const action = /^\/knowledge\/(article|search|pictures|picture|move|trash)$/.exec(path);
+  if (action && request.method === 'POST') {
+    const body = await request.json().catch(() => ({}));
+    await verifyKnowledgePassword(env, body.password);
+    return Response.json(await ACTIONS[action[1]](env, body), { headers: noStore });
   }
   throw new BusinessError('Not found.', 404, 'not_found');
 }

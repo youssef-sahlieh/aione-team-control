@@ -15,11 +15,11 @@
 <link rel="stylesheet" href="assets/styles/mobile.css">
 </head>
 <body>
-<div class="wrap">
+<div class="wrap kb-wrap">
   <div class="top">
     <div class="brand">
       <h1>Odoo knowledge base</h1>
-      <div class="sub">Customer logins are kept as entries in Odoo. Opening and changing them needs the knowledge password.</div>
+      <div class="sub">The articles in Odoo Knowledge, as Odoo shows them. Every change is saved straight to Odoo.</div>
     </div>
     <span class="db-top-actions">
       <a class="btn" href="dashboard.html">← Dashboard</a>
@@ -44,37 +44,82 @@
     <p class="msg" id="unlock-msg" role="status"></p>
   </section>
 
-  <section class="blk" id="entries-block" hidden>
-    <div class="kb-toolbar">
-      <input class="inp kb-search" id="kb-search" type="search" placeholder="Search by name or text" aria-label="Search entries" autocomplete="off">
-      <span class="msg" id="kb-count" aria-live="polite"></span>
-      <span class="kb-actions">
-        <a class="btn" id="kb-open" target="_blank" rel="noopener">Open in Odoo ↗</a>
-        <button class="btn primary" id="kb-new" type="button">Add entry</button>
+  <div class="kb-app" id="kb-app" hidden>
+    <aside class="kb-side" aria-label="Articles">
+      <input class="inp kb-search" id="kb-search" type="search" placeholder="Search articles…" aria-label="Search articles" autocomplete="off">
+      <div class="kb-side-actions">
+        <button class="btn primary" id="kb-new" type="button">+ New article</button>
+        <button class="btn" id="kb-reload" type="button" title="Read the articles from Odoo again">Reload</button>
         <button class="btn" id="kb-lock" type="button">Lock</button>
-      </span>
-    </div>
-    <p class="msg" id="kb-note" role="status"></p>
-    <ul class="kb-list" id="entries"></ul>
-    <p class="msg kb-empty" id="entries-empty" hidden></p>
-  </section>
+      </div>
+      <p class="msg" id="kb-count" aria-live="polite"></p>
+      <nav class="kb-tree" id="kb-tree"></nav>
+    </aside>
 
-  <section class="kb-card kb-edit-card" id="edit-block" hidden>
-    <h2 id="edit-title">Add entry</h2>
-    <form id="edit-form" class="kb-form kb-edit">
-      <input type="hidden" id="edit-id">
-      <label class="business-field kb-grow"><span>Name</span><input class="inp" id="edit-name" type="text" maxlength="200" required></label>
-      <label class="business-field kb-full"><span>Details</span><textarea class="inp" id="edit-text" rows="10" maxlength="20000"></textarea>
-        <span class="msg kb-count" id="edit-count" aria-live="polite"></span>
-      </label>
-      <span class="kb-actions kb-full">
-        <button class="btn primary" id="edit-submit" type="submit">Save</button>
-        <button class="btn" id="edit-cancel" type="button">Cancel</button>
-      </span>
-    </form>
-    <p class="msg" id="edit-msg" role="status"></p>
-  </section>
+    <main class="kb-main">
+      <p class="msg" id="kb-note" role="status"></p>
+      <div class="kb-empty" id="kb-pick">Pick an article on the left, or add a new one.</div>
 
+      <article class="kb-view" id="kb-view" hidden>
+        <div class="kb-crumbs" id="kb-crumbs"></div>
+        <div class="kb-head">
+          <h1 class="kb-title"><span class="kb-icon" id="kb-view-icon"></span><span id="kb-view-title"></span></h1>
+          <span class="kb-actions">
+            <button class="btn primary" id="kb-edit" type="button">Edit</button>
+            <button class="btn" id="kb-child" type="button">+ Nested article</button>
+            <button class="btn" id="kb-move" type="button">Move</button>
+            <button class="btn" id="kb-copy" type="button">Copy text</button>
+            <a class="btn" id="kb-odoo" target="_blank" rel="noopener">Open in Odoo ↗</a>
+            <button class="btn danger" id="kb-trash" type="button">Trash</button>
+          </span>
+        </div>
+        <div class="kb-move" id="kb-move-box" hidden>
+          <label class="business-field"><span>Move under</span><select class="inp" id="kb-move-to"></select></label>
+          <button class="btn primary" id="kb-move-ok" type="button">Move</button>
+          <button class="btn" id="kb-move-cancel" type="button">Cancel</button>
+        </div>
+        <div class="kb-doc" id="kb-body"></div>
+      </article>
+
+      <form class="kb-view kb-editor" id="kb-editor" hidden>
+        <div class="kb-crumbs" id="kb-edit-crumbs"></div>
+        <div class="kb-edit-head">
+          <input class="inp kb-icon-input" id="kb-edit-icon" type="text" maxlength="8" placeholder="📄" aria-label="Icon (an emoji)">
+          <input class="inp kb-title-input" id="kb-edit-title" type="text" maxlength="200" required aria-label="Title">
+        </div>
+        <div class="kb-tools" role="toolbar" aria-label="Formatting" id="kb-tools">
+          <button class="btn" type="button" data-cmd="formatBlock" data-arg="h1" title="Heading 1">H1</button>
+          <button class="btn" type="button" data-cmd="formatBlock" data-arg="h2" title="Heading 2">H2</button>
+          <button class="btn" type="button" data-cmd="formatBlock" data-arg="h3" title="Heading 3">H3</button>
+          <button class="btn" type="button" data-cmd="formatBlock" data-arg="p" title="Normal text">Text</button>
+          <span class="kb-sep"></span>
+          <button class="btn" type="button" data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+          <button class="btn" type="button" data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+          <button class="btn" type="button" data-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+          <button class="btn" type="button" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+          <span class="kb-sep"></span>
+          <button class="btn" type="button" data-cmd="insertUnorderedList" title="Bulleted list">• List</button>
+          <button class="btn" type="button" data-cmd="insertOrderedList" title="Numbered list">1. List</button>
+          <button class="btn" type="button" data-cmd="formatBlock" data-arg="pre" title="Code block">Code</button>
+          <button class="btn" type="button" data-cmd="formatBlock" data-arg="blockquote" title="Quote">Quote</button>
+          <button class="btn" type="button" data-cmd="insertHorizontalRule" title="Separator">―</button>
+          <span class="kb-sep"></span>
+          <button class="btn" type="button" data-cmd="link" title="Link">Link</button>
+          <button class="btn" type="button" data-cmd="picture" title="Add a picture (or paste or drop one)">Picture</button>
+          <button class="btn" type="button" data-cmd="removeFormat" title="Clear formatting">Clear</button>
+          <input type="file" id="kb-file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+        </div>
+        <div class="kb-doc kb-editable" id="kb-edit-body" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Article"></div>
+        <div class="kb-edit-foot">
+          <button class="btn primary" id="kb-save" type="submit">Save to Odoo</button>
+          <button class="btn" id="kb-cancel" type="button">Cancel</button>
+          <span class="msg" id="kb-edit-msg" role="status"></span>
+        </div>
+      </form>
+    </main>
+  </div>
+
+  <div class="kb-zoom" id="kb-zoom" hidden><img id="kb-zoom-img" alt=""></div>
 </div>
 
 <script src="assets/config.js"></script>
