@@ -4,8 +4,8 @@
 // One index of all PRs is kept in the database and brought up to date incrementally (only PRs changed
 // since the last sync are read), at most every SYNC_MS, so ticket screens stay fast.
 const SYNC_MS = 2 * 60 * 1000;
-// v2: PRs are matched to internal tickets (INT-n) too, so the index is read again once.
-const INDEX_KEY = "github:prs:v2", LOCK_KEY = "github:prs:lock";
+// v3: more ways of writing INT-n are matched, so the index is read again once.
+const INDEX_KEY = "github:prs:v3", LOCK_KEY = "github:prs:lock";
 const MAX_PAGES_FIRST_SYNC = 40; // 4,000 PRs per repository
 
 export const githubConfigured = (env) => !!(env.GITHUB_TOKEN && repos(env).length);
@@ -16,7 +16,10 @@ function aliases(env) { return [...new Set([env.JIRA_PROJECT, ...String(env.GITH
 // Internal tickets are written the same way: INT-12 (also in the branch name, e.g. int-12-fix).
 export function ticketKeys(env, { title = "", body = "", branch = "" }) {
   const project = String(env.JIRA_PROJECT || "").toUpperCase(), out = new Set();
-  for (const text of [title, body, branch]) for (const m of String(text || "").matchAll(/(?:^|[^A-Za-z0-9])INT[-_](\d{1,7})(?!\d)/gi)) out.add("INT-" + Number(m[1]));
+  // INT-12, INT_12, INT–12 (en/em dash), INT- 12, INT12.
+  for (const text of [title, body, branch]) for (const m of String(text || "").matchAll(/(?:^|[^A-Za-z0-9])INT(?:[-_‐-―]\s?|(?=\d))(\d{1,7})(?!\d)/gi)) out.add("INT-" + Number(m[1]));
+  // "INT 12" only in capitals, so an ordinary word like "int 5" is not a ticket.
+  for (const text of [title, body, branch]) for (const m of String(text || "").matchAll(/(?:^|[^A-Za-z0-9])INT\s(\d{1,7})(?!\d)/g)) out.add("INT-" + Number(m[1]));
   const names = aliases(env).map((a) => a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
   if (!project || !names) return [...out];
   const full = new RegExp("(?:^|[^A-Za-z0-9])(?:" + names + ")[-_ ]?\\s?(\\d{1,7})(?!\\d)", "gi");
@@ -25,6 +28,8 @@ export function ticketKeys(env, { title = "", body = "", branch = "" }) {
   const text = String(title || "") + "\n" + String(body || "");
   for (const m of text.matchAll(/^[ \t>*_-]*jira\s*:([^\n]*)$/gim)) for (const n of m[1].matchAll(/(?:^|[^A-Za-z0-9-])#?(\d{1,7})(?!\d)/g)) out.add(project + "-" + Number(n[1]));
   for (const m of text.matchAll(/\bjira(?:\s+ticket)?\s*#?\s*(\d{1,7})(?!\d)/gi)) out.add(project + "-" + Number(m[1]));
+  // An "Internal ticket: 45" line, like the "Jira:" line above.
+  for (const m of text.matchAll(/^[ \t>*_-]*internal\s+tickets?\s*:([^\n]*)$/gim)) for (const n of m[1].matchAll(/(?:^|[^A-Za-z0-9-])#?(\d{1,7})(?!\d)/g)) out.add("INT-" + Number(n[1]));
   return [...out];
 }
 
