@@ -188,13 +188,14 @@ test('clients sync from Odoo: only Odoo companies are clients, each project a su
   const [model,method]=[p.args[3],p.args[4]];
   // Odoo filters the contact list to companies; the mock returns only what that domain matches.
   // The integration user works in company 1 (Main); only its companies, partners and projects are taken.
-  if(model==='res.users')return Response.json({result:[{id:6,company_ids:[9,1]}]});
-  if(model==='res.partner'&&method==='search_read'){assert.deepEqual(p.args[5],[[['is_company','=',true],['company_id','=',1]]]);return Response.json({result:[{id:1,display_name:'Acme'}]});}
+  if(model==='res.users')return Response.json({result:[{id:6,company_ids:[1,9]}]});
+  if(model==='res.company')return Response.json({result:[{id:1,name:'All in One'},{id:9,name:'Holding'}]});
+  if(model==='res.partner'&&method==='search_read'){assert.deepEqual(p.args[5],[[['is_company','=',true],'|',['company_id','=',1],['company_id','=',false]]]);return Response.json({result:[{id:1,display_name:'Acme'}]});}
   if(model==='res.partner'&&method==='read'){const ids=p.args[5][0],kw=p.args[6];
     // Person 6 (Jane) works for no company: her own project is not a client's.
-    if(kw.fields.includes('is_company'))return Response.json({result:ids.map(id=>({id,active:true,is_company:id===1,company_id:id===1?[1,'Main']:false}))});
+    if(kw.fields.includes('is_company'))return Response.json({result:ids.map(id=>({id,active:true,is_company:id===1,company_id:id===1?[1,'All in One']:false}))});
     const commercial={5:[1,'Acme'],1:[1,'Acme'],6:[6,'Jane']};return Response.json({result:ids.map(id=>({id,commercial_partner_id:commercial[id]}))});}
-  assert.equal(model,'project.project');assert.equal(method,'search_read');assert.deepEqual(p.args[5],[[['company_id','=',1]]]);
+  assert.equal(model,'project.project');assert.equal(method,'search_read');assert.deepEqual(p.args[5],[['|',['company_id','=',1],['company_id','=',false]]]);
   return Response.json({result:[{id:10,display_name:'Branch A',partner_id:[5,'Acme, John']},{id:11,display_name:'Branch B',partner_id:[1,'Acme']},{id:12,display_name:'In-house',partner_id:false},{id:13,display_name:'Jane desk',partner_id:[6,'Jane']}]});};
  try{
   const call=(me,q='')=>api('/clients/odoo-sync'+q,'POST',{},me);
@@ -217,7 +218,8 @@ test('administrators create a customer or a project in Odoo from the Clients pag
  const customers=[{id:1,display_name:'Acme'}],projects=[];
  globalThis.fetch=async(u,init)=>{const p=JSON.parse(init.body).params;if(p.service==='common')return Response.json({result:7});
   const [model,method,args]=[p.args[3],p.args[4],p.args[5]];
-  if(model==='res.users')return Response.json({result:[{id:6,company_ids:[9,1]}]});
+  if(model==='res.users')return Response.json({result:[{id:6,company_ids:[1,9]}]});
+  if(model==='res.company')return Response.json({result:[{id:1,name:'All in One'},{id:9,name:'Holding'}]});
   if(method==='create'){created.push({model,values:args[0]});const id=100+created.length;if(model==='res.partner')customers.push({id,display_name:args[0].name});else projects.push({id,display_name:args[0].name,partner_id:[args[0].partner_id,'x']});return Response.json({result:id});}
   if(model==='res.partner'&&method==='search_read')return Response.json({result:customers});
   if(model==='res.partner'&&method==='read')return Response.json({result:args[0].map(id=>({id,active:true,is_company:true,company_id:[1,'Main'],commercial_partner_id:[id,(customers.find(c=>c.id===id)||{}).display_name]}))});
@@ -407,7 +409,8 @@ test('contacts archived in Odoo are archived in the dashboard by the sync, and c
  const odooState={customers:[{id:1,display_name:'Acme'},{id:2,display_name:'Old Shop'}],inactive:new Set([7])};
  globalThis.fetch=async(u,init)=>{const p=JSON.parse(init.body).params;if(p.service==='common')return Response.json({result:7});
   const [model,method,args,kw]=[p.args[3],p.args[4],p.args[5],p.args[6]||{}];
-  if(model==='res.users')return Response.json({result:[{id:6,company_ids:[9,1]}]});
+  if(model==='res.users')return Response.json({result:[{id:6,company_ids:[1,9]}]});
+  if(model==='res.company')return Response.json({result:[{id:1,name:'All in One'},{id:9,name:'Holding'}]});
   if(model==='res.partner'&&method==='search_read')return Response.json({result:odooState.customers});
   if(model==='res.partner'&&method==='read'){const ids=args[0];
    if(kw.fields.includes('active'))return Response.json({result:ids.map(id=>({id,active:!odooState.inactive.has(id),is_company:true,company_id:[1,'Main']}))});

@@ -166,18 +166,24 @@ function cleanName(n) {if(typeof n!=='string'||!n.trim()||n.trim().length>300)pr
 // inside one). Projects without a contact go under NO_CUSTOMER. Entries are only added (ids are stable by name), so tickets keep their client when Odoo changes.
 const odooSyncKey=env=>prefix(env)+'catalog:odoo-sync';
 export const NO_CUSTOMER='No contact';
-// The main company is the second company the Odoo integration user is allowed in (its company_ids, in Odoo's order).
-// Clients and projects come only from it.
+// The main company is the Odoo company named "All in One" (ODOO_CLIENT_COMPANY to name another) among those the
+// integration user is allowed in; without one, the second of its companies (company_ids, in Odoo's order).
+// Clients and projects are what Odoo shows with that company selected: its own, and those of no company.
 async function mainCompanyId(env){
   const [u]=await odoo(env,'res.users','search_read',[[['login','=',env.ODOO_LOGIN]]],{fields:['company_ids'],limit:1});
-  if(!u||!Array.isArray(u.company_ids)||u.company_ids.length<2)throw new Error("the Odoo user has no second company to take clients and projects from");
+  if(!u||!Array.isArray(u.company_ids)||!u.company_ids.length)throw new Error("the Odoo user has no company to take clients and projects from");
+  const wanted=nameKey(String(env.ODOO_CLIENT_COMPANY||'All in One'));
+  const named=(await odoo(env,'res.company','search_read',[[['id','in',u.company_ids]]],{fields:['name']})).find(c=>nameKey(String(c.name||''))===wanted);
+  if(named)return named.id;
+  if(u.company_ids.length<2)throw new Error("the Odoo user has no second company to take clients and projects from");
   return u.company_ids[1];
 }
+const inCompany=main=>['|',['company_id','=',main],['company_id','=',false]];
 async function odooRows(env){
   const main=await mainCompanyId(env);
   const [customers,projects]=await Promise.all([
-    odoo(env,'res.partner','search_read',[[['is_company','=',true],['company_id','=',main]]],{fields:['display_name'],order:'id',limit:5000}),
-    odoo(env,'project.project','search_read',[[['company_id','=',main]]],{fields:['display_name','partner_id'],order:'id',limit:1000})
+    odoo(env,'res.partner','search_read',[[['is_company','=',true],...inCompany(main)]],{fields:['display_name'],order:'id',limit:5000}),
+    odoo(env,'project.project','search_read',[inCompany(main)],{fields:['display_name','partner_id'],order:'id',limit:1000})
   ]);
   // A project's contact can be a person inside a company: the project belongs to the company. Clients are Odoo companies only:
   // a project whose owner is not a company (a person with no company) goes under NO_CUSTOMER, not under a client named after the person.
@@ -187,7 +193,7 @@ async function odooRows(env){
   // The contacts the projects belong to that are archived in Odoo (reading by id also returns archived ones).
   const owners=new Map();for(const p of projects)if(Array.isArray(p.partner_id)){const o=company[p.partner_id[0]]||{id:p.partner_id[0],name:String(p.partner_id[1]||'').trim()};owners.set(o.id,o.name);}
   const archivedOwners=[],companies=new Set();
-  if(owners.size)for(const c of await odoo(env,'res.partner','read',[[...owners.keys()]],{fields:['active','is_company','company_id']})){if(c.is_company&&Array.isArray(c.company_id)&&c.company_id[0]===main)companies.add(c.id);if(c.active===false&&owners.get(c.id))archivedOwners.push(owners.get(c.id));}
+  if(owners.size)for(const c of await odoo(env,'res.partner','read',[[...owners.keys()]],{fields:['active','is_company','company_id']})){if(c.is_company&&(!c.company_id||c.company_id[0]===main))companies.add(c.id);if(c.active===false&&owners.get(c.id))archivedOwners.push(owners.get(c.id));}
   const fits=n=>n&&n.length<=300;
   return {archivedOwners,
     customers:customers.map(c=>({displayName:String(c.display_name||'').trim(),sourceRow:c.id})).filter(r=>fits(r.displayName)),

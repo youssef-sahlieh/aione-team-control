@@ -30,9 +30,10 @@ const companies = await call(uid, "res.company", "search_read", [[["id", "in", u
 
 const out = [];
 for (const company of companies) {
-  // Same rule as the dashboard's client catalog: Odoo's Contacts > Companies, grouped by Company.
+  // Same rule as the dashboard's client catalog: Odoo's Contacts > Companies with this company selected
+  // (its own contacts and those of no company).
   const partners = await call(uid, "res.partner", "search_read", [[
-    ["is_company", "=", true], ["company_id", "=", company.id]
+    ["is_company", "=", true], "|", ["company_id", "=", company.id], ["company_id", "=", false]
   ]], { fields: ["display_name", "email", "phone"], order: "display_name", limit: 5000 });
   out.push({
     company: company.name,
