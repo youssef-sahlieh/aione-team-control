@@ -19,6 +19,9 @@ export const validEmail = (e) => /^[^@\s"'<>]+@[^@\s"'<>]+\.[^@\s"'<>]+$/.test(e
 // Developer names are the part after "ai1_" in Jira labels, e.g. "bashar.k".
 export const normDev = (d) => String(d || "").trim().replace(/^ai1_/i, "").toLowerCase();
 export const validDev = (d) => /^[a-z0-9._-]{1,40}$/.test(d);
+// The GitHub username an administrator sets for a developer (used to ask GitHub for reviews). Typed by hand, no sign-in.
+export const normGithub = (g) => String(g || "").trim().replace(/^@/, "");
+export const validGithub = (g) => /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(g);
 
 export function passwordProblem(pw) {
   if (typeof pw !== "string" || pw.length < 10) return "Use at least 10 characters.";
@@ -92,7 +95,7 @@ export async function listUsers(store) {
 }
 
 // What the dashboard may see about a user (never the password hash).
-export const publicUser = (u) => ({ email: u.email, accountId: u.id || "", name: u.name, role: u.role, dev: u.dev || "", hasPassword: !!u.pw, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null, lastLoginIp: u.lastLoginIp || "" });
+export const publicUser = (u) => ({ email: u.email, accountId: u.id || "", name: u.name, role: u.role, dev: u.dev || "", hasPassword: !!u.pw, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null, lastLoginIp: u.lastLoginIp || "", githubLogin: u.githubLogin || "" });
 
 // The last successful sign-in (time and IP address), shown on Manage users. Never blocks or fails a sign-in.
 export async function recordLogin(store, email, ip, at = new Date().toISOString()) {

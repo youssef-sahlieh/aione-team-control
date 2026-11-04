@@ -16,10 +16,17 @@ function aliases(env) { return [...new Set([env.JIRA_PROJECT, ...String(env.GITH
 // Internal tickets are written the same way: INT-12 (also in the branch name, e.g. int-12-fix).
 export function ticketKeys(env, { title = "", body = "", branch = "" }) {
   const project = String(env.JIRA_PROJECT || "").toUpperCase(), out = new Set();
-  // INT-12, INT_12, INT–12 (en/em dash), INT- 12, INT12.
-  for (const text of [title, body, branch]) for (const m of String(text || "").matchAll(/(?:^|[^A-Za-z0-9])INT(?:[-_‐-―]\s?|(?=\d))(\d{1,7})(?!\d)/gi)) out.add("INT-" + Number(m[1]));
-  // "INT 12" only in capitals, so an ordinary word like "int 5" is not a ticket.
-  for (const text of [title, body, branch]) for (const m of String(text || "").matchAll(/(?:^|[^A-Za-z0-9])INT\s(\d{1,7})(?!\d)/g)) out.add("INT-" + Number(m[1]));
+  // The word can be INT, int or Internal, and the word "ticket" (also "tiket", "tickets") may come before the number.
+  const ticketWord = "(?:[\\s_-]+(?:tickets?|tikets?|tiket))?";
+  // INT-12, Int-12, int_12, INT–12 (en/em dash), INT- 12, internal-12, internal tiket-12.
+  const dashed = new RegExp("(?:^|[^A-Za-z0-9])(?:int|internal)" + ticketWord + "\\s?[-_‐-―]\\s?(\\d{1,7})(?!\\d)", "gi");
+  // INT12, int12.
+  const glued = /(?:^|[^A-Za-z0-9])int(?=\d)(\d{1,7})(?!\d)/gi;
+  // A space and no dash: "INT 12", "INTERNAL 12", "Internal 12" (capitals), or "internal ticket 12" in any case. Plain
+  // "int 5" or "internal 5" is an ordinary word, not a ticket, and "Internal 2FA" is not a ticket either.
+  const spaced = new RegExp("(?:^|[^A-Za-z0-9])(?:INT|INTERNAL|Internal)" + ticketWord + "\\s+#?(\\d{1,7})(?![A-Za-z0-9])", "g");
+  const spacedWord = /(?:^|[^A-Za-z0-9])(?:int|internal)\s+(?:tickets?|tikets?|tiket)\s*:?\s*#?(\d{1,7})(?![A-Za-z0-9])/gi;
+  for (const re of [dashed, glued, spaced, spacedWord]) for (const text of [title, body, branch]) for (const m of String(text || "").matchAll(re)) out.add("INT-" + Number(m[1]));
   const names = aliases(env).map((a) => a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
   if (!project || !names) return [...out];
   const full = new RegExp("(?:^|[^A-Za-z0-9])(?:" + names + ")[-_ ]?\\s?(\\d{1,7})(?!\\d)", "gi");
@@ -28,8 +35,8 @@ export function ticketKeys(env, { title = "", body = "", branch = "" }) {
   const text = String(title || "") + "\n" + String(body || "");
   for (const m of text.matchAll(/^[ \t>*_-]*jira\s*:([^\n]*)$/gim)) for (const n of m[1].matchAll(/(?:^|[^A-Za-z0-9-])#?(\d{1,7})(?!\d)/g)) out.add(project + "-" + Number(n[1]));
   for (const m of text.matchAll(/\bjira(?:\s+ticket)?\s*#?\s*(\d{1,7})(?!\d)/gi)) out.add(project + "-" + Number(m[1]));
-  // An "Internal ticket: 45" line, like the "Jira:" line above.
-  for (const m of text.matchAll(/^[ \t>*_-]*internal\s+tickets?\s*:([^\n]*)$/gim)) for (const n of m[1].matchAll(/(?:^|[^A-Za-z0-9-])#?(\d{1,7})(?!\d)/g)) out.add("INT-" + Number(n[1]));
+  // An "Internal ticket: 45" (or "int tiket: 45") line, like the "Jira:" line above.
+  for (const m of text.matchAll(/^[ \t>*_-]*(?:internal|int)\s+(?:tickets?|tikets?|tiket)\s*:([^\n]*)$/gim)) for (const n of m[1].matchAll(/(?:^|[^A-Za-z0-9-])#?(\d{1,7})(?!\d)/g)) out.add("INT-" + Number(n[1]));
   return [...out];
 }
 
@@ -143,4 +150,30 @@ export function prsByKey(index, keys) {
   }
   for (const k of Object.keys(out)) out[k].sort((a, b) => (a.updated < b.updated ? 1 : -1));
   return out;
+}
+
+// One pull request from the index (the id is "owner/repo#number", the same as the index key).
+export async function prRecord(env, id) { return (await readIndex(env)).prs[id] || null; }
+
+// Review requests (see reviews.js). Every call has a timeout, and the answer is returned rather than thrown, so the
+// caller can tell "GitHub refused" from "no answer" (the second may still have been accepted).
+export async function githubRequest(env, method, path, body) {
+  const res = await fetch("https://api.github.com" + path, {
+    method,
+    headers: { Authorization: "Bearer " + env.GITHUB_TOKEN, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "aion-team-control", ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(10000)
+  });
+  const data = await res.json().catch(() => null);
+  return { status: res.status, ok: res.ok, data, rateLimited: res.status === 429 || (res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0") };
+}
+
+export const requestReviewer = (env, repo, number, login) => githubRequest(env, "POST", "/repos/" + repo + "/pulls/" + number + "/requested_reviewers", { reviewers: [login] });
+export const removeReviewer = (env, repo, number, login) => githubRequest(env, "DELETE", "/repos/" + repo + "/pulls/" + number + "/requested_reviewers", { reviewers: [login] });
+
+// Logins GitHub still has a review requested from (lowercase). Throws when GitHub doesn't answer.
+export async function requestedLogins(env, repo, number) {
+  const r = await githubRequest(env, "GET", "/repos/" + repo + "/pulls/" + number + "/requested_reviewers");
+  if (!r.ok) throw new Error("GitHub answered " + r.status);
+  return (r.data?.users || []).map((u) => String(u.login).toLowerCase());
 }

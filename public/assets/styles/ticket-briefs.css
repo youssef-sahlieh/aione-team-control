@@ -2,7 +2,7 @@
 .gr .ttl .s, .card .t, .compact-ticket b { color: var(--fg); font-weight: 600; }
 .gr .ttl:hover .s { color: var(--accent); }
 .gr .stbtn { font-weight: 600; color: color-mix(in srgb,var(--k) 85%,var(--fg)); border: 1px solid color-mix(in srgb,currentColor 30%,transparent); }
-.gr .duebtn:not(.late):not(.today) { color: var(--muted); }
+.gr .duebtn:not(.late):not(.today):not(.unset) { color: var(--muted); }
 .gr .who, .gr .upd, .gr .key, .gr .tags .epic, .gr .snip { color: var(--muted); }
 .gr .upd { font-size: 12px; }
 .ticket-brief { min-width: 0; font-size: 13px; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; }

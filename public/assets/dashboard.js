@@ -22,6 +22,7 @@ import { createDueDateHistory } from "./components/due-date-history.js";
 import { createTicketNotes } from "./components/ticket-notes.js";
 import { createInboxBell } from "./components/inbox-bell.js";
 import { createDateRequests } from "./components/date-requests.js";
+import { createReviews } from "./components/reviews.js";
 import { createCommentMentions } from "./components/comment-mentions.js";
 
   // The dashboard keeps loading after the page itself has loaded; the browser's own scroll restore could then
@@ -182,6 +183,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       const meta=el("span","pr-meta",(p.author?p.author+" · ":"")+(p.branch&&p.base?p.branch+" → "+p.base+" · ":"")+(p.merged?"merged "+ago(p.merged):"updated "+ago(p.updated)));
       row.append(el("span","pr-state pr-"+p.state,p.state),a,t,meta);
       const sig=prSignals(p); if(sig.length){ const line=el("div","pr-signals"); sig.forEach(([k,,full])=>line.appendChild(el("span","pr-sig "+k,full))); row.appendChild(line); }
+      // Administrators choose who reviews the pull request (see components/reviews.js).
+      if(IS_ADMIN){ const rv=el("button","btn small pr-reviewers","Reviewers"); rv.type="button"; rv.addEventListener("click",()=>REVIEWS.openPicker(p)); row.appendChild(rv); }
       box.appendChild(row);
     });
   }
@@ -589,7 +592,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   function dueButton(i,t){
     const late=i.due&&i.due<t&&i.cat!=="done";
     if(i.odoo){ const sp=el("span","duebtn none","—"); sp.title="Odoo Helpdesk tickets don't use due dates here"; return sp; }
-    const db=el("button","duebtn"+(late?" late":i.due===t?" today":!i.due?" none":""), i.due?(late?Math.round(dnum(t)-dnum(i.due))+"d late":i.due===t?"Today":fmtDate(i.due)):(dateRequests.all().some(r=>r.key===i.key&&(r.appliedDate||r.original?.due))?"Request date change":"+ set date"));
+    // No due date on a ticket with a developer assigned: shown in red so it gets a date.
+    const db=el("button","duebtn"+(late?" late":i.due===t?" today":!i.due?" none"+(i.devs&&i.devs.length?" unset":""):""),i.due?(late?Math.round(dnum(t)-dnum(i.due))+"d late":i.due===t?"Today":fmtDate(i.due)):(dateRequests.all().some(r=>r.key===i.key&&(r.appliedDate||r.original?.due))?"Request date change":"+ set date"));
     db.type="button"; db.title=(i.due?"Due "+fmtDate(i.due)+" · ":"")+(!i.due?"Set initial due date":IS_ADMIN?"Change approved date":"Request date change"); db.addEventListener("click",e=>{ e.stopPropagation(); duePopover(db,[i.key]); }); return db;
   }
   function avatar(i){ const p=i.assignee?PEOPLE[i.assignee]:null; const a=el("span","av "+(i.assignee?"kp-"+i.assignee:"k8"),p?p.ini:"?"); a.title=p?p.name:i.assigneeName; return a; }
@@ -1427,6 +1431,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     // New tickets that count: yours (all of them for administrators), not ones you opened yourself.
     mine:i=>(IS_ADMIN||(i.devs||[]).includes(MY_DEV))&&!(isInt(i.key)&&INT[i.key]&&INT[i.key].createdBy&&String(INT[i.key].createdBy.email).toLowerCase()===MY_EMAIL.toLowerCase()),
     open:key=>{ if(issueByKey(key)) openDrawer(key); else toast(key+" isn't in your ticket list.",["It may be closed for a while or not shared with you."],true); }});
+  const REVIEWS=createReviews({api,apiFile,toast,errorText});
   const dueDateHistory=createDueDateHistory({api,tickets:()=>state.issues||[],internal:key=>INT[key],openIssue:openDrawer});
   const dateRequests=createDateRequests({api,renderHistory:target=>dueDateHistory.render(target),context:()=>({admin:IS_ADMIN,email:MY_EMAIL,ticket:issueByKey}),openIssue:openDrawer,onApplied:(key,due)=>{patchIssue(key,matching(()=>({due:due||null}),"due"));mergeIssues();renderIfIdle();if(dz.key===key)$("d-due").value=due||"";},onChange:key=>{if(dz.key)dateRequests.renderDrawer(dz.key);return (key?refreshKeys([key]):reload()).then(()=>{if(dz.key){dateRequests.renderDrawer(dz.key);loadDetail(dz.key);}});}});
   state.businessFilter={};
@@ -1442,7 +1447,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // The Analytics page and its chart library load only when an administrator opens it.
   let analyticsModule=null;
   const analyticsPage=target=>import("./components/analytics.js").then(m=>{analyticsModule=analyticsModule||m.createAnalytics({api,today:todayStr,openIssue:key=>{if(issueByKey(key))openDrawer(key);}});analyticsModule.render(target);}).catch(err=>{target.appendChild(Object.assign(document.createElement("div"),{className:"state err",textContent:"Analytics could not be loaded: "+errorText(err)}));});
-  const workspace=createWorkspace({state,context:()=>({renderErrors:target=>syncErrors.render(target),admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount(),dateRequests:dateRequests.all(),pendingDates:dateRequests.pendingCount(),renderReports:target=>business.renderReports(target),renderAnalytics:target=>analyticsPage(target),syncAnalytics:()=>analyticsModule&&analyticsModule.syncFromUrl(),renderCatalog:target=>business.renderCatalog(target),renderWorkLog:target=>workLog.renderPage(target),renderRequests:(target,options)=>dateRequests.render(target,options)}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>{ if(!dz.key) return true; if(!closeDrawer(false,true)) return false; drawerPushed=false; if(location.hash) history.replaceState(history.state,"",location.pathname+location.search); return true; }});
+  const workspace=createWorkspace({state,context:()=>({renderErrors:target=>syncErrors.render(target),renderReviews:target=>REVIEWS.renderQueue(target),admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount(),dateRequests:dateRequests.all(),pendingDates:dateRequests.pendingCount(),renderReports:target=>business.renderReports(target),renderAnalytics:target=>analyticsPage(target),syncAnalytics:()=>analyticsModule&&analyticsModule.syncFromUrl(),renderCatalog:target=>business.renderCatalog(target),renderWorkLog:target=>workLog.renderPage(target),renderRequests:(target,options)=>dateRequests.render(target,options)}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>{ if(!dz.key) return true; if(!closeDrawer(false,true)) return false; drawerPushed=false; if(location.hash) history.replaceState(history.state,"",location.pathname+location.search); return true; }});
   const aiAssistant=createAIAssistant({openIssue:openDrawer,beforeOpen:()=>{if(dz.key&&!closeDrawer())return false;closePop();return true;}});
   const ticketBriefs=createTicketBriefs({api});
   const assigneeFilter=createAssigneeFilter({getSelection:()=>state.f.assignee,getOptions:()=>assigneeOptions(PEOPLE),getDefaults:()=>defaultAssigneeKeys(PEOPLE),getCounts:()=>countBy("assignee",i=>assigneeFilterKey(i,PEOPLE)),onApply:selected=>{state.f.assignee=selected;state.sel.clear();state.pageIndex=0;render();}});
