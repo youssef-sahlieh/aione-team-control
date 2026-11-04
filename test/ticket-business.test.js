@@ -189,7 +189,7 @@ test('clients sync from Odoo: only Odoo companies are clients, each project a su
   // Odoo filters the contact list to companies; the mock returns only what that domain matches.
   // The integration user works in company 1 (Main); only its companies, partners and projects are taken.
   if(model==='res.users')return Response.json({result:[{id:6,company_ids:[9,1]}]});
-  if(model==='res.partner'&&method==='search_read'){assert.deepEqual(p.args[5],[[['parent_id','=',false],['user_ids','=',false],['is_company','=',true],['company_id','=',1]]]);return Response.json({result:[{id:1,display_name:'Acme'}]});}
+  if(model==='res.partner'&&method==='search_read'){assert.deepEqual(p.args[5],[[['is_company','=',true],['company_id','=',1]]]);return Response.json({result:[{id:1,display_name:'Acme'}]});}
   if(model==='res.partner'&&method==='read'){const ids=p.args[5][0],kw=p.args[6];
     // Person 6 (Jane) works for no company: her own project is not a client's.
     if(kw.fields.includes('is_company'))return Response.json({result:ids.map(id=>({id,active:true,is_company:id===1,company_id:id===1?[1,'Main']:false}))});

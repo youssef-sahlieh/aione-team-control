@@ -160,8 +160,8 @@ export async function applyEpicSelection(env,key,{epicKey,clientId,subClientId,c
 const nameKey=n=>n.trim().normalize('NFC').toLocaleLowerCase('en-US');
 async function idFor(parent,name) { const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode((parent||'root')+'\0'+nameKey(name)));return 'c_'+Array.from(new Uint8Array(bytes).slice(0,16),x=>x.toString(16).padStart(2,'0')).join(''); }
 function cleanName(n) {if(typeof n!=='string'||!n.trim()||n.trim().length>300)problem('Client names must contain 1–300 characters.');return n.trim();}
-// Clients come straight from Odoo in two levels: every contact (top level, i.e. not a person inside a
-// company, and not an Odoo user account) is a client, with or without a project, and each project is a
+// Clients come straight from Odoo in two levels: every contact that is a company in the main company is a client
+// (exactly Odoo's Contacts > Companies, grouped by Company), with or without a project, and each project is a
 // sub-client - shown as "Project" - of its contact (the company, when the project's contact is a person
 // inside one). Projects without a contact go under NO_CUSTOMER. Entries are only added (ids are stable by name), so tickets keep their client when Odoo changes.
 const odooSyncKey=env=>prefix(env)+'catalog:odoo-sync';
@@ -176,7 +176,7 @@ async function mainCompanyId(env){
 async function odooRows(env){
   const main=await mainCompanyId(env);
   const [customers,projects]=await Promise.all([
-    odoo(env,'res.partner','search_read',[[['parent_id','=',false],['user_ids','=',false],['is_company','=',true],['company_id','=',main]]],{fields:['display_name'],order:'id',limit:5000}),
+    odoo(env,'res.partner','search_read',[[['is_company','=',true],['company_id','=',main]]],{fields:['display_name'],order:'id',limit:5000}),
     odoo(env,'project.project','search_read',[[['company_id','=',main]]],{fields:['display_name','partner_id'],order:'id',limit:1000})
   ]);
   // A project's contact can be a person inside a company: the project belongs to the company. Clients are Odoo companies only:

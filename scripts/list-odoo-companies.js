@@ -30,9 +30,9 @@ const companies = await call(uid, "res.company", "search_read", [[["id", "in", u
 
 const out = [];
 for (const company of companies) {
-  // Same rule as the dashboard's client catalog: top-level contacts that are companies, not user accounts.
+  // Same rule as the dashboard's client catalog: Odoo's Contacts > Companies, grouped by Company.
   const partners = await call(uid, "res.partner", "search_read", [[
-    ["parent_id", "=", false], ["user_ids", "=", false], ["is_company", "=", true], ["company_id", "=", company.id]
+    ["is_company", "=", true], ["company_id", "=", company.id]
   ]], { fields: ["display_name", "email", "phone"], order: "display_name", limit: 5000 });
   out.push({
     company: company.name,
