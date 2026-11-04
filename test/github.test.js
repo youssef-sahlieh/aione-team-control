@@ -16,6 +16,14 @@ test("ticket numbers are read from titles, branches and the release note's Jira 
   // Internal tickets: INT-n in the title, body or branch; words that only end in INT don't count.
   assert.deepEqual(keys({ title: "fix: cash rounding (INT-12)", body: "Also INT_40", branch: "codex/int-7-receipts" }), ["INT-12", "INT-40", "INT-7"]);
   assert.deepEqual(keys({ title: "PRINT-12 and MINT-3" }), []);
+  // Other ways of writing an internal ticket: spaces, dashes, no separator, and an "Internal ticket:" line.
+  assert.deepEqual(keys({ title: "fix: refunds (INT 45)" }), ["INT-45"]);
+  assert.deepEqual(keys({ title: "fix: refunds INT–46 and INT—47" }), ["INT-46", "INT-47"]);
+  assert.deepEqual(keys({ title: "fix: refunds INT48" }), ["INT-48"]);
+  assert.deepEqual(keys({ body: "# Pull Request\n\nInternal ticket: **45**\n" }), ["INT-45"]);
+  assert.deepEqual(keys({ body: "Internal ticket: **INT-45**" }), ["INT-45"]);
+  // Lowercase "int 5" is an ordinary word, not a ticket.
+  assert.deepEqual(keys({ title: "make the int 5 loop faster" }), []);
   assert.deepEqual(keys({ body: "Jira ticket 72 calls for manual deposits" }), ["AION-72"]);
   assert.deepEqual(keys({ branch: "codex/aione-561-sms" }), ["AION-561"]);
   // Placeholders, "None", other projects and numbers that aren't Jira references are ignored.
