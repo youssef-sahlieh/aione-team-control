@@ -33,7 +33,7 @@ import { odooAppRoutes, odooTranslations } from "./odoo-app.js";
 import { monitorCallbackUrl, monitorPublicKeys, monitorToken } from "./monitor-sso.js";
 import { cookieSessionRequest } from "./sessions.js";
 import { SESSION_MS, SESSION_SECONDS } from "./session-policy.js";
-import { aiChat, aiBrief, aiConfigured, aiDescription, AIError } from "./ai.js";
+import { aiChat, aiBrief, aiConfigured, aiDescription, aiImproveWriting, AIError } from "./ai.js";
 import { githubConfigured, syncPulls, prsByKey } from "./github.js";
 import { recordTicketEvent, ticketLogRoutes, readTicketLog } from "./ticket-log.js";
 import { integrationRoutes } from "./integrations.js";
@@ -516,6 +516,12 @@ async function route(request, env, url) {
     if(typeof b.description==="string"&&b.key)ticket.description=b.description.slice(0,6000)||ticket.description;
     try{return json({suggestion:await aiDescription(env,me,ticket)});}
     catch(e){if(e instanceof AIError||(e&&typeof e.status==="number"&&typeof e.code==="string"))return json({code:e.code,error:e.message},e.status);return fail("ai_unavailable","Could not suggest a description. Please try again.",502);}
+  }
+  // A comment being written, improved by the AI (formal, spelling and grammar fixed). Nothing is saved here.
+  if(path==="/ai-improve"&&method==="POST"){
+    const b=await readJson(request);if(!b||typeof b!=="object"||typeof b.text!=="string")return fail("bad_request","Write a comment first.",400);
+    try{return json({text:await aiImproveWriting(env,me,b.text)});}
+    catch(e){if(e instanceof AIError||(e&&typeof e.status==="number"&&typeof e.code==="string"))return json({code:e.code,error:e.message},e.status);return fail("ai_unavailable","Could not improve the text. Please try again.",502);}
   }
   if(path==="/clients"||path.startsWith("/clients/"))return catalogRoutes(request,env,url,me);
   if(path==="/epic-map"||path==="/epic-map/sync")return epicMapRoutes(request,env,url,me,(p,init)=>jira(env,p,init));

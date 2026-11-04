@@ -293,3 +293,28 @@ test("a Monitor sign-in that Team Control refuses shows the dashboard and says w
   expect(await page.evaluate(() => document.documentElement.style.visibility)).toBe("");
   expect(page.url()).toContain("/dashboard.html?ai1-monitor=");
 });
+
+// Improve writing: the AI rewrites the comment formally; the person mentioned is still mentioned when it's sent, and Undo
+// puts the original text back. Nothing is sent until Add comment.
+test("Improve writing rewrites the comment with AI, keeps the mention, and can be undone", async ({ page }) => {
+  const mock = await mockDashboard(page);
+  let asked = "";
+  await page.route("**/ai-improve", (r) => { asked = r.request().postDataJSON().text; return r.fulfill({ json: { text: "Dear [[M1]], there was an internet disconnection at the shop." } }); });
+  await page.goto("/dashboard.html#AION-101");
+  const box = page.locator("#d-reply");
+  await box.click();
+  await box.pressSequentially("@Ka");
+  await page.getByRole("option", { name: "Karim Example" }).click();
+  await box.pressSequentially("there was a internet disconncetion at the shop");
+  await page.locator("#d-improve").click();
+  await expect(box).toHaveValue("Dear @Karim Example, there was an internet disconnection at the shop.");
+  expect(asked).toBe("[[M1]] there was a internet disconncetion at the shop");
+  expect(mock.calls.some((c) => c.path.endsWith("/comment"))).toBe(false);
+  await page.locator("#d-cmsg").getByRole("button", { name: "Undo" }).click();
+  await expect(box).toHaveValue("@Karim Example there was a internet disconncetion at the shop");
+  await page.locator("#d-improve").click();
+  await expect(box).toHaveValue(/^Dear @Karim Example,/);
+  await page.locator("#d-send").click();
+  await expect.poll(() => mock.calls.find((c) => c.path === "/jira/issue/AION-101/comment")?.body?.text).toBe("Dear [~accountid:synthetic-karim], there was an internet disconnection at the shop.");
+  expect(mock.errors).toEqual([]);
+});

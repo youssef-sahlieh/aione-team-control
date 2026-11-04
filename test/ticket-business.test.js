@@ -378,6 +378,18 @@ test('client details come from Odoo (only fields it has); a name chosen in the d
   assert.equal((await readCatalog(s.env)).entries.find(e=>e.id===acme.id).aiName,undefined);
  }finally{globalThis.fetch=realFetch;}
 });
+test('AI improves the writing of a comment: formal, mistakes fixed, mentions kept; nothing is saved',async()=>{
+ const s=await setup();let seen=null,reply='Dear [[M1]], there was an internet disconnection.';
+ s.env.AI_PROVIDER=async body=>{seen=JSON.parse(body.input[0].content);return {output:[{type:'message',content:[{type:'output_text',text:reply}]}]};};
+ const r=await s.call('/ai-improve','POST',{text:'[[M1]] there was a internet disconncetion'});
+ assert.equal(r.status,200);assert.equal((await r.json()).text,'Dear [[M1]], there was an internet disconnection.');
+ assert.equal(seen.text,'[[M1]] there was a internet disconncetion');assert.equal(seen.source,'UNTRUSTED COMMENT TEXT');
+ reply='Dear colleague, there was an internet disconnection.'; // a mention lost: refused, the comment stays as written
+ assert.equal((await s.call('/ai-improve','POST',{text:'[[M1]] there was a internet disconncetion'})).status,502);
+ assert.equal((await s.call('/ai-improve','POST',{text:'   '})).status,400);
+ assert.equal((await s.call('/ai-improve','POST',{text:'x'.repeat(4001)})).status,413);
+ assert.equal((await s.call('/ai-improve','POST',{})).status,400);
+});
 test('AI suggests a ticket description from the ticket itself; replacing a Jira description is recorded with the real person',async()=>{
  const s=await setup();let seen=null;
  s.env.AI_PROVIDER=async body=>{seen=JSON.parse(body.input[0].content).data;return {output:[{type:'message',content:[{type:'output_text',text:'Goal:\n- Fix the labels'}]}]};};

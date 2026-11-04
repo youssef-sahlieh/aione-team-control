@@ -1413,6 +1413,22 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       if(!r.fail&&after){ const ix=after.indexOf("|"); const aid=after.slice(0,ix), aname=after.slice(ix+1); const r2=await doAssign([key],aid,aname); setMsg("d-cmsg",r2.fail?"Comment sent, but the assignee didn't change.":"Sent and assigned to "+aname+".",!r2.fail); } }
     finally{ sendingComment=false; btn.disabled=false; btn.textContent=label; } }
   $("d-send").addEventListener("click",()=>sendComment(false));
+  // Improve writing: the AI rewrites the comment formally and fixes spelling and grammar, keeping the people
+  // mentioned. Nothing is sent; Undo puts your own text back until you type again.
+  let undoImprove=null;
+  $("d-reply").addEventListener("input",()=>{ if(undoImprove){ undoImprove=null; $("d-cmsg").replaceChildren(); } });
+  $("d-improve").addEventListener("click",async()=>{
+    const key=dz.key, btn=$("d-improve"), msg=$("d-cmsg"); if(!key||!$("d-reply").value.trim()){ setMsg("d-cmsg","Write a comment first.",false); return; }
+    btn.disabled=true; $("d-reply").readOnly=true; msg.className="msg"; msg.textContent="Improving your writing…";
+    try{
+      const undo=await commentMentions.rewrite(async text=>(await api("/ai-improve",{method:"POST",body:{text}})).text);
+      if(dz.key!==key){ undo(); return; }
+      undoImprove=undo; const b=el("button","btn","Undo"); b.type="button";
+      b.addEventListener("click",()=>{ if(undoImprove&&dz.key===key) undoImprove(); undoImprove=null; msg.replaceChildren(); $("d-reply").focus(); });
+      msg.className="msg"; msg.replaceChildren("Rewritten by AI. Check it before sending. ",b);
+    }catch(err){ setMsg("d-cmsg",errorText(err),false); }
+    finally{ btn.disabled=false; $("d-reply").readOnly=false; }
+  });
   $("d-reply-customer").addEventListener("click",()=>sendComment(true));
 
   setInterval(()=>{ const a=$("auto"); if(!a||!lastLoad) return; const left=Math.max(0,120-Math.round((Date.now()-lastLoad)/1000)); a.textContent="next refresh in "+(left>=60?Math.floor(left/60)+"m "+(left%60)+"s":left+"s");

@@ -54,6 +54,24 @@ export function createCommentMentions({textarea,search,enabled,local=()=>false,p
   label();
   return {
     reset(){close();mentions=[];previous=textarea.value;label();},
+    // Replace the whole text with what rewrite(masked) returns, keeping the people mentioned: each mention is sent as
+    // a token ([[M1]]) and put back where the token comes back. Returns a function that undoes it.
+    async rewrite(rewrite){
+      sync();close();
+      const before={value:textarea.value,mentions:mentions.map(m=>({...m}))};
+      const live=mentions.filter(m=>textarea.value.slice(m.start,m.end)===m.label).sort((a,b)=>a.start-b.start);
+      let masked='',at=0;live.forEach((m,i)=>{masked+=textarea.value.slice(at,m.start)+'[[M'+(i+1)+']]';at=m.end;});masked+=textarea.value.slice(at);
+      const result=String(await rewrite(masked));
+      let value='',next=[];at=0;
+      for(const t of result.matchAll(/\[\[M(\d{1,3})\]\]/g)){
+        const m=live[Number(t[1])-1];value+=result.slice(at,t.index);at=t.index+t[0].length;
+        if(!m){value+=t[0];continue;}
+        next.push({...m,start:value.length,end:value.length+m.label.length});value+=m.label;
+      }
+      value+=result.slice(at);
+      textarea.value=value;previous=value;mentions=next;
+      return ()=>{textarea.value=before.value;previous=before.value;mentions=before.mentions;};
+    },
     mentioned(){sync();return [...new Set(mentions.filter(m=>textarea.value.slice(m.start,m.end)===m.label).map(m=>m.id))];},
     text(){sync();let result=textarea.value;if(local())return result.trim();for(const m of [...mentions].sort((a,b)=>b.start-a.start))if(result.slice(m.start,m.end)===m.label)result=result.slice(0,m.start)+'[~accountid:'+m.id+']'+result.slice(m.end);return result.trim();}
   };
