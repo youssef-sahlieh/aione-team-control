@@ -13,6 +13,9 @@ test("ticket numbers are read from titles, branches and the release note's Jira 
   assert.deepEqual(keys({ title: "feat: gated deposits API (Jira 72)" }), ["AION-72"]);
   assert.deepEqual(keys({ body: "## Release Note\nJira: AION-571 / AION-575 /AION- 5\nType: feature" }), ["AION-5", "AION-571", "AION-575"]);
   assert.deepEqual(keys({ body: "Release note required: yes\nJira: 572\n" }), ["AION-572"]);
+  // Internal tickets: INT-n in the title, body or branch; words that only end in INT don't count.
+  assert.deepEqual(keys({ title: "fix: cash rounding (INT-12)", body: "Also INT_40", branch: "codex/int-7-receipts" }), ["INT-12", "INT-40", "INT-7"]);
+  assert.deepEqual(keys({ title: "PRINT-12 and MINT-3" }), []);
   assert.deepEqual(keys({ body: "Jira ticket 72 calls for manual deposits" }), ["AION-72"]);
   assert.deepEqual(keys({ branch: "codex/aione-561-sms" }), ["AION-561"]);
   // Placeholders, "None", other projects and numbers that aren't Jira references are ignored.
@@ -81,6 +84,25 @@ test("developers only see pull requests for their own tickets", async () => {
   const d = await call("/github/prs?keys=AION-71,AION-72&refresh=1", token);
   assert.deepEqual(Object.keys(d.prs), ["AION-71"]);
   assert.match(jira[0].jql, /^labels = "ai1_builder" AND key in \(AION-71,AION-72\)$/);
+});
+
+test("internal tickets get the PRs that name them; developers only see their own", async () => {
+  const { env, call, pulls } = setup();
+  pulls["KAD-org/flutter_pos"].push({ number: 560, title: "fix: receipt printing (INT-5)", body: "", state: "open", draft: false, merged_at: null, updated_at: "2026-10-14T10:00:00Z", html_url: "https://github.com/KAD-org/flutter_pos/pull/560", user: { login: "dev1" }, head: { ref: "codex/receipts" }, base: { ref: "main" } });
+  await env.STORE.set("it:INT-5", JSON.stringify({ key: "INT-5", devs: ["builder"] }));
+  pulls["KAD-org/flutter_pos"].push({ number: 561, title: "fix: other till (INT-6)", body: "", state: "open", draft: false, merged_at: null, updated_at: "2026-10-14T11:00:00Z", html_url: "https://github.com/KAD-org/flutter_pos/pull/561", user: { login: "dev2" }, head: { ref: "codex/till" }, base: { ref: "main" } });
+  await env.STORE.set("it:INT-6", JSON.stringify({ key: "INT-6", devs: ["other"] }));
+  const admin = { email: "admin@aione.biz", name: "Admin", role: "admin", dev: "", v: 1 };
+  await saveUser(env.STORE, admin);
+  const user = { email: "dev@aione.biz", name: "Dev", role: "user", dev: "builder", v: 1 };
+  await saveUser(env.STORE, user);
+  const adminToken = (await makeToken(env, admin.email, Date.now(), 1)).token;
+  const userToken = (await makeToken(env, user.email, Date.now(), 1)).token;
+  const all = await call("/github/prs?keys=INT-5,INT-6", adminToken);
+  assert.deepEqual(all.prs["INT-5"].map((p) => p.number + " " + p.state), [560 + " open"]);
+  assert.deepEqual(all.prs["INT-6"].map((p) => p.number + " " + p.state), [561 + " open"]);
+  const mine = await call("/github/prs?keys=INT-5,INT-6", userToken);
+  assert.deepEqual(Object.keys(mine.prs), ["INT-5"]);
 });
 
 test("without a GitHub token nothing is requested", async () => {

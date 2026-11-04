@@ -686,13 +686,19 @@ async function route(request, env, url) {
   // Users only get PRs for tickets that are theirs.
   if (path === "/github/prs" && method === "GET") {
     if (!githubConfigured(env) || !env.STORE) return json({ configured: false, prs: {} });
-    let keys = [...new Set(String(url.searchParams.get("keys") || "").split(",").map((k) => k.trim()).filter((k) => isOurKey(k)))];
+    const isInternalKey = (k) => /^INT-\d+$/.test(k);
+    let keys = [...new Set(String(url.searchParams.get("keys") || "").split(",").map((k) => k.trim()).filter((k) => isOurKey(k) || isInternalKey(k)))];
     if (keys.length > 300) return fail("bad_request", "Ask for at most 300 tickets at a time.", 400);
     if (!keys.length) return json({ configured: true, prs: {} });
     if (!isAdmin) {
-      const r = await jira(env, "/rest/api/3/search/jql", { method: "POST", body: { jql: 'labels = "' + devLabel + '" AND key in (' + keys.join(",") + ")", fields: ["labels"], maxResults: 100 } });
-      if (!r.ok) return r.res;
-      const mine = new Set((r.data.issues || []).filter((i) => hasDevLabel(i.fields && i.fields.labels)).map((i) => i.key));
+      // Internal tickets: the ones assigned to this person's developer name. Jira tickets: the ones labelled for them.
+      const mine = new Set(Object.keys(await readBusinessTickets(keys.filter(isInternalKey))));
+      const ours = keys.filter((k) => !isInternalKey(k));
+      if (ours.length) {
+        const r = await jira(env, "/rest/api/3/search/jql", { method: "POST", body: { jql: 'labels = "' + devLabel + '" AND key in (' + ours.join(",") + ")", fields: ["labels"], maxResults: 100 } });
+        if (!r.ok) return r.res;
+        for (const i of r.data.issues || []) if (hasDevLabel(i.fields && i.fields.labels)) mine.add(i.key);
+      }
       keys = keys.filter((k) => mine.has(k));
     }
     try {
