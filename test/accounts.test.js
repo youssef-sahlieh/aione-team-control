@@ -99,12 +99,14 @@ const tests = [
     assert.equal((await call("/jira/issue/AION-1", { method: "PUT", token: u.token, body: { fields: { labels: ["ai1_bashar", "ai1_x"] } } })).status, 403, "can't change developers");
     assert.equal((await call("/jira/issue/AION-1", { method: "PUT", token: u.token, body: { fields: { assignee: null } } })).status, 403, "can't change assignee");
   }],
-  ["user can't manage users, send emails or search Jira people", async () => {
+  ["user can't manage users or send emails, but can search Jira people to mention them", async () => {
     const u = await login("bashar.b@aione.biz", "Bashar-pass-123", "5.5.5.5");
     assert.equal((await call("/users", { token: u.token })).status, 403);
     assert.equal((await call("/users", { method: "POST", token: u.token, body: { email: "me2@aione.biz", name: "x", role: "admin" } })).status, 403);
     assert.equal((await call("/mail", { method: "POST", token: u.token, body: { to: ["ellen@aione.biz"], subject: "x", html: "x" } })).status, 403);
-    assert.equal((await call("/jira/users?q=ab", { token: u.token })).status, 403);
+    jiraCalls.length=0;
+    assert.equal((await call("/jira/users?q=ab", { token: u.token })).status, 200);
+    assert.equal(jiraCalls.length,1,"the Jira people search runs for a user");
     jiraCalls.length=0;
     assert.equal((await call("/jira/issue/AION-1/history",{token:u.token})).status,403,"full ticket history remains manager-only, even for the user's own ticket");
     assert.equal(jiraCalls.length,0,"history denial happens before a Jira call");

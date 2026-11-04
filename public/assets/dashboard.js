@@ -1349,9 +1349,9 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   $("d-adddev").addEventListener("click",()=>{ const v=$("d-newdev").value.trim().replace(/^ai1_/i,"").replace(/\s+/g,"").toLowerCase(); if(!v){ setMsg("d-devmsg","Type a name first.",false); return; } dz.devs.add(v); $("d-newdev").value=""; renderDevChips(); setMsg("d-devmsg","Added ai1_"+v+". Press Save developers.",true); });
   $("d-newdev").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("d-adddev").click(); } });
   $("d-savedevs").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const labels=labelsWith(dz.labels,new Set(dz.devs)); const prev=new Set(dz.labels.filter(isDevLabel).map(devOf)); const want=new Set(dz.devs); const r=await runBatch([{key,added:[...dz.devs].filter(d=>!prev.has(d)),run:()=>(isOdoo(key)?odooApi.update(key,{devs:[...want]}):isInt(key)?internalApi.update(key,{devs:[...want]}):jira.edit(key,{labels})),patch:devsPatch(want)}],"Developers saved"); setMsg("d-devmsg",r.fail?"Not saved.":"Saved.",!r.fail); });
-  // Administrators mention Jira accounts on Jira tickets (Jira notifies them). Internal tickets, and everyone
-  // who isn't an administrator, mention dashboard people: they get a dashboard notification and an email.
-  const commentMentions=createCommentMentions({textarea:$("d-reply"),search:q=>jira.users(q),enabled:()=>!!dz.key&&!isOdoo(dz.key),local:()=>isInt(dz.key)||!IS_ADMIN,people:()=>mentionPeople(dz.key)});
+  // Everyone mentions Jira accounts on Jira tickets (Jira notifies them). Internal tickets mention dashboard people:
+  // they get a dashboard notification and an email.
+  const commentMentions=createCommentMentions({textarea:$("d-reply"),search:q=>jira.users(q),enabled:()=>!!dz.key&&!isOdoo(dz.key),local:()=>isInt(dz.key),people:()=>mentionPeople(dz.key)});
   // Pictures in a comment (paste with Ctrl+V, drag onto the box, or Add picture): uploaded to the ticket right
   // away and shown as a preview above the box, per ticket. When the comment is sent they go into it: Jira and
   // internal comments get the picture in their text (!name|thumbnail! / !name!), Odoo notes get it attached.

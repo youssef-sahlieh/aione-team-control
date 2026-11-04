@@ -635,7 +635,8 @@ async function route(request, env, url) {
     return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE,knowledgeLock:odooConfigured(env)&&!!env.STORE, capabilities:["ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1","db-report-pos-version-v1","epic-map-v1","ticket-bulk-import-v1"] });
   }
 
-  if (!isAdmin && (path === "/mail" || path === "/jira/users")) return fail("forbidden", "Only administrators can do that.", 403);
+  // Jira people are searchable for everyone, so anyone can @mention them in a Jira comment.
+  if (!isAdmin && path === "/mail") return fail("forbidden", "Only administrators can do that.", 403);
 
   if (path === "/mail" && method === "POST") {
     const b = await readJson(request), res = await sendMail(env, email, b);
