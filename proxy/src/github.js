@@ -4,7 +4,8 @@
 // One index of all PRs is kept in the database and brought up to date incrementally (only PRs changed
 // since the last sync are read), at most every SYNC_MS, so ticket screens stay fast.
 const SYNC_MS = 2 * 60 * 1000;
-const INDEX_KEY = "github:prs:v1", LOCK_KEY = "github:prs:lock";
+// v2: PRs are matched to internal tickets (INT-n) too, so the index is read again once.
+const INDEX_KEY = "github:prs:v2", LOCK_KEY = "github:prs:lock";
 const MAX_PAGES_FIRST_SYNC = 40; // 4,000 PRs per repository
 
 export const githubConfigured = (env) => !!(env.GITHUB_TOKEN && repos(env).length);
@@ -12,10 +13,12 @@ export function repos(env) { return String(env.GITHUB_REPOS || "").split(",").ma
 function aliases(env) { return [...new Set([env.JIRA_PROJECT, ...String(env.GITHUB_JIRA_ALIASES || "").split(",")].map((a) => String(a || "").trim().toUpperCase()).filter((a) => /^[A-Z][A-Z0-9_]*$/.test(a)))]; }
 
 // Every ticket key a PR refers to, as this project's keys (aliases such as AIONE-12 become AION-12).
+// Internal tickets are written the same way: INT-12 (also in the branch name, e.g. int-12-fix).
 export function ticketKeys(env, { title = "", body = "", branch = "" }) {
   const project = String(env.JIRA_PROJECT || "").toUpperCase(), out = new Set();
+  for (const text of [title, body, branch]) for (const m of String(text || "").matchAll(/(?:^|[^A-Za-z0-9])INT[-_](\d{1,7})(?!\d)/gi)) out.add("INT-" + Number(m[1]));
   const names = aliases(env).map((a) => a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-  if (!project || !names) return [];
+  if (!project || !names) return [...out];
   const full = new RegExp("(?:^|[^A-Za-z0-9])(?:" + names + ")[-_ ]?\\s?(\\d{1,7})(?!\\d)", "gi");
   for (const text of [title, body, branch]) for (const m of String(text || "").matchAll(full)) out.add(project + "-" + Number(m[1]));
   // Bare numbers only where they are clearly a Jira reference.

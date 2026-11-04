@@ -162,7 +162,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   }
   const prState=list=>list.some(p=>p.state==="open")?"open":list.some(p=>p.state==="draft")?"draft":list.every(p=>p.state==="merged")?"merged":"closed";
   async function loadPrs(keys,refresh){
-    keys=[...new Set(keys)].filter(k=>!isInt(k)&&!isOdoo(k)); if(!GITHUB||!keys.length) return;
+    keys=[...new Set(keys)].filter(k=>!isOdoo(k)); if(!GITHUB||!keys.length) return;
     try{
       for(let n=0;n<keys.length;n+=300){ const part=keys.slice(n,n+300); const r=await api("/github/prs?keys="+encodeURIComponent(part.join(","))+(refresh?"&refresh=1":"")); part.forEach(k=>{ PRS[k]=(r.prs&&r.prs[k])||[]; }); if(r.checks===false) PR_CHECKS=false; }
       PR_ERROR=""; if($("pop").hidden&&!drag) render(); if(dz.key&&keys.includes(dz.key)) renderPrs(dz.key);
