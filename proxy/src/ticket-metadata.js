@@ -209,6 +209,11 @@ export async function syncCatalogFromOdoo(env,{force=false}={}){
   if(!await store.setIfAbsent(lock,owner,120))return {odoo:true,changed:false,busy:true,syncedAt:last};
   try{
     const {customers,projects,archivedOwners}=await odooRows(env);let changed=false,added=0;
+    // Odoo projects the catalog links to that were deleted in Odoo (archived ones still exist): their links are
+    // dropped, so a project made again in Odoo under the same name is the one work is logged to.
+    const linked=[...new Set((await readCatalog(env)).entries.flatMap(e=>(e.sources||[]).filter(s=>s.source==='odoo').map(s=>s.row)))];
+    const existing=new Set(linked.length?(await odoo(env,'project.project','search_read',[[['id','in',linked]]],{fields:['id'],context:{active_test:false}})).map(p=>p.id):[]);
+    const deleted=new Set(linked.filter(id=>!existing.has(id)));
     if(customers.length||projects.length)for(let attempt=0;;attempt++){
       const key=catalogKey(env),previous=await store.get(key),catalog=previous?JSON.parse(previous):{revision:0,entries:[]};
       // The group for projects without a contact was called "No customer": renamed in place (same id, same projects).
@@ -218,6 +223,10 @@ export async function syncCatalogFromOdoo(env,{force=false}={}){
       let next=catalog,count=0;
       if(customers.length){const r=await prepareImport(next,customers,'odoo-customer');next=r.next;count+=r.preview.added;}
       if(projects.length){const r=await prepareImport(next,projects,'odoo');next=r.next;count+=r.preview.added;}
+      if(deleted.size){
+        if(next===catalog)next=structuredClone(catalog);
+        for(const e of next.entries)if(e.sources)e.sources=e.sources.filter(s=>!(s.source==='odoo'&&deleted.has(s.row)));
+      }
       // Contacts archived (or deleted) in Odoo are archived here too, so they aren't offered as clients; they
       // come back when restored in Odoo. Tickets that use one keep it. Archives made in the dashboard stay.
       if(customers.length){
@@ -266,6 +275,20 @@ async function readFields(env,model,ids,wanted){
   return fields.length&&ids.length?odoo(env,model,'read',[ids],{fields}):[];
 }
 const many2one=v=>Array.isArray(v)?String(v[1]||''):'';
+// A project made with only a name and a contact gets no task stages (and, for a contact of no company, no
+// company): Odoo then doesn't offer it when adding a task in a stage of All Tasks, nor for timesheets. New
+// projects take the setup of the latest project of the main company that has stages: the same stages,
+// timesheets, visibility and billing, in the main company. Also used to repair projects made before.
+const COPIED=['allow_timesheets','privacy_visibility','allow_billable'];
+export async function projectSetup(env){
+  const main=await mainCompanyId(env);
+  const [ref]=await odoo(env,'project.project','search_read',[[...inCompany(main),['type_ids','!=',false]]],{fields:['id'],order:'id desc',limit:1});
+  if(!ref)throw new Error('no project of the main company has task stages to copy');
+  const [r]=await readFields(env,'project.project',[ref.id],['type_ids',...COPIED]);
+  const values={company_id:main,type_ids:[[6,0,r.type_ids]]};
+  for(const f of COPIED)if(f in r)values[f]=r[f];
+  return {reference:ref.id,values};
+}
 export async function clientDetails(env,clientId){
   const catalog=await readCatalog(env),client=catalog.entries.find(e=>e.id===clientId&&!e.parentId);
   if(!client)problem('Client not found.',404,'not_found');
@@ -312,7 +335,7 @@ async function createInOdoo(env,url,me,b){
       let partner=(client.sources||[]).find(x=>x.source==='odoo-customer')?.row;
       if(!partner){const [found]=await odoo(env,'res.partner','search_read',[[['name','=',client.name],['parent_id','=',false]]],{fields:['id'],limit:1});partner=found&&found.id;}
       if(!partner)problem('This contact is not in Odoo. Create it as a contact first.');
-      created=await odoo(env,'project.project','create',[{name,partner_id:partner}]);
+      created=await odoo(env,'project.project','create',[{name,partner_id:partner,...(await projectSetup(env)).values}]);
     }
   }catch(e){if(e instanceof BusinessError)throw e;problem("Odoo didn't create it: "+String(e.message||'unknown error').slice(0,200),502,'odoo');}
   await syncCatalogFromOdoo(env,{force:true});

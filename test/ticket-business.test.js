@@ -223,6 +223,10 @@ test('administrators create a customer or a project in Odoo from the Clients pag
   if(method==='create'){created.push({model,values:args[0]});const id=100+created.length;if(model==='res.partner')customers.push({id,display_name:args[0].name});else projects.push({id,display_name:args[0].name,partner_id:[args[0].partner_id,'x']});return Response.json({result:id});}
   if(model==='res.partner'&&method==='search_read')return Response.json({result:customers});
   if(model==='res.partner'&&method==='read')return Response.json({result:args[0].map(id=>({id,active:true,is_company:true,company_id:[1,'Main'],commercial_partner_id:[id,(customers.find(c=>c.id===id)||{}).display_name]}))});
+  // The project new ones copy: the latest of the main company with task stages.
+  if(model==='project.project'&&method==='fields_get')return Response.json({result:{type_ids:{type:'many2many'},allow_timesheets:{type:'boolean'},privacy_visibility:{type:'selection'}}});
+  if(model==='project.project'&&method==='search_read'&&JSON.stringify(args[0]).includes('type_ids')){assert.deepEqual(args[0],['|',['company_id','=',1],['company_id','=',false],['type_ids','!=',false]]);return Response.json({result:[{id:50}]});}
+  if(model==='project.project'&&method==='read'){assert.deepEqual(args[0],[50]);return Response.json({result:[{id:50,type_ids:[3,4],allow_timesheets:true,privacy_visibility:'employees'}]});}
   return Response.json({result:projects});};
  try{
   assert.equal((await api('/clients/odoo/customer','POST',{name:'New Shop'},user)).status,403);
@@ -231,8 +235,13 @@ test('administrators create a customer or a project in Odoo from the Clients pag
   assert.deepEqual(created[0],{model:'res.partner',values:{name:'New Shop',is_company:true,customer_rank:1,email:'shop@example.invalid',phone:'050'}});
   const shop=(await c.json()).catalog.entries.find(e=>e.name==='New Shop'&&!e.parentId);assert.ok(shop);
   const pr=await api('/clients/odoo/project','POST',{name:'Shop POS',clientId:shop.id},admin);assert.equal(pr.status,201);
-  assert.deepEqual(created[1],{model:'project.project',values:{name:'Shop POS',partner_id:customers.find(x=>x.display_name==='New Shop').id}});
+  assert.deepEqual(created[1],{model:'project.project',values:{name:'Shop POS',partner_id:customers.find(x=>x.display_name==='New Shop').id,company_id:1,type_ids:[[6,0,[3,4]]],allow_timesheets:true,privacy_visibility:'employees'}});
   assert.deepEqual((await pr.json()).catalog.entries.filter(e=>e.parentId===shop.id).map(e=>e.name),['Shop POS']);
+  // Deleted in Odoo and made again from the dashboard: the project keeps only the new Odoo project.
+  projects.length=0;
+  const again=await api('/clients/odoo/project','POST',{name:'Shop POS',clientId:shop.id},admin);assert.equal(again.status,201);
+  const shopPos=(await again.json()).catalog.entries.filter(e=>e.parentId===shop.id);
+  assert.deepEqual(shopPos.map(e=>e.name),['Shop POS']);assert.deepEqual(shopPos[0].sources.filter(s=>s.source==='odoo').map(s=>s.row),[103]);
   assert.equal((await api('/clients/odoo/project','POST',{name:'Orphan',clientId:'missing'},admin)).status,400);
  }finally{globalThis.fetch=realFetch;}
 });
