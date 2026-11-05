@@ -20,6 +20,7 @@ The proxy's secrets are **Vercel environment variables**: vercel.com → aione-t
 | `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET` | Not used now: the Microsoft 365 alternative to Gmail, if an admin ever sets it up |
 | `JIRA_NOTIFICATION_SECRET` | Secret for the new-ticket Jira Automation webhook (at least 32 characters) |
 | `NO_DEVELOPER_NOTIFY_TO` | Optional recipient override; defaults to `youssef@aione.biz,ellen@aione.biz` |
+| `APP_URL` | The dashboard address, like `https://dashboard.ai1.host`. Used in links in emails |
 
 **After changing a variable, redeploy:** vercel.com → aione-team-proxy → **Deployments** → the latest one → **⋯ → Redeploy**. Variables only take effect on a new deployment.
 
@@ -56,6 +57,14 @@ Accounts are stored in a small free database (Upstash Redis) connected to the pr
 4. Youssef or Ellen signs in once with the current team password. That creates both administrator accounts, with that password; change it with **Forgot password?**.
 
 Until then, Youssef and Ellen sign in with the team password and the Users page explains that accounts aren't on yet.
+
+## Pull request reviews
+
+Administrators add reviewers to a pull request from the **Reviewers** button on the Pull requests page. Each reviewer sees it once in **Needs review**, with the linked Jira and internal tickets open read-only. The original assignee, labels and status of those tickets never change, and no ticket is copied. Review records are kept in the same Upstash database as the accounts, separate from the tickets.
+
+When a reviewer has a GitHub username, a real review request is also sent to GitHub. An administrator sets it for each developer on the **Users** page (**Manage** → **GitHub username**). Use the GitHub account of that person, which must be a member of the GitHub organisation. Nobody signs in with GitHub for this, and no GitHub app or OAuth setup is needed. Setting a username sends any review requests that were waiting for it.
+
+GitHub only accepts a review request when the token on the proxy (`GITHUB_TOKEN`) can request reviews on the repository. This has not been checked against the live token yet; if a request is refused, the reviewer's card shows GitHub's message and an administrator can retry it.
 
 ## Internal tickets
 

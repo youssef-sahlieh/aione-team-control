@@ -35,12 +35,13 @@ import { cookieSessionRequest } from "./sessions.js";
 import { SESSION_MS, SESSION_SECONDS } from "./session-policy.js";
 import { aiChat, aiBrief, aiConfigured, aiDescription, aiImproveWriting, AIError } from "./ai.js";
 import { githubConfigured, syncPulls, prsByKey } from "./github.js";
+import { reviewRoutes, requestWaitingReviews } from "./reviews.js";
 import { recordTicketEvent, ticketLogRoutes, readTicketLog } from "./ticket-log.js";
 import { integrationRoutes } from "./integrations.js";
 import { epicMapRoutes } from "./epic-map.js";
 import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
 import { recordLogin } from "./users.js";
-import { ROLES, checkPassword, createLinkToken, deleteUser, ensureAccountId, getUser, hashPassword, listUsers, newAccountId, normDev, normEmail, passwordProblem, peekLinkToken, publicUser, saveUser, updateUser, useLinkToken, validDev, validEmail } from "./users.js";
+import { ROLES, checkPassword, createLinkToken, deleteUser, ensureAccountId, getUser, hashPassword, listUsers, newAccountId, normDev, normEmail, normGithub, passwordProblem, peekLinkToken, publicUser, saveUser, updateUser, useLinkToken, validDev, validEmail, validGithub } from "./users.js";
 
 const enc = new TextEncoder();
 // Saved sign-ins last up to one year; account version changes still revoke tokens.
@@ -295,13 +296,19 @@ async function accountRoutes(request, env, url, me) {
     return json({ invited: sent, ...(sent ? {} : { link }) });
   }
 
-  const admins = (await listUsers(store)).filter((u) => u.role === "admin");
+  const all = await listUsers(store), admins = all.filter((u) => u.role === "admin");
   if (!m[2] && method === "PUT") {
     const b = (await readJson(request)) || {};
     const next = { ...target };
     if (b.name !== undefined) { next.name = String(b.name).trim(); if (!next.name || next.name.length > 80) return fail("bad_request", "Enter a name.", 400); }
     if (b.role !== undefined) { if (!ROLES.includes(b.role)) return fail("bad_request", "Choose Administrator or User.", 400); next.role = b.role; }
     if (b.dev !== undefined) { next.dev = normDev(b.dev); if (next.dev && !validDev(next.dev)) return fail("bad_request", "Developer names use letters, numbers, dots and dashes.", 400); }
+    if (b.githubLogin !== undefined) {
+      next.githubLogin = normGithub(b.githubLogin);
+      if (next.githubLogin && !validGithub(next.githubLogin)) return fail("bad_request", "Enter a GitHub username: letters, numbers and single dashes, up to 39 characters.", 400);
+      const holder = all.find((u) => u.email !== target.email && next.githubLogin && normGithub(u.githubLogin).toLowerCase() === next.githubLogin.toLowerCase());
+      if (holder) return fail("bad_request", "That GitHub username is already set for " + holder.name + ".", 400);
+    }
     if (next.role === "user" && !next.dev) return fail("bad_request", "Choose the developer this user sees.", 400);
     if (target.role === "admin" && next.role !== "admin") {
       if (target.email === me.email) return fail("bad_request", "You can't remove your own administrator role.", 400);
@@ -312,8 +319,14 @@ async function accountRoutes(request, env, url, me) {
     if (b.name !== undefined) set.name = next.name;
     if (b.role !== undefined) set.role = next.role;
     if (b.dev !== undefined) set.dev = next.dev;
+    if (b.githubLogin !== undefined) set.githubLogin = next.githubLogin;
     const saved = await updateUser(store, target.email, (cur) => ({ ...cur, ...set }));
     if (!saved) return fail("not_found", "No such user.", 404);
+    // A reviewer who was waiting for a GitHub login gets their review requests now.
+    if (set.githubLogin && set.githubLogin !== target.githubLogin) {
+      const ready = await ensureAccountId(store, saved);
+      if (ready) await requestWaitingReviews(env, ready.id, ready.githubLogin);
+    }
     return json({ user: publicUser(saved) });
   }
 
@@ -575,6 +588,7 @@ async function route(request, env, url) {
   }
 
   if (path === "/users" || path.startsWith("/users/")) return accountRoutes(request, env, url, me);
+  if (path === "/reviews" || path.startsWith("/reviews/")) return reviewRoutes(request, env, url, me, { jira });
   if (path === "/ticket-notes") return ticketNoteRoutes(request, env, url, me, {
     postToOdoo:(key, text) => postOdooNote(env, key, me, text),
     readTicket:async key => {

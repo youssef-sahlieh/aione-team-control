@@ -16,7 +16,8 @@ const icons = {
   requests: "M3 5v6h6 M3 11a9 9 0 1 1 2 7 M12 7v5l3 2",
   audit: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z M9 12l2 2 4-4",
   worklog: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18 M12 7v5l3 3",
-  errors: "M12 3l9 16H3z M12 10v4 M12 17h.01"
+  errors: "M12 3l9 16H3z M12 10v4 M12 17h.01",
+  reviews: "M4 4h12l4 4v12H4z M8 12l2 2 4-4"
 };
 const pages = [
   ["overview", "Overview", "Your work, at a glance."],
@@ -28,6 +29,7 @@ const pages = [
   ["analytics", "Analytics", "How much work comes in, gets done and takes time, over the period you choose."],
   ["clients", "Clients", "Manage clients (Odoo contacts) and their projects."],
   ["worklog", "Work log", "Time logged on tickets and sent to Odoo timesheets."],
+  ["reviews", "Needs review", "Pull requests waiting for your review. The linked tickets are read-only here."],
   ["errors", "Sync errors","Changes that didn't reach Jira, Odoo or the dashboard, ready to retry, and the state of the API keys."]
 ];
 // AI1 Monitor is a full page on its own site, opened in a new tab so the dashboard stays open. Its sign-in starts
@@ -258,17 +260,18 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     if(context().admin&&route.page==="history")moreNav.open=true;
     $("nav-date-count").textContent=String(context().pendingDates||0);
     $("nav-ticket-count").textContent = String(state.issues?.length || 0);
-    const custom = ["overview", "requests", "workload", "calendar", "reports", "analytics", "clients", "worklog", "errors"].includes(route.page);
+    const custom = ["overview", "requests", "workload", "calendar", "reports", "analytics", "clients", "worklog", "errors", "reviews"].includes(route.page);
     $("tickets-area").hidden = custom; $("workspace-content").hidden = !custom;
     if (!custom) return false;
     const target = $("workspace-content");
     target.replaceChildren();
-    if(context().filterCount&&!["requests","reports","analytics","clients","worklog","errors","calendar"].includes(route.page)){const info=node("div","summary-filter-info");info.append(node("span","","Using your current ticket filters"),button("Adjust filters →","linkbtn",()=>navigate("tickets")));target.appendChild(info);}
+    if(context().filterCount&&!["requests","reports","analytics","clients","worklog","errors","calendar","reviews"].includes(route.page)){const info=node("div","summary-filter-info");info.append(node("span","","Using your current ticket filters"),button("Adjust filters →","linkbtn",()=>navigate("tickets")));target.appendChild(info);}
     // Respect all active filters but include closed tickets for summary metrics.
     const data = allowedItems();
     if(route.page==="reports"&&context().admin)context().renderReports(target);
     if(route.page==="analytics"&&context().admin)context().renderAnalytics(target);
     if(route.page==="clients"&&context().admin)context().renderCatalog(target);
+    if(route.page==="reviews")context().renderReviews(target);
     if(route.page==="errors")context().renderErrors(target);
     if(route.page==="worklog")context().renderWorkLog(target);
     if (route.page === "requests") context().renderRequests(target);

@@ -20,7 +20,7 @@ async function saveFile(store, id, bytes) {
   for (let i = 0; i < parts; i++) await store.set("ia:" + id + ":" + i, toB64(bytes.subarray(i * CHUNK, (i + 1) * CHUNK)));
   return parts;
 }
-async function readFile(store, a) {
+export async function readFile(store, a) {
   const out = new Uint8Array(a.size);
   let at = 0;
   for (let i = 0; i < a.parts; i++) {

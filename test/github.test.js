@@ -30,6 +30,18 @@ test("ticket numbers are read from titles, branches and the release note's Jira 
   assert.deepEqual(keys({ title: "fix: cash rounding", body: "Jira: None\nJira: ticket number / text / None\nRefs NEXO-1234 and PR 55", branch: "codex/forecourt-opening-71" }), []);
 });
 
+test("internal tickets can be written as int-, Int-, INT, Internal, internal, or with the word ticket in any spelling", () => {
+  assert.deepEqual(keys({ title: "fix: a (int-1) (Int-2) (INT-3) (internal-4) (Internal–5) (INTERNAL—6)" }), ["INT-1", "INT-2", "INT-3", "INT-4", "INT-5", "INT-6"]);
+  assert.deepEqual(keys({ title: "fix: b INT 7, Internal 8, INTERNAL 9, INT12, int13" }), ["INT-12", "INT-13", "INT-7", "INT-8", "INT-9"]);
+  assert.deepEqual(keys({ title: "fix: c internal ticket 14 and internal tiket 15, Internal tickets: 16" }), ["INT-14", "INT-15", "INT-16"]);
+  assert.deepEqual(keys({ title: "fix: d INT tiket 17, Internal ticket-18, int ticket #19" }), ["INT-17", "INT-18", "INT-19"]);
+  assert.deepEqual(keys({ branch: "codex/internal-tiket-20-fix" }), ["INT-20"]);
+  assert.deepEqual(keys({ body: "Internal tiket: 21\nint tickets: 22" }), ["INT-21", "INT-22"]);
+  assert.deepEqual(keys({ body: "Internal tickets: 23, 24" }), ["INT-23", "INT-24"]);
+  // Ordinary words, a number that is part of a name, and other projects' tickets are still ignored.
+  assert.deepEqual(keys({ title: "the internal 5 loop, int 6 and Internal 2FA login, internal review, PRINT-7" }), []);
+});
+
 function setup({ noChecks = false } = {}) {
   const STORE = memoryStore(), gh = [], jira = [], graphqlCalls = [];
   const pulls = {

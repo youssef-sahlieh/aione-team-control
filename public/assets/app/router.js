@@ -1,4 +1,4 @@
-export const PAGES = new Set(["overview", "tickets", "workload", "calendar", "requests", "reports", "clients", "worklog", "errors", "analytics"]);
+export const PAGES = new Set(["overview", "tickets", "workload", "calendar", "requests", "reports", "clients", "worklog", "errors", "analytics", "reviews"]);
 export function readRoute(url, admin) {
   const requested = url.searchParams.get("page")==="history"?"requests":url.searchParams.get("page");
   const allowed = !(url.searchParams.get("page")==="history"&&!admin)&&PAGES.has(requested) && (admin || !["workload", "reports", "clients", "analytics"].includes(requested));
