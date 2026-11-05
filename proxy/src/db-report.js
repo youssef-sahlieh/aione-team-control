@@ -546,20 +546,55 @@ export function expiryDate(value) {
 // Extend database: signs in to the database with the logins from Knowledge (the same way the report
 // does) and sets the system parameter database.expiration_date, then reads it back to be sure.
 // The login needs Settings administrator rights in that database.
-async function extendDatabase(env, report, row, date) {
-  const creds = await readCredentialIndex(env);
+async function signInToRow(env, report, row, creds) {
   const prodDbs = (num) => [...new Set((report.rows || []).filter((r) => (r.section || "main") === "main" && r.num === num).flatMap((r) => [r.db, ...(r.databases || [])]).filter(Boolean))];
-  const slot = slotFor(creds, { ...row, section: row.section || "main" }, prodDbs);
+  const slot = slotFor(creds || await readCredentialIndex(env), { ...row, section: row.section || "main" }, prodDbs);
   if (!slot) throw new Error("There's no login for this database in Knowledge.");
   const login = await loginToDatabase(slot, [row.db, ...(row.databases || [])].filter(Boolean), row.section, row.multi ? [row.database] : null);
   if (login.offline) throw new Error("The server isn't answering. Start it, then try again.");
   if (!login.loginOk) throw new Error("Couldn't sign in to this database with the logins in Knowledge.");
+  return login;
+}
+async function extendDatabase(env, report, row, date, login) {
+  login = login || await signInToRow(env, report, row);
   const value = date + " 00:00:00";
   try { await login.kw("ir.config_parameter", "set_param", ["database.expiration_date", value]); }
   catch (e) { throw new Error("Signed in, but this login can't change system parameters (it needs Settings administrator rights). " + String(e.message || "").slice(0, 120)); }
   const now = await login.kw("ir.config_parameter", "get_param", ["database.expiration_date"]);
   if (now !== value) throw new Error("The new date didn't stick: the database still says " + (now || "nothing") + ".");
   return { db: login.db, expires: value };
+}
+
+// Automatic extend: every Tests and Dev database of the report the dashboard can sign in to, and that is expired,
+// gets an expiry date 30 days ahead. The date is read again in the database first: one extended since the report
+// was built is left as it is. Main databases are never touched. Each extend is in the action log, like one made by hand.
+export const AUTO_EXTEND_DAYS = 30;
+const AUTOMATIC = { email: "automation@aion", name: "Automatic extend (daily)", role: "system" };
+const isExpired = (value) => !!value && Date.parse(String(value) + "Z") < Date.now();
+export async function autoExtend(env, { deadline = Date.now() + 50000 } = {}) {
+  const report = await readReport(env), out = { extended: [], failed: [], current: [], notReached: [] }, changes = [];
+  if (!report) return out;
+  const due = (report.rows || []).filter((r) => ["tests", "dev"].includes(r.section) && r.loginOk && r.expired === true);
+  const date = new Date(Date.now() + AUTO_EXTEND_DAYS * DAY_MS).toISOString().slice(0, 10), creds = await readCredentialIndex(env);
+  await pool(due, POOL, async (row) => {
+    const name = row.database || row.instance;
+    if (Date.now() > deadline) { out.notReached.push(name); return; }
+    let login;
+    try { login = await signInToRow(env, report, row, creds); }
+    catch (e) { out.failed.push({ database: name, error: String(e.message || e).slice(0, 160) }); return; }
+    const now = await login.kw("ir.config_parameter", "get_param", ["database.expiration_date"]).catch(() => null);
+    if (now !== null && !isExpired(now)) { out.current.push(name); changes.push([row, { expires: now || null, expired: now ? false : null }]); return; }
+    const res = await act(env, AUTOMATIC, { action: "Extend database", target: row.instance, details: "Expired" + (row.expires ? " on " + String(row.expires).slice(0, 10) : "") + ": expiry date → " + date + " (automatic, Databases page)", run: () => extendDatabase(env, report, row, date, login) });
+    if (res.ok) { out.extended.push({ database: name, expires: date }); changes.push([row, { expires: date + " 00:00:00", expired: false }]); }
+    else out.failed.push({ database: name, error: String((await res.clone().json().catch(() => ({}))).error || "").slice(0, 160) });
+  });
+  // The saved report gets the new dates in one write (the extends run side by side).
+  if (changes.length) {
+    const saved = await readReport(env);
+    for (const [row, c] of changes) { const r = saved && (saved.rows || []).find((x) => x.instance === row.instance && (x.database || "") === (row.database || "")); if (r) Object.assign(r, c); }
+    if (saved) await env.STORE.set(REPORT_KEY, JSON.stringify(saved), 30 * DAY_MS / 1000);
+  }
+  return out;
 }
 
 // GET /db-report  (admin) - returns the cached report; rebuilds in the background when stale or missing.
@@ -622,4 +657,13 @@ export async function dbReportCron(request, env, url) {
   const rows = (rep && rep.rows) || [];
   const summary = { total: rows.length, loggedIn: rows.filter((x) => x.loginOk).length, noAccess: rows.filter((x) => x.loginFound && !x.loginOk).map((x) => x.database || x.instance) };
   return json({ ok: true, done: !!r.done, busy: !!r.busy, summary });
+}
+
+// GET /cron/db-extend - daily from Vercel cron, after the report rebuild: extends the expired Tests and Dev
+// databases (autoExtend). Same secret as /cron/db-report.
+export async function dbExtendCron(request, env) {
+  const token = env.CRON_SECRET || "";
+  if (!token || (request.headers.get("Authorization") || "") !== "Bearer " + token) return fail("forbidden", "Invalid cron token.", 403);
+  if (!odooConfigured(env) || !env.STORE) return json({ skipped: "not configured" });
+  return json({ ok: true, ...await autoExtend(env) });
 }

@@ -389,6 +389,54 @@ test("Extend database sets database.expiration_date, checks it, and logs it", as
   } finally { globalThis.fetch = inner; }
 });
 
+test("the daily automatic extend gives expired Tests and Dev databases 30 more days, never Main ones", async () => {
+  const { env, call, customer } = setup();
+  const admin = { email: "boss@aione.biz", name: "Boss", role: "admin", dev: "", v: 1 };
+  await saveUser(env.STORE, admin);
+  const token = (await makeToken(env, admin.email, Date.now(), 1)).token;
+  customer.expires = "2020-01-01 00:00:00"; // the Main databases are expired too
+  const inner = globalThis.fetch, params = { "database.expiration_date": "2020-06-01 00:00:00" }, mainWrites = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url), p = (JSON.parse(init.body || "{}").params) || {};
+    if (u.includes("kadis.odoo.test") && p.args && p.args[3] === "monitor.data.snapshot" && p.args[4] === "get_instances") {
+      const r = await (await inner(url, init)).json(); r.result.payload.services.push({ instance_name: "odoo503test", domain: "503test.ai1.host", server_zone: "test" }); return Response.json({ result: r.result });
+    }
+    if (u.includes("503test.ai1.host")) {
+      if (p.service === "db") return Response.json({ error: { message: "Access denied" } });
+      if (p.service === "common" && p.method === "version") return Response.json({ result: { server_serie: "18.0" } });
+      if (p.service === "common") return Response.json({ result: p.args[0] === "RonitYamProd_test" && p.args[2] === "pw123" ? 9 : false });
+      const [, , , model, method, args] = p.args;
+      if (model === "ir.config_parameter" && method === "set_param") { params[args[0]] = args[1]; return Response.json({ result: true }); }
+      if (model === "ir.config_parameter" && method === "get_param") return Response.json({ result: params[args[0]] || false });
+      if (model === "ir.config_parameter") return Response.json({ result: [{ value: params["database.expiration_date"] }] });
+      return Response.json({ result: method === "search_count" ? 1 : [] });
+    }
+    if (p.args && p.args[3] === "ir.config_parameter" && p.args[4] === "set_param") mainWrites.push(u);
+    return inner(url, init);
+  };
+  try {
+    for (let i = 0; i < 5; i++) { const r = await (await call("/db-report/refresh", { method: "POST", token })).json(); if (r.done) break; }
+    assert.equal((await call("/cron/db-extend", { token: "wrong" })).status, 403);
+    const d = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+    const r = await (await call("/cron/db-extend", { token: "cron-secret-123" })).json();
+    assert.equal(r.extended.length, 1); assert.equal(r.extended[0].expires, d);
+    assert.equal(params["database.expiration_date"], d + " 00:00:00");
+    assert.deepEqual(mainWrites, [], "Main databases are never extended");
+    const row = (await (await call("/db-report", { token })).json()).report.rows.find((x) => x.instance === "odoo503test");
+    assert.equal(row.expires, d + " 00:00:00"); assert.equal(row.expired, false);
+    const logged = JSON.parse(await env.STORE.get("mlog:1"));
+    assert.equal(logged.action, "Extend database"); assert.equal(logged.target, "odoo503test"); assert.equal(logged.name, "Automatic extend (daily)"); assert.match(logged.details, /automatic/);
+    // Run again: nothing is expired any more.
+    assert.equal((await (await call("/cron/db-extend", { token: "cron-secret-123" })).json()).extended.length, 0);
+    // The report still says expired, but the database was extended by hand since: its later date is kept.
+    const saved = JSON.parse(await env.STORE.get("dbreport:v1"));
+    saved.rows.find((x) => x.instance === "odoo503test").expired = true; await env.STORE.set("dbreport:v1", JSON.stringify(saved));
+    params["database.expiration_date"] = "2027-06-01 00:00:00";
+    const again = await (await call("/cron/db-extend", { token: "cron-secret-123" })).json();
+    assert.equal(again.extended.length, 0); assert.equal(params["database.expiration_date"], "2027-06-01 00:00:00");
+  } finally { globalThis.fetch = inner; }
+});
+
 test("a site whose address gives 404 counts as offline (no login attempts)", async () => {
   const { env, call } = setup();
   const admin = { email: "boss@aione.biz", name: "Boss", role: "admin", dev: "", v: 1 };

@@ -115,7 +115,7 @@ function addonCell(r) {
 // including a test database on a production server, so it's offered everywhere.
 const ACTIONS = [
   { key: "restart", title: "Restart Instance", desc: "Restart the container", tone: "warn", icon: "↻", note: "The site is unavailable for a short time while the container restarts.", enabled: (r) => !r.fromKnowledge, off: "not in Audit & Deploy" },
-  { key: "extend", title: "Extend Database", desc: "Move the expiry date forward", tone: "ok", icon: "⏱", note: "Signs in to the database with the login from Knowledge and sets its expiry date (database.expiration_date). The login needs Settings administrator rights. Use it on test databases.", enabled: () => true, date: true },
+  { key: "extend", title: "Extend Database", desc: "Move the expiry date forward", tone: "ok", icon: "⏱", note: "Signs in to the database with the login from Knowledge and sets its expiry date (database.expiration_date). The login needs Settings administrator rights. Use it on test databases. Every day, expired Tests and Dev databases the dashboard can sign in to are extended automatically for 30 days.", enabled: () => true, date: true },
   { key: "start", title: "Start Instance", desc: "Scale to 1 replica", tone: "ok", icon: "▶", note: "", enabled: () => false },
   { key: "stop", title: "Stop Instance", desc: "Scale to 0 replicas", tone: "bad", icon: "■", note: "", enabled: () => false }
 ];

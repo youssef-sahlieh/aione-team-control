@@ -27,7 +27,7 @@ import { inboxRoutes, notifyMentions, jiraMentionEmails, addToInbox } from "./in
 import { odooConfigured, odooRoutes, odooTicketInfo, odooTicketForTime, postOdooNote } from "./odoo.js";
 import { timeRoutes, timeSyncCron } from "./time-entries.js";
 import { monitorRoutes } from "./monitor.js";
-import { dbReportRoutes, dbReportCron } from "./db-report.js";
+import { dbReportRoutes, dbReportCron, dbExtendCron } from "./db-report.js";
 import { knowledgeRoutes } from "./knowledge-lock.js";
 import { odooAppRoutes, odooTranslations } from "./odoo-app.js";
 import { monitorCallbackUrl, monitorPublicKeys, monitorToken } from "./monitor-sso.js";
@@ -367,6 +367,7 @@ async function route(request, env, url) {
   // Public compatibility check for Pages publishing; exposes no runtime credentials or ticket data.
   if (path.startsWith("/monitor/odoo/translations") && method === "GET") return odooTranslations(env, url);
   if (path === "/cron/db-report") return dbReportCron(request, env, url);
+  if (path === "/cron/db-extend") return dbExtendCron(request, env);
   // The work log's background sync to Odoo (secret in the Authorization header, never a user session).
   if (path === "/cron/time-sync") return timeSyncCron(request, env);
   // AI1 Monitor checks its tokens with this public key. It holds no private key.
