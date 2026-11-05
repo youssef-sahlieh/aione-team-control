@@ -7,15 +7,16 @@
 // Store keys:
 //   "review:<owner/repo#number>"  one JSON document per pull request: { prId, assignments: [...] }, changed with
 //                                 compare-and-set (writeIndexed) so two administrators never overwrite each other.
-//   "reviews-by:<accountId>"      set of pull request IDs the account has been assigned (kept for history too).
-// An assignment: { id, reviewerId, reviewerEmail, reviewerName, status: "active"|"removed", createdAt, createdBy,
-//   startedAt, endedAt, seen, github: { state, error, code, at, removeError } }
-// github.state: "no_login" (no GitHub login set yet) | "pending" | "requested" | "failed" | "removed".
+//   "reviews-by:<accountId>"      set of pull request IDs the account has been assigned.
+// An assignment is never removed: a reviewer stays on the pull request until it closes or merges.
+// An assignment: { id, reviewerId, reviewerEmail, reviewerName, createdAt, createdBy, startedAt, seen,
+//   github: { state, error, code, at } }
+// github.state: "no_login" (no GitHub login set yet) | "pending" | "requested" | "failed".
 // The shown status (needs_review, in_review, approved, changes_requested, closed, unlinked) is worked out from the
 // assignment and the synced pull request, so it is never stored and cannot go stale.
 import { addToInbox } from "./inbox.js";
 import { ensureAccountId, getUser, listUsers } from "./users.js";
-import { githubConfigured, prRecord, removeReviewer, requestReviewer, requestedLogins, syncPulls } from "./github.js";
+import { githubConfigured, prRecord, requestReviewer, requestedLogins, syncPulls } from "./github.js";
 import { readFile } from "./internal.js";
 
 const json = (data, status = 200) => Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
@@ -34,7 +35,6 @@ const failed = (code, error) => ({ state: "failed", error, code, at: nowIso() })
 
 // The status a reviewer sees. Pure: it depends only on the assignment, the pull request and the reviewer's GitHub login.
 export function reviewStatus(a, pr, login) {
-  if (a.status !== "active") return "removed";
   if (!pr) return "unlinked";
   if (!isOpen(pr)) return "closed";
   const latest = login ? (pr.status?.reviews || []).find((r) => lc(r.by) === lc(login)) : null;
@@ -108,12 +108,11 @@ async function settle(env, prId, pr, users) {
   if (!doc) return;
   const byEmail = new Map(users.map((u) => [u.id, u]));
   for (const a of doc.assignments) {
-    if (a.status !== "active") continue;
     const status = reviewStatus(a, pr, byEmail.get(a.reviewerId)?.githubLogin);
     if (status === a.seen) continue;
     const changed = await mutate(env, prId, (d) => {
       const x = d.assignments.find((y) => y.id === a.id);
-      if (!x || x.status !== "active" || x.seen === status) return { out: false };
+      if (!x || x.seen === status) return { out: false };
       x.seen = status;
       return { doc: d, out: true };
     });
@@ -136,7 +135,7 @@ export async function requestWaitingReviews(env, accountId, login) {
     if (!isOpen(pr)) continue;
     const doc = await readDoc(env, prId);
     for (const a of doc?.assignments || []) {
-      if (a.reviewerId !== accountId || a.status !== "active" || a.github?.state !== "no_login") continue;
+      if (a.reviewerId !== accountId || a.github?.state !== "no_login") continue;
       await editAssignment(env, prId, a.id, (x) => { x.github = { state: "pending", error: "", code: "", at: nowIso() }; });
       const github = await requestOnGitHub(env, prId, pr, login);
       await editAssignment(env, prId, a.id, (x) => { x.github = github; });
@@ -153,7 +152,7 @@ function assignmentRow(a, pr, login) {
     assignedAt: a.createdAt,
     assignedBy: a.createdBy?.name || "",
     startedAt: a.startedAt || null,
-    github: { state: a.github?.state || "none", error: a.github?.error || "", code: a.github?.code || "", removeError: a.github?.removeError || "" }
+    github: { state: a.github?.state || "none", error: a.github?.error || "", code: a.github?.code || "" }
   };
 }
 
@@ -172,7 +171,7 @@ async function myQueue(env, user) {
     if (pr) await settle(env, prId, pr, users);
     const doc = await readDoc(env, prId);
     for (const a of doc?.assignments || []) {
-      if (a.reviewerId !== user.id || a.status !== "active") continue;
+      if (a.reviewerId !== user.id) continue;
       items.push({ prId, pr: prSummary(pr, prId), ...assignmentRow(a, pr, user.githubLogin) });
     }
   }
@@ -196,46 +195,34 @@ async function accountsWithIds(store) {
   return ready.filter(Boolean);
 }
 
-// Replaces the reviewers of one pull request with the chosen set: adds new ones, ends the rest. Each new reviewer
-// gets one assignment; a repeated request finds the assignment already there and adds nothing.
-async function setReviewers(env, me, prId, pr, wanted, byId) {
+// Adds the chosen reviewers to one pull request. Nobody is ever removed: a reviewer already on the pull request stays,
+// whether or not they are in the list. Each new reviewer gets one assignment; a repeated request finds the assignment
+// already there and adds nothing.
+async function addReviewers(env, me, prId, pr, wanted, byId) {
   const at = nowIso(), actor = { email: me.email, name: me.name || me.email };
   // byId holds the full account records (GitHub login included), so the actions below need no second read.
-  const result = await mutate(env, prId, (d) => {
-    const removed = [], adds = [], add = [];
-    for (const a of d.assignments) {
-      if (a.status === "active" && !wanted.includes(a.reviewerId)) {
-        a.status = "removed";
-        a.endedAt = at;
-        removed.push({ ...a });
-      }
-    }
-    const active = new Set(d.assignments.filter((a) => a.status === "active").map((a) => a.reviewerId));
+  const adds = await mutate(env, prId, (d) => {
+    const created = [], add = [];
+    const already = new Set(d.assignments.map((a) => a.reviewerId));
     for (const id of wanted) {
-      if (active.has(id)) continue;
+      if (already.has(id)) continue;
       const u = byId.get(id);
       const a = {
-        id: crypto.randomUUID(), reviewerId: id, reviewerEmail: u.email, reviewerName: u.name, status: "active",
-        createdAt: at, createdBy: actor, startedAt: null, endedAt: null, seen: "needs_review",
+        id: crypto.randomUUID(), reviewerId: id, reviewerEmail: u.email, reviewerName: u.name,
+        createdAt: at, createdBy: actor, startedAt: null, seen: "needs_review",
         github: u.githubLogin ? { state: "pending", error: "", code: "", at } : { state: "no_login", error: "", code: "no_login", at }
       };
       d.assignments.push(a);
-      adds.push({ ...a });
+      created.push({ ...a });
       add.push(["reviews-by:" + id, prId]);
     }
-    if (!adds.length && !removed.length) return { out: { adds, removed } };
-    return { doc: d, add, out: { adds, removed } };
+    if (!created.length) return { out: created };
+    return { doc: d, add, out: created };
   });
   const title = pr.title, key = pr.keys?.[0] || "", repo = prId.split("#")[0] + " #" + pr.number;
-  await notify(env, result.adds.map((a) => a.reviewerEmail), { type: "review", key, title: "Review requested: " + title, by: actor.name, text: repo });
-  await notify(env, result.removed.map((a) => a.reviewerEmail), { type: "review_removed", key, title: "Review request removed: " + title, by: actor.name, text: repo });
-  // Requests that GitHub should see: removed ones it was asked for, and new ones (those without a login wait for one).
-  for (const a of result.removed) {
-    if (a.github?.state !== "requested" || !byId.get(a.reviewerId)?.githubLogin) continue;
-    const r = await removeReviewer(env, prId.split("#")[0], pr.number, byId.get(a.reviewerId).githubLogin).catch(() => null);
-    await editAssignment(env, prId, a.id, (x) => { x.github = r?.ok ? { ...x.github, state: "removed", removeError: "" } : { ...x.github, removeError: r ? "GitHub answered " + r.status + "." : "GitHub didn't answer." }; });
-  }
-  await Promise.all(result.adds.filter((a) => a.github.state === "pending").map(async (a) => {
+  await notify(env, adds.map((a) => a.reviewerEmail), { type: "review", key, title: "Review requested: " + title, by: actor.name, text: repo });
+  // A reviewer without a GitHub login waits for one (see requestWaitingReviews); the others are asked now.
+  await Promise.all(adds.filter((a) => a.github.state === "pending").map(async (a) => {
     const github = await requestOnGitHub(env, prId, pr, byId.get(a.reviewerId).githubLogin);
     await editAssignment(env, prId, a.id, (x) => { x.github = github; });
   }));
@@ -288,13 +275,13 @@ async function readReviewTicket(env, deps, key) {
 }
 
 // The pull request that gives this account read access to the ticket: an open pull request that mentions the ticket
-// and has an active assignment for the account. Checked on every read; removal or closure ends it at once.
+// and has an assignment for the account. Checked on every read; closure or merge ends it at once.
 async function reviewedPr(env, accountId, key) {
   for (const prId of await env.STORE.smembers(setKey(accountId))) {
     const pr = await prRecord(env, prId);
     if (!isOpen(pr) || !pr.keys?.includes(key)) continue;
     const doc = await readDoc(env, prId);
-    if (doc?.assignments.some((a) => a.reviewerId === accountId && a.status === "active")) return pr;
+    if (doc?.assignments.some((a) => a.reviewerId === accountId)) return pr;
   }
   return null;
 }
@@ -365,7 +352,7 @@ export async function reviewRoutes(request, env, url, me, deps) {
         if (!u) return fail("bad_request", "Choose dashboard people as reviewers.", 400);
         if (u.githubLogin && lc(u.githubLogin) === lc(pr.author)) return fail("bad_request", u.name + " wrote this pull request, so they can't review it.", 400);
       }
-      await setReviewers(env, user, prId, pr, wanted, byId);
+      await addReviewers(env, user, prId, pr, wanted, byId);
       return prView(env, prId, pr, { isAdmin, id: user.id }, await listUsers(store));
     }
     return fail("method", "Use GET or PUT here.", 405);
@@ -377,7 +364,7 @@ export async function reviewRoutes(request, env, url, me, deps) {
     if (!pr) return fail("not_found", "Pull request unavailable.", 404);
     const aid = url.searchParams.get("assignment") || "";
     const doc = await readDoc(env, prId);
-    const a = doc?.assignments.find((x) => x.id === aid && x.status === "active");
+    const a = doc?.assignments.find((x) => x.id === aid);
     if (!a) return fail("not_found", "No such review.", 404);
     if (path === "/reviews/start") {
       if (a.reviewerId !== user.id) return fail("not_found", "No such review.", 404);

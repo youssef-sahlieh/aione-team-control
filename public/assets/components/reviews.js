@@ -32,13 +32,15 @@ export function createReviews({ api, apiFile, toast, errorText }) {
     const body = el("div", "review-body");
     const form = el("form", "review-picker");
     const chosen = new Set(activeReviewerIds(view.assignments));
-    const note = el("p", "review-note", "Reviewers see the pull request in their Needs review list, with the ticket read-only. People with a GitHub username also get a review request there.");
+    const note = el("p", "review-note", "Reviewers see the pull request in their Needs review list, with the ticket read-only. People with a GitHub username also get a review request there. A reviewer stays on the pull request until it closes or merges.");
     const msg = el("p", "msg");
     const list = el("div", "review-people");
     for (const p of people) {
       const label = el("label", "review-person");
       const box = el("input");
       box.type = "checkbox"; box.name = "reviewer"; box.value = p.accountId; box.checked = chosen.has(p.accountId);
+      // A reviewer already on the pull request stays there, so their box can't be cleared.
+      box.disabled = box.checked;
       label.append(box, el("span", "", p.name + (p.dev ? " (" + p.dev + ")" : "")), el("span", p.githubLogin ? "review-tag ok" : "review-tag", p.githubLogin ? "GitHub " + p.githubLogin : "No GitHub username"));
       list.appendChild(label);
     }

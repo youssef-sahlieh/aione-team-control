@@ -14,14 +14,14 @@ const pr = (over = {}) => ({
   status: { reviews: [], requested: [], decision: null, comments: 0, unresolved: 0 }, ...over
 });
 
-function setup({ prs = { [PR_ID]: pr() }, githubStatus = 201, githubDelete = 200 } = {}) {
+function setup({ prs = { [PR_ID]: pr() }, githubStatus = 201 } = {}) {
   const STORE = memoryStore(), github = [], jira = [];
   globalThis.fetch = async (url, init = {}) => {
     const u = new URL(url);
     if (u.hostname === "api.github.com" && u.pathname.endsWith("/requested_reviewers")) {
       const body = JSON.parse(init.body || "{}");
       github.push({ method: init.method, path: u.pathname, reviewers: body.reviewers, auth: init.headers.Authorization });
-      return init.method === "DELETE" ? new Response("{}", { status: githubDelete }) : Response.json({}, { status: githubStatus });
+      return Response.json({}, { status: githubStatus });
     }
     if (u.href.startsWith("https://jira.test/rest/api/3/issue/AION-71")) {
       jira.push(u.pathname);
@@ -65,7 +65,6 @@ test("the review status is worked out from the assignment, the pull request and 
   assert.equal(reviewStatus(a, pr({ status: { reviews: [{ by: "bashar-gh", state: "CHANGES_REQUESTED" }] } }), "bashar-gh"), "changes_requested");
   assert.equal(reviewStatus(a, closed, "bashar-gh"), "closed");
   assert.equal(reviewStatus(a, null, "bashar-gh"), "unlinked");
-  assert.equal(reviewStatus({ ...a, status: "removed" }, open, "bashar-gh"), "removed");
 });
 
 test("Jira's rich text becomes plain text for the read-only ticket view", () => {
@@ -127,23 +126,31 @@ test("a reviewer reads the linked ticket read-only, and nobody else can", async 
   assert.equal((await t.call("POST", "/reviews/ticket?key=AION-71", reviewer, {})).status, 404);
 });
 
-test("the read-only ticket view ends with the review: removal and closure both cut it off", async () => {
+test("a reviewer is never removed: a save that leaves them out keeps them, and only closing the pull request ends the review", async () => {
   const t = setup();
   const adminToken = await t.seed("admin-1", "admin@aione.test", "Ellen", "admin");
   const reviewer = await t.seed("u-1", "sam@aione.test", "Sam", "user", { githubLogin: "sam-gh" });
   const path = "/reviews/pr?id=" + encodeURIComponent(PR_ID);
   await t.call("PUT", path, adminToken, { reviewerIds: ["u-1"] });
-  await t.call("PUT", path, adminToken, { reviewerIds: [] });
-  assert.equal((await t.call("GET", "/reviews/ticket?key=AION-71", reviewer)).status, 404);
-  assert.equal((await (await t.call("GET", "/reviews/me", reviewer)).json()).items.length, 0);
-  // Removing a reviewer GitHub already accepted also asks GitHub to drop the request.
-  assert.equal(t.github.at(-1).method, "DELETE");
-  assert.deepEqual(t.github.at(-1).reviewers, ["sam-gh"]);
-  // Asking again adds a new assignment and a new GitHub request.
+  const left = await t.call("PUT", path, adminToken, { reviewerIds: [] });
+  assert.equal(left.status, 200);
+  assert.equal((await left.json()).assignments.length, 1);
+  assert.equal(t.github.length, 1, "leaving Sam out asks GitHub for nothing");
+  assert.equal((await (await t.call("GET", "/reviews/me", reviewer)).json()).items.length, 1);
+  assert.equal((await t.call("GET", "/reviews/ticket?key=AION-71", reviewer)).status, 200);
+  // Asking again does not add a second assignment or a second GitHub request.
   await t.call("PUT", path, adminToken, { reviewerIds: ["u-1"] });
-  assert.equal(t.github.at(-1).method, "POST");
-  await t.call("PUT", path, adminToken, { reviewerIds: [] });
-  assert.equal(t.github.at(-1).method, "DELETE");
+  assert.equal((await (await t.call("GET", "/reviews/me", reviewer)).json()).items.length, 1);
+  assert.equal(t.github.length, 1);
+});
+
+test("the read-only ticket view ends when the pull request closes", async () => {
+  const t = setup();
+  const adminToken = await t.seed("admin-1", "admin@aione.test", "Ellen", "admin");
+  const reviewer = await t.seed("u-1", "sam@aione.test", "Sam", "user");
+  await t.call("PUT", "/reviews/pr?id=" + encodeURIComponent(PR_ID), adminToken, { reviewerIds: ["u-1"] });
+  t.STORE.set("github:prs:v3", JSON.stringify({ prs: { [PR_ID]: pr({ state: "merged", merged: now }) }, cursors: {}, syncedAt: Date.now() }));
+  assert.equal((await t.call("GET", "/reviews/ticket?key=AION-71", reviewer)).status, 404);
 });
 
 test("a closed pull request shows its reviews as closed and blocks new reviewers", async () => {

@@ -169,7 +169,6 @@ export async function githubRequest(env, method, path, body) {
 }
 
 export const requestReviewer = (env, repo, number, login) => githubRequest(env, "POST", "/repos/" + repo + "/pulls/" + number + "/requested_reviewers", { reviewers: [login] });
-export const removeReviewer = (env, repo, number, login) => githubRequest(env, "DELETE", "/repos/" + repo + "/pulls/" + number + "/requested_reviewers", { reviewers: [login] });
 
 // Logins GitHub still has a review requested from (lowercase). Throws when GitHub doesn't answer.
 export async function requestedLogins(env, repo, number) {
