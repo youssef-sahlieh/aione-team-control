@@ -39,8 +39,8 @@ const message=(target,e)=>{target.textContent=e.message||String(e);target.classN
 // The overage flag: more work logged than the agreed hours. Administrators also see the hours over.
 export function checkupNote(m){const text=m.agreedHours!=null?'Needs checkup: '+(Math.round(m.loggedMinutes/60*100)/100)+' h logged, '+m.agreedHours+' h agreed'+(m.overHours>0?' ('+m.overHours+' h over)':'')+'.':'Needs checkup: more work is logged than agreed.';return el('p','msg err checkup',text);}
 export function createTicketBusiness({api,context,onChange,openIssue}){
-  let billingNeeded=false,enabled=false,epicMapping=false,catalog={revision:0,entries:[]},records={},editor=null;
-  const reportBrowser=createReportBrowser({api,openIssue});
+  let billingNeeded=false,enabled=false,epicMapping=false,projectAdmin=false,catalog={revision:0,entries:[]},records={},editor=null;
+  const reportBrowser=createReportBrowser({api,openIssue,clientsPanel:reportAddPanel});
   const admin=()=>context().admin;
   let odooOn=false;
   const clients=()=>catalog.entries.filter(e=>!e.parentId&&!e.archived);
@@ -188,22 +188,131 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       project.prepend(el('h3','','New project in Odoo'));
       project.append(button('Create project',async e=>{const b=e.currentTarget;b.disabled=true;msg.className='msg';msg.textContent='Creating the project in Odoo…';try{const r=await api('/clients/odoo/project',{method:'POST',body:{name:pName.value,clientId:pClient.value}});catalog=r.catalog;catalogNote={text:'Project “'+pName.value.trim()+'” created in Odoo.',at:Date.now()};await onChange();target.replaceChildren();renderCatalog(target);}catch(err){message(msg,err);b.disabled=false;}},'btn primary'));
       forms.append(customer,project);panel.append(forms);
-      // Projects here without an Odoo project (never made in Odoo, or deleted there): pushed to Odoo under their contact.
-      const parentOf=e=>catalog.entries.find(c=>c.id===e.parentId);
-      const notInOdoo=catalog.entries.filter(e=>e.parentId&&!e.archived&&!(e.sources||[]).some(s=>s.source==='odoo')&&parentOf(e)&&!parentOf(e).archived&&!['No contact','No customer'].includes(parentOf(e).name))
-        .sort((a,b)=>(parentOf(a).name+' / '+a.name).localeCompare(parentOf(b).name+' / '+b.name));
-      if(notInOdoo.length){
-        const missing=el('div','catalog-missing');missing.append(el('h3','','Projects not in Odoo'),el('p','business-guidance','These projects have no Odoo project (never created there, or deleted in Odoo). Push one to create it in Odoo under its contact; it keeps its tickets and Jira epic.'));
-        for(const e of notInOdoo){const row=el('div','catalog-missing-row');row.append(el('span','',parentOf(e).name+' / '+e.name),button('Push to Odoo',async ev=>{const b=ev.currentTarget;b.disabled=true;msg.className='msg';msg.textContent='Creating “'+e.name+'” in Odoo…';try{const r=await api('/clients/odoo/project',{method:'POST',body:{name:e.name,clientId:e.parentId}});catalog=r.catalog;catalogNote={text:'Project “'+e.name+'” created in Odoo.',at:Date.now()};await onChange();target.replaceChildren();renderCatalog(target);}catch(err){message(msg,err);b.disabled=false;}},'btn'));missing.append(row);}
-        panel.append(missing);
-      }
     }else{
     const add=el('div','business-form'),name=field(add,'New client or project name',input('text','')),parent=field(add,'Parent (optional)',el('select','fsel'));option(parent,'Top-level client','');for(const c of clients())option(parent,c.name,c.id);add.append(button('Add',async()=>{try{catalog=await api('/clients',{method:'POST',body:{revision:catalog.revision,name:name.value,parentId:parent.value||null}});await onChange();target.replaceChildren();renderCatalog(target);}catch(err){message(msg,err);}}));panel.append(add);}
+    if(projectAdmin&&admin())renderProjects(target);
     if(epicMapping&&admin())renderEpicMap(target);
   }
   // Jira epics → Odoo projects (epic-map.js): tickets under a mapped epic take that project as their client.
   const projects=()=>catalog.entries.filter(e=>!e.archived&&(e.parentId||!catalog.entries.some(c=>c.parentId===e.id)))
     .map(e=>({id:e.id,name:e.parentId?(catalog.entries.find(c=>c.id===e.parentId)?.name||'')+' / '+e.name:e.name})).sort((a,b)=>a.name.localeCompare(b.name));
+  // Clients & projects (administrators, project-admin-v1). Work starts from what is not in Odoo: each project there gets
+  // an Odoo project (added here, or mapped to one that already exists), then every client lists its projects.
+  const STATUS_LABEL={mapped:'In Odoo',unmapped:'Not in Odoo',conflict:'Conflict',archived:'Archived'};
+  const NO_CLIENT=['No contact','No customer'];
+  const inOdooContact=c=>(c.sources||[]).some(s=>s.source==='odoo-customer');
+  const inOdooProject=p=>(p.sources||[]).some(s=>s.source==='odoo');
+  const byName=(a,b)=>a.name.localeCompare(b.name);
+  // Shared with the client report: add a client, or a project under a client that is already in Odoo.
+  async function addContactToOdoo(name){const r=await api('/clients/odoo/customer',{method:'POST',body:{name,email:'',phone:''}});catalog=r.catalog;await onChange();return r;}
+  async function addProjectToOdoo(name,clientId){const r=await api('/clients/odoo/project',{method:'POST',body:{name,clientId}});catalog=r.catalog;await onChange();return r;}
+  async function renderProjects(target){
+    const panel=el('section','panel business-panel clients-board');target.append(panel);panel.append(el('h2','','Clients & projects'));
+    const msg=el('p','msg','Loading…');panel.append(msg);
+    let data;try{data=await api('/clients/projects');}catch(err){message(msg,err);return;}
+    msg.textContent='';
+    const live=data.projects.filter(p=>!p.archived),queue=live.filter(p=>p.unmapped),conflicted=data.projects.filter(p=>p.conflicts.length).length;
+    const summary=el('div','board-summary');
+    summary.append(el('span','board-chip',live.length+(live.length===1?' project':' projects')),el('span','board-chip'+(queue.length?' needs':''),queue.length+' not in Odoo'),el('span','board-chip'+(conflicted?' conflict':''),conflicted+(conflicted===1?' conflict':' conflicts')));
+    const queueBox=el('div','board-queue');
+    queueBox.append(el('h3','',queue.length?'Not in Odoo yet':'Every project is in Odoo'));
+    if(queue.length)queueBox.append(el('p','business-guidance','These projects have no Odoo project. Add one to Odoo under its client, or map it to an Odoo project that already exists with the same name. A client must be in Odoo before its projects can be added.'));
+    for(const p of queue)queueBox.append(projectRow(p,target,msg));
+    panel.append(summary,queueBox);
+    // Every client with its projects; the filter narrows both the clients and the projects shown.
+    const filter=el('select','fsel');filter.setAttribute('aria-label','Filter clients and projects');
+    for(const [v,l] of [['','All clients and projects'],['unmapped','Not in Odoo'],['conflict','Conflicts'],['archived','Archived']])option(filter,l,v);
+    const byClient=el('div','board-clients');
+    const shown=p=>!filter.value||(filter.value==='unmapped'?p.unmapped&&!p.archived:filter.value==='conflict'?p.conflicts.length>0:p.archived);
+    const card=(title,contactEntry,projects)=>{
+      const box=el('details','board-client');box.open=true;
+      const head=el('summary','board-client-head');head.append(el('strong','',title));
+      if(contactEntry){const inOdoo=inOdooContact(contactEntry);head.append(el('span','project-status '+(inOdoo?'mapped':'unmapped'),inOdoo?'In Odoo':'Not in Odoo'));if(contactEntry.archived)head.append(el('span','project-status archived','Archived'));}
+      head.append(el('span','msg',projects.length+(projects.length===1?' project':' projects')));
+      box.append(head);
+      for(const p of projects)box.append(projectRow(p,target,msg));
+      if(!projects.length)box.append(el('p','business-guidance','No projects match this filter.'));
+      return box;};
+    const draw=()=>{byClient.replaceChildren();let any=false;
+      for(const c of catalog.entries.filter(e=>!e.parentId&&!NO_CLIENT.includes(e.name)).sort(byName)){
+        const projects=data.projects.filter(p=>p.contact.id===c.id&&shown(p)).sort(byName);
+        if(filter.value&&!projects.length)continue;
+        any=true;byClient.append(card(c.name,c,projects));
+      }
+      const loose=data.projects.filter(p=>NO_CLIENT.includes(p.contact.name)&&shown(p));
+      if(loose.length){any=true;byClient.append(card('No client',null,loose));}
+      if(!any)byClient.append(el('p','business-guidance','No clients or projects match this filter.'));};
+    filter.addEventListener('change',draw);
+    panel.append(filter,byClient);draw();
+    renderConflicts(panel,data.projects);
+  }
+  // One project: its local ID, Odoo links, status, and the actions for a project that is not in Odoo yet.
+  function projectRow(p,target,msg){
+    const row=el('div','board-row'),client=catalog.entries.find(e=>e.id===p.contact.id&&!e.parentId),info=el('div','board-row-info'),actions=el('div','board-row-actions');
+    info.append(el('strong','',p.name+(p.aiName?' ('+p.aiName+')':'')),el('span','project-id',p.id));
+    for(const l of p.odooLinks){const a=el('a','','Odoo #'+l.odooId);a.href=l.url;a.target='_blank';a.rel='noopener';info.append(a);}
+    row.append(info,el('span','project-status '+p.status,STATUS_LABEL[p.status]),actions);
+    if(p.unmapped&&!p.archived&&odooOn&&client&&!NO_CLIENT.includes(client.name)){
+      const inOdoo=inOdooContact(client);
+      if(!inOdoo)actions.append(button('Add client to Odoo',async ev=>{const b=ev.currentTarget;b.disabled=true;msg.className='msg';msg.textContent='Adding “'+client.name+'” to Odoo…';
+        try{await addContactToOdoo(client.name);target.replaceChildren();renderCatalog(target,'“'+client.name+'” added to Odoo.');}catch(err){message(msg,err);b.disabled=false;}},'btn'));
+      const add=button('Add to Odoo',async ev=>{const b=ev.currentTarget;b.disabled=true;msg.className='msg';msg.textContent='Adding “'+p.name+'” to Odoo…';
+        try{await addProjectToOdoo(p.name,client.id);target.replaceChildren();renderCatalog(target,'Project “'+p.name+'” added to Odoo.');}catch(err){message(msg,err);b.disabled=false;}},'btn primary');
+      add.disabled=!inOdoo;if(!inOdoo)add.title='Add the client to Odoo first';
+      actions.append(add);
+      mapControl(p,actions,msg,target);
+    }
+    return row;
+  }
+  // The client report: the clients and projects its tickets use that are not in Odoo yet, each with an Add to Odoo action.
+  function reportAddPanel({rows,refresh}){
+    if(!odooOn||!projectAdmin||!admin())return null;
+    const contactOf=id=>catalog.entries.find(e=>e.id===id&&!e.parentId),usable=c=>c&&!NO_CLIENT.includes(c.name);
+    const reported=new Map(),contacts=new Map();
+    for(const t of rows){
+      if(t.subClientId&&t.subClientId!=='__none'){const p=catalog.entries.find(e=>e.id===t.subClientId&&e.parentId);if(p&&!p.archived)reported.set(p.id,p);}
+      const c=t.clientId&&t.clientId!=='__none'?contactOf(t.clientId):null;if(usable(c))contacts.set(c.id,c);
+    }
+    const missingProjects=[...reported.values()].filter(p=>!inOdooProject(p)).map(p=>({p,c:contactOf(p.parentId)})).filter(x=>usable(x.c));
+    for(const {c} of missingProjects)contacts.set(c.id,c);
+    const missingContacts=[...contacts.values()].filter(c=>!inOdooContact(c)).sort(byName);
+    missingProjects.sort((a,b)=>(a.c.name+' / '+a.p.name).localeCompare(b.c.name+' / '+b.p.name));
+    const box=el('section','report-odoo-add'),msg=el('p','msg');
+    if(!missingContacts.length&&!missingProjects.length){box.append(el('p','msg','Every client and project in this report is in Odoo.'));return box;}
+    const run=async(b,label,work)=>{b.disabled=true;msg.className='msg';msg.textContent=label;try{await work();refresh();}catch(err){message(msg,err);b.disabled=false;}};
+    const addRow=(kind,label,btn)=>{const row=el('div','report-add-row');row.append(el('span','board-kind',kind),el('span','report-add-name',label),btn);return row;};
+    box.append(el('h3','','In this report but not in Odoo'),el('p','business-guidance','Add them to Odoo from here. A project goes under its client, so add the client first.'),msg);
+    for(const c of missingContacts)box.append(addRow('Client',c.name,button('Add client to Odoo',ev=>run(ev.currentTarget,'Adding “'+c.name+'” to Odoo…',()=>addContactToOdoo(c.name)),'btn primary')));
+    for(const {p,c} of missingProjects){const inOdoo=inOdooContact(c),btn=button('Add to Odoo',ev=>run(ev.currentTarget,'Adding “'+p.name+'” to Odoo…',()=>addProjectToOdoo(p.name,c.id)),'btn primary');
+      btn.disabled=!inOdoo;if(!inOdoo)btn.title='Add the client to Odoo first';
+      box.append(addRow('Project',c.name+' / '+p.name,btn));}
+    return box;
+  }
+  // "Map to Odoo" for an unmapped project: lists the unlinked Odoo projects it matches, then links the one chosen.
+  function mapControl(p,cell,msg,target){
+    cell.append(button('Map to Odoo',async ev=>{const b=ev.currentTarget;b.disabled=true;msg.className='msg';msg.textContent='Looking for matching Odoo projects…';
+      try{const {candidates}=await api('/clients/odoo/candidates?id='+encodeURIComponent(p.id));msg.textContent='';
+        if(!candidates.length){b.remove();cell.append(el('span','business-guidance','No match: no unlinked Odoo project named “'+p.name+'” under “'+p.contact.name+'”. To create one, use Add to Odoo.'));return;}
+        const pick=el('select','fsel');pick.setAttribute('aria-label','Odoo project for '+p.name);option(pick,'Choose Odoo project…','');for(const c of candidates)option(pick,'#'+c.odooId+' '+c.name,String(c.odooId));
+        const link=button('Link',async e=>{if(!pick.value)return;link.disabled=true;msg.className='msg';msg.textContent='Linking “'+p.name+'” to Odoo…';
+          try{catalog=await api('/clients/odoo/link',{method:'POST',body:{revision:catalog.revision,id:p.id,odooId:Number(pick.value)}});catalogNote={text:'Linked “'+p.name+'” to Odoo #'+pick.value+'.',at:Date.now()};await onChange();target.replaceChildren();renderCatalog(target,catalogNote.text);}
+          catch(err){message(msg,err);link.disabled=false;}},'btn primary');
+        b.replaceWith(pick,link);
+      }catch(err){message(msg,err);b.disabled=false;}},'btn'));
+  }
+  function renderConflicts(panel,rows){
+    const box=el('div','project-conflicts'),conflicted=rows.filter(p=>p.conflicts.length);
+    box.append(el('h3','','Conflicts'));
+    if(!conflicted.length){box.append(el('p','business-guidance','No conflicts. Each Odoo project is linked to one project, and each project to at most one Odoo project.'));panel.append(box);return;}
+    box.append(el('p','business-guidance','Fix these in Odoo before relying on tickets and reports for them. Links cannot be removed from this page yet.'));
+    const name=id=>rows.find(r=>r.id===id)?.name||id;
+    for(const p of conflicted){
+      const item=el('div','project-conflict');item.append(el('strong','',(p.contact.name||'No contact')+' / '+p.name+' ('+p.id+')'));
+      for(const c of p.conflicts)item.append(el('p','business-guidance',c.type==='several-odoo'?'Linked to '+c.odooIds.length+' Odoo projects: '+c.odooIds.map(i=>'#'+i).join(', ')+'.':'Odoo #'+c.odooId+' is also linked to '+c.with.map(id=>name(id)).join(', ')+'.'));
+      box.append(item);
+    }
+    panel.append(box);
+  }
   let epicCache=null,epicNote={text:'',at:0};
   async function renderEpicMap(target){
     const panel=el('section','panel business-panel');target.append(panel);panel.append(el('h2','','Jira epics → Odoo projects'));
@@ -226,5 +335,5 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       row.append(label,select);list.append(row);
     }
   }
-  return {configure:async cfg=>{reportBrowser.configure(cfg);odooOn=!!cfg.odoo;billingNeeded=cfg.billingRequired===true;enabled=cfg.capabilities?.includes('ticket-business-v1')===true;epicMapping=enabled&&cfg.capabilities?.includes('epic-map-v1')===true;if(enabled){await loadCatalog();if(cfg.odoo)api('/clients/odoo-sync',{method:'POST',body:{}}).then(r=>{if(r.changed)return loadCatalog();}).catch(()=>{});if(epicMapping)api('/epic-map/sync',{method:'POST',body:{}}).then(async r=>{if(r.changed&&Object.keys(records).length){await load(Object.keys(records));await onChange();}}).catch(()=>{});}},enabled:()=>enabled,load,decorate,canQuickEdit,quickEdit,quickLabel:name=>QUICK[name],createFields,renderEditor,dirty:key=>editor?.key===key&&editor.dirty(),reset:()=>{editor=null;},bulk,ensureBilling,overrideReason,filters,matches,renderReports,renderCatalog,loadCatalog};
+  return {configure:async cfg=>{reportBrowser.configure(cfg);odooOn=!!cfg.odoo;billingNeeded=cfg.billingRequired===true;enabled=cfg.capabilities?.includes('ticket-business-v1')===true;epicMapping=enabled&&cfg.capabilities?.includes('epic-map-v1')===true;projectAdmin=enabled&&cfg.capabilities?.includes('project-admin-v1')===true;if(enabled){await loadCatalog();if(cfg.odoo)api('/clients/odoo-sync',{method:'POST',body:{}}).then(r=>{if(r.changed)return loadCatalog();}).catch(()=>{});if(epicMapping)api('/epic-map/sync',{method:'POST',body:{}}).then(async r=>{if(r.changed&&Object.keys(records).length){await load(Object.keys(records));await onChange();}}).catch(()=>{});}},enabled:()=>enabled,load,decorate,canQuickEdit,quickEdit,quickLabel:name=>QUICK[name],createFields,renderEditor,dirty:key=>editor?.key===key&&editor.dirty(),reset:()=>{editor=null;},bulk,ensureBilling,overrideReason,filters,matches,renderReports,renderCatalog,loadCatalog};
 }

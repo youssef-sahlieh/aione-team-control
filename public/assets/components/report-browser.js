@@ -13,7 +13,7 @@ const FLAGS=[['','All flags'],['overage','Needs checkup'],['ok','Within agreed h
 const TABLE_HEADERS=['Ticket','Title','Status','Client','Project','Billing','Developers','Estimated (h)','Agreed (h)','Logged (h)','Actual (h)','Over agreed (h)','Flag','Odoo'];
 const PAGE=50;
 const sameSelection=(a,b)=>a===b||(!!a&&!!b&&typeof a==='object'&&a.employee===b.employee&&a.client===b.client);
-export function createReportBrowser({api,openIssue}){
+export function createReportBrowser({api,openIssue,clientsPanel}){
  let supported=false,agreedSupported=false,bulkSupported=false,isAdmin=false,snapshot=null,pending=false,page=0,generation=0,refreshCurrent=null,attempted=false,snapshotInfo={},view='employee';
  // Chart selection and dashboard state live here so they survive re-renders.
  const selection={...EMPTY_SELECTION};
@@ -136,7 +136,10 @@ export function createReportBrowser({api,openIssue}){
   // Unknown values are counted apart: a total covers only the tickets that have a recorded value.
   const logged=knownSum(rows,'loggedHours'),agreed=knownSum(rows,'agreedHours');
   const cards=el('div','report-totals');cards.append(el('span','','Tickets: '+rows.length),el('span','','Logged: '+formatHours(logged.sum)+' ('+logged.known+' of '+logged.total+' recorded)'),el('span','','Agreed: '+formatHours(agreed.sum)+' ('+agreed.known+' of '+agreed.total+' set)'),el('span','','Needs checkup: '+rows.filter(t=>t.overage==='overage').length));
-  output.append(cards,dashboard(dashboardContext(rows)));
+  output.append(cards);
+  // Administrators can add the report's clients and projects to Odoo from here (ticket-business supplies the panel).
+  const addPanel=clientsPanel?.({rows:base,refresh:()=>show()});if(addPanel)output.append(addPanel);
+  output.append(dashboard(dashboardContext(rows)));
   const switcher=el('select','fsel');switcher.setAttribute('aria-label','Report view');switcher.append(new Option('By employee, then customer','employee'),new Option('All tickets (table)','tickets'));switcher.value=view;switcher.addEventListener('change',()=>{view=switcher.value;page=0;show();});output.append(switcher);
   if(view==='employee'){
    const people=groupByEmployee(rows);if(!people.length)output.append(el('p','msg','No tickets match these report filters.'));
