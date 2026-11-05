@@ -221,7 +221,7 @@ test('administrators create a customer or a project in Odoo from the Clients pag
   if(model==='res.users')return Response.json({result:[{id:6,company_ids:[1,9]}]});
   if(model==='res.company')return Response.json({result:[{id:1,name:'All in One'},{id:9,name:'Holding'}]});
   if(method==='create'){created.push({model,values:args[0]});const id=100+created.length;if(model==='res.partner')customers.push({id,display_name:args[0].name});else projects.push({id,display_name:args[0].name,partner_id:[args[0].partner_id,'x']});return Response.json({result:id});}
-  if(model==='res.partner'&&method==='search_read')return Response.json({result:customers});
+  if(model==='res.partner'&&method==='search_read'){const named=(args[0]||[]).find(t=>t[0]==='name');return Response.json({result:named?customers.filter(c=>c.display_name===named[2]):customers});}
   if(model==='res.partner'&&method==='read')return Response.json({result:args[0].map(id=>({id,active:true,is_company:true,company_id:[1,'Main'],commercial_partner_id:[id,(customers.find(c=>c.id===id)||{}).display_name]}))});
   // The project new ones copy: the latest of the main company with task stages.
   if(model==='project.project'&&method==='fields_get')return Response.json({result:{type_ids:{type:'many2many'},allow_timesheets:{type:'boolean'},privacy_visibility:{type:'selection'}}});
@@ -232,6 +232,8 @@ test('administrators create a customer or a project in Odoo from the Clients pag
   assert.equal((await api('/clients/odoo/customer','POST',{name:'New Shop'},user)).status,403);
   assert.equal((await api('/clients/odoo/customer','POST',{name:'New Shop',email:'not-an-email'},admin)).status,400);
   const c=await api('/clients/odoo/customer','POST',{name:'New Shop',email:'shop@example.invalid',phone:'050'},admin);assert.equal(c.status,201);
+  // The same name again is refused: it is already in Odoo, so nothing is created.
+  const dup=await api('/clients/odoo/customer','POST',{name:'New Shop'},admin);assert.equal(dup.status,409);assert.equal((await dup.json()).code,'exists');assert.equal(created.length,1);
   assert.deepEqual(created[0],{model:'res.partner',values:{name:'New Shop',is_company:true,customer_rank:1,email:'shop@example.invalid',phone:'050'}});
   const shop=(await c.json()).catalog.entries.find(e=>e.name==='New Shop'&&!e.parentId);assert.ok(shop);
   const pr=await api('/clients/odoo/project','POST',{name:'Shop POS',clientId:shop.id},admin);assert.equal(pr.status,201);
@@ -244,6 +246,45 @@ test('administrators create a customer or a project in Odoo from the Clients pag
   const shopPos=(await again.json()).catalog.entries.filter(e=>e.parentId===shop.id);
   assert.deepEqual(shopPos.map(e=>e.name),['Shop POS']);assert.deepEqual(shopPos[0].sources.filter(s=>s.source==='odoo').map(s=>s.row),[103]);
   assert.equal((await api('/clients/odoo/project','POST',{name:'Orphan',clientId:'missing'},admin)).status,400);
+ }finally{globalThis.fetch=realFetch;}
+});
+test('administrators see every project with its local ID and Odoo links, and map an unmapped one to an Odoo project of the same name and contact',async()=>{
+ const {env,call:api,sub,parent}=await setup();const realFetch=globalThis.fetch;
+ Object.assign(env,{ODOO_URL:'https://odoo.invalid',ODOO_DB:'db',ODOO_LOGIN:'bot@example.invalid',ODOO_API_KEY:'k'});
+ globalThis.fetch=async(u,init)=>{const p=JSON.parse(init.body).params;if(p.service==='common')return Response.json({result:7});
+  const [model,method,args,kw]=[p.args[3],p.args[4],p.args[5],p.args[6]];
+  if(model==='res.users')return Response.json({result:[{id:6,company_ids:[1,9]}]});
+  if(model==='res.company')return Response.json({result:[{id:1,name:'All in One'},{id:9,name:'Holding'}]});
+  if(model==='res.partner'&&method==='search_read')return Response.json({result:[{id:1,display_name:'Acme'}]});
+  if(model==='res.partner'&&method==='read'){
+    if(kw.fields.includes('is_company'))return Response.json({result:args[0].map(id=>({id,active:true,is_company:id===1,company_id:id===1?[1,'All in One']:false}))});
+    return Response.json({result:args[0].map(id=>({id,commercial_partner_id:[1,'Acme']}))});}
+  return Response.json({result:[{id:10,display_name:'Branch A',partner_id:[1,'Acme']},{id:11,display_name:'Branch B',partner_id:[1,'Acme']}]});};
+ try{
+  assert.equal((await api('/clients/projects','GET',undefined,user)).status,403);
+  const list=await (await api('/clients/projects','GET',undefined,admin)).json();
+  assert.equal(list.revision,1);
+  const row=list.projects.find(p=>p.id===sub.id);
+  assert.equal(row.status,'unmapped');assert.equal(row.unmapped,true);assert.equal(row.contact.name,'Acme');assert.deepEqual(row.odooLinks,[]);
+  assert.equal((await api('/clients/odoo/candidates?id='+sub.id,'GET',undefined,user)).status,403);
+  assert.deepEqual((await (await api('/clients/odoo/candidates?id='+sub.id,'GET',undefined,admin)).json()).candidates.map(c=>c.odooId),[10]);
+  // Stale revision, a project that is not a candidate, and a non-admin are all refused before anything is written.
+  assert.equal((await api('/clients/odoo/link','POST',{revision:0,id:sub.id,odooId:10},admin)).status,409);
+  const notCandidate=await api('/clients/odoo/link','POST',{revision:1,id:sub.id,odooId:11},admin);assert.equal(notCandidate.status,400);assert.equal((await notCandidate.json()).code,'not_candidate');
+  assert.equal((await api('/clients/odoo/link','POST',{revision:1,id:sub.id,odooId:10},user)).status,403);
+  const ok=await api('/clients/odoo/link','POST',{revision:1,id:sub.id,odooId:10},admin);assert.equal(ok.status,200);
+  const linked=await ok.json();assert.equal(linked.revision,2);assert.ok(linked.entries.find(e=>e.id===sub.id).sources.some(s=>s.source==='odoo'&&s.row===10));
+  const after=(await (await api('/clients/projects','GET',undefined,admin)).json()).projects.find(p=>p.id===sub.id);
+  assert.equal(after.status,'mapped');assert.deepEqual(after.odooLinks.map(l=>l.odooId),[10]);assert.match(after.odooLinks[0].url,/^https:\/\/odoo\.invalid\/web#id=10&model=project\.project/);
+  // Linking it again is refused: it already has an Odoo project.
+  assert.equal((await api('/clients/odoo/link','POST',{revision:2,id:sub.id,odooId:10},admin)).status,409);
+  // Two projects pointing at the same Odoo project are a conflict; archiving one of them leaves it archived.
+  {const c=await readCatalog(env);c.entries.push({id:'dup',name:'Branch A copy',parentId:parent.id,archived:false,sources:[{source:'odoo',row:10}]});await env.STORE.set(catalogKey(env),JSON.stringify(c));}
+  const conflicted=(await (await api('/clients/projects','GET',undefined,admin)).json()).projects;
+  assert.equal(conflicted.find(p=>p.id===sub.id).status,'conflict');
+  assert.equal(conflicted.find(p=>p.id==='dup').conflicts[0].type,'shared-odoo');
+  {const c=await readCatalog(env);c.entries.find(e=>e.id==='dup').archived=true;await env.STORE.set(catalogKey(env),JSON.stringify(c));}
+  assert.equal((await (await api('/clients/projects','GET',undefined,admin)).json()).projects.find(p=>p.id==='dup').status,'archived');
  }finally{globalThis.fetch=realFetch;}
 });
 test('the dashboard priority is stored with the ticket, validated, and never changes Jira fields',async()=>{

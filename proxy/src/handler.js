@@ -387,7 +387,7 @@ async function route(request, env, url) {
     if (!account || account.id !== grant.accountId) return fail("forbidden", "This account can't use AI1 Monitor.", 403);
     try { return json(await monitorToken(env, account)); } catch { return fail("not_configured", "AI1 Monitor sign-in isn't set up.", 503); }
   }
-  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1", "db-report-v1", "db-report-company-v1", "db-report-pos-version-v1", "time-entries-v1","epic-map-v1","analytics-v1","ticket-bulk-import-v1"], build: String(env.BUILD || "").slice(0, 7)});
+  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1", "db-report-v1", "db-report-company-v1", "db-report-pos-version-v1", "time-entries-v1","epic-map-v1","analytics-v1","ticket-bulk-import-v1","project-admin-v1"], build: String(env.BUILD || "").slice(0, 7)});
 
   // Jira Automation uses its own secret, never a team password or a user's browser session.
   if (path === "/notifications/jira-created") {

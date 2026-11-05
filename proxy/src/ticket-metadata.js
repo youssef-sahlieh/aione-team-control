@@ -327,6 +327,9 @@ async function createInOdoo(env,url,me,b){
     if(url.pathname==='/clients/odoo/customer'){
       const email=text(b.email,200),phone=text(b.phone,50);
       if(email&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))problem('Enter a valid email or leave it empty.');
+      // A contact with this name already in Odoo is not created again (the next sync links it to the client).
+      const [same]=await odoo(env,'res.partner','search_read',[[['name','=',name],['is_company','=',true]]],{fields:['id'],limit:1});
+      if(same)problem('A contact named “'+name+'” is already in Odoo.',409,'exists');
       created=await odoo(env,'res.partner','create',[{name,is_company:true,customer_rank:1,...(email?{email}:{}),...(phone?{phone}:{})}]);
     }else{
       const catalog=await readCatalog(env),client=catalog.entries.find(e=>e.id===b.clientId&&!e.parentId);
@@ -345,6 +348,30 @@ async function createInOdoo(env,url,me,b){
   await syncCatalogFromOdoo(env,{force:true});
   return Response.json({created,catalog:await readCatalog(env)},{status:201,headers:{'Cache-Control':'no-store'}});
 }
+// ---- Projects page (administrators): every project with its local ID, Odoo links, contact and status ----
+// The local ID is the catalog entry's id, which tickets already use. Flags are what the page filters on: a project
+// with no Odoo project is unmapped; one linked to several Odoo projects, or whose Odoo project another project also
+// links to, has a conflict; an archived one is archived. Status shows the most serious of them.
+const odooLink=(env,model,id)=>String(env.ODOO_URL||'').replace(/\/+$/,'')+'/web#id='+id+'&model='+model+'&view_type=form';
+export function projectRows(catalog,env){
+  const projects=catalog.entries.filter(e=>e.parentId),owners=new Map();
+  for(const e of projects)for(const s of e.sources||[])if(s.source==='odoo'){if(!owners.has(s.row))owners.set(s.row,[]);owners.get(s.row).push(e.id);}
+  return projects.map(e=>{
+    const odooIds=(e.sources||[]).filter(s=>s.source==='odoo').map(s=>s.row),conflicts=[];
+    if(odooIds.length>1)conflicts.push({type:'several-odoo',odooIds});
+    for(const id of odooIds){const others=owners.get(id).filter(x=>x!==e.id);if(others.length)conflicts.push({type:'shared-odoo',odooId:id,with:others});}
+    const contact=catalog.entries.find(c=>c.id===e.parentId),unmapped=!odooIds.length;
+    return {id:e.id,name:e.name,aiName:e.aiName||'',contact:{id:e.parentId,name:shownName(contact)},odooLinks:odooIds.map(id=>({odooId:id,url:odooLink(env,'project.project',id)})),
+      archived:!!e.archived,unmapped,conflicts,status:e.archived?'archived':conflicts.length?'conflict':unmapped?'unmapped':'mapped'};
+  });
+}
+// Odoo projects a project with no Odoo project can be linked to: same name, under the same contact, and not linked yet.
+async function mapCandidates(env,catalog,entry){
+  const contact=catalog.entries.find(c=>c.id===entry.parentId),linked=new Set(catalog.entries.flatMap(e=>(e.sources||[]).filter(s=>s.source==='odoo').map(s=>s.row)));
+  const {projects}=await odooRows(env);
+  return projects.filter(p=>contact&&p.customer===contact.name&&nameKey(p.displayName)===nameKey(entry.name)&&!linked.has(p.sourceRow))
+    .map(p=>({odooId:p.sourceRow,name:p.displayName,contact:p.customer,url:odooLink(env,'project.project',p.sourceRow)}));
+}
 export async function catalogRoutes(request,env,url,me) {
   if(url.pathname==='/clients/details'&&request.method==='GET'){
     if(me.role!=='admin')problem('Only administrators manage the client catalog.',403,'forbidden');
@@ -362,6 +389,29 @@ export async function catalogRoutes(request,env,url,me) {
     const force=url.searchParams.get('force')==='1';if(force&&me.role!=='admin')problem('Only administrators manage the client catalog.',403,'forbidden');
     let result;try{result=await syncCatalogFromOdoo(env,{force});}catch(e){if(e instanceof BusinessError)throw e;problem("Couldn't read projects from Odoo: "+(e.message||'unknown error'),502,'odoo');}
     return Response.json({...result,...(result.changed?{catalog:await catalogRoutes(new Request(url,{method:'GET'}),env,new URL('/clients',url),me).then(r=>r.json())}:{})},{headers:{'Cache-Control':'no-store'}});
+  }
+  if(url.pathname==='/clients/projects'&&request.method==='GET'){
+    if(me.role!=='admin')problem('Only administrators manage the client catalog.',403,'forbidden');
+    const catalog=await readCatalog(env);
+    return Response.json({revision:catalog.revision,projects:projectRows(catalog,env)},{headers:{'Cache-Control':'no-store'}});
+  }
+  if((url.pathname==='/clients/odoo/candidates'&&request.method==='GET')||(url.pathname==='/clients/odoo/link'&&request.method==='POST')){
+    if(me.role!=='admin')problem('Only administrators manage the client catalog.',403,'forbidden');
+    if(!odooConfigured(env))problem('Odoo is not connected.',501,'odoo_off');
+    const linking=url.pathname.endsWith('/link');
+    let b=null;if(linking){try{b=JSON.parse(await request.text());}catch{problem('Invalid request.');}}
+    const store=requireStore(env),key=catalogKey(env),raw=await store.get(key),catalog=raw?JSON.parse(raw):{revision:0,entries:[]};
+    if(linking&&(!b||b.revision!==catalog.revision))problem('Catalog changed. Refresh.',409,'conflict');
+    const entry=catalog.entries.find(e=>e.id===(linking?b.id:url.searchParams.get('id'))&&e.parentId);
+    if(!entry)problem('Project not found.',404,'not_found');
+    if((entry.sources||[]).some(s=>s.source==='odoo'))problem('This project is already linked to Odoo.',409,'exists');
+    let candidates;try{candidates=await mapCandidates(env,catalog,entry);}catch(e){if(e instanceof BusinessError)throw e;problem("Couldn't read projects from Odoo: "+String(e.message||'unknown error').slice(0,200),502,'odoo');}
+    if(!linking)return Response.json({candidates},{headers:{'Cache-Control':'no-store'}});
+    const row=Number(b.odooId);
+    if(!candidates.some(c=>c.odooId===row))problem('That Odoo project does not match this project. Only an unlinked Odoo project with the same name, under the same contact, can be mapped.',400,'not_candidate');
+    const next=structuredClone(catalog);next.entries.find(e=>e.id===entry.id).sources=[...(entry.sources||[]),{source:'odoo',row}];next.revision=catalog.revision+1;
+    if(!await store.compareAndSet(key,raw,JSON.stringify(next)))problem('Catalog changed. Refresh.',409,'conflict');
+    return Response.json(next,{headers:{'Cache-Control':'no-store'}});
   }
   const store=requireStore(env),catalog=await readCatalog(env),admin=me.role==='admin';
   if(request.method==='GET')return Response.json({revision:catalog.revision,entries:catalog.entries.map(e=>admin?e:({id:e.id,name:e.name,...(e.aiName?{aiName:e.aiName}:{}),parentId:e.parentId,archived:e.archived}))},{headers:{'Cache-Control':'no-store'}});
