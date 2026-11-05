@@ -84,5 +84,5 @@ test("managing someone: changing the role sends the update", async ({ page }) =>
   await page.locator('#p-role [data-role="admin"]').click();
   await page.locator("#p-save").click();
   await expect(page.locator("#person")).toBeHidden();
-  expect(m.puts).toEqual([{ name: "Ben Builder", role: "admin", dev: "builder" }]);
+  expect(m.puts).toEqual([{ name: "Ben Builder", role: "admin", dev: "builder", githubLogin: "" }]);
 });
