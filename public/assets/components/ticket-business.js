@@ -188,6 +188,15 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       project.prepend(el('h3','','New project in Odoo'));
       project.append(button('Create project',async e=>{const b=e.currentTarget;b.disabled=true;msg.className='msg';msg.textContent='Creating the project in Odoo…';try{const r=await api('/clients/odoo/project',{method:'POST',body:{name:pName.value,clientId:pClient.value}});catalog=r.catalog;catalogNote={text:'Project “'+pName.value.trim()+'” created in Odoo.',at:Date.now()};await onChange();target.replaceChildren();renderCatalog(target);}catch(err){message(msg,err);b.disabled=false;}},'btn primary'));
       forms.append(customer,project);panel.append(forms);
+      // Projects here without an Odoo project (never made in Odoo, or deleted there): pushed to Odoo under their contact.
+      const parentOf=e=>catalog.entries.find(c=>c.id===e.parentId);
+      const notInOdoo=catalog.entries.filter(e=>e.parentId&&!e.archived&&!(e.sources||[]).some(s=>s.source==='odoo')&&parentOf(e)&&!parentOf(e).archived&&!['No contact','No customer'].includes(parentOf(e).name))
+        .sort((a,b)=>(parentOf(a).name+' / '+a.name).localeCompare(parentOf(b).name+' / '+b.name));
+      if(notInOdoo.length){
+        const missing=el('div','catalog-missing');missing.append(el('h3','','Projects not in Odoo'),el('p','business-guidance','These projects have no Odoo project (never created there, or deleted in Odoo). Push one to create it in Odoo under its contact; it keeps its tickets and Jira epic.'));
+        for(const e of notInOdoo){const row=el('div','catalog-missing-row');row.append(el('span','',parentOf(e).name+' / '+e.name),button('Push to Odoo',async ev=>{const b=ev.currentTarget;b.disabled=true;msg.className='msg';msg.textContent='Creating “'+e.name+'” in Odoo…';try{const r=await api('/clients/odoo/project',{method:'POST',body:{name:e.name,clientId:e.parentId}});catalog=r.catalog;catalogNote={text:'Project “'+e.name+'” created in Odoo.',at:Date.now()};await onChange();target.replaceChildren();renderCatalog(target);}catch(err){message(msg,err);b.disabled=false;}},'btn'));missing.append(row);}
+        panel.append(missing);
+      }
     }else{
     const add=el('div','business-form'),name=field(add,'New client or project name',input('text','')),parent=field(add,'Parent (optional)',el('select','fsel'));option(parent,'Top-level client','');for(const c of clients())option(parent,c.name,c.id);add.append(button('Add',async()=>{try{catalog=await api('/clients',{method:'POST',body:{revision:catalog.revision,name:name.value,parentId:parent.value||null}});await onChange();target.replaceChildren();renderCatalog(target);}catch(err){message(msg,err);}}));panel.append(add);}
     if(epicMapping&&admin())renderEpicMap(target);

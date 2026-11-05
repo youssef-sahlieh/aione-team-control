@@ -185,6 +185,7 @@
 .business-panel .report-filter-form { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; }
 .report-filter-form .business-field { min-width:0; }
 .report-filter-form > .btn { align-self:end; min-height:44px; }
+.catalog-missing{margin:12px 0}.catalog-missing h3{margin:0 0 4px;font-size:13px}.catalog-missing-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 0;border-top:1px solid var(--line,#e5e7eb)}.catalog-missing-row span{min-width:0;overflow-wrap:anywhere}
 .catalog-create{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin:12px 0}.catalog-create h3{grid-column:1/-1;margin:0;font-size:13px}
 /* Clients page: details card per client. */
 .client-card{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin:8px 0 14px}

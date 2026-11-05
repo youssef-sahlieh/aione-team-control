@@ -335,6 +335,10 @@ async function createInOdoo(env,url,me,b){
       let partner=(client.sources||[]).find(x=>x.source==='odoo-customer')?.row;
       if(!partner){const [found]=await odoo(env,'res.partner','search_read',[[['name','=',client.name],['parent_id','=',false]]],{fields:['id'],limit:1});partner=found&&found.id;}
       if(!partner)problem('This contact is not in Odoo. Create it as a contact first.');
+      // A project of this contact already here with this name is pushed to Odoo only when it has no Odoo project left.
+      const same=catalog.entries.find(e=>e.parentId===client.id&&nameKey(e.name)===nameKey(name));
+      const linked=(same?.sources||[]).filter(s=>s.source==='odoo').map(s=>s.row);
+      if(linked.length){const [found]=await odoo(env,'project.project','search_read',[[['id','in',linked]]],{fields:['id'],context:{active_test:false},limit:1});if(found)problem('This project is already in Odoo (#'+found.id+').',409,'exists');}
       created=await odoo(env,'project.project','create',[{name,partner_id:partner,...(await projectSetup(env)).values}]);
     }
   }catch(e){if(e instanceof BusinessError)throw e;problem("Odoo didn't create it: "+String(e.message||'unknown error').slice(0,200),502,'odoo');}

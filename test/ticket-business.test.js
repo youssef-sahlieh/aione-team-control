@@ -237,7 +237,8 @@ test('administrators create a customer or a project in Odoo from the Clients pag
   const pr=await api('/clients/odoo/project','POST',{name:'Shop POS',clientId:shop.id},admin);assert.equal(pr.status,201);
   assert.deepEqual(created[1],{model:'project.project',values:{name:'Shop POS',partner_id:customers.find(x=>x.display_name==='New Shop').id,company_id:1,type_ids:[[6,0,[3,4]]],allow_timesheets:true,privacy_visibility:'employees'}});
   assert.deepEqual((await pr.json()).catalog.entries.filter(e=>e.parentId===shop.id).map(e=>e.name),['Shop POS']);
-  // Deleted in Odoo and made again from the dashboard: the project keeps only the new Odoo project.
+  // Pushed again while its Odoo project exists: refused. Deleted in Odoo and pushed again: it keeps only the new Odoo project.
+  assert.equal((await api('/clients/odoo/project','POST',{name:'shop pos',clientId:shop.id},admin)).status,409);assert.equal(created.length,2);
   projects.length=0;
   const again=await api('/clients/odoo/project','POST',{name:'Shop POS',clientId:shop.id},admin);assert.equal(again.status,201);
   const shopPos=(await again.json()).catalog.entries.filter(e=>e.parentId===shop.id);
