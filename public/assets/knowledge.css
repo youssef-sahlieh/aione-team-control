@@ -1,16 +1,5 @@
 /* Odoo knowledge base page: a sidebar tree and the article, laid out like Odoo's Knowledge app. Colours and type
    come from dashboard.css. */
-.kb-card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px;display:flex;flex-direction:column;gap:10px}
-.kb-card h2{margin:0;font-size:16px}
-.kb-unlock{max-width:520px}
-
-.kb-form{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px}
-.kb-form .business-field{display:flex;flex-direction:column;gap:4px;min-width:0}
-.kb-form .business-field > span:first-child{font-size:12px;color:var(--muted);font-weight:500}
-.kb-grow{flex:1 1 240px}
-.kb-form .inp{width:100%;box-sizing:border-box;padding:7px 9px}
-.kb-pass{display:flex;gap:6px;align-items:center}
-.kb-pass .inp{flex:1;min-width:0}
 .kb-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 
 /* Two panes: the tree and the article. */
@@ -118,6 +107,4 @@
   .kb-title{font-size:22px}
   .kb-node-add{opacity:1}
 }
-@media (max-width:600px){
-  .kb-card{padding:14px}
-}
+

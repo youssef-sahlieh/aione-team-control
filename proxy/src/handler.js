@@ -28,7 +28,7 @@ import { odooConfigured, odooRoutes, odooTicketInfo, odooTicketForTime, postOdoo
 import { timeRoutes, timeSyncCron } from "./time-entries.js";
 import { monitorRoutes } from "./monitor.js";
 import { dbReportRoutes, dbReportCron, dbExtendCron } from "./db-report.js";
-import { knowledgeRoutes } from "./knowledge-lock.js";
+import { knowledgeRoutes } from "./knowledge.js";
 import { odooAppRoutes, odooTranslations } from "./odoo-app.js";
 import { monitorCallbackUrl, monitorPublicKeys, monitorToken } from "./monitor-sso.js";
 import { cookieSessionRequest } from "./sessions.js";
@@ -653,7 +653,7 @@ async function route(request, env, url) {
     // At most a short wait for Jira; when it's slow or down, the team setting's list is used.
     const fromJira = await Promise.race([jiraDevs(env).catch(() => []), new Promise((r) => setTimeout(() => r([]), 3000))]);
     team.devs = [...new Set([...(Array.isArray(team.devs) ? team.devs : []), ...fromJira])];
-    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE,knowledgeLock:odooConfigured(env)&&!!env.STORE, capabilities:["ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1","db-report-pos-version-v1","epic-map-v1","ticket-bulk-import-v1"] });
+    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE,knowledge:odooConfigured(env), capabilities:["ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1","db-report-pos-version-v1","epic-map-v1","ticket-bulk-import-v1"] });
   }
 
   // Jira people are searchable for everyone, so anyone can @mention them in a Jira comment.

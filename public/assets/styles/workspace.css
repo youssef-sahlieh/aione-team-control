@@ -104,3 +104,5 @@ body[data-workspace-page="calendar"] .sync-line{display:none}
 
 /* A menu link that opens another site in a new tab. */
 .nav-ext{margin-left:auto;font-size:12px;opacity:.7}
+/* Pages beside the dashboard have no search box: the account menu sits at the right. */
+.breadcrumbs+.account-menu{margin-left:auto}

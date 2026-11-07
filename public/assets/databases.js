@@ -5,7 +5,10 @@
 // The table sorts by any column (click its header), filters by search and by access, Odoo version, expiry,
 // Flutter POS and order activity, and shows the columns you pick. Choices are kept in this browser.
 import { api, getSession, signOut } from "./session.js";
+import { startFrame, appConfig } from "./app/frame.js";
 import { monitorInstanceUrl, monitorOpenUrl, rememberMonitorPage } from "./models/monitor-links.js";
+
+startFrame({ current: "databases" });
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -343,7 +346,7 @@ function explainCompanies() {
 
 async function load() {
   try {
-    api("/config").then((cfg) => { serverHasCompanies = (cfg.capabilities || []).includes("db-report-company-v1"); serverHasPosVersion = (cfg.capabilities || []).includes("db-report-pos-version-v1"); explainCompanies(); }).catch(() => {});
+    appConfig().then((cfg) => { serverHasCompanies = (cfg.capabilities || []).includes("db-report-company-v1"); serverHasPosVersion = (cfg.capabilities || []).includes("db-report-pos-version-v1"); explainCompanies(); }).catch(() => {});
     const data = await api("/db-report");
     // The saved report shows at once; when it's out of date it is updated in the background.
     if (data.report) showReport(data.report);

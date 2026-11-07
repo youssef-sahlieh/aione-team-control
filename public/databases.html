@@ -12,22 +12,31 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="assets/styles/tokens.css">
 <link rel="stylesheet" href="assets/dashboard.css">
+<link rel="stylesheet" href="assets/styles/workspace.css">
+<link rel="stylesheet" href="assets/styles/readability.css">
 <link rel="stylesheet" href="assets/styles/mobile.css">
 <script src="assets/config.js"></script>
 <script src="assets/early.js"></script>
 </head>
 <body class="db-page">
-<div class="wrap">
-  <div class="top">
-    <div class="brand">
-      <h1>Databases</h1>
-      <div class="sub">Main, test and dev databases from Audit &amp; Deploy. Refreshes daily.</div>
-    </div>
-    <span class="db-top-actions">
-      <a class="btn" href="dashboard.html">← Dashboard</a>
-      <span class="me"><span class="db-me-text">Signed in as <b id="me">…</b></span> <button class="btn" id="signout" type="button">Sign out</button></span>
-    </span>
-  </div>
+<a class="skip-link" href="#main-content">Skip to content</a>
+<div class="app-shell">
+  <aside class="app-sidebar" id="app-sidebar" aria-label="Main navigation">
+    <a class="app-brand" href="dashboard.html?page=overview" aria-label="AIONE Team Control, overview"><img class="brand-mark" src="assets/brand/aione-mark.png" alt="" width="40" height="40"><span class="brand-full"><img class="brand-wordmark" src="assets/brand/aione-wordmark-light.png" alt="AIONE" width="150" height="53"><span class="brand-caption">TEAM CONTROL</span></span></a>
+    <div class="workspace-label"><span class="workspace-dot"></span> Team workspace</div>
+    <p class="nav-label">WORKSPACE</p>
+    <nav id="main-nav" aria-label="Workspace"></nav>
+    <div class="sidebar-bottom"><a class="nav-link admin-only" id="users-link" href="users.html" hidden><span class="nav-icon">♙</span><span>Users &amp; access</span></a><button class="nav-link" id="sidebar-collapse" type="button" aria-label="Collapse sidebar" aria-expanded="true"><span class="nav-icon">«</span><span>Collapse sidebar</span></button><div class="sidebar-note"><span class="workspace-dot"></span> Connected workspace</div></div>
+  </aside>
+  <button class="nav-scrim" id="nav-scrim" type="button" aria-label="Close navigation" hidden></button>
+  <div class="app-workspace">
+  <header class="app-topbar">
+    <button class="icon-btn" id="mobile-menu" type="button" aria-label="Open navigation" aria-controls="app-sidebar" aria-expanded="false">☰</button>
+    <div class="breadcrumbs">Admin<span aria-hidden="true">›</span><b>Databases</b></div>
+    <details class="account-menu"><summary><span class="account-avatar" id="account-avatar">A</span><span class="account-name">My account</span></summary><div class="account-panel"><span class="me"><b id="me">…</b></span><span id="account-role">Team member</span><button class="btn" id="signout" type="button">Sign out</button></div></details>
+  </header>
+  <main class="wrap frame-page" id="main-content" tabindex="-1">
+  <div class="page-heading"><div><h1 id="page-heading" tabindex="-1">Databases</h1><p>Main, test and dev databases from Audit &amp; Deploy. Refreshes daily.</p></div></div>
 
   <div id="pagestate" class="state">Loading…</div>
   <div id="notice" class="db-notice" role="status" hidden></div>
@@ -52,6 +61,8 @@
       <thead><tr id="head"></tr></thead>
       <tbody id="rows"></tbody>
     </table>
+  </div>
+</main>
   </div>
 </div>
 <dialog id="action-dialog" class="db-dialog" aria-labelledby="action-title"></dialog>
