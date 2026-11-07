@@ -1,4 +1,4 @@
-// AION Team Control sign-in: the proxy checks the email and password and returns a session token.
+// AIONE Team Control sign-in: the proxy checks the email and password and returns a session token.
 // Also the "Forgot password?" form, which asks the proxy to email a reset link.
 import { api, getSession, proxyReady, saveSession } from "./session.js";
 
@@ -40,7 +40,7 @@ if (getSession()) {
       btn.textContent = "Sign in";
       showMsg("signin-msg", err.code === "login" ? "That email and password don't match. Check them and try again."
         : err.code === "rate_limited" ? "Too many tries. Wait a few minutes and try again."
-        : err.code === "network" ? "Can't reach the AION server. Check your connection and try again."
+        : err.code === "network" ? "Can't reach the AIONE server. Check your connection and try again."
         : "Sign-in didn't work (" + err.message + "). Try again, or ask Youssef.", "err");
       $("password").select();
     }
@@ -66,7 +66,7 @@ if (getSession()) {
       btn.textContent = "Send again";
     } catch (err) {
       showMsg("forgot-msg", err.code === "rate_limited" ? "Too many reset requests. Wait a while and try again."
-        : err.code === "network" ? "Can't reach the AION server. Check your connection and try again."
+        : err.code === "network" ? "Can't reach the AIONE server. Check your connection and try again."
         : err.message, "err");
       btn.textContent = "Send reset link";
     } finally {

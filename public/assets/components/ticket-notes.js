@@ -15,7 +15,7 @@ export function createTicketNotes({api}) {
     try {
       const result = await api('/ticket-notes?key='+encodeURIComponent(key));
       if (run !== generation) return;
-      panel.replaceChildren(element('h3', 'Internal notes'), element('p', 'Team notes on this ticket. Type @ to mention someone and they get a notification in AION. Nothing is emailed or posted to Jira.', 'msg'));
+      panel.replaceChildren(element('h3', 'Internal notes'), element('p', 'Team notes on this ticket. Type @ to mention someone and they get a notification in AIONE. Nothing is emailed or posted to Jira.', 'msg'));
       const list = element('div');
       for (const note of result.notes.slice().reverse()) {
         const card = element('article', null, 'blk');
@@ -38,7 +38,7 @@ export function createTicketNotes({api}) {
       form.append(label, input, button, status);
       panel.append(list, form);
       // The picker is inserted after the textarea, so the form must be in the panel first.
-      const mentions = createCommentMentions({textarea:input, enabled:() => true, local:() => true, people:async () => people, localHint:'Type @ to mention someone. They get a notification in AION.'});
+      const mentions = createCommentMentions({textarea:input, enabled:() => true, local:() => true, people:async () => people, localHint:'Type @ to mention someone. They get a notification in AIONE.'});
       form.addEventListener('submit', async event => {
         event.preventDefault();
         const text = mentions.text(); if (!text) return;

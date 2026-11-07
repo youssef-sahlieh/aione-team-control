@@ -20,7 +20,7 @@ const ticketRow=t=>[t.key,t.title,t.status,t.clientName||'',t.subClientName||'',
 export function reportSheets(rows,info={}){
  const hours=k=>rows.reduce((s,t)=>typeof t[k]==='number'&&Number.isFinite(t[k])?s+t[k]:s,0),known=k=>rows.filter(t=>typeof t[k]==='number'&&Number.isFinite(t[k])).length;
  const r2=n=>Math.round(n*100)/100;
- const summary=[['Report','AION business report'],['Generated',info.generatedAt||''],['Period',info.period?info.period.start+' to '+info.period.end:''],
+ const summary=[['Report','AIONE business report'],['Generated',info.generatedAt||''],['Period',info.period?info.period.start+' to '+info.period.end:''],
   ...(info.filters||[]).filter(([,v])=>v),['Tickets',rows.length],['Logged hours',r2(hours('loggedHours'))],['Logged hours recorded on',known('loggedHours')+' of '+rows.length+' tickets'],
   ['Agreed hours',r2(hours('agreedHours'))],['Agreed hours set on',known('agreedHours')+' of '+rows.length+' tickets'],['Needs checkup',rows.filter(t=>t.overage==='overage').length],
   ...(info.warnings||[]).map(w=>['Note',w]),['How to edit','Change Client, Project, Billing or Agreed hours on the Tickets sheet, save, then use Import in Checks & Reports. Blank cells change nothing.']];

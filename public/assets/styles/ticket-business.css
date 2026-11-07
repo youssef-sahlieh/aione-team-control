@@ -121,7 +121,7 @@
 .dash-segmented { display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px; }
 .dash-control-label { font-size:12px; color:var(--dash-muted); margin-right:4px; }
 .dash-seg { font:inherit; font-size:13px; min-height:36px; padding:4px 10px; border:1px solid var(--line-strong,#d7ddeb); border-radius:999px; background:var(--surface,#fff); color:inherit; cursor:pointer; }
-.dash-seg[aria-pressed=true] { background:var(--accent,#2563eb); border-color:var(--accent,#2563eb); color:var(--on-accent,#fff); }
+.dash-seg[aria-pressed=true] { background:var(--accent-fill); border-color:var(--accent-fill); color:var(--on-accent); }
 .dash-bars { display:flex; flex-direction:column; gap:12px; }
 .dash-bar-row { min-width:0; }
 .dash-bar-head { display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 10px; align-items:baseline; font-size:13px; }

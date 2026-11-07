@@ -23,7 +23,7 @@ function toast(text, isErr) {
 }
 function showState(text, isErr) { const s = $("pagestate"); s.hidden = !text; s.className = "state" + (isErr ? " err" : ""); s.textContent = text || ""; }
 function setMsg(id, text, ok) { const m = $(id); m.textContent = text || ""; m.className = "msg" + (text ? (ok ? " ok" : " err") : ""); }
-const errText = (err) => err.code === "network" ? "Can't reach the AION server. Try again." : err.message;
+const errText = (err) => err.code === "network" ? "Can't reach the AIONE server. Try again." : err.message;
 const isPending = (u) => !u.hasPassword;
 
 // What a person can see, in one plain sentence.

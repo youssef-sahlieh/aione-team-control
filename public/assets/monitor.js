@@ -5,7 +5,7 @@ import { api, getSession, signOut } from "./session.js";
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
-const errText = (err) => err.code === "network" ? "Can't reach the AION server. Try again." : err.message;
+const errText = (err) => err.code === "network" ? "Can't reach the AIONE server. Try again." : err.message;
 const when = (v) => { if (!v) return ""; const d = new Date(/Z$|[+-]\d\d:?\d\d$/.test(v) ? v : String(v).replace(" ", "T") + "Z"); return isNaN(d) ? String(v) : d.toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }); };
 const ago = (v) => { const d = new Date(/Z$|[+-]\d\d:?\d\d$/.test(v || "") ? v : String(v || "").replace(" ", "T") + "Z"); if (isNaN(d)) return ""; const m = (Date.now() - d) / 60000; return m < 60 ? Math.max(1, Math.round(m)) + "m ago" : m < 1440 ? Math.round(m / 60) + "h ago" : Math.round(m / 1440) + "d ago"; };
 const siteUrl = (domain) => /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(domain || "") ? "https://" + domain : null;
