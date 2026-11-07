@@ -44,7 +44,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     SITE=cfg.site; PROJECT=cfg.project; MAIL=!!cfg.mail; PEOPLE=cfg.people||{}; DEVS=cfg.devs||[]; DEV_EMAIL=cfg.devEmails||{}; DEV_COLOR=cfg.devColors||{};
     PEOPLE={...PEOPLE,[INTERNAL_ASSIGNEE]:{name:"Internal Tickets",ini:"IT",id:INTERNAL_ASSIGNEE}};
     BYID={}; for(const k in PEOPLE) BYID[PEOPLE[k].id]=k;
-    IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||""; MY_EMAIL=cfg.email||""; INTERNAL=!!cfg.accounts; ODOO=!!cfg.odoo; { const dl=$("dbreport-link"); if(dl) dl.hidden=!cfg.dbReport; } { const kl=$("knowledge-link"); if(kl) kl.hidden=!cfg.knowledgeLock; } $("new-int").hidden=!INTERNAL;
+    IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||""; MY_EMAIL=cfg.email||""; INTERNAL=!!cfg.accounts; ODOO=!!cfg.odoo; { const dl=$("dbreport-link"); if(dl) dl.hidden=!cfg.dbReport; } { const kl=$("knowledge-link"); if(kl) kl.hidden=!cfg.knowledge; } $("new-int").hidden=!INTERNAL;
     const filtersKey="aion.ticket-filters.open."+encodeURIComponent(MY_EMAIL);
     if(ticketFiltersKey!==filtersKey){ticketFiltersKey=filtersKey;ticketFiltersOpen=false;try{ticketFiltersOpen=localStorage.getItem(ticketFiltersKey)==="1";}catch{}}
     document.body.classList.toggle("role-user",!IS_ADMIN);
