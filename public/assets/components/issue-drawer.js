@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 // The ticket view is laid out like Jira: a main column (description, attachments, then Activity with its own
-// tabs: comments, history, due date changes, internal notes) and a side column (status, details, assignee,
+// tabs: comments, history, due date changes, internal notes, then the work log) and a side column (status, details, assignee,
 // developers, due date, development and the ticket's work fields). On narrow screens the side column comes first.
 export function createIssueDrawer({ isDirty, canViewHistory, canViewFullHistory = () => false, onSelect = () => {} }) {
   const drawer = $("drawer"), body = $("d-body"), tabs = $("drawer-tabs");
@@ -41,6 +41,8 @@ export function createIssueDrawer({ isDirty, canViewHistory, canViewFullHistory 
   panels.activity.prepend(el("p", "msg", "Recorded due date changes. This timeline is not a complete ticket audit."));
   Object.values(panels).forEach(panel => activity.append(panel));
   main.append(activity);
+  // The work log comes last, after the comments.
+  const workLog = pick("#work-log"); if (workLog) main.append(workLog);
   // Anything not placed above stays in the main column, so nothing is lost.
   for (const child of blocks) if (!layout.contains(child)) main.insertBefore(child, activity);
   body.replaceChildren(layout);
