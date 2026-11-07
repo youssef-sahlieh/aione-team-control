@@ -244,3 +244,39 @@
 .report-import-actions{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
 .report-import-map{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:10px 0}
 .report-import input[type=file]{max-width:100%}
+/* Odoo projects: allocated and logged hours per project (project-budget-v1). */
+.odoo-projects .board-summary button.board-chip{background:var(--surface);color:var(--fg);cursor:pointer;font:inherit;font-size:13px;font-weight:600}
+.budget-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0}
+.budget-bar input[type=search]{flex:1 1 240px;min-width:0;min-height:44px;box-sizing:border-box}
+.budget-bar .fsel{width:auto;flex:0 1 200px;min-width:0}
+.odoo-projects .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
+.budget-table{width:100%;border-collapse:collapse;font-size:14px}
+.budget-table th,.budget-table td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.budget-table thead th{background:var(--sunk);position:sticky;top:0;white-space:nowrap}
+.budget-table tfoot th,.budget-table tfoot td{font-weight:700;background:var(--sunk);border-bottom:0}
+.budget-table .num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.budget-table td.over{color:var(--crit);font-weight:700}
+.budget-table tr.budget-over td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
+.budget-table tr.budget-near td:first-child{box-shadow:inset 3px 0 0 var(--warn)}
+.th-sort{background:none;border:0;padding:0;font:inherit;font-weight:700;color:inherit;cursor:pointer;white-space:nowrap}
+.budget-sub{display:block;color:var(--muted);font-size:12px;margin-top:2px;font-weight:400}
+.budget-unset{color:var(--muted);font-style:italic}
+.budget-links{min-width:200px}
+.budget-link{display:inline-flex;align-items:center;gap:4px;margin:0 4px 4px 0;padding:1px 8px;border:1px solid var(--line-strong);border-radius:999px;font-size:12px}
+.budget-unlink{background:none;border:0;padding:0 2px;cursor:pointer;color:var(--muted);font-size:14px;line-height:1}
+.budget-unlink:hover{color:var(--crit)}
+.budget-tickets summary{cursor:pointer;font-size:12px;color:var(--muted)}
+.budget-keys{font-family:var(--mono);font-size:12px;margin:4px 0;word-break:break-word}
+.budget-edit{display:flex;flex-wrap:wrap;gap:4px;align-items:center;justify-content:flex-end;margin-top:4px}
+.budget-edit input[type=number]{width:90px}
+.budget-links .budget-edit{justify-content:flex-start}
+.budget-links .budget-edit .combo{min-width:200px}
+.budget-edit-btn{margin-left:8px}
+.budget-link-btn{display:block;margin-top:4px}
+/* Smaller buttons inside table rows on desktop; phones keep the full touch size. */
+@media (min-width:821px){.budget-table .btn{min-height:30px;padding:3px 10px;font-size:13px}.budget-table .fsel{min-height:30px;padding:3px 8px}}
+.budget-status{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap;border:1px solid var(--line-strong)}
+.budget-status.over{color:var(--crit);background:var(--crit-soft);border-color:var(--crit)}
+.budget-status.near{color:var(--warn);background:var(--warn-soft);border-color:var(--warn)}
+.budget-status.on_track{color:var(--ok);background:var(--ok-soft);border-color:var(--ok)}
+.budget-status.not_set{color:var(--muted);background:var(--sunk)}

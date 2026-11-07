@@ -169,7 +169,7 @@ export const NO_CUSTOMER='No contact';
 // The main company is the Odoo company named "All in One" (ODOO_CLIENT_COMPANY to name another) among those the
 // integration user is allowed in; without one, the second of its companies (company_ids, in Odoo's order).
 // Clients and projects are what Odoo shows with that company selected: its own, and those of no company.
-async function mainCompanyId(env){
+export async function mainCompanyId(env){
   const [u]=await odoo(env,'res.users','search_read',[[['login','=',env.ODOO_LOGIN]]],{fields:['company_ids'],limit:1});
   if(!u||!Array.isArray(u.company_ids)||!u.company_ids.length)throw new Error("the Odoo user has no company to take clients and projects from");
   const wanted=nameKey(String(env.ODOO_CLIENT_COMPANY||'All in One'));
@@ -256,7 +256,8 @@ export async function prepareImport(catalog,rows,source='project-workbook') {
   async function ensure(name,parentId,sourceRow){
     name=cleanName(name);let e=next.entries.find(e=>e.parentId===parentId&&nameKey(e.name)===nameKey(name));
     if(!e){const id=await idFor(parentId,name);e=next.entries.find(e=>e.id===id);if(!e){e={id,name,parentId,archived:false,sources:[]};next.entries.push(e);added.push(e.id);}}
-    if(sourceRow&&!e.sources.some(s=>s.row===sourceRow&&s.source===source))e.sources.push({source,row:sourceRow});
+    // An Odoo project an administrator unlinked from this project is not linked back by the sync.
+    if(sourceRow&&!(source==='odoo'&&(e.odooUnlinked||[]).includes(sourceRow))&&!e.sources.some(s=>s.row===sourceRow&&s.source===source))e.sources.push({source,row:sourceRow});
     return e;
   }
   for(const [i,r] of rows.entries()){
