@@ -1,10 +1,13 @@
-// Odoo knowledge base, behind an extra password that administrators set. The page works like Odoo's Knowledge app:
+// Odoo knowledge base, open to every signed-in team member. The page works like Odoo's Knowledge app:
 // the articles in a tree grouped as Odoo groups them (Workspace, Shared, Private), each article shown as Odoo shows it
 // with its pictures, nested articles added under any article, and an editor that takes pictures. Odoo is the only
-// copy: everything is read from Odoo and every change is saved straight back. The proxy checks the password on every
-// call. The password and the articles live in memory for this page view only, never in browser storage.
+// copy: everything is read from Odoo and every change is saved straight back. The articles live in memory for this
+// page view only, never in browser storage.
 import { api, getSession, signOut } from "./session.js";
+import { startFrame } from "./app/frame.js";
 import { fromOdooHtml, toOdooHtml } from "./models/knowledge-html.js";
+
+startFrame({ current: "knowledge" });
 
 const $ = (id) => document.getElementById(id);
 const errText = (err) => (err && err.code === "network" ? "Can't reach the AIONE server. Try again." : (err && err.message) || "Something went wrong.");
@@ -14,7 +17,6 @@ const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls)
 const SECTIONS = [["workspace", "Workspace"], ["shared", "Shared"], ["private", "Private"]];
 const MAX_PICTURE = 2.5 * 1024 * 1024;
 
-let password = "";
 let odooLink = "";          // https://…/odoo/knowledge
 let articles = [];          // the tree: { id, name, parentId, sequence, icon, category, updatedAt }
 let byId = new Map();
@@ -24,7 +26,7 @@ let found = null;           // ids Odoo found for the search (null: not searchin
 let current = null;         // { article, pictures }
 let dirty = false;
 
-const call = (path, body = {}) => api(path, { method: "POST", body: { ...body, password } });
+const call = (path, body = {}) => api(path, { method: "POST", body });
 const odooOrigin = () => { try { return new URL(odooLink).origin; } catch { return ""; } };
 const sectionOf = (a) => (SECTIONS.some(([k]) => k === a.category) ? a.category : "workspace");
 const ancestors = (id) => { const out = []; let a = byId.get(id); const seen = new Set(); while (a && a.parentId && !seen.has(a.parentId)) { seen.add(a.parentId); a = byId.get(a.parentId); if (a) out.unshift(a); } return out; };
@@ -389,10 +391,10 @@ $("kb-editor").addEventListener("submit", async (e) => {
 
 window.addEventListener("beforeunload", (e) => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
 
-// ---- Unlock, reload, lock ------------------------------------------------------------------------------------------
+// ---- Open and reload ----------------------------------------------------------------------------------------------
 function showApp(list) {
   setArticles(list);
-  show("state", false); show("unlock-block", false); show("kb-app", true);
+  show("state", false); show("kb-app", true);
   // Top-level articles start open, as in Odoo's sidebar.
   for (const [key] of SECTIONS) for (const a of kids.get("root:" + key) || []) expanded.add(a.id);
   renderTree();
@@ -400,65 +402,28 @@ function showApp(list) {
   if (fromLink && byId.has(fromLink)) openArticle(fromLink); else { show("kb-pick", true); show("kb-view", false); show("kb-editor", false); }
 }
 
-function lock() {
-  if (!leaveEditor()) return;
-  password = ""; articles = []; byId = new Map(); kids = new Map(); current = null; found = null; expanded.clear();
-  $("kb-tree").replaceChildren(); $("kb-body").replaceChildren(); $("kb-edit-body").replaceChildren();
-  $("kb-search").value = ""; note("kb-note", "");
-  document.title = "Odoo knowledge base · AIONE Team Control";
-  show("kb-app", false); show("unlock-block", true);
-  note("unlock-msg", "Locked. Enter the password to open it again.");
-  $("unlock-password").focus();
-}
-
-$("unlock-toggle").addEventListener("click", () => {
-  const input = $("unlock-password");
-  const showing = input.type === "text";
-  input.type = showing ? "password" : "text";
-  $("unlock-toggle").textContent = showing ? "Show" : "Hide";
-  $("unlock-toggle").setAttribute("aria-pressed", String(!showing));
-});
-
-$("unlock-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const typed = $("unlock-password").value;
-  $("unlock-submit").disabled = true; note("unlock-msg", "Checking…");
-  try {
-    const { url, articles: list } = await api("/knowledge/unlock", { method: "POST", body: { password: typed } });
-    password = typed;
-    odooLink = String(url || "").replace(/\/+$/, "");
-    $("unlock-password").value = "";
-    $("unlock-password").type = "password";
-    $("unlock-toggle").textContent = "Show";
-    $("unlock-toggle").setAttribute("aria-pressed", "false");
-    note("unlock-msg", "");
-    showApp(list);
-  } catch (err) {
-    if (err && err.code === "session") { signOut(true); return; }
-    note("unlock-msg", errText(err), true);
-  } finally { $("unlock-submit").disabled = false; }
-});
-
 $("kb-reload").addEventListener("click", async () => {
   if (!leaveEditor()) return;
   $("kb-reload").disabled = true;
   try {
-    const { articles: list } = await api("/knowledge/unlock", { method: "POST", body: { password } });
+    const { articles: list } = await call("/knowledge/open");
     setArticles(list); renderTree();
     if (current && byId.has(current.article.id)) await openArticle(current.article.id);
     note("kb-note", "Read from Odoo again.");
   } catch (err) { note("kb-note", errText(err), true); }
   finally { $("kb-reload").disabled = false; }
 });
-$("kb-lock").addEventListener("click", lock);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("kb-zoom").hidden) show("kb-zoom", false); });
 
 async function load() {
-  const status = await api("/knowledge/status");
-  show("state", false);
-  if (!status.odoo) { show("state", true); $("state").textContent = "Odoo is not connected, so the knowledge base is not available."; return; }
-  if (status.configured) show("unlock-block", true);
-  else { show("state", true); $("state").textContent = "No knowledge password has been set yet. An administrator sets it on the Users page."; }
+  try {
+    const { url, articles: list } = await call("/knowledge/open");
+    odooLink = String(url || "").replace(/\/+$/, "");
+    showApp(list);
+  } catch (err) {
+    if (err && err.code === "odoo_unavailable" && err.status === 503) throw new Error("Odoo is not connected, so the knowledge base is not available.");
+    throw err;
+  }
 }
 
 const s = getSession();

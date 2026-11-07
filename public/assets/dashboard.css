@@ -498,6 +498,13 @@ button.key.odoo:hover{text-decoration:underline}
 .db-page .db-table .db-col-addons{min-width:0}
 .db-page .db-ago{display:block}
 .db-page .db-pill{white-space:normal;display:inline-block}
+/* Inside the app frame the page is the top bar plus the content, which takes the rest of the screen. */
+.db-page .app-shell{height:100%;min-height:0}
+.db-page .app-workspace{height:100%;display:flex;flex-direction:column}
+.db-page .app-topbar{flex:none}
+.db-page .wrap.frame-page{flex:1;min-height:0;height:auto;width:100%;padding-block:20px 12px}
+.db-page .page-heading{flex:none}
+.db-page .db-table .db-col-control .btn{max-width:100%;min-width:0;padding-inline:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (max-width:760px){
   .db-page .wrap{padding-inline:max(10px,env(safe-area-inset-left)) max(10px,env(safe-area-inset-right));gap:6px}
   .db-page .sub,.db-me-text{display:none}

@@ -2,6 +2,9 @@
 // Users and administrators see and do the same things. Every change goes through the proxy, which runs
 // it in Odoo and records it in the dashboard's action log with the signed-in person's name.
 import { api, getSession, signOut } from "./session.js";
+import { startFrame, appConfig } from "./app/frame.js";
+
+startFrame();
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -328,7 +331,7 @@ async function start() {
   const s = getSession(); if (!s) return signOut(true);
   $("me").textContent = s.email;
   try {
-    const cfg = await api("/config");
+    const cfg = await appConfig();
     if (!cfg.odoo) { showState("Odoo isn't connected, so Audit & Deploy isn't available. See SETUP.md.", true); return; }
     showState(""); $("tabs").hidden = false;
     const tab = location.hash.slice(1);
