@@ -1,8 +1,8 @@
 /* Frame around Odoo's own Audit & Deploy screen. The screen itself uses Odoo's styles. */
 html, body { height: 100%; margin: 0; }
 body.o_web_client { display: flex; flex-direction: column; overflow: hidden; }
-.ad-bar { position: relative; z-index: 1100; display: flex !important; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: max(6px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 6px max(14px, env(safe-area-inset-left)); background: #1f2433; color: #fff; font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; flex: none; }
-.ad-bar a { color: #c9d4ff; text-decoration: none; }
+.ad-bar { position: relative; z-index: 1100; display: flex !important; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: max(6px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 6px max(14px, env(safe-area-inset-left)); background: #0d0d0c; color: #fff; font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; flex: none; }
+.ad-bar a { color: #f0bd45; text-decoration: none; }
 .ad-bar a:hover { text-decoration: underline; }
 .ad-sp { flex: 1; }
 .ad-me { color: #b8bfd0; font-size: 13px; }

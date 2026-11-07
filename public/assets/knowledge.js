@@ -7,7 +7,7 @@ import { api, getSession, signOut } from "./session.js";
 import { fromOdooHtml, toOdooHtml } from "./models/knowledge-html.js";
 
 const $ = (id) => document.getElementById(id);
-const errText = (err) => (err && err.code === "network" ? "Can't reach the AION server. Try again." : (err && err.message) || "Something went wrong.");
+const errText = (err) => (err && err.code === "network" ? "Can't reach the AIONE server. Try again." : (err && err.message) || "Something went wrong.");
 const show = (id, on) => { $(id).hidden = !on; };
 const note = (id, text, isErr) => { const n = $(id); n.textContent = text || ""; n.classList.toggle("err", !!isErr); };
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -405,7 +405,7 @@ function lock() {
   password = ""; articles = []; byId = new Map(); kids = new Map(); current = null; found = null; expanded.clear();
   $("kb-tree").replaceChildren(); $("kb-body").replaceChildren(); $("kb-edit-body").replaceChildren();
   $("kb-search").value = ""; note("kb-note", "");
-  document.title = "Odoo knowledge base · AION Team Control";
+  document.title = "Odoo knowledge base · AIONE Team Control";
   show("kb-app", false); show("unlock-block", true);
   note("unlock-msg", "Locked. Enter the password to open it again.");
   $("unlock-password").focus();

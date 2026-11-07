@@ -26,7 +26,7 @@ async function start() {
   try {
     info = await api("/reset/check", { method: "POST", body: { token } });
   } catch (err) {
-    return finish("This link doesn't work", err.code === "network" ? "Can't reach the AION server. Check your connection and open the link again."
+    return finish("This link doesn't work", err.code === "network" ? "Can't reach the AIONE server. Check your connection and open the link again."
       : "It has expired or was already used. Ask for a new one with \"Forgot password?\" on the sign-in page.");
   }
   $("title").textContent = info.purpose === "invite" ? "Welcome, " + info.name : "Choose a new password";
@@ -50,7 +50,7 @@ async function start() {
       btn.disabled = false;
       btn.textContent = "Save password";
       if (err.code === "bad_link") return finish("This link doesn't work", "It has expired or was already used. Ask for a new one with \"Forgot password?\" on the sign-in page.");
-      showMsg(err.code === "network" ? "Can't reach the AION server. Try again." : err.message, "err");
+      showMsg(err.code === "network" ? "Can't reach the AIONE server. Try again." : err.message, "err");
     }
   });
 }

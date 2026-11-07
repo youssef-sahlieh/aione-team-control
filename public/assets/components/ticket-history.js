@@ -21,7 +21,7 @@ export function createTicketHistory({api,getIssue,allowed,formatTime,personName=
   }
   function paintLocal(){
     if(!local.length)return;
-    const section=node("section","ticket-history-local");section.appendChild(node("h4","","Changes made in AION Team Control ("+local.length+")"));
+    const section=node("section","ticket-history-local");section.appendChild(node("h4","","Changes made in AIONE Team Control ("+local.length+")"));
     for(const e of [...local].reverse()){
       const entry=node("article","ticket-history-entry");const header=node("div","ticket-history-meta");
       header.appendChild(node("strong","",e.by?.name||e.by?.email||"Someone"));header.appendChild(node("span","",ACTIONS[e.action]||"Changed"));
@@ -38,7 +38,7 @@ export function createTicketHistory({api,getIssue,allowed,formatTime,personName=
     for(const history of [...rows].sort((a,b)=>Date.parse(b.created)-Date.parse(a.created))){
       const entry=node("article","ticket-history-entry");const header=node("div","ticket-history-meta");
       const real=realAuthor(history);
-      header.appendChild(node("strong","",real?real+" (via AION Team Control)":history.author?.displayName||"Unknown author"));
+      header.appendChild(node("strong","",real?real+" (via AIONE Team Control)":history.author?.displayName||"Unknown author"));
       const time=node("time","",formatTime(history.created));if(history.created)time.dateTime=history.created;header.appendChild(time);entry.appendChild(header);
       for(const change of history.items||[])entry.appendChild(changeLine(change.field||change.fieldId||"Field",change.fromString??change.from,change.toString??change.to));
       box.appendChild(entry);

@@ -9,7 +9,7 @@ import { monitorInstanceUrl, monitorOpenUrl, rememberMonitorPage } from "./model
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
-const errText = (err) => err && err.code === "network" ? "Can't reach the AION server. Try again." : (err && err.message) || "Something went wrong.";
+const errText = (err) => err && err.code === "network" ? "Can't reach the AIONE server. Try again." : (err && err.message) || "Something went wrong.";
 
 function showState(text, isErr) { const s = $("pagestate"); s.hidden = !text; s.className = "state" + (isErr ? " err" : ""); s.textContent = text || ""; }
 let toastTimer = null;

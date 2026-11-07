@@ -47,7 +47,7 @@
     });
   }).catch(function (err) {
     root.style.visibility = "";
-    document.title = "AION Team Control";
+    document.title = "AIONE Team Control";
     return (err && err.message) || "AI1 Monitor sign-in didn't work. Open AI1 Monitor again.";
   });
 })();

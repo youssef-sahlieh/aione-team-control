@@ -1,7 +1,6 @@
 /* Comfortable reading sizes and consistent targets for the workspace. */
 :root {
   --sans: "Segoe UI", "IBM Plex Sans", "IBM Plex Sans Hebrew", Arial, sans-serif;
-  --muted: #5f6d83;
 }
 body { font-size: 15px; line-height: 1.55; }
 .skip-link { top: 0; transform: translateY(calc(-100% - 12px)); }
@@ -15,7 +14,7 @@ button, a, input, select, textarea, summary { touch-action: manipulation; }
 .nav-link { font-size: 15px; min-height: 48px; }
 .brand-caption { font-size: 11px; letter-spacing: 1.2px; }
 .workspace-label, .sidebar-note, .nav-label { font-size: 12px; }
-.nav-label, .sidebar-note { color: #a7b5cd; }
+.nav-label, .sidebar-note { color: var(--side-muted); }
 .breadcrumbs, .account-menu summary, .account-panel { font-size: 14px; }
 .search-wrap .search { height: 44px; font-size: 15px; }
 .search-wrap::before { top: 7px; }
@@ -115,7 +114,4 @@ button, a, input, select, textarea, summary { touch-action: manipulation; }
   .calendar-panel .calendar-ticket { font-size: 14px; padding: 10px; }
   .calendar-panel .calendar-ticket small, .calendar-panel .calendar-empty { font-size: 12px; }
   .pagination .page-buttons { width: 100%; justify-content: space-between; }
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme=light]) { --muted: #a8b5ca; }
 }
