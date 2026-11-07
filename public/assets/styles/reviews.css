@@ -1,0 +1,52 @@
+/* Pull request reviews: the Needs review page, the reviewers picker and the read-only ticket dialog (components/reviews.js). */
+body[data-workspace-page=reviews] #create-ticket,body[data-workspace-page=reviews] #team{display:none}
+body[data-workspace-page=reviews] #workspace-content{max-width:920px}
+
+.review-list{display:grid;gap:12px}
+.review-card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+.review-card.review-needs_review{border-left:3px solid var(--accent)}
+.review-card.review-changes_requested{border-left:3px solid var(--crit)}
+.review-card.review-approved{border-left:3px solid var(--ok)}
+.review-head-line{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.review-title{font-weight:600;color:var(--fg);text-decoration:none;overflow-wrap:anywhere}
+.review-title:hover{text-decoration:underline}
+.review-meta{margin:4px 0 0;color:var(--muted);font-size:12.5px}
+.review-gh{margin:8px 0 0;font-size:12.5px}
+.review-gh.ok{color:var(--ok)}
+.review-gh.wait{color:var(--warn)}
+.review-gh.bad{color:var(--crit)}
+.review-card .review-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.review-status{font-size:12px;font-weight:600;border-radius:999px;padding:3px 10px;background:var(--sunk);color:var(--muted);white-space:nowrap}
+.review-status.needs_review{background:var(--accent-soft);color:var(--accent)}
+.review-status.in_review{background:var(--accent-soft);color:var(--accent)}
+.review-status.changes_requested{background:var(--crit-soft);color:var(--crit)}
+.review-status.approved{background:var(--ok-soft);color:var(--ok)}
+
+.review-dialog{width:min(640px,calc(100vw - 32px));max-height:86vh;border:1px solid var(--line-strong);border-radius:12px;padding:0;background:var(--surface);color:var(--fg);box-shadow:var(--shadow)}
+.review-dialog::backdrop{background:var(--scrim)}
+.review-dialog h2{font-size:17px;margin:0;padding:18px 22px 0;overflow-wrap:anywhere}
+.review-body{padding:14px 22px;overflow:auto;max-height:calc(86vh - 130px)}
+.review-dialog .review-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 22px;border-top:1px solid var(--line)}
+.review-body h3{font-size:13px;margin:18px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.review-note,.review-ro{color:var(--muted);font-size:12.5px;margin:6px 0}
+.review-facts{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0;font-size:13px}
+.review-facts dt{color:var(--muted)}
+.review-facts dd{margin:0;overflow-wrap:anywhere}
+.review-text{white-space:pre-wrap;font:inherit;font-size:13px;margin:0;overflow-wrap:anywhere}
+.review-comment{border-top:1px solid var(--line);padding:8px 0}
+.review-when{color:var(--muted);font-size:12px}
+.review-files{list-style:none;padding:0;margin:0}
+.review-files li{padding:4px 0}
+.review-files .link{background:none;border:0;padding:0;color:var(--accent);text-align:left;font:inherit;cursor:pointer}
+
+.review-picker{display:grid;gap:12px}
+.review-people{display:grid;gap:4px;max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px}
+.review-person{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer}
+.review-person:hover{background:var(--sunk)}
+.review-person span:nth-child(2){flex:1}
+.review-tag{font-size:11.5px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 8px}
+.review-tag.ok{color:var(--ok);border-color:var(--ok)}
+.review-assignments{display:grid;gap:8px}
+.review-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px}
+.review-row .review-gh{margin:0}
+.pr-reviewers{margin-left:auto}

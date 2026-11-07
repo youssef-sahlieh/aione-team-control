@@ -1,5 +1,5 @@
 // Users page (administrators only): invite people, choose Administrator or User, pick whose tickets a User sees,
-// send password links and remove accounts. Everything is checked again by the proxy.
+// set the GitHub username used for review requests, send password links and remove accounts. Everything is checked again by the proxy.
 import { api, getSession, signOut } from "./session.js";
 
 const $ = (id) => document.getElementById(id);
@@ -64,6 +64,9 @@ function openDialog(u) {
   $("p-manage").hidden = !u;
   $("p-save").textContent = u ? "Save changes" : "Send invitation";
   $("p-otherwrap").hidden = true;
+  // The GitHub username is set when managing someone; it is not asked for when inviting.
+  $("p-githubwrap").hidden = !u;
+  $("p-github").value = u ? u.githubLogin || "" : "";
   setRole(u ? u.role : "user");
   $("p-name").value = u ? u.name : "";
   $("p-email").value = u ? u.email : "";
@@ -104,7 +107,7 @@ $("person-form").addEventListener("submit", async (e) => {
   btn.disabled = true; setMsg("p-msg", editing ? "Saving…" : "Sending…", true);
   try {
     if (editing) {
-      await api("/users/" + encodeURIComponent(editing.email), { method: "PUT", body: { name, role, dev } });
+      await api("/users/" + encodeURIComponent(editing.email), { method: "PUT", body: { name, role, dev, githubLogin: $("p-github").value.trim() } });
       dialog.close();
       toast("Saved. It applies right away.");
     } else {
