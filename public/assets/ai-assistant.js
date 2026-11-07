@@ -11,7 +11,7 @@ export function createAIAssistant({openIssue,beforeOpen}) {
   function setBusy(value){busy=value;send.disabled=value||!enabled;$("ai-new").disabled=value;input.disabled=!enabled;panel.setAttribute("aria-busy",String(value));for(const control of builder.querySelectorAll("button,input,select"))control.disabled=value||!enabled;}
   function close(){panel.hidden=true;$("ai-scrim").hidden=true;shell.inert=false;document.body.classList.remove("ai-open");launcher.setAttribute("aria-expanded","false");opener?.focus();}
   function addMessage(role,content,references=[]){
-    const row=node("article","ai-message ai-message-"+role);row.appendChild(node("div","ai-author",role==="user"?"You":"AION AI"));
+    const row=node("article","ai-message ai-message-"+role);row.appendChild(node("div","ai-author",role==="user"?"You":"AIONE AI"));
     const body=node("div","ai-message-text");body.dir="auto";
     if(role==="assistant")renderAIAnswer(document,body,content,references,key=>{close();openIssue(key);});else body.textContent=content;
     row.appendChild(body);

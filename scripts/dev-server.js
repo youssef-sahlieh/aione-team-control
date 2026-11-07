@@ -8,7 +8,7 @@ import { aiChat, aiBrief, aiConfigured } from "../proxy/src/ai.js";
 const root = resolve("public");
 const port = Number(process.env.PORT || 3000);
 const upstream = "https://aione-team-proxy.vercel.app";
-const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
+const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".png": "image/png" };
 
 createServer(async (req, res) => {
   try {

@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { resolve, extname, sep } from "node:path";
 // E2E_PUBLIC: serve another copy (e.g. one stamped by scripts/stamp-assets.js, as deployed).
 const root = resolve(process.env.E2E_PUBLIC || "public");
-const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
+const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".png": "image/png" };
 createServer(async (req, res) => {
   try {
     const pathname = decodeURIComponent(new URL(req.url, "http://localhost").pathname);

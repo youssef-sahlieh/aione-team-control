@@ -1,4 +1,4 @@
-// AION Team Control dashboard. Jira data comes through the AION proxy (worker/), which checks the
+// AIONE Team Control dashboard. Jira data comes through the AION proxy (worker/), which checks the
 // sign-in and holds the Jira token. Team details (people, developers, emails) come from the proxy too,
 // so they aren't in this public code.
 import { createTicketBusiness } from "./components/ticket-business.js";
@@ -152,7 +152,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // Table cell: each PR's number (linked), state and what needs attention.
   function prCell(i){
     const c=el("span","c-prs pr-cell"), list=PRS[i.key];
-    if(isInt(i.key)||isOdoo(i.key)){ c.textContent=""; return c; }
+    if(isOdoo(i.key)){ c.textContent=""; return c; }
     if(!list){ if(PR_ERROR){ const e=el("span","pr-none pr-err","can't load"); e.title=PR_ERROR; c.appendChild(e); } else c.appendChild(el("span","pr-none","…")); return c; }
     if(!list.length){ c.appendChild(el("span","pr-none","—")); return c; }
     list.slice(0,3).forEach(p=>{ const line=el("div","pr-line"); const a=prLink(p,"#"+p.number); a.title=p.repo+" #"+p.number+" · "+p.state+" · "+p.title; line.appendChild(a);
@@ -170,7 +170,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     }catch(err){ const first=!PR_ERROR; PR_ERROR=err.message||errorText(err); if(first){ toast("Pull requests can't be loaded",[PR_ERROR,"An administrator can check the GitHub token on the Sync errors page."],true); renderIfIdle(); } if(dz.key&&keys.includes(dz.key)) renderPrs(dz.key,PR_ERROR); }
   }
   function renderPrs(key,problem){
-    const blk=$("d-prs-blk"), box=$("d-prs"); blk.hidden=!GITHUB||isInt(key)||isOdoo(key); if(blk.hidden) return;
+    const blk=$("d-prs-blk"), box=$("d-prs"); blk.hidden=!GITHUB||isOdoo(key); if(blk.hidden) return;
     box.replaceChildren(); const list=PRS[key];
     if(problem){ box.appendChild(el("span","msg err","Couldn't load pull requests: "+problem)); return; }
     if(!list){ $("d-prs-count").textContent=""; box.appendChild(el("span","msg","Looking for pull requests…")); loadPrs([key]); return; }
@@ -921,7 +921,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
         const rows=items.map(i=>"<tr><td><a href=\""+esc(dashUrl(i.key))+"\">"+esc(i.key)+"</a>"+(i.internal?"":" (<a href=\""+esc(ticketUrl(i.key))+"\">"+sourceName(i.key)+"</a>)")+"</td><td>"+esc(i.summary)+"</td><td>"+esc(i.status)+"</td><td>"+esc(i.due?fmtDate(i.due):"Not set")+"</td><td>"+esc(i.parent?i.parent.name:"")+"</td><td>"+esc(i.reporter)+"</td></tr>").join("");
         const html="<p>Hi "+esc(devFirstName(d))+",</p><p>You have been assigned as the developer (ai1_"+esc(d)+") on the following Jira "+(keys.length===1?"ticket":"tickets")+":</p>"
           +"<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\"><thead><tr><th>Ticket</th><th>Title</th><th>Status</th><th>Due date</th><th>Epic</th><th>Reporter</th></tr></thead><tbody>"+rows+"</tbody></table>"
-          +"<p>Please review "+(keys.length===1?"it":"them")+" and request a due date in AION Team Control based on the development time.</p><p>Thanks,<br>"+esc(ME)+"</p>";
+          +"<p>Please review "+(keys.length===1?"it":"them")+" and request a due date in AIONE Team Control based on the development time.</p><p>Thanks,<br>"+esc(ME)+"</p>";
         try{ await api("/mail",{method:"POST",body:{to:[to],subject,html}}); sent.push("ai1_"+d+" ("+to+") · "+keys.join(", ")); }
         catch(err){ failed.push("ai1_"+d+": "+(err.code==="network"?"the server didn't confirm; ask the developer before resending":err.message)); }
         continue;
@@ -943,7 +943,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   function errorText(err){ const c=err&&err.code;
     if(c==="too_large"||c==="bad_request"||c==="forbidden"||c==="not_found") return err.message;
     if(c==="session") return "Your sign-in has expired. Sign in again.";
-    if(c==="network") return "Can't reach the AION server. Check your connection and try again.";
+    if(c==="network") return "Can't reach the AIONE server. Check your connection and try again.";
     if(c==="rate_limited") return "Jira is busy. Wait a moment and try again.";
     if(c==="jira") return "Jira refused: "+(err.message||"unknown error");
     return "Couldn't reach Jira"+(err&&err.message?": "+err.message:"."); }
@@ -975,7 +975,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       lastLoad=Date.now(); $("updated").textContent="updated "+new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
       // Show the tickets straight away; their client and hours fill in a moment later (unless a client filter needs them).
       if(!Object.values(state.businessFilter||{}).some(Boolean)) renderIfIdle();
-      setTimeout(()=>loadClosed(),0); loadPrs(issues.map(i=>i.key));
+      setTimeout(()=>loadClosed(),0); loadPrs([...issues.map(i=>i.key),...state.internalIssues.map(i=>i.key)]);
       await businessReady; await business.load([...issues.map(i=>i.key),...state.internalIssues.map(i=>i.key)]);
       mergeIssues(); saveCache(); renderIfIdle();
       if(dz.key)dateRequests.renderDrawer(dz.key);
@@ -1001,7 +1001,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
         keys.some(isOdoo)?loadOdoo():null,
         businessReady.then(()=>business.load(keys.filter(k=>!isOdoo(k))))
       ]);
-      mergeIssues(); saveCache(); renderIfIdle(); loadPrs(jk);
+      mergeIssues(); saveCache(); renderIfIdle(); loadPrs(keys);
     }catch(_){ await reload(); }
   }
   // Changes shown on the page before the loaded data has them. Jira's search can lag a few seconds behind an
