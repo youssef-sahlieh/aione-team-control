@@ -1,0 +1,39 @@
+/* An open ticket stays inside the app on computers: the sidebar and top bar remain, with no dark overlay.
+   Full page fills the content area; Side by side keeps the list on the left. Phones keep the full-screen view. */
+:root{--side-w:236px;--top-h:78px;--split-w:min(720px,50vw)}
+@media(max-width:1100px){:root{--side-w:205px}}
+body.sidebar-collapsed{--side-w:76px}
+
+body.ticket-page .app-topbar,body.ticket-split .app-topbar{position:sticky;top:0;z-index:14}
+body.ticket-page #scrim,body.ticket-split #scrim{display:none}
+body.ticket-page #drawer,body.ticket-split #drawer{top:var(--top-h);bottom:0;right:0;z-index:13;padding-top:0}
+body.ticket-page #drawer{left:var(--side-w);width:auto;border-left:0;box-shadow:none;background:var(--bg)}
+body.ticket-page #drawer .dhead{background:var(--surface)}
+body.ticket-split #drawer{left:auto;width:var(--split-w);border-left:1px solid var(--line);box-shadow:-8px 0 24px #17140a0d}
+body.ticket-split #main-content{margin-right:var(--split-w)}
+/* Beside a ticket the list is narrower: the tiles wrap instead of squeezing. */
+body.ticket-split .tiles{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+body.ticket-split .page-heading{flex-direction:column;align-items:flex-start}
+/* The list behind a full-page ticket keeps its scroll position for when the ticket closes. */
+body.ticket-page #main-content{visibility:hidden}
+
+/* Breadcrumb: the page the ticket was opened from, the ticket, and Previous / Next. */
+.dcrumb{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);min-height:32px}
+.dcrumb-back{background:none;border:0;padding:0;font:inherit;color:var(--accent);font-weight:600;cursor:pointer}
+.dcrumb-back:hover{text-decoration:underline}
+#d-crumb{color:var(--fg);font-weight:600;font-family:var(--mono);font-size:12px}
+.dnav{margin-left:auto;display:flex;align-items:center;gap:6px}
+.dpos{font-size:12px;margin-right:4px;white-space:nowrap}
+.dnav .btn{min-width:34px;min-height:32px;padding:4px 8px;justify-content:center}
+.dnav .btn:disabled{opacity:.4;cursor:default}
+body:not(.ticket-page):not(.ticket-split) .dcrumb-back,body:not(.ticket-page):not(.ticket-split) .dcrumb>span[aria-hidden],body:not(.ticket-page):not(.ticket-split) #d-crumb{display:none}
+
+/* The open ticket is marked in the list. */
+.gr.item.is-open,.business-list .gr.item.is-open>*{background:var(--accent-soft)}
+.gr.item.is-open::before{background:var(--accent-fill)}
+.card.is-open{outline:2px solid var(--accent-fill);outline-offset:-1px}
+
+@media(prefers-reduced-motion:no-preference){
+  body.ticket-split #drawer{animation:ticket-in .16s ease-out}
+  @keyframes ticket-in{from{transform:translateX(16px);opacity:.6}}
+}

@@ -4,7 +4,15 @@ const $ = id => document.getElementById(id);
 // developers, due date, development and the ticket's work fields). On narrow screens the side column comes first.
 export function createIssueDrawer({ isDirty, canViewHistory, canViewFullHistory = () => false, onSelect = () => {} }) {
   const drawer = $("drawer"), body = $("d-body"), tabs = $("drawer-tabs");
-  let opener = null, active = "comments";
+  let opener = null, active = "comments", isOpen = false, modal = true, cover = false;
+  // On phones the ticket covers the app (a modal dialog). On computers it opens inside the app: the sidebar and
+  // top bar stay usable, and only a full-page ticket hides the list behind it.
+  function apply() {
+    $("main-content").closest(".app-shell").inert = isOpen && modal;
+    $("main-content").inert = isOpen && !modal && cover;
+    drawer.setAttribute("role", modal ? "dialog" : "region");
+    if (modal) drawer.setAttribute("aria-modal", "true"); else drawer.removeAttribute("aria-modal");
+  }
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
   const blocks = [...body.children], has = (child, sel) => child.matches(sel) || !!child.querySelector(sel);
   const pick = sel => blocks.find(child => has(child, sel));
@@ -61,7 +69,7 @@ export function createIssueDrawer({ isDirty, canViewHistory, canViewFullHistory 
     e.preventDefault(); select(list[next].id.slice(4)); list[next].focus();
   });
   document.addEventListener("keydown", e => {
-    if (drawer.hidden || e.key !== "Tab" || !$("pop").hidden || document.querySelector("dialog[open]")) return;
+    if (!modal || drawer.hidden || e.key !== "Tab" || !$("pop").hidden || document.querySelector("dialog[open]")) return;
     const targets = [...drawer.querySelectorAll('button,a[href],input,textarea,select,[tabindex="0"]')].filter(n => !n.disabled && n.getClientRects().length);
     const first = targets[0], last = targets.at(-1);
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
@@ -74,8 +82,9 @@ export function createIssueDrawer({ isDirty, canViewHistory, canViewFullHistory 
   document.addEventListener("click", e => { if (more.open && !more.contains(e.target)) more.open = false; });
   return {
     select,
-    open() { opener = document.activeElement; select("overview"); body.scrollTop = 0; $("main-content").closest(".app-shell").inert = true; document.body.classList.add("drawer-open"); },
+    layout(next) { modal = next.modal; cover = next.cover; apply(); },
+    open() { opener = document.activeElement; select("overview"); body.scrollTop = 0; isOpen = true; apply(); document.body.classList.add("drawer-open"); },
     allowClose() { return !isDirty() || confirm("Discard your unsaved ticket edits?"); },
-    close() { $("main-content").closest(".app-shell").inert = false; document.body.classList.remove("drawer-open"); if (opener?.isConnected) opener.focus(); else $("page-heading").focus(); }
+    close() { isOpen = false; apply(); document.body.classList.remove("drawer-open"); if (opener?.isConnected) opener.focus(); else $("page-heading").focus(); }
   };
 }
