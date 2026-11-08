@@ -39,6 +39,7 @@ import { reviewRoutes, requestWaitingReviews } from "./reviews.js";
 import { recordTicketEvent, ticketLogRoutes, readTicketLog } from "./ticket-log.js";
 import { integrationRoutes } from "./integrations.js";
 import { epicMapRoutes } from "./epic-map.js";
+import { projectBudgetRoutes } from "./project-budget.js";
 import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
 import { recordLogin } from "./users.js";
 import { ROLES, checkPassword, createLinkToken, deleteUser, ensureAccountId, getUser, hashPassword, listUsers, newAccountId, normDev, normEmail, normGithub, passwordProblem, peekLinkToken, publicUser, saveUser, updateUser, useLinkToken, validDev, validEmail, validGithub } from "./users.js";
@@ -400,7 +401,7 @@ async function route(request, env, url) {
     if (!account || account.id !== grant.accountId) return fail("forbidden", "This account can't use AI1 Monitor.", 403);
     try { return json(await monitorToken(env, account)); } catch { return fail("not_configured", "AI1 Monitor sign-in isn't set up.", 503); }
   }
-  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1", "db-report-v1", "db-report-company-v1", "db-report-pos-version-v1", "time-entries-v1","epic-map-v1","analytics-v1","ticket-bulk-import-v1","project-admin-v1"], build: String(env.BUILD || "").slice(0, 7)});
+  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1", "db-report-v1", "db-report-company-v1", "db-report-pos-version-v1", "time-entries-v1","epic-map-v1","analytics-v1","ticket-bulk-import-v1","project-admin-v1","project-budget-v1"], build: String(env.BUILD || "").slice(0, 7)});
 
   // Jira Automation uses its own secret, never a team password or a user's browser session.
   if (path === "/notifications/jira-created") {
@@ -537,6 +538,8 @@ async function route(request, env, url) {
     try{return json({text:await aiImproveWriting(env,me,b.text)});}
     catch(e){if(e instanceof AIError||(e&&typeof e.status==="number"&&typeof e.code==="string"))return json({code:e.code,error:e.message},e.status);return fail("ai_unavailable","Could not improve the text. Please try again.",502);}
   }
+  // All Odoo projects with allocated and logged hours (administrators).
+  if(path==="/clients/odoo-projects"||path.startsWith("/clients/odoo-projects/"))return projectBudgetRoutes(request,env,url,me);
   if(path==="/clients"||path.startsWith("/clients/"))return catalogRoutes(request,env,url,me);
   if(path==="/epic-map"||path==="/epic-map/sync")return epicMapRoutes(request,env,url,me,(p,init)=>jira(env,p,init));
   // Work log (Odoo timesheets) on Jira, internal and Odoo Helpdesk tickets the signed-in person can see.
@@ -653,7 +656,7 @@ async function route(request, env, url) {
     // At most a short wait for Jira; when it's slow or down, the team setting's list is used.
     const fromJira = await Promise.race([jiraDevs(env).catch(() => []), new Promise((r) => setTimeout(() => r([]), 3000))]);
     team.devs = [...new Set([...(Array.isArray(team.devs) ? team.devs : []), ...fromJira])];
-    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE,knowledgeLock:odooConfigured(env)&&!!env.STORE, capabilities:["ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1","db-report-pos-version-v1","epic-map-v1","ticket-bulk-import-v1"] });
+    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE,knowledgeLock:odooConfigured(env)&&!!env.STORE, capabilities:["ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1","db-report-pos-version-v1","epic-map-v1","ticket-bulk-import-v1","project-admin-v1","project-budget-v1"] });
   }
 
   // Jira people are searchable for everyone, so anyone can @mention them in a Jira comment.
