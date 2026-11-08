@@ -1,8 +1,8 @@
 import { test, expect } from "@playwright/test";
 
-// Ticket details: an administrator picks the Assignee from a searchable list (Unassigned included for Jira tickets). A refused
-// save puts the previous owner back. Everyone else sees the owner as text, with no picker. The sidebar count matches "All open".
-async function mockDashboard(page, { role = "admin" } = {}) {
+// Ticket details: an administrator, or a developer on the ticket, picks the Assignee from a searchable list (Unassigned included for
+// Jira tickets). A refused save puts the previous owner back. Anyone else sees the owner as text, with no picker. The sidebar count matches "All open".
+async function mockDashboard(page, { role = "admin", dev = "builder" } = {}) {
   const writes = [];
   writes.fail = false;
   const email = role === "admin" ? "admin@example.invalid" : "user@example.invalid";
@@ -14,7 +14,7 @@ async function mockDashboard(page, { role = "admin" } = {}) {
     if (url.origin === "http://127.0.0.1:4173") return route.continue();
     if (url.hostname !== "aione-team-proxy.vercel.app") return route.abort();
     const path = url.pathname;
-    if (path === "/config") return route.fulfill({ json: { site: "https://jira.example.invalid", project: "AION", people: { builder: { id: "acc-b", name: "Builder" }, reviewer: { id: "acc-r", name: "Reviewer" } }, devs: ["builder"], role, dev: "builder", email, accounts: true, odoo: false, mail: false, ai: { enabled: false } } });
+    if (path === "/config") return route.fulfill({ json: { site: "https://jira.example.invalid", project: "AION", people: { builder: { id: "acc-b", name: "Builder" }, reviewer: { id: "acc-r", name: "Reviewer" } }, devs: ["builder"], role, dev, email, accounts: true, odoo: false, mail: false, ai: { enabled: false } } });
     if (path === "/jira/search") return route.fulfill({ json: { issues: [
       { ...issue("AION-1", "acc-b", "Builder", "new") },
       { ...issue("AION-2", null, "", "indeterminate") },
@@ -66,6 +66,16 @@ test("an administrator types to find a person and presses Enter; only the assign
   expect(writes[0].body.fields.assignee.accountId).toBe("acc-r");
 });
 
+test("a developer on the ticket can change its assignee; only the assignee is sent", async ({ page }) => {
+  const writes = await mockDashboard(page, { role: "user", dev: "builder" });
+  await openTicket(page);
+  const pick = page.getByRole("combobox", { name: "Assignee" });
+  await pick.fill("Rev");
+  await pick.press("Enter");
+  await expect(page.locator("#d-asgmsg")).toHaveText("Saved.");
+  expect(writes.length).toBe(1);
+  expect(Object.keys(writes[0].body.fields)).toEqual(["assignee"]);
+});
 test("Unassigned is offered for a Jira ticket and clears the owner", async ({ page }) => {
   const writes = await mockDashboard(page);
   await openTicket(page);
@@ -91,8 +101,8 @@ test("a refused save puts the previous owner back and says so", async ({ page })
   expect(writes.length).toBe(1);
 });
 
-test("someone without permission sees the current assignee and no picker", async ({ page }) => {
-  const writes = await mockDashboard(page, { role: "user" });
+test("someone who is not on the ticket sees the current assignee and no picker", async ({ page }) => {
+  const writes = await mockDashboard(page, { role: "user", dev: "reviewer" });
   await openTicket(page);
   await expect(page.locator("#d-asgname")).toContainText("Builder");
   await expect(page.getByRole("combobox", { name: "Assignee" })).toBeHidden();

@@ -54,6 +54,8 @@ export function buildNav(nav, { onPage } = {}) {
     a.append(icon(id), node("span", "", label));
     if (id === "tickets") { const count = node("span", "nav-count", "—"); count.id = "nav-ticket-count"; count.hidden = !onPage; a.appendChild(count); }
     if (id === "requests") { const count = node("span", "nav-count", "0"); count.id = "nav-date-count"; count.hidden = !onPage; a.append(count); }
+    // Administrators' count of tickets waiting for review; shown only when there are some (see components/reviews.js).
+    if (id === "reviews") { const count = node("span", "nav-count", "0"); count.id = "nav-review-count"; count.hidden = true; a.appendChild(count); }
     if (id === "errors") { const count = node("span", "nav-count nav-alert", "0"); count.id = "nav-error-count"; count.hidden = true; a.appendChild(count); }
     if (onPage) a.addEventListener("click", e => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); onPage(id); });
     nav.appendChild(a);

@@ -14,10 +14,13 @@
 // github.state: "no_login" (no GitHub login set yet) | "pending" | "requested" | "failed".
 // The shown status (needs_review, in_review, approved, changes_requested, closed, unlinked) is worked out from the
 // assignment and the synced pull request, so it is never stored and cannot go stale.
+// Administrators also get the workspace queue (GET /reviews/queue): every open pull request that names a ticket, with
+// its review state from GitHub (prReviewState), grouped by ticket. Nothing is stored for it either.
 import { addToInbox } from "./inbox.js";
 import { ensureAccountId, getUser, listUsers } from "./users.js";
-import { githubConfigured, prRecord, requestReviewer, requestedLogins, syncPulls } from "./github.js";
+import { githubConfigured, prRecord, pullIndex, requestReviewer, requestedLogins, syncPulls } from "./github.js";
 import { readFile } from "./internal.js";
+import { publicMetadata, readCatalog, readMetadata } from "./ticket-metadata.js";
 
 const json = (data, status = 200) => Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
 const fail = (code, error, status = 400) => json({ code, error }, status);
@@ -41,6 +44,35 @@ export function reviewStatus(a, pr, login) {
   if (latest?.state === "APPROVED") return "approved";
   if (latest?.state === "CHANGES_REQUESTED") return "changes_requested";
   return a.startedAt ? "in_review" : "needs_review";
+}
+
+const latest = (times) => times.filter(Boolean).sort().at(-1) || "";
+const earliest = (times) => times.filter(Boolean).sort()[0] || "";
+// When the wait for a review started: the oldest request still open, else the assignment, else when the pull request
+// became ready for review.
+const waitingSince = (pr, assignments) => earliest([...(pr.status?.requests || []).map((r) => r.at), ...assignments.map((a) => a.createdAt)]) || pr.readyAt || pr.created || pr.updated || "";
+
+// The review state of an open pull request, from GitHub's reviews (see github.js). Pure, so the rules are tested.
+// state: "awaiting" (someone should review: nobody has approved yet, the author pushed after changes were requested, or
+// GitHub needs more approvals), "changes_requested" (the author has to act first) or "approved".
+// reason: "new_commits", "more_approvals", "stale" (every approval is older than the latest commit) or "".
+// counts: whether it needs a review from someone now. since: when the wait started (ISO time), or "".
+export function prReviewState(pr, assignments = []) {
+  const s = pr.status || {}, head = s.lastCommitAt || "", reviews = s.reviews || [];
+  const changes = reviews.filter((r) => r.state === "CHANGES_REQUESTED");
+  const approvals = reviews.filter((r) => r.state === "APPROVED");
+  if (changes.length) {
+    const asked = latest(changes.map((r) => r.at));
+    return head && head > asked
+      ? { state: "awaiting", reason: "new_commits", since: head, counts: true }
+      : { state: "changes_requested", reason: "", since: asked, counts: false };
+  }
+  if (approvals.length) {
+    if (head && approvals.every((r) => r.at && r.at < head)) return { state: "approved", reason: "stale", since: head, counts: true };
+    if (s.decision === "REVIEW_REQUIRED") return { state: "awaiting", reason: "more_approvals", since: waitingSince(pr, assignments), counts: true };
+    return { state: "approved", reason: "", since: latest(approvals.map((r) => r.at)), counts: false };
+  }
+  return { state: "awaiting", reason: "", since: waitingSince(pr, assignments), counts: true };
 }
 
 async function readDoc(env, prId) {
@@ -311,6 +343,103 @@ async function ticketAttachment(env, deps, key, id) {
   } });
 }
 
+// An open pull request that names the ticket, for the ticket dialog's link (administrators see every ticket).
+async function openPrFor(env, key) {
+  return Object.values((await pullIndex(env)).prs).find((pr) => isOpen(pr) && pr.keys?.includes(key)) || null;
+}
+
+// Internal tickets (INT-n) live in the store; every other ticket is read from Jira.
+const jiraKey = (key) => !key.startsWith("INT-");
+// Oldest wait first. A missing time sorts last.
+const byWait = (a = "", b = "") => { const x = a || "9999", y = b || "9999"; return x < y ? -1 : x > y ? 1 : 0; };
+
+// Title, status and assignee of each ticket. A Jira ticket outside this project is left out. When Jira can't be read,
+// the Jira tickets stay with their key only and the error says so.
+async function ticketDetails(env, deps, keys) {
+  const details = new Map();
+  let error = "";
+  for (const key of keys.filter((k) => !jiraKey(k))) {
+    const raw = await env.STORE.get("it:" + key);
+    if (!raw) continue;
+    const t = JSON.parse(raw);
+    details.set(key, { title: t.summary || key, status: t.status || "", assignee: t.assignee?.name || "Unassigned" });
+  }
+  const ours = keys.filter(jiraKey);
+  for (let i = 0; i < ours.length; i += 100) {
+    try {
+      const jql = 'project = "' + env.JIRA_PROJECT + '" AND key in (' + ours.slice(i, i + 100).join(",") + ")";
+      const r = await deps.jira(env, "/rest/api/3/search/jql", { method: "POST", body: { jql, fields: ["summary", "status", "assignee"], maxResults: 100 } });
+      if (!r.ok) { error = "Jira couldn't be read, so titles and assignees may be missing."; continue; }
+      for (const issue of r.data.issues || []) {
+        details.set(issue.key, { title: issue.fields?.summary || issue.key, status: issue.fields?.status?.name || "", assignee: issue.fields?.assignee?.displayName || "Unassigned" });
+      }
+    } catch {
+      error = "Jira couldn't be read, so titles and assignees may be missing.";
+    }
+  }
+  return { details, error };
+}
+
+// Every reviewer on a pull request: the dashboard people assigned, then anyone else GitHub has been asked for.
+function reviewersOf(pr, assignments, byId, byLogin) {
+  const out = [], seen = new Set();
+  const add = (name, login) => {
+    const k = lc(login || name);
+    if (!k || seen.has(k)) return;
+    seen.add(k);
+    out.push({ name: name || login, login: login || "" });
+  };
+  for (const a of assignments) add(a.reviewerName, byId.get(a.reviewerId)?.githubLogin || "");
+  for (const login of pr.status?.requested || []) add(byLogin.get(lc(login))?.name || login, login);
+  return out;
+}
+
+// The administrators' queue: open pull requests that name a ticket and need a review now, grouped by ticket. A pull
+// request is listed when prReviewState says so, and "changes requested" is listed too. Approved ones are left out
+// unless they are stale or GitHub needs more approvals. Drafts, merged and closed pull requests never appear.
+// Read-only: nothing is stored. Sync and Jira failures come back as fields, so the page can say so.
+async function adminQueue(env, deps, me) {
+  if (!githubConfigured(env)) return json({ configured: false, syncedAt: null, syncError: "", ticketsError: "", tickets: [], counts: { tickets: 0, prs: 0 }, reviewers: [], clients: [] });
+  let syncError = "";
+  try { await syncPulls(env); } catch (e) { syncError = e.message || "Couldn't read pull requests."; }
+  const index = await pullIndex(env);
+  syncError = syncError || index.statusError || "";
+  const open = Object.values(index.prs).filter((pr) => pr.state === "open" && pr.keys?.length);
+  const [docs, users, catalog] = await Promise.all([Promise.all(open.map((pr) => readDoc(env, pr.id))), listUsers(env.STORE), readCatalog(env)]);
+  const byId = new Map(users.map((u) => [u.id, u])), byLogin = new Map(users.filter((u) => u.githubLogin).map((u) => [lc(u.githubLogin), u]));
+  const named = [...new Set(open.flatMap((pr) => pr.keys.filter((k) => TICKET.test(k))))];
+  const { details, error: ticketsError } = await ticketDetails(env, deps, named);
+  const known = (key) => details.has(key) || (!!ticketsError && jiraKey(key));
+
+  const rows = [];
+  open.forEach((pr, i) => {
+    const keys = pr.keys.filter((k) => TICKET.test(k) && known(k));
+    if (!keys.length) return;
+    const assignments = docs[i]?.assignments || [];
+    const review = prReviewState(pr, assignments);
+    if (review.state === "approved" && !review.counts) return;
+    rows.push({ pr, keys, review, reviewers: reviewersOf(pr, assignments, byId, byLogin) });
+  });
+
+  const groups = new Map();
+  for (const row of rows) for (const key of row.keys) groups.set(key, [...(groups.get(key) || []), row]);
+  const tickets = await Promise.all([...groups].map(async ([key, list]) => {
+    const d = details.get(key) || { title: key, status: "", assignee: "" };
+    const m = publicMetadata(await readMetadata(env, key), me, catalog);
+    const prs = list
+      .map(({ pr, review, reviewers }) => ({ id: pr.id, repo: pr.id.split("#")[0], number: pr.number, title: pr.title, url: pr.url, author: pr.author || "", state: review.state, reason: review.reason, since: review.since, reviewers }))
+      .sort((a, b) => byWait(a.since, b.since) || a.number - b.number);
+    return { key, title: d.title, status: d.status, assignee: d.assignee, client: m.clientName || "", subClient: m.subClientName || "", since: earliest(prs.map((p) => p.since)), prs };
+  }));
+  tickets.sort((a, b) => byWait(a.since, b.since) || a.key.localeCompare(b.key));
+  const reviewers = [...new Set(rows.flatMap((r) => r.reviewers.map((x) => x.name)))].sort((a, b) => a.localeCompare(b));
+  const clients = [...new Set(tickets.map((t) => t.client).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  return json({
+    configured: true, syncedAt: index.syncedAt ? new Date(index.syncedAt).toISOString() : null, syncError, ticketsError,
+    tickets, counts: { tickets: tickets.length, prs: rows.length }, reviewers, clients
+  });
+}
+
 // Reviewer and administrator routes. deps.jira is the proxy's Jira call (see handler.js).
 export async function reviewRoutes(request, env, url, me, deps) {
   const store = env.STORE, path = url.pathname, method = request.method;
@@ -328,6 +457,11 @@ export async function reviewRoutes(request, env, url, me, deps) {
   if (method === "GET" && path === "/reviews/people") {
     if (!isAdmin) return forbidden();
     return json({ people: people(await accountsWithIds(store)) });
+  }
+
+  if (method === "GET" && path === "/reviews/queue") {
+    if (!isAdmin) return forbidden();
+    return adminQueue(env, deps, me);
   }
 
   if (path === "/reviews/pr") {
@@ -383,15 +517,16 @@ export async function reviewRoutes(request, env, url, me, deps) {
   if (method === "GET" && path === "/reviews/ticket") {
     const key = url.searchParams.get("key") || "";
     if (!TICKET.test(key)) return fail("bad_request", "Choose a ticket.", 400);
-    const pr = await reviewedPr(env, user.id, key);
-    const ticket = pr && await readReviewTicket(env, deps, key);
+    // Administrators read any ticket (read-only); others only the tickets of their own pull requests.
+    const pr = isAdmin ? await openPrFor(env, key) : await reviewedPr(env, user.id, key);
+    const ticket = (isAdmin || pr) && (await readReviewTicket(env, deps, key));
     if (!ticket) return fail("not_found", "Ticket unavailable.", 404);
-    return json({ ticket, pr: prSummary(pr, pr.id || "") });
+    return json({ ticket, pr: prSummary(pr, pr?.id || "") });
   }
   if (method === "GET" && path === "/reviews/ticket/attachment") {
     const key = url.searchParams.get("key") || "", id = url.searchParams.get("id") || "";
     if (!TICKET.test(key) || !ATTACHMENT.test(id)) return fail("bad_request", "Choose an attachment.", 400);
-    if (!(await reviewedPr(env, user.id, key))) return fail("not_found", "Attachment unavailable.", 404);
+    if (!isAdmin && !(await reviewedPr(env, user.id, key))) return fail("not_found", "Attachment unavailable.", 404);
     return (await ticketAttachment(env, deps, key, id)) || fail("not_found", "Attachment unavailable.", 404);
   }
   return fail("not_found", "Not found.", 404);

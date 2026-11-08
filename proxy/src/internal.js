@@ -102,7 +102,7 @@ function applyFields(t, b, me, creating, people = []) {
     }
   }
   if (b.assignee !== undefined) {
-    if (!creating && me.role !== "admin" && b.assignee !== t.assignee) return "Only administrators can change the assignee.";
+    if (!creating && me.role !== "admin" && b.assignee !== t.assignee && !(me.dev && t.devs?.includes(me.dev))) return "Only administrators and the ticket's developers can change the assignee.";
     if (people.length && !people.includes(b.assignee)) return "Choose the assignee: " + people.join(", ") + ".";
     t.assignee = b.assignee;
   }

@@ -633,7 +633,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     tt.addEventListener("click",()=>openDrawer(i.key)); r.appendChild(tt);
     r.appendChild(priorityCell(i));
     if(showTicketBriefs())r.appendChild(ticketBriefs.renderCell(i));
-    const canAsg=IS_ADMIN; const who=el(canAsg?"button":"span","who c-who"+(canAsg?" asg":"")); who.appendChild(avatar(i)); who.appendChild(el("span",null,i.assignee?PEOPLE[i.assignee].name:i.assigneeName));
+    const canAsg=canAssign(i); const who=el(canAsg?"button":"span","who c-who"+(canAsg?" asg":"")); who.appendChild(avatar(i)); who.appendChild(el("span",null,i.assignee?PEOPLE[i.assignee].name:i.assigneeName));
     if(canAsg){ who.type="button"; who.title="Change assignee"; who.addEventListener("click",e=>{ e.stopPropagation(); assigneePopover(who,[i.key]); }); } r.appendChild(who);
     const rp=el("span","who c-rep"); rp.appendChild(el("span","av k6",initials(i.reporter))); const rn=el("span",null,i.reporter); rn.title=i.reporter; rp.appendChild(rn); r.appendChild(rp);
     r.appendChild(devButton(i));
@@ -656,7 +656,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     action("Open details",()=>openDrawer(i.key));
     action("Copy ticket link",async()=>{try{await navigator.clipboard.writeText(dashUrl(i.key));toast("Ticket link copied.");}catch(_){toast("Couldn't copy the link.",[],true);}});
     action("Change status",()=>statusPopover(anchor,[i.key]));if(!i.odoo)action(IS_ADMIN?"Change approved date":"Request date change",()=>duePopover(anchor,[i.key]));
-    if(IS_ADMIN){action(i.odoo?"Change developer":"Assign developers",()=>devPopover(anchor,[i.key],"set"));if(!i.odoo)action("Change assignee",()=>assigneePopover(anchor,[i.key]));}action("Internal notes",()=>notePopover(anchor,i.key));
+    if(IS_ADMIN){action(i.odoo?"Change developer":"Assign developers",()=>devPopover(anchor,[i.key],"set"));}if(canAssign(i))action("Change assignee",()=>assigneePopover(anchor,[i.key]));action("Internal notes",()=>notePopover(anchor,i.key));
     if(!i.internal){const a=el("a","opt","Open in "+sourceName(i.key)+" ↗");a.href=ticketUrl(i.key);a.target="_blank";a.rel="noopener";body.appendChild(a);}
     placePop(anchor);body.querySelector("button")?.focus({preventScroll:true});
   }
@@ -819,6 +819,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const body=el("div","body"); p.appendChild(body); placePop(anchor);
     business.quickEdit(body,i.key,f,()=>{ closePop(); mergeIssues(); saveCache(); render(); toast(i.key+": "+business.quickLabel(f)+" saved"); }).then(()=>{ if(popAnchor===anchor) placePop(anchor); });
   }
+  // Administrators, and the developers on a ticket, may change its assignee (Odoo tickets are changed in Odoo).
+  const canAssign=i=>!!i&&!isOdoo(i.key)&&(IS_ADMIN||(!!MY_DEV&&(i.devs||[]).includes(MY_DEV)));
   // The drawer's assignee: the current owner, and a select of the team to pick another (or Unassigned, for Jira tickets).
   function fillAssigneePick(i){
     const sel=$("d-asg-pick"), box=$("d-asgname");
@@ -830,7 +832,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     Object.keys(PEOPLE).filter(k=>k!==INTERNAL_ASSIGNEE||internal).forEach(k=>sel.appendChild(new Option(PEOPLE[k].name,PEOPLE[k].id)));
     if(i.assigneeId&&!Object.values(PEOPLE).some(p=>p.id===i.assigneeId)) sel.appendChild(new Option(an,i.assigneeId));
     sel.value=i.assigneeId||"";
-    sel.disabled=!IS_ADMIN||isOdoo(i.key); asgPick.refresh();
+    const can=canAssign(i); sel.disabled=!can; asgPick.refresh();
+    $("d-asg-tgl").hidden=$("d-asg-hint").hidden=$("d-asg").hidden=!can;
   }
   function assigneePopover(anchor,keys){
     const p=$("pop"); p.replaceChildren(); p.appendChild(el("h4",null,keys.length===1?"Assign "+keys[0]+" to":"Assign "+keys.length+" tickets to"));
@@ -994,6 +997,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       // Show the tickets straight away; their client and hours fill in a moment later (unless a client filter needs them).
       if(!Object.values(state.businessFilter||{}).some(Boolean)) renderIfIdle();
       setTimeout(()=>loadClosed(),0); loadPrs([...issues.map(i=>i.key),...state.internalIssues.map(i=>i.key)]);
+      // The administrators' Needs review queue and its sidebar count refresh with the tickets (same button, same 120 s).
+      if(IS_ADMIN) REVIEWS.refreshQueue();
       await businessReady; await business.load([...issues.map(i=>i.key),...state.internalIssues.map(i=>i.key)]);
       mergeIssues(); saveCache(); renderIfIdle();
       if(dz.key)dateRequests.renderDrawer(dz.key);
@@ -1509,7 +1514,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     // New tickets that count: yours (all of them for administrators), not ones you opened yourself.
     mine:i=>(IS_ADMIN||(i.devs||[]).includes(MY_DEV))&&!(isInt(i.key)&&INT[i.key]&&INT[i.key].createdBy&&String(INT[i.key].createdBy.email).toLowerCase()===MY_EMAIL.toLowerCase()),
     open:key=>{ if(issueByKey(key)) openDrawer(key); else toast(key+" isn't in your ticket list.",["It may be closed for a while or not shared with you."],true); }});
-  const REVIEWS=createReviews({api,apiFile,toast,errorText});
+  const REVIEWS=createReviews({api,apiFile,toast,errorText,isAdmin:()=>IS_ADMIN});
   const dueDateHistory=createDueDateHistory({api,tickets:()=>state.issues||[],internal:key=>INT[key],openIssue:openDrawer});
   const dateRequests=createDateRequests({api,renderHistory:target=>dueDateHistory.render(target),context:()=>({admin:IS_ADMIN,email:MY_EMAIL,ticket:issueByKey}),openIssue:openDrawer,onApplied:(key,due)=>{patchIssue(key,matching(()=>({due:due||null}),"due"));mergeIssues();renderIfIdle();if(dz.key===key)$("d-due").value=due||"";},onChange:key=>{if(dz.key)dateRequests.renderDrawer(dz.key);return (key?refreshKeys([key]):reload()).then(()=>{if(dz.key){dateRequests.renderDrawer(dz.key);loadDetail(dz.key);}});}});
   state.businessFilter={};

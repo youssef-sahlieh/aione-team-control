@@ -166,29 +166,37 @@ test('with BILLING_REQUIRED on, administrator assignment requires explicit billi
  await s.call('/ticket-metadata','PUT',{key:'AION-1',fields:{revision:0,billing:'billable'}},admin);
  assert.equal((await s.call('/jira/issue/AION-1','PUT',{fields:{assignee:{accountId:'lead'}}},admin)).status,200);
 });
-test('assignee changes: only administrators, Unassigned clears a Jira owner, history records who changed it, and Developers are not sent',async()=>{
+test('assignee changes: administrators and the ticket\'s developers, Unassigned clears a Jira owner, history records who changed it, and Developers are not sent',async()=>{
  const s=await setup();
- assert.equal((await s.call('/jira/issue/AION-1','PUT',{fields:{assignee:{accountId:'lead'}}},user)).status,403);
+ const stranger={email:'other@example.invalid',name:'Other',role:'user',dev:'other',v:1};
+ await saveUser(s.env.STORE,stranger);
+ const strangerToken=(await makeToken(s.env,stranger.email,Date.now(),1)).token;
+ const asStranger=(path,method,body)=>worker.fetch(new Request('https://proxy.invalid'+path,{method,headers:{Authorization:'Bearer '+strangerToken,'Content-Type':'application/json'},body:JSON.stringify(body)}),s.env);
+ assert.equal((await asStranger('/jira/issue/AION-1','PUT',{fields:{assignee:{accountId:'lead'}}})).status,403);
+assert.equal((await s.call('/jira/issue/AION-1','PUT',{fields:{labels:['ai1_builder']}},user)).status,403);
  assert.equal(s.calls.filter(c=>c.method==='PUT').length,0);
  assert.equal((await s.call('/jira/issue/AION-1','PUT',{fields:{assignee:{accountId:'lead'}},assigneeName:'Lead'},admin)).status,200);
  assert.equal((await s.call('/jira/issue/AION-1','PUT',{fields:{assignee:null},assigneeName:'Unassigned'},admin)).status,200);
- assert.deepEqual(s.calls.filter(c=>c.method==='PUT').map(c=>Object.keys(c.body.fields)),[['assignee'],['assignee']]);
+assert.equal((await s.call('/jira/issue/AION-1','PUT',{fields:{assignee:{accountId:'lead'}},assigneeName:'Lead'},user)).status,200);
+ assert.deepEqual(s.calls.filter(c=>c.method==='PUT').map(c=>Object.keys(c.body.fields)),[['assignee'],['assignee'],['assignee']]);
  const log=await readTicketLog(s.env,'AION-1');
- assert.deepEqual(log.map(e=>e.action),['assignee','assignee']);
+ assert.deepEqual(log.map(e=>e.action),['assignee','assignee','assignee']);
+ assert.equal(log[2].by.email,user.email);
  assert.deepEqual(log[0].changes.assignee,{from:'Unassigned',to:'Lead'});
  assert.equal(log[1].changes.assignee.to,'Unassigned');
  assert.equal(log[0].by.email,admin.email);
  assert.ok(!Number.isNaN(Date.parse(log[0].at)));
  assert.equal(log[0].changes.developers,undefined);
  const t=await s.create();
+ assert.equal((await asStranger('/internal/'+t.key,'PUT',{assignee:'lead'})).status,404);
  const r=await s.call('/internal/'+t.key,'PUT',{assignee:'lead'},admin);
  assert.equal(r.status,200);
  assert.deepEqual((await r.json()).ticket.devs,['builder']);
- assert.equal((await s.call('/internal/'+t.key,'PUT',{assignee:INTERNAL_ASSIGNEE},user)).status,400);
+ assert.equal((await s.call('/internal/'+t.key,'PUT',{assignee:INTERNAL_ASSIGNEE},user)).status,200);
  const last=(await readTicketLog(s.env,t.key)).at(-1);
  assert.equal(last.action,'assignee');
- assert.deepEqual(last.changes.assignee,{from:INTERNAL_ASSIGNEE,to:'lead'});
- assert.equal(last.by.email,admin.email);
+ assert.deepEqual(last.changes.assignee,{from:'lead',to:INTERNAL_ASSIGNEE});
+ assert.equal(last.by.email,user.email);
  assert.equal(last.changes.developers,undefined);
 });
 test('user initial dates, submissions and revisions require a saved positive estimate',async()=>{

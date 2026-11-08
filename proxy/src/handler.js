@@ -803,7 +803,7 @@ async function route(request, env, url) {
     if (sub === "" && method === "PUT") {
       const b = await readJson(request);
       if (!b || !validFields(b.fields)) return fail("bad_request", "Only labels, due date and assignee can be changed.", 400);
-      if (!isAdmin) return fail("forbidden", "Users must request due date changes; only admins can edit ticket fields.", 403);
+      if (!isAdmin && !(Object.keys(b.fields).length === 1 && "assignee" in b.fields)) return fail("forbidden", "Users must request due date changes; only admins can edit ticket fields.", 403);
       if("duedate" in b.fields)return fail("date_request", "Use the date approval process and provide a reason.",400);
       return withTicketLock(env,key,async()=>{
         const ticket=await readBusinessTicket(key);if(!ticket)return fail('not_found','Ticket unavailable.',404);
