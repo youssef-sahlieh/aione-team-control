@@ -5,6 +5,44 @@ import { pages, adminPages, buildNav, arrangeNav, wireSidebar } from "./nav.js";
 const $ = id => document.getElementById(id);
 const node = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const button = (text, cls, action) => { const b = node("button", cls, text); b.type = "button"; b.addEventListener("click", action); return b; };
+const icons = {
+  overview: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z",
+  tickets: "M4 4h16v16H4z M8 9h8 M8 14h5",
+  internal: "M4 3h12l4 4v14H4z M16 3v5h4 M8 12h8 M8 16h5",
+  workload: "M4 20V10 M10 20V4 M16 20v-7 M22 20H2",
+  calendar: "M4 5h16v16H4z M8 2v6 M16 2v6 M4 10h16 M8 14h2 M14 14h2",
+  reports: "M4 3h16v18H4z M8 8h8 M8 12h8 M8 16h5",
+  analytics: "M3 20h18 M6 16v-5 M11 16V6 M16 16v-8 M21 16v-3",
+  clients: "M3 6h18v15H3z M7 6V3h10v3 M7 11h10",
+  requests: "M3 5v6h6 M3 11a9 9 0 1 1 2 7 M12 7v5l3 2",
+  audit: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z M9 12l2 2 4-4",
+  worklog: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18 M12 7v5l3 3",
+  errors: "M12 3l9 16H3z M12 10v4 M12 17h.01",
+  reviews: "M4 4h12l4 4v12H4z M8 12l2 2 4-4"
+};
+const pages = [
+  ["overview", "Overview", "Your work, at a glance."],
+  ["tickets", "All open", "A clear view of your team's work, from first task to final delivery."],
+  ["workload", "Workload", "Understand assignments, deadlines, and where support is needed."],
+  ["calendar", "Calendar", "Make space for what's next. Plan around your ticket due dates."],
+  ["requests", "Date requests", "Review and decide proposed date changes."],
+  ["reports", "Checks & Reports", "Run ticket checks and review management reports."],
+  ["analytics", "Analytics", "How much work comes in, gets done and takes time, over the period you choose."],
+  ["clients", "Clients", "Manage clients (Odoo contacts) and their projects."],
+  ["worklog", "Work log", "Time logged on tickets and sent to Odoo timesheets."],
+  ["reviews", "Needs review", "Pull requests waiting for your review. The linked tickets are read-only here."],
+  ["errors", "Sync errors","Changes that didn't reach Jira, Odoo or the dashboard, ready to retry, and the state of the API keys."]
+];
+// AI1 Monitor is a full page on its own site, opened in a new tab so the dashboard stays open. Its sign-in starts
+// there, passes through this dashboard (in that new tab, which shares the dashboard sign-in) and ends on the Monitor.
+const MONITOR_START_URL = "https://monitor.ai1.host/auth/aione/start";
+function icon(name) {
+  const box = node("span", "nav-icon");
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.5", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(key, value);
+  const p = document.createElementNS(svg.namespaceURI, "path"); p.setAttribute("d", icons[name]); svg.appendChild(p); box.appendChild(svg); return box;
+}
+
 export function createWorkspace({ state, context, render, openIssue, today, allowedItems, canLeave }) {
   let route = readRoute(new URL(location.href), true), ready = false;
   let month = today().slice(0, 7), weekAnchor = today(), calendarMode = "month", workloadMode = "dev";
@@ -31,6 +69,34 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
   window.addEventListener("popstate", () => { const next = readRoute(new URL(location.href), context().admin); if (next.page === route.page && next.mode === route.mode) { if (next.page === "analytics") context().syncAnalytics(); return; } route = next; synchronize(); render(); });
   const nav = $("main-nav");
   buildNav(nav, { onPage: id => navigate(id) });
+  for (const [id, label] of pages) {
+    const a = node("a", "nav-link"); a.href = `dashboard.html?page=${id}`; a.dataset.page = id; a.title = label;
+    a.append(icon(id), node("span", "", label));
+    if (id === "tickets") { const count = node("span", "nav-count", "—"); count.id = "nav-ticket-count"; a.appendChild(count); }
+    if(id==="requests"){const count=node("span","nav-count","0");count.id="nav-date-count";a.append(count);}
+    if (id === "errors") { const count = node("span", "nav-count nav-alert", "0"); count.id = "nav-error-count"; count.hidden = true; a.appendChild(count); }
+    // "All open" starts from the same built-in view as the dashboard's All open tile, so the filters reset too.
+    a.addEventListener("click", e => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); if (id === "tickets") context().openAllOpen(); else navigate(id); });
+    nav.appendChild(a);
+  }
+  // Databases report is its own admin-only page; shown when Odoo is connected (set in applyConfig).
+  const dbReport = node("a", "nav-link"); dbReport.id = "dbreport-link"; dbReport.href = "databases.html"; dbReport.dataset.link = "databases"; dbReport.title = "Databases"; dbReport.hidden = true;
+  dbReport.append(icon("audit"), node("span", "", "Databases"));
+  nav.insertBefore(dbReport, nav.querySelector('[data-page="tickets"]').nextSibling);
+  // AI1 Monitor opens in a new tab on the Monitor's own site (its sign-in starts from the link). Every dashboard role may use it.
+  const monitor = node("a", "nav-link"); monitor.id = "ai1-monitor-link"; monitor.href = MONITOR_START_URL; monitor.target = "_blank"; monitor.rel = "noopener"; monitor.title = "AI1 Monitor (opens in a new tab)"; monitor.hidden = true;
+  monitor.append(icon("audit"), node("span", "", "AI1 Monitor"), node("span", "nav-ext", "↗"));
+  nav.insertBefore(monitor, dbReport.nextSibling);
+  // The Odoo knowledge base is its own page behind a password; shown when Odoo is connected (set in applyConfig).
+  const knowledge = node("a", "nav-link"); knowledge.id = "knowledge-link"; knowledge.href = "knowledge.html"; knowledge.dataset.link = "knowledge"; knowledge.title = "Odoo knowledge base"; knowledge.hidden = true;
+  knowledge.append(icon("audit"), node("span", "", "Knowledge base"));
+  nav.insertBefore(knowledge, monitor.nextSibling);
+  // Work pages first, then the administrator pages under their own label (hidden for users).
+  const navOrder = ["overview", "tickets", "requests", "calendar", "worklog", "errors", "monitor", "knowledge", "workload", "reports", "analytics", "clients", "databases"];
+  const navItem = id => nav.querySelector(id === "databases" ? "#dbreport-link" : id === "monitor" ? "#ai1-monitor-link" : id === "knowledge" ? "#knowledge-link" : `[data-page="${id}"]`);
+  const adminLabel = node("p", "nav-label nav-group", "ADMIN"); adminLabel.id = "nav-admin-label";
+  // Pages only administrators see; the breadcrumb names the section they belong to.
+  const adminPages = new Set(["workload", "reports", "analytics", "clients"]);
   function configure() {
     route = readRoute(new URL(location.href), context().admin);
     document.body.dataset.workspaceRole=context().admin?"manager":"user";
@@ -155,10 +221,12 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     if (!ready) return false;
     const page = pages.find(p => p[0] === route.page);
     document.body.dataset.workspacePage = route.page;
-    $("page-heading").textContent = page[1]; $("page-description").textContent = route.page==="tickets"&&!context().admin?"The tickets you’re authorized to work on.":page[2]; $("breadcrumbs").textContent = adminPages.has(route.page) ? "Admin" : "Workspace";
+    // The tickets page is named after the view it shows (All open, Closed, Overdue…), so the heading never disagrees with the list.
+    $("page-heading").textContent = route.page === "tickets" ? context().focusLabel() : page[1]; $("page-description").textContent = route.page==="tickets"&&!context().admin?"The tickets you’re authorized to work on.":page[2]; $("breadcrumbs").textContent = adminPages.has(route.page) ? "Admin" : "Workspace";
     for (const link of nav.querySelectorAll("a[data-page]")) { if (link.dataset.page === route.page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); }
     $("nav-date-count").textContent=String(context().pendingDates||0);
-    $("nav-ticket-count").textContent = String(state.issues?.length || 0);
+    // Same count as the All open tile: open tickets in the current scope (see openCount in dashboard.js).
+    $("nav-ticket-count").textContent = String(context().openCount());
     const custom = ["overview", "requests", "workload", "calendar", "reports", "analytics", "clients", "worklog", "errors", "reviews"].includes(route.page);
     $("tickets-area").hidden = custom; $("workspace-content").hidden = !custom;
     if (!custom) return false;

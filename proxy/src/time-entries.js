@@ -203,6 +203,16 @@ export async function readSummaries(env,keys){
   keys.forEach((k,n)=>{if(raws[n])out[k]=JSON.parse(raws[n]);});
   return out;
 }
+// Minutes that have no Odoo line yet (syncing, or needing setup), by the Odoo project they go to (null: not known yet).
+// A corrected entry already has its line in Odoo, so it is not counted again.
+export async function pendingByProject(env){
+  const store=requireStore(env),ids=await store.smembers(K.pending(env))||[],out={};
+  const entries=(await mget(store,ids.map(id=>K.entry(env,id)))).filter(Boolean).map(r=>JSON.parse(r)).filter(e=>!e.lineId);
+  const keys=[...new Set(entries.filter(e=>!e.projectId).map(e=>e.ticket))],tasks=await mget(store,keys.map(k=>K.task(env,k)));
+  const taskProject=Object.fromEntries(keys.map((k,n)=>[k,tasks[n]?JSON.parse(tasks[n]).projectId||null:null]));
+  for(const e of entries){const p=e.projectId||taskProject[e.ticket]||null;out[p]=(out[p]||0)+e.minutes;}
+  return out;
+}
 export function publicEntry(e,me){
   const admin=me.role==='admin',own=normEmail(me.email)===e.author.email;
   return {id:e.id,ticket:e.ticket,source:e.source,ticketTitle:e.ticketTitle,date:e.date,minutes:e.minutes,description:e.description,

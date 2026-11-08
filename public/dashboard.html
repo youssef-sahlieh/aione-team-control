@@ -53,7 +53,7 @@
     <details class="account-menu"><summary><span class="account-avatar" id="account-avatar">A</span><span class="account-name">My account</span></summary><div class="account-panel"><span class="me"><b id="me">…</b></span><span id="account-role">Team member</span><button class="btn" id="signout" type="button">Sign out</button></div></details>
   </header>
   <main class="wrap" id="main-content" tabindex="-1">
-  <div class="page-heading"><div><div class="eyebrow" id="page-eyebrow">YOUR WORKSPACE, IN FOCUS</div><h1 id="page-heading" tabindex="-1">All tickets</h1><p id="page-description">A clear view of your team's work, from first task to final delivery.</p></div><div class="page-actions"><span class="date-pill" id="today"></span><button class="btn" id="refresh" type="button">↻ Refresh</button><button class="btn primary" id="create-ticket" type="button">+ Internal ticket</button></div></div>
+  <div class="page-heading"><div><div class="eyebrow" id="page-eyebrow">YOUR WORKSPACE, IN FOCUS</div><h1 id="page-heading" tabindex="-1">All open</h1><p id="page-description">A clear view of your team's work, from first task to final delivery.</p></div><div class="page-actions"><span class="date-pill" id="today"></span><button class="btn" id="refresh" type="button">↻ Refresh</button><button class="btn primary" id="create-ticket" type="button">+ Internal ticket</button></div></div>
   <div class="sync-line"><span id="team">…</span><span class="sync-meta"><span class="workspace-dot"></span><span id="updated">Loading from Jira…</span><span id="auto">auto-refresh every 2 min</span></span></div>
 
   <div id="pagestate" class="state" role="status">Loading tickets from Jira…</div>
@@ -136,7 +136,7 @@
     <div class="blk"><h3>Due date</h3>
       <div class="inline"><input class="inp" type="date" id="d-due" aria-label="Approved due date" disabled><button class="btn primary" id="d-requestdate" type="button">Request date change</button><span class="msg" id="d-duemsg"></span></div><div id="d-date-requests" aria-live="polite"></div></div>
     <div class="blk"><h3>Due date history</h3><div id="d-hist"></div></div>
-    <div class="blk admin-only"><h3>Assignee</h3><p class="blk-hint">The owner of the ticket in Jira. Used by the By assignee view and the Assignee filter.</p><div class="inline"><span id="d-asgname" class="who"></span><button class="btn" id="d-asg" type="button">Change assignee</button></div></div>
+    <div class="blk admin-only"><h3>Assignee</h3><p class="blk-hint">The owner of the ticket. Used by the By assignee view and the Assignee filter. Choosing a name saves it at once.</p><div class="inline"><span id="d-asgname" class="who"></span><label class="tgl">Change to <select class="fsel auto" id="d-asg-pick" aria-label="Assignee"></select></label><button class="btn" id="d-asg" type="button">Find someone in Jira…</button><span class="msg" id="d-asgmsg" aria-live="polite"></span></div></div>
     <div class="blk int-hide"><h3>Attachments <span id="d-acount"></span></h3><div id="d-att" class="atts"></div>
       <div class="inline jira-only"><label class="btn" for="j-file">+ Add files</label><input type="file" id="j-file" multiple hidden><span class="msg" id="j-attmsg">Up to 4 MB each. Uploaded to the Jira ticket as they are.</span></div></div>
     <div class="blk int-only"><h3>Attachments <span id="i-acount"></span></h3><div id="i-att" class="atts"></div>

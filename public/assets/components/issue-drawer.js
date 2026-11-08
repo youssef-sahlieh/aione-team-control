@@ -43,6 +43,8 @@ export function createIssueDrawer({ isDirty, canViewHistory, canViewFullHistory 
   main.append(activity);
   // The work log comes last, after the comments.
   const workLog = pick("#work-log"); if (workLog) main.append(workLog);
+  // The Work log comes last in the main column, after Activity.
+  const workLogPart = pick("#work-log"); if (workLogPart) main.append(workLogPart);
   // Anything not placed above stays in the main column, so nothing is lost.
   for (const child of blocks) if (!layout.contains(child)) main.insertBefore(child, activity);
   body.replaceChildren(layout);

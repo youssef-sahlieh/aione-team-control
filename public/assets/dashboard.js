@@ -313,6 +313,10 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     return business.matches(i,state.businessFilter)&&matchesFilters(i,t,{filters,query:state.q,needsReply,assigneeKey:i=>assigneeFilterKey(i,PEOPLE)},skip);
   }
   const focusDef=()=>FOCUS.find(x=>x.id===state.focus)||FOCUS[0];
+  // The tickets the current filters and scope allow. The All open tile, the sidebar count and the list all count from this.
+  const scopedIssues=t=>(state.issues||[]).filter(i=>passFilters(i,t));
+  // Open tickets in scope: the same number as the All open tile and the sidebar's All open item.
+  function openCount(){ const t=todayStr(), open=FOCUS.find(x=>x.id==="open"); return scopedIssues(t).filter(i=>open.f(i,t)).length; }
   function visible(skip){ const t=todayStr(), fd=focusDef(); return (state.issues||[]).filter(i=>fd.f(i,t)&&passFilters(i,t,skip)); }
   function filterCount(){ const f=state.f; return Object.values(state.businessFilter||{}).filter(Boolean).length+ f.reporter.size+f.assignee.size+f.dev.size+f.status.size+f.type.size+f.priority.size+(f.epic?1:0)+(f.due!=="any"?1:0)+(f.activity!=="any"?1:0)+(f.source!=="all"?1:0)+(state.q?1:0); }
   const showTicketBriefs=()=>ticketBriefs.enabled();
@@ -344,7 +348,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const primaryFocus=["open","overdue","today","closed"];
     let extra;
     if(IS_ADMIN&&workspace.route().page!=="tickets"){extra=el("details","focus-more");extra.id="manager-more-focus";extra.open=!!state.moreFocusOpen||!primaryFocus.includes(state.focus);extra.appendChild(el("summary","btn","More focus options"));extra.addEventListener("toggle",()=>{state.moreFocusOpen=extra.open;});}
-    const base=(state.issues||[]).filter(i=>passFilters(i,t));
+    const base=scopedIssues(t);
     FOCUS.forEach(fd=>{
       if((fd.id==="nodev"||fd.id==="duechg")&&!IS_ADMIN) return;
       // Administrators see every ticket by default; the All tickets tile is for users, who get the same view as "All tickets" in Saved views.
@@ -815,6 +819,19 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const body=el("div","body"); p.appendChild(body); placePop(anchor);
     business.quickEdit(body,i.key,f,()=>{ closePop(); mergeIssues(); saveCache(); render(); toast(i.key+": "+business.quickLabel(f)+" saved"); }).then(()=>{ if(popAnchor===anchor) placePop(anchor); });
   }
+  // The drawer's assignee: the current owner, and a select of the team to pick another (or Unassigned, for Jira tickets).
+  function fillAssigneePick(i){
+    const sel=$("d-asg-pick"), box=$("d-asgname");
+    if(!i){ sel.replaceChildren(); box.replaceChildren(); return; }
+    const an=i.assigneeName||"Unassigned", internal=isInt(i.key);
+    box.replaceChildren(el("span","av "+(i.assigneeId&&BYID[i.assigneeId]?"kp-"+BYID[i.assigneeId]:"k8"),initialsOf(an)),el("span",null,an));
+    sel.replaceChildren();
+    if(!internal) sel.appendChild(new Option("Unassigned",""));
+    Object.keys(PEOPLE).filter(k=>k!==INTERNAL_ASSIGNEE||internal).forEach(k=>sel.appendChild(new Option(PEOPLE[k].name,PEOPLE[k].id)));
+    if(i.assigneeId&&!Object.values(PEOPLE).some(p=>p.id===i.assigneeId)) sel.appendChild(new Option(an,i.assigneeId));
+    sel.value=i.assigneeId||"";
+    sel.disabled=!IS_ADMIN||isOdoo(i.key);
+  }
   function assigneePopover(anchor,keys){
     const p=$("pop"); p.replaceChildren(); p.appendChild(el("h4",null,keys.length===1?"Assign "+keys[0]+" to":"Assign "+keys.length+" tickets to"));
     const body=el("div","body"); p.appendChild(body);
@@ -1101,6 +1118,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     $("d-facts").replaceChildren(); $("d-desc").replaceChildren(el("span",null,"Loading…")); $("d-comments").replaceChildren(); $("d-ccount").textContent=""; $("d-trans").replaceChildren(el("span","msg","Loading…"));
     ["d-devmsg","d-duemsg","d-cmsg"].forEach(id=>setMsg(id,"")); $("d-att").replaceChildren(el("span","msg","Loading…")); $("d-acount").textContent=""; $("d-asgname").textContent=i?i.assigneeName:""; $("d-after").replaceChildren(new Option("Keep current assignee",""));    dz.labels=i?i.labels.slice():[]; dz.devs=new Set(i?i.devs:[]); renderDevChips(); $("d-due").value=i&&i.due?i.due:"";
     document.title=key+" · "+(i?i.summary:key)+" · "+appTitle; renderTicketNav();
+    ["d-devmsg","d-duemsg","d-cmsg"].forEach(id=>setMsg(id,"")); $("d-att").replaceChildren(el("span","msg","Loading…")); $("d-acount").textContent=""; fillAssigneePick(i); $("d-after").replaceChildren(new Option("Keep current assignee",""));    dz.labels=i?i.labels.slice():[]; dz.devs=new Set(i?i.devs:[]); renderDevChips(); $("d-due").value=i&&i.due?i.due:"";
     $("d-body").scrollTop=0; $("d-close").focus(); renderDrawerHist(key); loadDetail(key);
   }
   async function loadTransitions(key){
@@ -1129,7 +1147,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       const pictures={key,attachments:f.attachment||[]};
       $("d-desc").replaceChildren(richNode(f.description,pictures));
       renderAttachments(f.attachment||[]);
-      { const an=(f.assignee&&f.assignee.displayName)||"Unassigned"; const ak=BYID[f.assignee&&f.assignee.accountId]; const box=$("d-asgname"); box.replaceChildren(el("span","av "+(ak?"kp-"+ak:"k8"),initialsOf(an)),el("span",null,an)); }
+      fillAssigneePick(issueByKey(key));
       { const sel=$("d-after"); sel.replaceChildren(new Option("Keep current assignee",""));
         const seen=new Set(); const add=(id,n,tag)=>{ if(!id||seen.has(id)||(f.assignee&&f.assignee.accountId===id)) return; seen.add(id); sel.appendChild(new Option(n+(tag?" ("+tag+")":""),id+"|"+n)); };
         if(f.reporter) add(f.reporter.accountId,f.reporter.displayName,"reporter");
@@ -1173,7 +1191,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     $("d-facts").replaceChildren(fact("Type","Internal (not in Jira)"),fact("Assignee",ni.assigneeName),fact("Priority",t.priority),fact("Developers",(t.devs||[]).map(d=>"ai1_"+d).join(", ")),fact("Opened by",t.createdBy&&t.createdBy.name),fact("Created date",createdDate(t.created)),fact("Updated",ago(t.updated)),fact("Due",t.due?fmtDate(t.due):"not set"),fact("Closed",t.closedAt?ago(t.closedAt):""));
     dz.labels=ni.labels.slice(); dz.devs=new Set(ni.devs); renderDevChips(); $("d-due").value=t.due||"";
     HIST[key]={updated:t.updated,changes:(t.dueHistory||[]).map(h=>({when:h.when,by:h.by,from:h.from,to:h.to}))}; renderDrawerHist(key);
-    { const box=$("d-asgname"); box.replaceChildren(el("span","av "+(ni.assignee?"kp-"+ni.assignee:"k8"),initialsOf(ni.assigneeName)),el("span",null,ni.assigneeName)); }
+    fillAssigneePick(issueByKey(key));
     const d=el("div","plain",t.description||""); if(!t.description){ d.textContent="No description."; d.style.color="var(--muted)"; } $("d-desc").replaceChildren(d);
     renderIntAttachments(key);
     const cm=t.comments||[]; $("d-ccount").textContent="("+cm.length+")";
@@ -1378,6 +1396,18 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   $("d-note").addEventListener("click",e=>{ if(dz.key) notePopover(e.currentTarget,dz.key); });
   $("d-comment-note").addEventListener("click",e=>{ if(dz.key) notePopover(e.currentTarget,dz.key); });
   $("d-asg").addEventListener("click",e=>{ if(dz.key) assigneePopover(e.currentTarget,[dz.key]); });
+  // Picking a name saves it to Jira (or the internal ticket) at once. The new owner shows straight away; a refused save puts the old one back.
+  $("d-asg-pick").addEventListener("change",async e=>{
+    const sel=e.currentTarget, key=dz.key, i=key&&issueByKey(key); if(!i) return;
+    const id=sel.value||null, name=id?sel.selectedOptions[0].text:"Unassigned";
+    if(id===(i.assigneeId||null)) return;
+    setMsg("d-asgmsg","Saving…",true); sel.disabled=true;
+    const saved=doAssign([key],id,name);
+    fillAssigneePick(issueByKey(key));
+    try{ const r=await saved; setMsg("d-asgmsg",r.fail?"Not saved. The owner was put back.":r.ok?"Saved.":"",!r.fail); }
+    catch(err){ setMsg("d-asgmsg",errorText(err),false); }
+    finally{ fillAssigneePick(issueByKey(key)); }
+  });
   $("d-adddev").addEventListener("click",()=>{ const v=$("d-newdev").value.trim().replace(/^ai1_/i,"").replace(/\s+/g,"").toLowerCase(); if(!v){ setMsg("d-devmsg","Type a name first.",false); return; } dz.devs.add(v); $("d-newdev").value=""; renderDevChips(); setMsg("d-devmsg","Added ai1_"+v+". Press Save developers.",true); });
   $("d-newdev").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("d-adddev").click(); } });
   $("d-savedevs").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const labels=labelsWith(dz.labels,new Set(dz.devs)); const prev=new Set(dz.labels.filter(isDevLabel).map(devOf)); const want=new Set(dz.devs); const r=await runBatch([{key,added:[...dz.devs].filter(d=>!prev.has(d)),run:()=>(isOdoo(key)?odooApi.update(key,{devs:[...want]}):isInt(key)?internalApi.update(key,{devs:[...want]}):jira.edit(key,{labels})),patch:devsPatch(want)}],"Developers saved"); setMsg("d-devmsg",r.fail?"Not saved.":"Saved.",!r.fail); });
@@ -1493,7 +1523,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // The Analytics page and its chart library load only when an administrator opens it.
   let analyticsModule=null;
   const analyticsPage=target=>import("./components/analytics.js").then(m=>{analyticsModule=analyticsModule||m.createAnalytics({api,today:todayStr,openIssue:key=>{if(issueByKey(key))openDrawer(key);}});analyticsModule.render(target);}).catch(err=>{target.appendChild(Object.assign(document.createElement("div"),{className:"state err",textContent:"Analytics could not be loaded: "+errorText(err)}));});
-  const workspace=createWorkspace({state,context:()=>({renderErrors:target=>syncErrors.render(target),renderReviews:target=>REVIEWS.renderQueue(target),admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount(),dateRequests:dateRequests.all(),pendingDates:dateRequests.pendingCount(),renderReports:target=>business.renderReports(target),renderAnalytics:target=>analyticsPage(target),syncAnalytics:()=>analyticsModule&&analyticsModule.syncFromUrl(),renderCatalog:target=>business.renderCatalog(target),renderWorkLog:target=>workLog.renderPage(target),renderRequests:(target,options)=>dateRequests.render(target,options)}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>{ if(!dz.key) return true; if(!closeDrawer(false,true)) return false; drawerPushed=false; if(location.hash) history.replaceState(history.state,"",location.pathname+location.search); return true; }});
+  const workspace=createWorkspace({state,context:()=>({openCount,openAllOpen:()=>applyBuiltIn("__current"),focusLabel:()=>focusDef().l,renderErrors:target=>syncErrors.render(target),renderReviews:target=>REVIEWS.renderQueue(target),admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount(),dateRequests:dateRequests.all(),pendingDates:dateRequests.pendingCount(),renderReports:target=>business.renderReports(target),renderAnalytics:target=>analyticsPage(target),syncAnalytics:()=>analyticsModule&&analyticsModule.syncFromUrl(),renderCatalog:target=>business.renderCatalog(target),renderWorkLog:target=>workLog.renderPage(target),renderRequests:(target,options)=>dateRequests.render(target,options)}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>{ if(!dz.key) return true; if(!closeDrawer(false,true)) return false; drawerPushed=false; if(location.hash) history.replaceState(history.state,"",location.pathname+location.search); return true; }});
   const aiAssistant=createAIAssistant({openIssue:openDrawer,beforeOpen:()=>{if(dz.key&&!closeDrawer())return false;closePop();return true;}});
   const ticketBriefs=createTicketBriefs({api});
   const assigneeFilter=createAssigneeFilter({getSelection:()=>state.f.assignee,getOptions:()=>assigneeOptions(PEOPLE),getDefaults:()=>defaultAssigneeKeys(PEOPLE),getCounts:()=>countBy("assignee",i=>assigneeFilterKey(i,PEOPLE)),onApply:selected=>{state.f.assignee=selected;state.sel.clear();state.pageIndex=0;render();}});
