@@ -44,7 +44,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     SITE=cfg.site; PROJECT=cfg.project; MAIL=!!cfg.mail; PEOPLE=cfg.people||{}; DEVS=cfg.devs||[]; DEV_EMAIL=cfg.devEmails||{}; DEV_COLOR=cfg.devColors||{};
     PEOPLE={...PEOPLE,[INTERNAL_ASSIGNEE]:{name:"Internal Tickets",ini:"IT",id:INTERNAL_ASSIGNEE}};
     BYID={}; for(const k in PEOPLE) BYID[PEOPLE[k].id]=k;
-    IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||""; MY_EMAIL=cfg.email||""; INTERNAL=!!cfg.accounts; ODOO=!!cfg.odoo; { const dl=$("dbreport-link"); if(dl) dl.hidden=!cfg.dbReport; } { const kl=$("knowledge-link"); if(kl) kl.hidden=!cfg.knowledgeLock; } $("new-int").hidden=!INTERNAL;
+    IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||""; MY_EMAIL=cfg.email||""; INTERNAL=!!cfg.accounts; ODOO=!!cfg.odoo; { const dl=$("dbreport-link"); if(dl) dl.hidden=!cfg.dbReport; } { const kl=$("knowledge-link"); if(kl) kl.hidden=!cfg.knowledge; } $("new-int").hidden=!INTERNAL;
     const filtersKey="aion.ticket-filters.open."+encodeURIComponent(MY_EMAIL);
     if(ticketFiltersKey!==filtersKey){ticketFiltersKey=filtersKey;ticketFiltersOpen=false;try{ticketFiltersOpen=localStorage.getItem(ticketFiltersKey)==="1";}catch{}}
     document.body.classList.toggle("role-user",!IS_ADMIN);
@@ -464,8 +464,9 @@ import { createCommentMentions } from "./components/comment-mentions.js";
 
   // Redraws keep your place on the page: a redraw that briefly makes the page shorter (lists emptied and
   // rebuilt) would otherwise send you back to the top while you scroll.
+  let afterRender=()=>{}; // set up with the ticket view: marks the open ticket in the list
   function render(){
-    const y=window.scrollY; renderNow(); if(BELL) BELL.update();
+    const y=window.scrollY; renderNow(); afterRender(); if(BELL) BELL.update();
     if(y&&Math.abs(window.scrollY-y)>1) window.scrollTo(0,Math.min(y,document.documentElement.scrollHeight-innerHeight));
   }
   // The list's width, measured before it is emptied (measuring an empty list makes the page jump up).
@@ -622,7 +623,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     for(const c of order){const child=[...row.children].find(n=>n.classList.contains(c));if(child)row.append(child);}
   }
   function gridRow(i,t){
-    const r=el("div","gr item "+stK(i)+(state.sel.has(i.key)?" sel":""));
+    const r=el("div","gr item "+stK(i)+(state.sel.has(i.key)?" sel":"")); r.dataset.key=i.key;
     const ckw=el("span","c-ck"); ckw.appendChild(selBox(i,on=>r.classList.toggle("sel",on))); r.appendChild(ckw);
     const kw=el("span","c-key"); kw.appendChild(keyLink(i));kw.appendChild(el("small","business-key-date",createdDate(i.created))); r.appendChild(kw);
     const tt=el("button","ttl c-ttl"); tt.type="button"; tt.title="Open details";
@@ -714,7 +715,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   }
   function card(i,t,colId,mode){
     const tint=mode==="status"?(i.devs[0]?devK(i.devs[0]):"k2"):stK(i);
-    const c=el("div","card "+tint+(state.sel.has(i.key)?" sel":""));
+    const c=el("div","card "+tint+(state.sel.has(i.key)?" sel":"")); c.dataset.key=i.key;
     c.draggable=mode!=="assignee";
     c.addEventListener("dragstart",e=>{ const keys=state.sel.has(i.key)&&state.sel.size>1?[...state.sel]:[i.key]; drag={keys,from:colId}; c.classList.add("dragging"); try{ e.dataTransfer.setData("text/plain",i.key); e.dataTransfer.effectAllowed="move"; }catch(x){} });
     c.addEventListener("dragend",()=>{ c.classList.remove("dragging"); document.querySelectorAll(".col.over").forEach(x=>x.classList.remove("over")); setTimeout(()=>{ drag=null; },0); });
@@ -1060,7 +1061,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // An open ticket is a step in the browser's history (#KEY), so Back closes it instead of leaving the dashboard.
   // keepHistory: switching straight to another ticket (its own step replaces this one).
   let drawerPushed=false, skipPop=false;
-  function closeDrawer(force,keepHistory){ if(dz.key&&force!==true&&!drawerUI.allowClose())return false;ticketNotes.reset(dz.key);business.reset();workLog.reset();$("drawer").hidden=true;$("scrim").hidden=true;dz.key=null;drawerUI.close();
+  function closeDrawer(force,keepHistory){ if(dz.key&&force!==true&&!drawerUI.allowClose())return false;ticketNotes.reset(dz.key);business.reset();workLog.reset();$("drawer").hidden=true;$("scrim").hidden=true;dz.key=null;drawerUI.close();applyDrawerSize();renderTicketNav();document.title=appTitle;
     if(!keepHistory){ if(drawerPushed){ drawerPushed=false; skipPop=true; history.back(); } else if(location.hash) history.replaceState(history.state,"",location.pathname+location.search); }
     return true; }
   window.addEventListener("popstate",()=>{
@@ -1075,13 +1076,39 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       c.addEventListener("click",()=>{ dz.devs.has(d)?dz.devs.delete(d):dz.devs.add(d); c.setAttribute("aria-pressed",String(dz.devs.has(d))); setMsg("d-devmsg",""); }); box.appendChild(c); }); }
   const fact=(dt,dd)=>{ const w=el("div"); w.appendChild(el("dt",null,dt)); w.appendChild(el("dd",null,dd||"—")); return w; };
   const drawerFull=()=>{ try{ return localStorage.getItem("aion.drawer.full")!=="0"; }catch(_){ return true; } };
-  function applyDrawerSize(){ const full=drawerFull(); $("drawer").classList.toggle("full",full); $("d-size").textContent=full?"Side panel":"Full screen"; }
-  $("d-size").addEventListener("click",()=>{ try{ localStorage.setItem("aion.drawer.full",drawerFull()?"0":"1"); }catch(_){} applyDrawerSize(); });
+  // On computers an open ticket stays inside the app: a full page in the content area, or side by side with the
+  // list. Phones show it full screen over the app.
+  const phone=matchMedia("(max-width:820px)"), appTitle=document.title;
+  function applyDrawerSize(){ const full=drawerFull(), open=!!dz.key&&!phone.matches;
+    $("drawer").classList.toggle("full",full); $("d-size").textContent=full?"Side by side":"Full page";
+    const split=open&&!full, changed=document.body.classList.contains("ticket-split")!==split;
+    document.body.classList.toggle("ticket-page",open&&full); document.body.classList.toggle("ticket-split",split);
+    if(dz.key) drawerUI.layout({modal:phone.matches,cover:full});
+    if(changed) refitList(); }
+  $("d-size").addEventListener("click",()=>{ try{ localStorage.setItem("aion.drawer.full",drawerFull()?"0":"1"); }catch(_){} applyDrawerSize(); renderTicketNav(true); });
+  phone.addEventListener("change",applyDrawerSize);
   applyDrawerSize();
+  // Previous and Next (and the J and K keys) go through the tickets in the order the list shows them.
+  const listedKeys=()=>[...new Set([...$("view").querySelectorAll("[data-key]")].map(n=>n.dataset.key))];
+  function renderTicketNav(scroll){
+    const keys=listedKeys(), at=dz.key?keys.indexOf(dz.key):-1;
+    $("d-back").textContent=$("page-heading").textContent||"All tickets"; $("d-crumb").textContent=dz.key||"";
+    $("d-pos").textContent=at<0?"":(at+1)+" of "+keys.length; $("d-prev").disabled=at<=0; $("d-next").disabled=at<0||at>=keys.length-1;
+    $("view").querySelectorAll(".is-open").forEach(n=>n.classList.remove("is-open"));
+    if(at>=0) $("view").querySelectorAll('[data-key="'+CSS.escape(dz.key)+'"]').forEach((n,idx)=>{ n.classList.add("is-open"); if(scroll&&!idx&&document.body.classList.contains("ticket-split")) n.scrollIntoView({block:"nearest"}); });
+  }
+  afterRender=()=>{ if(dz.key) renderTicketNav(); };
+  function stepTicket(d){ const keys=listedKeys(), next=keys[keys.indexOf(dz.key)+d]; if(dz.key&&next&&keys.includes(dz.key)){ openDrawer(next); renderTicketNav(true); } }
+  $("d-prev").addEventListener("click",()=>stepTicket(-1)); $("d-next").addEventListener("click",()=>stepTicket(1)); $("d-back").addEventListener("click",()=>closeDrawer());
+  document.addEventListener("keydown",e=>{
+    if(!dz.key||e.ctrlKey||e.metaKey||e.altKey||!$("pop").hidden||document.querySelector("dialog[open]")||(e.code!=="KeyJ"&&e.code!=="KeyK")) return;
+    if(e.target.closest&&e.target.closest("input,textarea,select,[contenteditable]:not([contenteditable=false])")) return;
+    e.preventDefault(); stepTicket(e.code==="KeyJ"?1:-1);
+  });
   function openDrawer(key){ setTimeout(()=>{ if(dz.key===key) renderPrs(key); },0);
     if(dz.key&&dz.key!==key&&!closeDrawer(false,true))return;
     if(location.hash!=="#"+key){ const url=location.pathname+location.search+"#"+key; if(drawerPushed) history.replaceState(history.state,"",url); else { history.pushState(history.state,"",url); drawerPushed=true; } }
-    const opening=!dz.key;dz.key=key;
+    const opening=!dz.key;dz.key=key;applyDrawerSize();
     if(opening){drawerUI.open();$("d-reply").value="";commentMentions.reset();$("d-newdev").value="";}
     ticketHistory.reset();drawerUI.select("overview");renderNoteFiles(key);$("d-send").textContent=sendLabel(key);$("d-aidesc-out").hidden=true;$("d-aidesc-out").replaceChildren();dateRequests.renderDrawer(key);
     closePop(); dz.key=key; const i=issueByKey(key);
@@ -1089,6 +1116,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     $("d-key").textContent=key+(isInt(key)?"":" ↗"); $("d-key").href=$("d-open").href=ticketUrl(key); if(isInt(key)) $("d-key").removeAttribute("href");
     $("d-title").textContent=i?i.summary:key; $("d-status").textContent=i?i.status:""; $("d-status").className="stbtn "+(i?stK(i):"");
     $("d-facts").replaceChildren(); $("d-desc").replaceChildren(el("span",null,"Loading…")); $("d-comments").replaceChildren(); $("d-ccount").textContent=""; $("d-trans").replaceChildren(el("span","msg","Loading…"));
+    ["d-devmsg","d-duemsg","d-cmsg"].forEach(id=>setMsg(id,"")); $("d-att").replaceChildren(el("span","msg","Loading…")); $("d-acount").textContent=""; $("d-asgname").textContent=i?i.assigneeName:""; $("d-after").replaceChildren(new Option("Keep current assignee",""));    dz.labels=i?i.labels.slice():[]; dz.devs=new Set(i?i.devs:[]); renderDevChips(); $("d-due").value=i&&i.due?i.due:"";
+    document.title=key+" · "+(i?i.summary:key)+" · "+appTitle; renderTicketNav();
     ["d-devmsg","d-duemsg","d-cmsg"].forEach(id=>setMsg(id,"")); $("d-att").replaceChildren(el("span","msg","Loading…")); $("d-acount").textContent=""; fillAssigneePick(i); $("d-after").replaceChildren(new Option("Keep current assignee",""));    dz.labels=i?i.labels.slice():[]; dz.devs=new Set(i?i.devs:[]); renderDevChips(); $("d-due").value=i&&i.due?i.due:"";
     $("d-body").scrollTop=0; $("d-close").focus(); renderDrawerHist(key); loadDetail(key);
   }
@@ -1468,7 +1497,9 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(Date.now()-lastLoad>120000&&document.visibilityState==="visible"&&!batchBusy&&!reloading&&$("pop").hidden&&!drag){ lastLoad=Date.now(); reload(); } },1000);
   $("signout").addEventListener("click",()=>signOut());
   // The Work view re-fits its columns when the window size changes.
-  let resizeTimer=null; window.addEventListener("resize",()=>{ clearTimeout(resizeTimer); resizeTimer=setTimeout(()=>{ if(state.issues&&state.view==="list"&&state.columnsMode!=="all"&&$("pop").hidden&&!drag&&workColumns&&(viewWidth=$("view").clientWidth,fitWorkColumns()).keys!==workColumns.join()) render(); },150); });
+  // The list fits its columns to its width: after the window is resized, or when a ticket opens beside it.
+  function refitList(){ if(state.issues&&state.view==="list"&&state.columnsMode!=="all"&&$("pop").hidden&&!drag&&workColumns&&(viewWidth=$("view").clientWidth,fitWorkColumns()).keys!==workColumns.join()) render(); }
+  let resizeTimer=null; window.addEventListener("resize",()=>{ clearTimeout(resizeTimer); resizeTimer=setTimeout(refitList,150); });
   const ticketHistory=createTicketHistory({api,getIssue:()=>issueByKey(dz.key),allowed:()=>IS_ADMIN&&!!dz.key&&!isOdoo(dz.key)&&!$("drawer").hidden,personName:k=>(PEOPLE[k]&&PEOPLE[k].name)||k,formatTime:value=>{const time=fmtWhen(value);return time.d+" "+time.t;}});
   const drawerUI=createIssueDrawer({canViewHistory:()=>IS_ADMIN,canViewFullHistory:()=>IS_ADMIN&&!!dz.key&&!isOdoo(dz.key),onSelect:id=>{if(id==="history")ticketHistory.load(dz.key);if(id==="notes")ticketNotes.load(dz.key);},isDirty:()=>{if(business.dirty(dz.key)||ticketNotes.dirty(dz.key))return true;const issue=issueByKey(dz.key);if(!issue)return !!$("d-reply").value.trim();return !!$("d-reply").value.trim()||!!$("d-newdev").value.trim()||dz.devs.size!==issue.devs.length||issue.devs.some(d=>!dz.devs.has(d));}});
   const ticketNotes=createTicketNotes({api,isAdmin:IS_ADMIN});

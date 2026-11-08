@@ -30,9 +30,8 @@ async function mockKnowledge(page) {
     const path = url.pathname, body = req.postDataJSON() || {};
     calls.push({ path, body });
     const json = (v, status = 200) => route.fulfill({ status, json: v });
-    if (path === "/knowledge/status") return json({ configured: true, odoo: true, canSetPassword: false });
-    if (body.password !== "right-password-1") return json({ code: "wrong_password", error: "That password is not right." }, 403);
-    if (path === "/knowledge/unlock") return json({ url: "https://odoo.example.invalid/odoo/knowledge", articles: tree() });
+    if ("password" in body) return json({ code: "bad_request", error: "The knowledge base has no password." }, 400);
+    if (path === "/knowledge/open") return json({ url: "https://odoo.example.invalid/odoo/knowledge", articles: tree() });
     if (path === "/knowledge/article") {
       const a = odoo.articles.find((x) => x.id === body.id);
       return json({ article: a, pictures: a.id === 2 ? { 41: "data:image/png;base64," + PNG } : {}, later: [] });
@@ -53,16 +52,15 @@ async function mockKnowledge(page) {
   return { calls, errors, odoo };
 }
 
-async function unlock(page) {
+// The knowledge base opens straight away for anyone signed in: there is no password.
+async function open(page) {
   await page.goto("/knowledge.html");
-  await page.locator("#unlock-password").fill("right-password-1");
-  await page.locator("#unlock-submit").click();
   await expect(page.locator("#kb-app")).toBeVisible();
 }
 
 test("the articles show as Odoo's tree, and an article shows with its pictures, made safe", async ({ page }) => {
   const mock = await mockKnowledge(page);
-  await unlock(page);
+  await open(page);
   await expect(page.locator(".kb-section")).toHaveText(["Workspace", "Private"]);
   await expect(page.locator("#kb-tree")).toContainText("Our Customers");
   await expect(page.locator("#kb-tree")).toContainText("Suzumi"); // top-level articles start open
@@ -92,7 +90,7 @@ test("the articles show as Odoo's tree, and an article shows with its pictures, 
 
 test("a nested article is added, written with a picture, and saved to Odoo as Odoo HTML", async ({ page }) => {
   const mock = await mockKnowledge(page);
-  await unlock(page);
+  await open(page);
   await page.locator(".kb-node", { hasText: "Suzumi" }).hover();
   await page.getByRole("button", { name: "Add a nested article under Suzumi" }).click();
   await expect(page.locator("#kb-editor")).toBeVisible();
@@ -142,7 +140,7 @@ test("a nested article is added, written with a picture, and saved to Odoo as Od
 
 test("search finds articles by their text; an article can be moved and sent to the trash", async ({ page }) => {
   const mock = await mockKnowledge(page);
-  await unlock(page);
+  await open(page);
   await page.locator("#kb-search").fill("DEPOSIT");
   await expect(page.locator(".kb-node.hit")).toHaveText(/Suzumi/);
   await expect(page.locator("#kb-count")).toHaveText("1 found");
