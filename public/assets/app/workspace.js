@@ -20,19 +20,6 @@ const icons = {
   errors: "M12 3l9 16H3z M12 10v4 M12 17h.01",
   reviews: "M4 4h12l4 4v12H4z M8 12l2 2 4-4"
 };
-const pages = [
-  ["overview", "Overview", "Your work, at a glance."],
-  ["tickets", "All open", "A clear view of your team's work, from first task to final delivery."],
-  ["workload", "Workload", "Understand assignments, deadlines, and where support is needed."],
-  ["calendar", "Calendar", "Make space for what's next. Plan around your ticket due dates."],
-  ["requests", "Date requests", "Review and decide proposed date changes."],
-  ["reports", "Checks & Reports", "Run ticket checks and review management reports."],
-  ["analytics", "Analytics", "How much work comes in, gets done and takes time, over the period you choose."],
-  ["clients", "Clients", "Manage clients (Odoo contacts) and their projects."],
-  ["worklog", "Work log", "Time logged on tickets and sent to Odoo timesheets."],
-  ["reviews", "Needs review", "Pull requests waiting for your review. The linked tickets are read-only here."],
-  ["errors", "Sync errors","Changes that didn't reach Jira, Odoo or the dashboard, ready to retry, and the state of the API keys."]
-];
 // AI1 Monitor is a full page on its own site, opened in a new tab so the dashboard stays open. Its sign-in starts
 // there, passes through this dashboard (in that new tab, which shares the dashboard sign-in) and ends on the Monitor.
 const MONITOR_START_URL = "https://monitor.ai1.host/auth/aione/start";
@@ -68,35 +55,9 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
   // Back/Forward between dashboard pages; a step that only opens or closes a ticket (#KEY) leaves the page as it is.
   window.addEventListener("popstate", () => { const next = readRoute(new URL(location.href), context().admin); if (next.page === route.page && next.mode === route.mode) { if (next.page === "analytics") context().syncAnalytics(); return; } route = next; synchronize(); render(); });
   const nav = $("main-nav");
-  buildNav(nav, { onPage: id => navigate(id) });
-  for (const [id, label] of pages) {
-    const a = node("a", "nav-link"); a.href = `dashboard.html?page=${id}`; a.dataset.page = id; a.title = label;
-    a.append(icon(id), node("span", "", label));
-    if (id === "tickets") { const count = node("span", "nav-count", "—"); count.id = "nav-ticket-count"; a.appendChild(count); }
-    if(id==="requests"){const count=node("span","nav-count","0");count.id="nav-date-count";a.append(count);}
-    if (id === "errors") { const count = node("span", "nav-count nav-alert", "0"); count.id = "nav-error-count"; count.hidden = true; a.appendChild(count); }
-    // "All open" starts from the same built-in view as the dashboard's All open tile, so the filters reset too.
-    a.addEventListener("click", e => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); if (id === "tickets") context().openAllOpen(); else navigate(id); });
-    nav.appendChild(a);
-  }
-  // Databases report is its own admin-only page; shown when Odoo is connected (set in applyConfig).
-  const dbReport = node("a", "nav-link"); dbReport.id = "dbreport-link"; dbReport.href = "databases.html"; dbReport.dataset.link = "databases"; dbReport.title = "Databases"; dbReport.hidden = true;
-  dbReport.append(icon("audit"), node("span", "", "Databases"));
-  nav.insertBefore(dbReport, nav.querySelector('[data-page="tickets"]').nextSibling);
-  // AI1 Monitor opens in a new tab on the Monitor's own site (its sign-in starts from the link). Every dashboard role may use it.
-  const monitor = node("a", "nav-link"); monitor.id = "ai1-monitor-link"; monitor.href = MONITOR_START_URL; monitor.target = "_blank"; monitor.rel = "noopener"; monitor.title = "AI1 Monitor (opens in a new tab)"; monitor.hidden = true;
-  monitor.append(icon("audit"), node("span", "", "AI1 Monitor"), node("span", "nav-ext", "↗"));
-  nav.insertBefore(monitor, dbReport.nextSibling);
-  // The Odoo knowledge base is its own page behind a password; shown when Odoo is connected (set in applyConfig).
-  const knowledge = node("a", "nav-link"); knowledge.id = "knowledge-link"; knowledge.href = "knowledge.html"; knowledge.dataset.link = "knowledge"; knowledge.title = "Odoo knowledge base"; knowledge.hidden = true;
-  knowledge.append(icon("audit"), node("span", "", "Knowledge base"));
-  nav.insertBefore(knowledge, monitor.nextSibling);
-  // Work pages first, then the administrator pages under their own label (hidden for users).
-  const navOrder = ["overview", "tickets", "requests", "calendar", "worklog", "errors", "monitor", "knowledge", "workload", "reports", "analytics", "clients", "databases"];
-  const navItem = id => nav.querySelector(id === "databases" ? "#dbreport-link" : id === "monitor" ? "#ai1-monitor-link" : id === "knowledge" ? "#knowledge-link" : `[data-page="${id}"]`);
-  const adminLabel = node("p", "nav-label nav-group", "ADMIN"); adminLabel.id = "nav-admin-label";
+  // "All open" starts from the same built-in view as the dashboard's All open tile, so the filters reset too.
+  buildNav(nav, { onPage: id => (id === "tickets" ? context().openAllOpen() : navigate(id)) });
   // Pages only administrators see; the breadcrumb names the section they belong to.
-  const adminPages = new Set(["workload", "reports", "analytics", "clients"]);
   function configure() {
     route = readRoute(new URL(location.href), context().admin);
     document.body.dataset.workspaceRole=context().admin?"manager":"user";
