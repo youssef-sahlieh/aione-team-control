@@ -12,38 +12,34 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="assets/styles/tokens.css">
 <link rel="stylesheet" href="assets/dashboard.css">
+<link rel="stylesheet" href="assets/styles/workspace.css">
+<link rel="stylesheet" href="assets/styles/readability.css">
 <link rel="stylesheet" href="assets/knowledge.css">
 <link rel="stylesheet" href="assets/styles/mobile.css">
+<script src="assets/config.js"></script>
+<script src="assets/early.js"></script>
 </head>
 <body>
-<div class="wrap kb-wrap">
-  <div class="top">
-    <div class="brand">
-      <h1>Odoo knowledge base</h1>
-      <div class="sub">The articles in Odoo Knowledge, as Odoo shows them. Every change is saved straight to Odoo.</div>
-    </div>
-    <span class="db-top-actions">
-      <a class="btn" href="dashboard.html">← Dashboard</a>
-      <span class="me"><span>Signed in as <b id="me">…</b></span> <button class="btn" id="signout" type="button">Sign out</button></span>
-    </span>
-  </div>
+<a class="skip-link" href="#main-content">Skip to content</a>
+<div class="app-shell">
+  <aside class="app-sidebar" id="app-sidebar" aria-label="Main navigation">
+    <a class="app-brand" href="dashboard.html?page=overview" aria-label="AIONE Team Control, overview"><img class="brand-mark" src="assets/brand/aione-mark.png" alt="" width="40" height="40"><span class="brand-full"><img class="brand-wordmark" src="assets/brand/aione-wordmark-light.png" alt="AIONE" width="150" height="53"><span class="brand-caption">TEAM CONTROL</span></span></a>
+    <div class="workspace-label"><span class="workspace-dot"></span> Team workspace</div>
+    <p class="nav-label">WORKSPACE</p>
+    <nav id="main-nav" aria-label="Workspace"></nav>
+    <div class="sidebar-bottom"><a class="nav-link admin-only" id="users-link" href="users.html" hidden><span class="nav-icon">♙</span><span>Users &amp; access</span></a><button class="nav-link" id="sidebar-collapse" type="button" aria-label="Collapse sidebar" aria-expanded="true"><span class="nav-icon">«</span><span>Collapse sidebar</span></button><div class="sidebar-note"><span class="workspace-dot"></span> Connected workspace</div></div>
+  </aside>
+  <button class="nav-scrim" id="nav-scrim" type="button" aria-label="Close navigation" hidden></button>
+  <div class="app-workspace">
+  <header class="app-topbar">
+    <button class="icon-btn" id="mobile-menu" type="button" aria-label="Open navigation" aria-controls="app-sidebar" aria-expanded="false">☰</button>
+    <div class="breadcrumbs">Workspace<span aria-hidden="true">›</span><b>Knowledge base</b></div>
+    <details class="account-menu"><summary><span class="account-avatar" id="account-avatar">A</span><span class="account-name">My account</span></summary><div class="account-panel"><span class="me"><b id="me">…</b></span><span id="account-role">Team member</span><button class="btn" id="signout" type="button">Sign out</button></div></details>
+  </header>
+  <main class="wrap kb-wrap frame-page" id="main-content" tabindex="-1">
+  <div class="page-heading"><div><h1 id="page-heading" tabindex="-1">Odoo knowledge base</h1><p>The articles in Odoo Knowledge, as Odoo shows them. Every change is saved straight to Odoo.</p></div></div>
 
   <div id="state" class="state">Loading…</div>
-
-  <section class="kb-card kb-unlock" id="unlock-block" hidden>
-    <h2>Unlock</h2>
-    <p class="msg">Enter the knowledge password your administrator set. It stays only on this page and is cleared when you lock or leave.</p>
-    <form id="unlock-form" class="kb-form">
-      <label class="business-field kb-grow"><span>Knowledge password</span>
-        <span class="kb-pass">
-          <input class="inp" id="unlock-password" type="password" autocomplete="off" required>
-          <button class="btn" id="unlock-toggle" type="button" aria-pressed="false" aria-controls="unlock-password">Show</button>
-        </span>
-      </label>
-      <button class="btn primary" id="unlock-submit" type="submit">Unlock</button>
-    </form>
-    <p class="msg" id="unlock-msg" role="status"></p>
-  </section>
 
   <div class="kb-app" id="kb-app" hidden>
     <aside class="kb-side" aria-label="Articles">
@@ -51,7 +47,6 @@
       <div class="kb-side-actions">
         <button class="btn primary" id="kb-new" type="button">+ New article</button>
         <button class="btn" id="kb-reload" type="button" title="Read the articles from Odoo again">Reload</button>
-        <button class="btn" id="kb-lock" type="button">Lock</button>
       </div>
       <p class="msg" id="kb-count" aria-live="polite"></p>
       <nav class="kb-tree" id="kb-tree"></nav>
@@ -121,6 +116,8 @@
   </div>
 
   <div class="kb-zoom" id="kb-zoom" hidden><img id="kb-zoom-img" alt=""></div>
+</main>
+  </div>
 </div>
 
 <script src="assets/config.js"></script>

@@ -25,6 +25,7 @@
 <link rel="stylesheet" href="assets/styles/reviews.css">
 <link rel="stylesheet" href="assets/styles/ticket-business.css">
 <link rel="stylesheet" href="assets/styles/analytics.css">
+<link rel="stylesheet" href="assets/styles/ticket-view.css">
 <link rel="stylesheet" href="assets/styles/mobile.css">
 <script src="assets/config.js"></script>
 <script src="assets/early.js"></script>
@@ -115,10 +116,11 @@
 <div class="scrim" id="scrim" hidden></div>
 <aside class="drawer" id="drawer" hidden aria-label="Ticket details" role="dialog" aria-modal="true">
   <div class="dhead">
+    <nav class="dcrumb" aria-label="Breadcrumb"><button class="dcrumb-back" id="d-back" type="button">All tickets</button><span aria-hidden="true">›</span><span id="d-crumb" aria-current="page"></span><span class="dnav"><span class="dpos" id="d-pos"></span><button class="btn" id="d-prev" type="button" aria-label="Previous ticket" title="Previous ticket (K)">↑</button><button class="btn" id="d-next" type="button" aria-label="Next ticket" title="Next ticket (J)">↓</button></span></nav>
     <div class="dtop">
       <a class="key" id="d-key" target="_blank" rel="noopener"></a>
       <span class="stbtn" id="d-status"></span>
-      <span class="sp"><button class="btn" id="d-logwork" type="button" title="Log time worked on this ticket (sent to Odoo timesheets)" hidden>Log work</button><button class="btn int-only" id="d-edit" type="button">Edit</button><details class="dmore"><summary class="btn" aria-label="More actions" title="More actions">…</summary><div class="dmore-list"><button class="btn note note-action" id="d-note" type="button" title="Send an internal note">Internal note</button><a class="btn primary odoo-only" id="d-odoo" target="_blank" rel="noopener">Open in Odoo ↗</a><a class="btn primary jira-only" id="d-open" target="_blank" rel="noopener">Open in Jira ↗</a><button class="btn" id="d-size" type="button" title="Switch between full screen and a side panel">Side panel</button><button class="btn danger admin-only int-only" id="d-del" type="button">Delete</button></div></details><button class="btn" id="d-close" type="button">Close</button></span>
+      <span class="sp"><button class="btn" id="d-logwork" type="button" title="Log time worked on this ticket (sent to Odoo timesheets)" hidden>Log work</button><button class="btn int-only" id="d-edit" type="button">Edit</button><details class="dmore"><summary class="btn" aria-label="More actions" title="More actions">…</summary><div class="dmore-list"><button class="btn note note-action" id="d-note" type="button" title="Send an internal note">Internal note</button><a class="btn primary odoo-only" id="d-odoo" target="_blank" rel="noopener">Open in Odoo ↗</a><a class="btn primary jira-only" id="d-open" target="_blank" rel="noopener">Open in Jira ↗</a><button class="btn" id="d-size" type="button" title="Show the ticket as a full page, or next to the list">Side by side</button><button class="btn danger admin-only int-only" id="d-del" type="button">Delete</button></div></details><button class="btn" id="d-close" type="button">Close</button></span>
     </div>
     <h2 class="dtitle" id="d-title" dir="auto"></h2>
   </div>

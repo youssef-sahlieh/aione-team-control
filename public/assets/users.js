@@ -1,6 +1,9 @@
 // Users page (administrators only): invite people, choose Administrator or User, pick whose tickets a User sees,
 // set the GitHub username used for review requests, send password links and remove accounts. Everything is checked again by the proxy.
 import { api, getSession, signOut } from "./session.js";
+import { startFrame, appConfig } from "./app/frame.js";
+
+startFrame({ current: "users" });
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -221,42 +224,12 @@ async function load() {
 
 $("signout").addEventListener("click", () => signOut());
 
-// Knowledge base password: set and changed here by administrators. The proxy checks the administrator again.
-const fmtDate = (v) => { const d = new Date(v); return v && !isNaN(d) ? d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : ""; };
-async function loadKnowledgePassword() {
-  const status = await api("/knowledge/status");
-  $("kb-pass").hidden = false;
-  $("kb-help").textContent = !status.odoo
-    ? "Odoo is not connected, so the knowledge base is not available."
-    : status.configured
-      ? "A password is set (last changed " + fmtDate(status.updatedAt) + "). Changing it means everyone who opens the knowledge base needs the new password."
-      : "No password is set yet. Set one so people can open the knowledge base.";
-  $("kb-submit").textContent = status.configured ? "Change password" : "Set password";
-  $("kb-password").disabled = $("kb-submit").disabled = !status.odoo;
-}
-
-$("kb-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const password = $("kb-password").value;
-  $("kb-submit").disabled = true; setMsg("kb-msg", "Saving…", true);
-  try {
-    await api("/knowledge/password", { method: "POST", body: { password } });
-    $("kb-password").value = "";
-    toast("Knowledge base password saved. Tell the people who need it.");
-    setMsg("kb-msg", "");
-    await loadKnowledgePassword();
-  } catch (err) {
-    if (err.code === "session") { signOut(); return; }
-    setMsg("kb-msg", errText(err), false);
-  } finally { $("kb-submit").disabled = false; }
-});
-
 async function start() {
   const s = getSession();
   if (!s) return signOut();
   $("me").textContent = s.email;
   try {
-    const cfg = await api("/config");
+    const cfg = await appConfig();
     if (cfg.role !== "admin") { location.replace("dashboard.html"); return; }
     if (!cfg.accounts) { showState("User accounts aren't switched on yet: the proxy needs its database (see SETUP.md, \"User accounts\"). Until then, Youssef and Ellen sign in with the team password.", true); return; }
     me = { email: cfg.email, name: cfg.name };
@@ -264,7 +237,6 @@ async function start() {
     await load();
     showState("");
     $("list").hidden = false;
-    loadKnowledgePassword().catch((err) => { $("kb-pass").hidden = false; $("kb-help").textContent = errText(err); });
   } catch (err) {
     showState(errText(err), true);
   }
