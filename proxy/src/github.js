@@ -4,8 +4,9 @@
 // One index of all PRs is kept in the database and brought up to date incrementally (only PRs changed
 // since the last sync are read), at most every SYNC_MS, so ticket screens stay fast.
 const SYNC_MS = 2 * 60 * 1000;
-// v3: more ways of writing INT-n are matched, so the index is read again once.
-const INDEX_KEY = "github:prs:v3", LOCK_KEY = "github:prs:lock";
+// v4: pull requests keep when they were opened and when they became ready for review, and open ones keep their
+// review and commit times, so the index is read again once.
+const INDEX_KEY = "github:prs:v4", LOCK_KEY = "github:prs:lock";
 const MAX_PAGES_FIRST_SYNC = 40; // 4,000 PRs per repository
 
 export const githubConfigured = (env) => !!(env.GITHUB_TOKEN && repos(env).length);
@@ -40,12 +41,15 @@ export function ticketKeys(env, { title = "", body = "", branch = "" }) {
   return [...out];
 }
 
-function record(env, repo, pr) {
+// The index record of one pull request. readyAt is when it became ready for review: the first time the index saw it
+// open, or the sync that first saw a draft turn ready. A draft has none, and a closed one keeps the time it had.
+function record(env, repo, pr, prev) {
+  const state = pr.merged_at ? "merged" : pr.state === "open" ? (pr.draft ? "draft" : "open") : "closed";
+  const readyAt = state === "draft" ? null : prev && prev.state === "draft" ? new Date().toISOString() : (prev && prev.readyAt) || pr.created_at || null;
   return {
     id: repo + "#" + pr.number, repo: repo.split("/")[1], number: pr.number, title: String(pr.title || "").slice(0, 300),
-    state: pr.merged_at ? "merged" : pr.state === "open" ? (pr.draft ? "draft" : "open") : "closed",
-    url: pr.html_url, author: pr.user && pr.user.login, branch: pr.head && pr.head.ref, base: pr.base && pr.base.ref,
-    updated: pr.updated_at, merged: pr.merged_at || null,
+    state, url: pr.html_url, author: pr.user && pr.user.login, branch: pr.head && pr.head.ref, base: pr.base && pr.base.ref,
+    created: pr.created_at || null, readyAt, updated: pr.updated_at, merged: pr.merged_at || null,
     keys: ticketKeys(env, { title: pr.title, body: pr.body, branch: pr.head && pr.head.ref })
   };
 }
@@ -61,12 +65,14 @@ async function gh(env, path) {
   return res.json();
 }
 
-async function readIndex(env) { try { return JSON.parse((await env.STORE.get(INDEX_KEY)) || "null") || { prs: {}, cursors: {}, syncedAt: 0 }; } catch { return { prs: {}, cursors: {}, syncedAt: 0 }; } }
+// The whole index: every pull request that names a ticket, and when it was last synced. statusError is the last
+// failure to read review states ("" when the last sync read them all).
+export async function pullIndex(env) { try { return JSON.parse((await env.STORE.get(INDEX_KEY)) || "null") || { prs: {}, cursors: {}, syncedAt: 0 }; } catch { return { prs: {}, cursors: {}, syncedAt: 0 }; } }
 
 // Brings the index up to date. Each repository is read newest-updated first until PRs older than
 // the last sync appear, so a normal sync is one request per repository.
 export async function syncPulls(env, { force = false } = {}) {
-  const index = await readIndex(env);
+  const index = await pullIndex(env);
   if (!force && Date.now() - index.syncedAt < SYNC_MS) return { index, synced: false };
   const owner = crypto.randomUUID();
   if (!(await env.STORE.setIfAbsent(LOCK_KEY, owner, 120))) return { index, synced: false };
@@ -79,7 +85,7 @@ export async function syncPulls(env, { force = false } = {}) {
         const list = await gh(env, "/repos/" + repo + "/pulls?state=all&sort=updated&direction=desc&per_page=100&page=" + page);
         for (const pr of list) {
           if (cursor && pr.updated_at <= cursor) { done = true; break; }
-          const r = record(env, repo, pr);
+          const r = record(env, repo, pr, index.prs[repo + "#" + pr.number]);
           if (r.keys.length) index.prs[r.id] = r; else delete index.prs[r.id];
           if (!newest || pr.updated_at > newest) newest = pr.updated_at;
         }
@@ -87,7 +93,11 @@ export async function syncPulls(env, { force = false } = {}) {
       }
       index.cursors[repo] = newest;
     }));
-    await Promise.all(repos(env).map((repo) => openStatus(env, repo, index).catch((e) => console.warn("github_status_failed", repo, String(e.message || e).slice(0, 200)))));
+    index.statusError = "";
+    await Promise.all(repos(env).map((repo) => openStatus(env, repo, index).catch((e) => {
+      console.warn("github_status_failed", repo, String(e.message || e).slice(0, 200));
+      index.statusError = "Review states couldn't be read for " + repo + ": " + String(e.message || e).slice(0, 200);
+    })));
     index.syncedAt = Date.now();
     await env.STORE.set(INDEX_KEY, JSON.stringify(index));
     return { index, synced: true };
@@ -100,8 +110,8 @@ export async function syncPulls(env, { force = false } = {}) {
 const CHECKS = "commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:100){nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}";
 const statusQuery = (withChecks) => `query($owner:String!,$name:String!,$after:String){ repository(owner:$owner,name:$name){ pullRequests(first:50,states:[OPEN],orderBy:{field:UPDATED_AT,direction:DESC},after:$after){ pageInfo{hasNextPage endCursor} nodes{ number
   comments{totalCount} reviewThreads(first:100){totalCount nodes{isResolved comments{totalCount}}}
-  reviewDecision reviewRequests(first:20){nodes{requestedReviewer{__typename ... on User{login} ... on Team{name} ... on Bot{login}}}}
-  latestOpinionatedReviews(first:20){nodes{author{login} state}} ${withChecks ? CHECKS : ""} } } } }`;
+  reviewDecision reviewRequests(first:20){nodes{createdAt requestedReviewer{__typename ... on User{login} ... on Team{name} ... on Bot{login}}}}
+  latestOpinionatedReviews(first:20){nodes{author{login} state submittedAt}} head: commits(last:1){nodes{commit{committedDate}}} ${withChecks ? CHECKS : ""} } } } }`;
 const FAILED = new Set(["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
 
 async function graphql(env, query, variables) {
@@ -126,12 +136,16 @@ async function openStatus(env, repo, index) {
       const threads = (p.reviewThreads && p.reviewThreads.nodes) || [];
       const roll = withChecks && p.commits && p.commits.nodes[0] && p.commits.nodes[0].commit.statusCheckRollup;
       const contexts = (roll && roll.contexts && roll.contexts.nodes) || [];
+      const asked = p.reviewRequests.nodes.filter((n) => n.requestedReviewer);
       pr.status = {
         comments: p.comments.totalCount + threads.reduce((n, t) => n + ((t.comments && t.comments.totalCount) || 0), 0),
         unresolved: threads.filter((t) => !t.isResolved).length,
         decision: p.reviewDecision || null,
-        requested: p.reviewRequests.nodes.map((n) => n.requestedReviewer && (n.requestedReviewer.login || n.requestedReviewer.name)).filter(Boolean),
-        reviews: p.latestOpinionatedReviews.nodes.map((n) => ({ by: (n.author && n.author.login) || "someone", state: n.state })),
+        requested: asked.map((n) => n.requestedReviewer.login || n.requestedReviewer.name).filter(Boolean),
+        // Who was asked and when (the wait starts then), and each reviewer's latest review with when it was given.
+        requests: asked.map((n) => ({ by: n.requestedReviewer.login || n.requestedReviewer.name || "", at: n.createdAt || null })),
+        reviews: p.latestOpinionatedReviews.nodes.map((n) => ({ by: (n.author && n.author.login) || "someone", state: n.state, at: n.submittedAt || null })),
+        lastCommitAt: (p.head && p.head.nodes[0] && p.head.nodes[0].commit.committedDate) || null,
         checks: withChecks ? (roll ? roll.state : "NONE") : null,
         failed: contexts.filter((c) => FAILED.has(c.conclusion || c.state)).map((c) => c.name || c.context).slice(0, 10),
         running: contexts.filter((c) => (c.status && c.status !== "COMPLETED") || c.state === "PENDING" || c.state === "EXPECTED").length,
@@ -153,7 +167,7 @@ export function prsByKey(index, keys) {
 }
 
 // One pull request from the index (the id is "owner/repo#number", the same as the index key).
-export async function prRecord(env, id) { return (await readIndex(env)).prs[id] || null; }
+export async function prRecord(env, id) { return (await pullIndex(env)).prs[id] || null; }
 
 // Review requests (see reviews.js). Every call has a timeout, and the answer is returned rather than thrown, so the
 // caller can tell "GitHub refused" from "no answer" (the second may still have been accepted).

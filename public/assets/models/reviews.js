@@ -41,3 +41,65 @@ export function assignedLine(item) {
   const by = item.assignedBy ? "Asked by " + item.assignedBy : "Asked";
   return by + (item.assignedAt ? " · " + new Date(item.assignedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "");
 }
+
+// The administrators' queue (GET /reviews/queue): one state per pull request, as the proxy works it out from GitHub.
+export const QUEUE_STATE_LABEL = { awaiting: "Awaiting review", changes_requested: "Changes requested", approved: "Approved" };
+export const queueStateLabel = (pr) => QUEUE_STATE_LABEL[pr.state] || "Unknown";
+export const NO_REVIEWER = "__none";
+
+// The reason under a state, when the state alone doesn't say why the pull request is listed.
+export function queueReasonText(pr) {
+  if (pr.state === "awaiting" && pr.reason === "new_commits") return "New commits since changes were requested";
+  if (pr.state === "awaiting" && pr.reason === "more_approvals") return "More approvals needed";
+  if (pr.state === "approved" && pr.reason === "stale") return "Approved, but new commits since";
+  return "";
+}
+
+// How long something has waited since its ISO time: "under a minute", "5 hours", "3 days". now is passed in for tests.
+export function waitingFor(since, now = Date.now()) {
+  if (!since) return "";
+  const mins = Math.floor((now - Date.parse(since)) / 60000);
+  if (mins < 1) return "under a minute";
+  if (mins < 60) return mins + (mins === 1 ? " minute" : " minutes");
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return hours + (hours === 1 ? " hour" : " hours");
+  const days = Math.floor(hours / 24);
+  return days + (days === 1 ? " day" : " days");
+}
+
+// Longest wait first: the earliest ISO time comes first, and an unknown one goes last.
+export const longestWaitFirst = (a, b) => (a || "￿") < (b || "￿") ? -1 : (a || "￿") > (b || "￿") ? 1 : 0;
+
+// The choices for the queue's filters, taken from the tickets that are there now.
+export function queueOptions(tickets) {
+  const sorted = (set) => [...set].filter(Boolean).sort((a, b) => a.localeCompare(b));
+  const prs = tickets.flatMap((t) => t.prs);
+  return {
+    clients: sorted(new Set(tickets.map((t) => t.client))),
+    repos: sorted(new Set(prs.map((pr) => pr.repo))),
+    reviewers: sorted(new Set(prs.flatMap((pr) => pr.reviewers.map((r) => r.name))))
+  };
+}
+
+// Narrows the queue. A ticket that matches by key or title keeps all its pull requests; otherwise only pull requests
+// whose own title matches stay. A ticket with no pull request left is dropped. Order is kept.
+export function filterQueue(tickets, f = {}) {
+  const q = (f.search || "").trim().toLowerCase();
+  const has = (text) => (text || "").toLowerCase().includes(q);
+  return tickets
+    .filter((t) => !f.client || t.client === f.client)
+    .map((t) => {
+      const ticketMatch = !q || has(t.key) || has(t.title);
+      const prs = t.prs.filter((pr) => (ticketMatch || has(pr.title))
+        && (!f.repo || pr.repo === f.repo)
+        && (!f.state || pr.state === f.state)
+        && (!f.reviewer || (f.reviewer === NO_REVIEWER ? !pr.reviewers.length : pr.reviewers.some((r) => r.name === f.reviewer))));
+      return { ...t, prs };
+    })
+    .filter((t) => t.prs.length);
+}
+
+// Tickets and distinct pull requests. A pull request that names two tickets counts once as a pull request.
+export function queueCounts(tickets) {
+  return { tickets: tickets.length, prs: new Set(tickets.flatMap((t) => t.prs.map((pr) => pr.id))).size };
+}

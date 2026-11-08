@@ -183,7 +183,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     const page = pages.find(p => p[0] === route.page);
     document.body.dataset.workspacePage = route.page;
     // The tickets page is named after the view it shows (All open, Closed, Overdue…), so the heading never disagrees with the list.
-    $("page-heading").textContent = route.page === "tickets" ? context().focusLabel() : page[1]; $("page-description").textContent = route.page==="tickets"&&!context().admin?"The tickets you’re authorized to work on.":page[2]; $("breadcrumbs").textContent = adminPages.has(route.page) ? "Admin" : "Workspace";
+    $("page-heading").textContent = route.page === "tickets" ? context().focusLabel() : page[1]; $("page-description").textContent = route.page==="tickets"&&!context().admin?"The tickets you’re authorized to work on.":route.page==="reviews"&&context().admin?"Open pull requests that name a ticket and are waiting for a review, longest wait first. Tickets are read-only here.":page[2]; $("breadcrumbs").textContent = adminPages.has(route.page) ? "Admin" : "Workspace";
     for (const link of nav.querySelectorAll("a[data-page]")) { if (link.dataset.page === route.page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); }
     $("nav-date-count").textContent=String(context().pendingDates||0);
     // Same count as the All open tile: open tickets in the current scope (see openCount in dashboard.js).

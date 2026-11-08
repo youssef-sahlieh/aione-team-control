@@ -97,7 +97,7 @@ const tests = [
     assert.equal((await call("/jira/issue/AION-2", { method: "PUT", token: u.token, body: { fields: { duedate: "2026-12-01" } } })).status, 403, "someone else's ticket");
     assert.equal((await call("/jira/issue/AION-2/changelog", { token: u.token })).status, 403);
     assert.equal((await call("/jira/issue/AION-1", { method: "PUT", token: u.token, body: { fields: { labels: ["ai1_bashar", "ai1_x"] } } })).status, 403, "can't change developers");
-    assert.equal((await call("/jira/issue/AION-1", { method: "PUT", token: u.token, body: { fields: { assignee: null } } })).status, 403, "can't change assignee");
+    assert.equal((await call("/jira/issue/AION-1", { method: "PUT", token: u.token, body: { fields: { assignee: null } } })).status, 200, "a developer on the ticket can change its assignee");
   }],
   ["user can't manage users or send emails, but can search Jira people to mention them", async () => {
     const u = await login("bashar.b@aione.biz", "Bashar-pass-123", "5.5.5.5");
@@ -226,8 +226,8 @@ const tests = [
     assert.equal((await call("/internal", { method: "POST", token: u.token, body: { summary: "Bad", assignee: "bashar" } })).status, 400, "only team members");
     const r = await call("/internal", { method: "POST", token: u.token, body: { summary: "For Rami", assignee: "rami" } });
     assert.equal(r.status, 201); assert.equal(r.data.ticket.assignee, "rami");
-    assert.equal((await call("/internal/" + r.data.ticket.key, { method: "PUT", token: u.token, body: { assignee: "karim" } })).status, 400, "user can't reassign");
-    assert.equal((await call("/internal/" + r.data.ticket.key, { method: "PUT", token: u.token, body: { assignee: "rami", status: "In Development" } })).status, 200, "unchanged assignee is fine");
+    assert.equal((await call("/internal/" + r.data.ticket.key, { method: "PUT", token: u.token, body: { assignee: "karim" } })).status, 200, "a developer on the ticket can change its assignee");
+    assert.equal((await call("/internal/" + r.data.ticket.key, { method: "PUT", token: u.token, body: { assignee: "karim", status: "In Development" } })).status, 200, "unchanged assignee is fine");
     const a = await login("youssef@aione.biz", "Team-password-1", "10.0.2.2");
     await call("/ticket-metadata",{method:"PUT",token:a.token,body:{key:r.data.ticket.key,fields:{revision:1,billing:"not_billable"}}});
     const c = await call("/internal/" + r.data.ticket.key, { method: "PUT", token: a.token, body: { assignee: "karim" } });

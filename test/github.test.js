@@ -144,7 +144,7 @@ test("open PRs carry comments, reviewers and failed checks; a token without chec
     const pr = d.prs["AION-71"].find((p) => p.number === 175);
     assert.equal(pr.status.comments, 6); assert.equal(pr.status.unresolved, 1);
     assert.equal(pr.status.decision, "CHANGES_REQUESTED"); assert.deepEqual(pr.status.requested, ["rami-alt"]);
-    assert.deepEqual(pr.status.reviews, [{ by: "ellen", state: "CHANGES_REQUESTED" }]);
+    assert.deepEqual(pr.status.reviews, [{ by: "ellen", state: "CHANGES_REQUESTED", at: null }]);
     if (noChecks) { assert.equal(pr.status.checks, null); assert.equal(d.checks, false); }
     else { assert.equal(pr.status.checks, "FAILURE"); assert.deepEqual(pr.status.failed, ["build"]); assert.equal(pr.status.running, 1); assert.equal(d.checks, true); }
     // The merged PR has no live status.
