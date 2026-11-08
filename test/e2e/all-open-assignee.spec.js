@@ -1,9 +1,12 @@
 import { test, expect } from "@playwright/test";
 
-// Sidebar count matches the "All open" tile, the assignee selector saves to Jira, and Work log is the last section of ticket details.
-async function mockDashboard(page) {
+// Ticket details: an administrator picks the Assignee from a searchable list (Unassigned included for Jira tickets). A refused
+// save puts the previous owner back. Everyone else sees the owner as text, with no picker. The sidebar count matches "All open".
+async function mockDashboard(page, { role = "admin" } = {}) {
   const writes = [];
-  await page.addInitScript(() => { localStorage.setItem("aione-session", JSON.stringify({ token: "t", email: "admin@example.invalid", expiresAt: Date.now() + 3600000, role: "admin" })); });
+  writes.fail = false;
+  const email = role === "admin" ? "admin@example.invalid" : "user@example.invalid";
+  await page.addInitScript(({ role, email }) => { localStorage.setItem("aione-session", JSON.stringify({ token: "t", email, expiresAt: Date.now() + 3600000, role })); }, { role, email });
   const issue = (key, accountId, name, cat) => ({ key, fields: { summary: "Ticket " + key, status: { name: cat === "done" ? "Done" : "To Do", statusCategory: { key: cat } }, labels: ["ai1_builder"], assignee: accountId ? { accountId, displayName: name } : null, updated: "2026-10-14T10:00:00.000+0000", created: "2026-10-01T10:00:00.000+0000" } });
   let assignee = { accountId: "acc-b", displayName: "Builder" };
   await page.route("**/*", (route) => {
@@ -11,7 +14,7 @@ async function mockDashboard(page) {
     if (url.origin === "http://127.0.0.1:4173") return route.continue();
     if (url.hostname !== "aione-team-proxy.vercel.app") return route.abort();
     const path = url.pathname;
-    if (path === "/config") return route.fulfill({ json: { site: "https://jira.example.invalid", project: "AION", people: { builder: { id: "acc-b", name: "Builder" }, reviewer: { id: "acc-r", name: "Reviewer" } }, devs: ["builder"], role: "admin", dev: "builder", email: "admin@example.invalid", accounts: true, odoo: false, mail: false, ai: { enabled: false } } });
+    if (path === "/config") return route.fulfill({ json: { site: "https://jira.example.invalid", project: "AION", people: { builder: { id: "acc-b", name: "Builder" }, reviewer: { id: "acc-r", name: "Reviewer" } }, devs: ["builder"], role, dev: "builder", email, accounts: true, odoo: false, mail: false, ai: { enabled: false } } });
     if (path === "/jira/search") return route.fulfill({ json: { issues: [
       { ...issue("AION-1", "acc-b", "Builder", "new") },
       { ...issue("AION-2", null, "", "indeterminate") },
@@ -19,6 +22,7 @@ async function mockDashboard(page) {
     ], isLast: true } });
     if (path.startsWith("/jira/issue/") && req.method() === "PUT") {
       writes.push({ path, body: req.postDataJSON() });
+      if (writes.fail) return route.fulfill({ status: 503, json: { code: "jira", error: "Jira is busy. Try again." } });
       const accountId = req.postDataJSON()?.fields?.assignee?.accountId ?? null;
       assignee = accountId ? { accountId, displayName: accountId === "acc-r" ? "Reviewer" : "Builder" } : null;
       return route.fulfill({ json: { ok: true } });
@@ -33,6 +37,11 @@ async function mockDashboard(page) {
   return writes;
 }
 
+const openTicket = async (page) => {
+  await page.goto("/dashboard.html#tickets");
+  await page.getByRole("button", { name: "Ticket AION-1", exact: true }).first().click();
+};
+
 test("the sidebar count matches the All open tile", async ({ page }) => {
   await mockDashboard(page);
   await page.goto("/dashboard.html#tickets");
@@ -42,25 +51,73 @@ test("the sidebar count matches the All open tile", async ({ page }) => {
   await expect(page.locator("#page-heading")).toHaveText("All open");
 });
 
-test("changing the assignee in ticket details saves it to Jira", async ({ page }) => {
+test("an administrator types to find a person and presses Enter; only the assignee is sent to Jira", async ({ page }) => {
   const writes = await mockDashboard(page);
-  await page.goto("/dashboard.html#tickets");
-  await page.getByRole("button", { name: "Ticket AION-1", exact: true }).first().click();
-  const pick = page.locator("#d-asg-pick");
-  await expect(pick).toHaveValue("acc-b");
-  await pick.selectOption("acc-r");
+  await openTicket(page);
+  const pick = page.getByRole("combobox", { name: "Assignee" });
+  await expect(pick).toHaveValue("Builder");
+  await pick.fill("Rev");
+  await pick.press("Enter");
   await expect(page.locator("#d-asgmsg")).toHaveText("Saved.");
   await expect(page.locator("#d-asgname")).toContainText("Reviewer");
+  await expect(pick).toHaveValue("Reviewer");
   expect(writes.length).toBe(1);
+  expect(Object.keys(writes[0].body.fields)).toEqual(["assignee"]);
   expect(writes[0].body.fields.assignee.accountId).toBe("acc-r");
+});
+
+test("Unassigned is offered for a Jira ticket and clears the owner", async ({ page }) => {
+  const writes = await mockDashboard(page);
+  await openTicket(page);
+  const pick = page.getByRole("combobox", { name: "Assignee" });
+  await pick.click();
+  await page.locator(".combo-list li", { hasText: "Unassigned" }).click();
+  await expect(page.locator("#d-asgmsg")).toHaveText("Saved.");
+  await expect(page.locator("#d-asgname")).toContainText("Unassigned");
+  expect(writes.length).toBe(1);
+  expect(writes[0].body.fields.assignee).toBeNull();
+});
+
+test("a refused save puts the previous owner back and says so", async ({ page }) => {
+  const writes = await mockDashboard(page);
+  writes.fail = true;
+  await openTicket(page);
+  const pick = page.getByRole("combobox", { name: "Assignee" });
+  await pick.fill("Rev");
+  await pick.press("Enter");
+  await expect(page.locator("#d-asgmsg")).toHaveText("Not saved. The owner was put back.");
+  await expect(page.locator("#d-asgname")).toContainText("Builder");
+  await expect(pick).toHaveValue("Builder");
+  expect(writes.length).toBe(1);
+});
+
+test("someone without permission sees the current assignee and no picker", async ({ page }) => {
+  const writes = await mockDashboard(page, { role: "user" });
+  await openTicket(page);
+  await expect(page.locator("#d-asgname")).toContainText("Builder");
+  await expect(page.getByRole("combobox", { name: "Assignee" })).toBeHidden();
+  await expect(page.locator("#d-asg")).toBeHidden();
+  expect(writes.length).toBe(0);
+});
+
+test("on a phone the Assignee picker fits the ticket details and the page does not scroll sideways", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockDashboard(page);
+  await openTicket(page);
+  const pick = page.getByRole("combobox", { name: "Assignee" });
+  await pick.scrollIntoViewIfNeeded();
+  await expect(pick).toBeInViewport();
+  const fits = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
+  expect(fits).toBe(true);
+  await pick.click();
+  await expect(page.locator(".combo-list")).toBeVisible();
 });
 
 for (const [name, viewport] of [["desktop", { width: 1280, height: 900 }], ["mobile", { width: 390, height: 844 }]]) {
   test(`Work log is the last section of ticket details on ${name}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await mockDashboard(page);
-    await page.goto("/dashboard.html#tickets");
-    await page.getByRole("button", { name: "Ticket AION-1", exact: true }).first().click();
+    await openTicket(page);
     const top = (sel) => page.locator(sel).first().evaluate(n => n.getBoundingClientRect().top);
     const workLog = await top("#drawer .work-log, #drawer #work-log");
     const activity = await top("#drawer .jira-activity");

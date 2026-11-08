@@ -1,9 +1,10 @@
 import { test, expect } from "@playwright/test";
 
 // Work log page: "+ Log work" picks an open ticket, then the time. Every request is intercepted.
-async function mockWorkLog(page, { canLog = true } = {}) {
-  const calls = [], unexpected = [], rows = [];
-  page.on("dialog", (d) => d.accept());
+async function mockWorkLog(page, { canLog = true, failFirstPost = false } = {}) {
+  const calls = [], unexpected = [], rows = [], dialogs = [];
+  let posts = 0;
+  page.on("dialog", (d) => { dialogs.push(d.message()); d.accept(); });
   await page.addInitScript(() => { localStorage.setItem("aione-session", JSON.stringify({ token: "t", email: "builder@example.invalid", expiresAt: Date.now() + 3600000, role: "user" })); });
   await page.route("**/*", async (route) => {
     const req = route.request(), url = new URL(req.url());
@@ -23,6 +24,8 @@ async function mockWorkLog(page, { canLog = true } = {}) {
       return json({ ticket: "AION-7", source: "jira", closed: false, logging: true, canLog, today: "2026-10-15", maxMinutes: 1440, lockDate: null, entries: [], summary: { loggedMinutes: 0, pendingMinutes: 0 }, baselineHours: null, totalHours: null, destination: null });
     }
     if (path === "/time-entries" && method === "POST") {
+      posts += 1;
+      if (failFirstPost && posts === 1) return route.fulfill({ status: 500, json: { code: "odoo", error: "Odoo is busy. Try again." } });
       const entry = { id: body.id, ticket: body.ticket, source: "jira", date: body.date, minutes: body.minutes, description: body.description, user: "Builder", status: "synced", statusLabel: "Saved in Odoo", synced: true, clientName: null, subClientName: null };
       rows.push(entry);
       return json({ entry: { ...entry, statusLabel: "Saved in Odoo" }, summary: { loggedMinutes: body.minutes, pendingMinutes: 0 } });
@@ -30,26 +33,33 @@ async function mockWorkLog(page, { canLog = true } = {}) {
     unexpected.push({ path, method });
     return route.fulfill({ status: 403, json: { code: "forbidden", error: "Unconfigured test request" } });
   });
-  return { calls, unexpected };
+  return { calls, unexpected, dialogs };
 }
 
-test("a user picks one of their open tickets on the Work log page, enters the time, and it appears in the report", async ({ page }) => {
-  const mock = await mockWorkLog(page);
+// Opens the form for AION-7 from the Work log page and returns it.
+async function openForm(page) {
   await page.goto("/dashboard.html?page=worklog");
-  const logButton = page.getByRole("button", { name: "+ Log work", exact: true });
-  await expect(logButton).toBeVisible();
-
-  await logButton.click();
+  await page.getByRole("button", { name: "+ Log work", exact: true }).click();
   const picker = page.getByRole("dialog", { name: "Log work" });
   await picker.getByLabel("Ticket").fill("login");
   await picker.getByRole("button", { name: /AION-7/ }).click();
-
   const form = page.getByRole("dialog", { name: "Log work · AION-7" });
   await expect(form).toBeVisible();
-  await form.getByRole("spinbutton", { name: /^Hours/ }).fill("1");
-  await form.getByRole("spinbutton", { name: /^Minutes/ }).fill("30");
-  await form.getByLabel(/^Description/).fill("Fixed the redirect after login");
-  await form.getByRole("button", { name: "Save", exact: true }).click();
+  return form;
+}
+
+const hours = (form) => form.getByRole("spinbutton", { name: /^Hours/ });
+const minutes = (form) => form.getByRole("spinbutton", { name: /^Minutes/ });
+const description = (form) => form.getByLabel(/^Description/);
+const chip = (form, label) => form.getByRole("button", { name: label, exact: true });
+
+test("a user picks one of their open tickets on the Work log page, enters the time, and it appears in the report", async ({ page }) => {
+  const mock = await mockWorkLog(page);
+  const form = await openForm(page);
+  await hours(form).fill("1");
+  await minutes(form).fill("30");
+  await description(form).fill("Fixed the redirect after login");
+  await form.getByRole("button", { name: "Save work", exact: true }).click();
 
   await expect.poll(() => mock.calls.find((c) => c.method === "POST" && c.path === "/time-entries")?.body)
     .toMatchObject({ ticket: "AION-7", date: "2026-10-15", minutes: 90, description: "Fixed the redirect after login" });
@@ -63,4 +73,111 @@ test("the Log work button is hidden when this person may not log work", async ({
   await page.goto("/dashboard.html?page=worklog");
   await expect(page.locator(".wl-page")).toBeVisible();
   await expect(page.getByRole("button", { name: "+ Log work", exact: true })).toBeHidden();
+});
+
+test("the shortcuts set the total, are highlighted when they match, and the total is shown", async ({ page }) => {
+  await mockWorkLog(page);
+  const form = await openForm(page);
+  await chip(form, "1h").click();
+  await expect(hours(form)).toHaveValue("1");
+  await expect(minutes(form)).toHaveValue("0");
+  await expect(form.getByText("Total: 1h", { exact: true })).toBeVisible();
+  await expect(chip(form, "1h")).toHaveAttribute("aria-pressed", "true");
+  // A shortcut sets the total rather than adding to it.
+  await chip(form, "15m").click();
+  await expect(hours(form)).toHaveValue("0");
+  await expect(minutes(form)).toHaveValue("15");
+  await expect(form.getByText("Total: 15m", { exact: true })).toBeVisible();
+  await expect(chip(form, "15m")).toHaveAttribute("aria-pressed", "true");
+  await expect(chip(form, "1h")).toHaveAttribute("aria-pressed", "false");
+  // Typing a total that matches no shortcut clears the highlight.
+  await minutes(form).fill("20");
+  await expect(form.locator(".wl-chip[aria-pressed='true']")).toHaveCount(0);
+});
+
+test("invalid durations are named beside their box, and nothing is saved", async ({ page }) => {
+  const mock = await mockWorkLog(page);
+  const form = await openForm(page);
+  await description(form).fill("Checked the redirect");
+  await hours(form).fill("24");
+  await minutes(form).fill("30");
+  await form.getByRole("button", { name: "Save work", exact: true }).click();
+  await expect(minutes(form)).toHaveAttribute("aria-invalid", "true");
+  await expect(form.getByText("With 24 hours, minutes must be 0.")).toBeVisible();
+  await hours(form).fill("0");
+  await minutes(form).fill("0");
+  await form.getByRole("button", { name: "Save work", exact: true }).click();
+  await expect(form.getByText("Enter at least 1 minute.")).toBeVisible();
+  expect(mock.calls.some((c) => c.method === "POST" && c.path === "/time-entries")).toBe(false);
+});
+
+test("Save & add another keeps the ticket and date, and clears the duration and description", async ({ page }) => {
+  const mock = await mockWorkLog(page);
+  const form = await openForm(page);
+  await hours(form).fill("1");
+  await description(form).fill("First part");
+  await form.getByRole("button", { name: "Save & add another", exact: true }).click();
+  await expect(form.locator(".msg.ok")).toContainText("Add the next one.");
+  await expect(hours(form)).toHaveValue("");
+  await expect(minutes(form)).toHaveValue("");
+  await expect(description(form)).toHaveValue("");
+  await expect(hours(form)).toBeFocused();
+  await expect(form.getByLabel("Work date")).toHaveValue("2026-10-15");
+  await expect(form.getByText(/15 Oct 2026/)).toBeVisible();
+  expect(mock.calls.find((c) => c.method === "POST" && c.path === "/time-entries")?.body).toMatchObject({ ticket: "AION-7", date: "2026-10-15", minutes: 60 });
+});
+
+test("a failed save keeps every value, shows the error, and the retry is the same entry", async ({ page }) => {
+  const mock = await mockWorkLog(page, { failFirstPost: true });
+  const form = await openForm(page);
+  await hours(form).fill("2");
+  await minutes(form).fill("5");
+  await description(form).fill("Kept after a failure");
+  await form.getByRole("button", { name: "Save work", exact: true }).click();
+  await expect(form.locator(".msg.err")).toContainText("Odoo is busy");
+  await expect(hours(form)).toHaveValue("2");
+  await expect(minutes(form)).toHaveValue("5");
+  await expect(description(form)).toHaveValue("Kept after a failure");
+  await form.getByRole("button", { name: "Save work", exact: true }).click();
+  await expect.poll(() => mock.calls.filter((c) => c.method === "POST" && c.path === "/time-entries").length).toBe(2);
+  const [first, second] = mock.calls.filter((c) => c.method === "POST" && c.path === "/time-entries").map((c) => c.body);
+  expect(second.id).toBe(first.id);
+  expect(second.minutes).toBe(125);
+});
+
+test("Escape with unsaved values asks before discarding them; without them the form just closes", async ({ page }) => {
+  const mock = await mockWorkLog(page);
+  const form = await openForm(page);
+  await description(form).fill("Not saved yet");
+  await page.keyboard.press("Escape");
+  await expect.poll(() => mock.dialogs.length).toBe(1);
+  expect(mock.dialogs[0]).toContain("Discard this work entry");
+  await expect(form).toBeHidden();
+  // Focus goes back to the button that opened the form.
+  await expect(page.getByRole("button", { name: "+ Log work", exact: true })).toBeFocused();
+  await page.getByRole("button", { name: "+ Log work", exact: true }).click();
+  const again = page.getByRole("dialog", { name: "Log work" });
+  await again.getByLabel("Ticket").fill("login");
+  await again.getByRole("button", { name: /AION-7/ }).click();
+  await expect(page.getByRole("dialog", { name: "Log work · AION-7" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Log work · AION-7" })).toBeHidden();
+  expect(mock.dialogs.length).toBe(1);
+});
+
+test("on a phone the form fits the screen, Hours and Minutes stay side by side, and the actions stay in view", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 700 });
+  await mockWorkLog(page);
+  const form = await openForm(page);
+  const left = async (box) => (await box.boundingBox()).x;
+  const top = async (box) => (await box.boundingBox()).y;
+  expect(await top(hours(form))).toBeCloseTo(await top(minutes(form)), 0);
+  expect(await left(minutes(form))).toBeGreaterThan(await left(hours(form)));
+  const fits = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
+  expect(fits).toBe(true);
+  const save = form.getByRole("button", { name: "Save work", exact: true });
+  await save.scrollIntoViewIfNeeded();
+  await expect(save).toBeInViewport();
+  await expect(form.getByRole("button", { name: "Save & add another", exact: true })).toBeVisible();
+  await expect(form.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
 });

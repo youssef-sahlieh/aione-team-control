@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import worker,{makeToken} from '../proxy/src/handler.js';
 import {memoryStore,saveUser} from '../proxy/src/users.js';
-import {prepareImport,catalogKey,readCatalog} from '../proxy/src/ticket-metadata.js';
+import {prepareImport,catalogKey,readCatalog,allocatedHoursInput} from '../proxy/src/ticket-metadata.js';
 import {budgetStatus} from '../proxy/src/project-budget.js';
 const admin={email:'admin@example.invalid',name:'Manager',role:'admin',dev:'builder',v:1};
 const user={email:'user@example.invalid',name:'Developer',role:'user',dev:'builder',v:1};
@@ -23,14 +23,15 @@ async function setup({readGroup=true}={}){
   const P='tw:AION:';
   for(const [id,e] of Object.entries({a:{ticket:'AION-7',minutes:90,projectId:11},b:{ticket:'AION-5',minutes:30},c:{ticket:'AION-1',minutes:600,projectId:10,lineId:55}})){await env.STORE.set(P+'e:'+id,JSON.stringify(e));await env.STORE.sadd(P+'pending',id);}
   await env.STORE.set(P+'task:AION-5',JSON.stringify({taskId:3,projectId:10}));
-  const projects=[{id:10,name:'Branch A',partner_id:[1,'Acme'],company_id:[1,'All in One'],allocated_hours:10},{id:11,name:'Odoo only',partner_id:false,company_id:false,allocated_hours:0},{id:12,name:'Holding job',partner_id:[2,'Holding'],company_id:[9,'Holding'],allocated_hours:5}];
+  // 11 has no allocation (Odoo reads false); 13 is archived, so it is in no list.
+  const projects=[{id:10,name:'Branch A',partner_id:[1,'Acme'],company_id:[1,'All in One'],allocated_hours:10,create_date:'2026-03-01 09:00:00'},{id:11,name:'Odoo only',partner_id:false,company_id:false,allocated_hours:false,create_date:'2026-05-01 09:00:00'},{id:12,name:'Holding job',partner_id:[2,'Holding'],company_id:[9,'Holding'],allocated_hours:5,create_date:'2026-04-01 09:00:00'},{id:13,name:'Archived job',partner_id:false,company_id:false,allocated_hours:3,active:false,create_date:'2026-06-01 09:00:00'}];
   const writes=[],realFetch=globalThis.fetch;
   globalThis.fetch=async(u,init)=>{const p=JSON.parse(init.body).params;if(p.service==='common')return Response.json({result:7});
     const [model,method,args,kw]=[p.args[3],p.args[4],p.args[5],p.args[6]];
     if(model==='res.users')return Response.json({result:[{id:6,company_ids:[9,1]}]});
     if(model==='res.company')return Response.json({result:[{id:1,name:'All in One'},{id:9,name:'Holding'}]});
     if(model==='project.project'&&method==='fields_get')return Response.json({result:{allocated_hours:{type:'float',readonly:false}}});
-    if(model==='project.project'&&method==='search_read'){assert.deepEqual(kw.context.allowed_company_ids,[9,1]);const d=args[0];return Response.json({result:d.length?projects.filter(x=>x.id===d[0][2]):projects.map(({allocated_hours,...x})=>x)});}
+    if(model==='project.project'&&method==='search_read'){assert.deepEqual(kw.context.allowed_company_ids,[9,1]);const d=args[0];if(d.length&&d[0][0]==='active'){assert.deepEqual(d,[['active','=',true]]);return Response.json({result:projects.filter(x=>x.active!==false).map(({allocated_hours,active,...x})=>x)});}if(d.some(c=>c[0]==='type_ids'))return Response.json({result:[{id:10}]});return Response.json({result:d.length?projects.filter(x=>x.id===d[0][2]):projects.map(({allocated_hours,...x})=>x)});}
     if(model==='project.project'&&method==='read')return Response.json({result:projects.filter(x=>args[0].includes(x.id)).map(x=>({id:x.id,allocated_hours:x.allocated_hours}))});
     if(model==='project.project'&&method==='write'){writes.push(args);Object.assign(projects.find(x=>x.id===args[0][0]),args[1]);return Response.json({result:true});}
     if(model==='account.analytic.line'&&method==='read_group'){if(!readGroup)return Response.json({error:{message:'Odoo Server Error',data:{message:'read_group is removed'}}});return Response.json({result:[{project_id:[10,'Branch A'],unit_amount:12.5},{project_id:[12,'Holding job'],unit_amount:4.5}]});}
@@ -45,6 +46,14 @@ test('budget status: not set, on track, near the limit and over by the hours ove
   assert.deepEqual(budgetStatus(10,2),{status:'on_track',remainingHours:8,overHours:0});
   assert.deepEqual(budgetStatus(10,8),{status:'near',remainingHours:2,overHours:0});
   assert.deepEqual(budgetStatus(10,12.5),{status:'over',remainingHours:-2.5,overHours:2.5});
+  // An explicit zero is an allocation: nothing logged is on track, any logged time is over. It is never "near limit".
+  assert.deepEqual(budgetStatus(0,0),{status:'on_track',remainingHours:0,overHours:0});
+  assert.deepEqual(budgetStatus(0,0.5),{status:'over',remainingHours:-0.5,overHours:0.5});
+});
+test('allocated hours: empty is not known, zero and decimals are kept',()=>{
+  assert.equal(allocatedHoursInput(undefined),undefined);assert.equal(allocatedHoursInput(null),undefined);assert.equal(allocatedHoursInput(''),undefined);
+  assert.equal(allocatedHoursInput(0),0);assert.equal(allocatedHoursInput('0'),0);assert.equal(allocatedHoursInput('12.5'),12.5);assert.equal(allocatedHoursInput(10),10);
+  for(const bad of [-1,'-0.5','abc','1.234',NaN,'Infinity',2000000])assert.throws(()=>allocatedHoursInput(bad),err=>err.status===400,String(bad));
 });
 for(const readGroup of [true,false])test('every Odoo project is listed with its links and hours, each hour counted once'+(readGroup?'':' (Odoo 19 grouping)'),async()=>{
   const s=await setup({readGroup});
@@ -53,6 +62,8 @@ for(const readGroup of [true,false])test('every Odoo project is listed with its 
     const r=await s.call('/clients/odoo-projects');assert.equal(r.status,200);
     const data=await r.json(),by=Object.fromEntries(data.projects.map(p=>[p.odooId,p]));
     assert.deepEqual(data.projects.map(p=>p.odooId),[10,11,12]);assert.equal(data.allocation,true);
+    // Archived in Odoo: not listed, and its record in Odoo is not touched.
+    assert.equal(data.projects.some(p=>p.odooId===13),false);
     const a=by[10];
     assert.equal(a.allocatedHours,10);assert.equal(a.loggedHours,12.5);assert.equal(a.remainingHours,-2.5);assert.equal(a.status,'over');assert.equal(a.overHours,2.5);
     // Only the entry with no Odoo line yet is pending; the corrected one is already in the 12.5 hours.
@@ -61,6 +72,7 @@ for(const readGroup of [true,false])test('every Odoo project is listed with its 
     assert.deepEqual(a.links.tickets,{count:3,byProject:{AION:2,INT:1},keys:['AION-1','AION-2','INT-3']});assert.equal(a.linkable,true);
     const b=by[11];
     assert.equal(b.allocatedHours,null);assert.equal(b.status,'not_set');assert.equal(b.remainingHours,null);assert.equal(b.loggedHours,0);assert.equal(b.pendingHours,1.5);
+    assert.equal(b.createdAt,'2026-05-01T09:00:00.000Z');assert.equal(a.createdAt,'2026-03-01T09:00:00.000Z');
     assert.equal(b.mapped,false);assert.equal(b.linkable,true);
     const c=by[12];assert.equal(c.status,'near');assert.equal(c.company,'Holding');assert.equal(c.linkable,false);
   }finally{s.restore();}
@@ -69,12 +81,18 @@ test('administrators set and clear the allocated hours on the Odoo project',asyn
   const s=await setup();
   try{
     assert.equal((await s.call('/clients/odoo-projects/allocation','PUT',{odooId:11,hours:40},user)).status,403);
-    for(const hours of [-1,0,'abc',1.234])assert.equal((await s.call('/clients/odoo-projects/allocation','PUT',{odooId:11,hours})).status,400,String(hours));
+    for(const hours of [-1,'abc',1.234])assert.equal((await s.call('/clients/odoo-projects/allocation','PUT',{odooId:11,hours})).status,400,String(hours));
     assert.equal((await s.call('/clients/odoo-projects/allocation','PUT',{odooId:99,hours:4})).status,404);
     const ok=await s.call('/clients/odoo-projects/allocation','PUT',{odooId:11,hours:40.5});assert.equal(ok.status,200);assert.deepEqual(await ok.json(),{odooId:11,allocatedHours:40.5});
     assert.deepEqual(s.writes.at(-1),[[11],{allocated_hours:40.5}]);
     const list=await (await s.call('/clients/odoo-projects')).json();assert.equal(list.projects.find(p=>p.odooId===11).status,'on_track');
-    assert.equal((await s.call('/clients/odoo-projects/allocation','PUT',{odooId:11,hours:null})).status,200);assert.deepEqual(s.writes.at(-1),[[11],{allocated_hours:0}]);
+    // Clearing leaves the allocation unknown (null), which is not the same as zero.
+    assert.equal((await s.call('/clients/odoo-projects/allocation','PUT',{odooId:11,hours:null})).status,200);assert.deepEqual(s.writes.at(-1),[[11],{allocated_hours:null}]);
+    assert.equal((await (await s.call('/clients/odoo-projects')).json()).projects.find(p=>p.odooId===11).status,'not_set');
+    // An explicit zero is saved as zero and shown as zero, not as not set.
+    const zero=await s.call('/clients/odoo-projects/allocation','PUT',{odooId:11,hours:0});assert.equal(zero.status,200);assert.deepEqual(await zero.json(),{odooId:11,allocatedHours:0});
+    assert.deepEqual(s.writes.at(-1),[[11],{allocated_hours:0}]);
+    const zeroRow=(await (await s.call('/clients/odoo-projects')).json()).projects.find(p=>p.odooId===11);assert.equal(zeroRow.allocatedHours,0);assert.equal(zeroRow.status,'on_track');
   }finally{s.restore();}
 });
 test('linking a dashboard project to an Odoo project, unlinking it, and the sync not linking it back',async()=>{
@@ -94,4 +112,28 @@ test('linking a dashboard project to an Odoo project, unlinking it, and the sync
     const again=await prepareImport(await readCatalog(s.env),[{customer:'Acme',displayName:'Branch A',sourceRow:10}],'odoo');
     assert.deepEqual(again.next.entries.find(e=>e.id===s.sub.id).sources.filter(x=>x.source==='odoo'),[]);
   }finally{s.restore();}
+});
+test('a new Odoo project takes its allocated hours: decimal, zero, or none when not known yet',async()=>{
+  const s=await setup();
+  const created=[],prev=globalThis.fetch;
+  // The create call and the lookups around it; everything else is empty, as the catalog sync reads only what it finds.
+  globalThis.fetch=async(u,init)=>{const p=JSON.parse(init.body).params;if(p.service!=='object')return prev(u,init);
+    const [model,method,args]=[p.args[3],p.args[4],p.args[5]];
+    if(model==='project.project'&&method==='create'){created.push(args[0]);return Response.json({result:100+created.length});}
+    if(model==='project.project'&&method==='fields_get')return Response.json({result:args.length?{allocated_hours:{type:'float',readonly:false}}:{type_ids:{type:'one2many'},allow_timesheets:{type:'boolean'},privacy_visibility:{type:'selection'},allow_billable:{type:'boolean'}}});
+    if(model==='res.users')return Response.json({result:[{id:6,company_ids:[1,9]}]});
+    if(model==='res.company')return Response.json({result:[{id:1,name:'All in One'},{id:9,name:'Holding'}]});
+    if(model==='res.partner'&&method==='search_read')return Response.json({result:[{id:1,name:'Acme'}]});
+    if(model==='project.project'&&method==='search_read'&&JSON.stringify(args[0]).includes('type_ids'))return Response.json({result:[{id:10}]});
+    if(model==='project.project'&&method==='read'&&args[0]?.[0]===10)return Response.json({result:[{id:10,type_ids:[1]}]});
+    return Response.json({result:[]});};
+  try{
+    const catalog=await readCatalog(s.env),acme=catalog.entries.find(e=>e.name==='Acme'&&!e.parentId);
+    const make=(allocatedHours,me=admin)=>s.call('/clients/odoo/project','POST',{name:'Job '+created.length,clientId:acme.id,...(allocatedHours===undefined?{}:{allocatedHours})},me);
+    assert.equal((await make('12.5',user)).status,403);
+    assert.equal((await make('-3')).status,400);assert.equal((await make('abc')).status,400);assert.equal(created.length,0);
+    const decimal=await make('12.5');assert.equal(decimal.status,201);assert.equal(created.at(-1).allocated_hours,12.5);
+    const none=await make('');assert.equal(none.status,201);assert.equal('allocated_hours' in created.at(-1),false);
+    const zero=await make('0');assert.equal(zero.status,201);assert.equal(created.at(-1).allocated_hours,0);
+  }finally{globalThis.fetch=prev;s.restore();}
 });

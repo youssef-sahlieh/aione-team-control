@@ -1,7 +1,7 @@
 // AIONE Team Control dashboard. Jira data comes through the AION proxy (worker/), which checks the
 // sign-in and holds the Jira token. Team details (people, developers, emails) come from the proxy too,
 // so they aren't in this public code.
-import { createTicketBusiness } from "./components/ticket-business.js";
+import { createTicketBusiness, combobox } from "./components/ticket-business.js";
 import { previewFile, canPreview } from "./components/file-preview.js";
 import { INTERNAL_ASSIGNEE, sortTickets, validSort, createdDate } from "./models/ticket-business.js";
 import { api, apiFile, getSession, signOut, onApiWrite } from "./session.js";
@@ -821,7 +821,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // The drawer's assignee: the current owner, and a select of the team to pick another (or Unassigned, for Jira tickets).
   function fillAssigneePick(i){
     const sel=$("d-asg-pick"), box=$("d-asgname");
-    if(!i){ sel.replaceChildren(); box.replaceChildren(); return; }
+    if(!i){ sel.replaceChildren(); box.replaceChildren(); asgPick.refresh(); return; }
     const an=i.assigneeName||"Unassigned", internal=isInt(i.key);
     box.replaceChildren(el("span","av "+(i.assigneeId&&BYID[i.assigneeId]?"kp-"+BYID[i.assigneeId]:"k8"),initialsOf(an)),el("span",null,an));
     sel.replaceChildren();
@@ -829,7 +829,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     Object.keys(PEOPLE).filter(k=>k!==INTERNAL_ASSIGNEE||internal).forEach(k=>sel.appendChild(new Option(PEOPLE[k].name,PEOPLE[k].id)));
     if(i.assigneeId&&!Object.values(PEOPLE).some(p=>p.id===i.assigneeId)) sel.appendChild(new Option(an,i.assigneeId));
     sel.value=i.assigneeId||"";
-    sel.disabled=!IS_ADMIN||isOdoo(i.key);
+    sel.disabled=!IS_ADMIN||isOdoo(i.key); asgPick.refresh();
   }
   function assigneePopover(anchor,keys){
     const p=$("pop"); p.replaceChildren(); p.appendChild(el("h4",null,keys.length===1?"Assign "+keys[0]+" to":"Assign "+keys.length+" tickets to"));
@@ -1366,13 +1366,15 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   });
   $("d-note").addEventListener("click",e=>{ if(dz.key) notePopover(e.currentTarget,dz.key); });
   $("d-comment-note").addEventListener("click",e=>{ if(dz.key) notePopover(e.currentTarget,dz.key); });
+  // Type to narrow the team. Unassigned is offered where the select has a blank option (Jira tickets).
+  const asgPick=combobox($("d-asg-pick"),{blank:true});asgPick.input.setAttribute("aria-label","Assignee");
   $("d-asg").addEventListener("click",e=>{ if(dz.key) assigneePopover(e.currentTarget,[dz.key]); });
   // Picking a name saves it to Jira (or the internal ticket) at once. The new owner shows straight away; a refused save puts the old one back.
   $("d-asg-pick").addEventListener("change",async e=>{
     const sel=e.currentTarget, key=dz.key, i=key&&issueByKey(key); if(!i) return;
     const id=sel.value||null, name=id?sel.selectedOptions[0].text:"Unassigned";
     if(id===(i.assigneeId||null)) return;
-    setMsg("d-asgmsg","Saving…",true); sel.disabled=true;
+    setMsg("d-asgmsg","Saving…",true); sel.disabled=true; asgPick.refresh();
     const saved=doAssign([key],id,name);
     fillAssigneePick(issueByKey(key));
     try{ const r=await saved; setMsg("d-asgmsg",r.fail?"Not saved. The owner was put back.":r.ok?"Saved.":"",!r.fail); }
@@ -1469,7 +1471,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   $("signout").addEventListener("click",()=>signOut());
   // The Work view re-fits its columns when the window size changes.
   let resizeTimer=null; window.addEventListener("resize",()=>{ clearTimeout(resizeTimer); resizeTimer=setTimeout(()=>{ if(state.issues&&state.view==="list"&&state.columnsMode!=="all"&&$("pop").hidden&&!drag&&workColumns&&(viewWidth=$("view").clientWidth,fitWorkColumns()).keys!==workColumns.join()) render(); },150); });
-  const ticketHistory=createTicketHistory({api,getIssue:()=>issueByKey(dz.key),allowed:()=>IS_ADMIN&&!!dz.key&&!isOdoo(dz.key)&&!$("drawer").hidden,personName:k=>(PEOPLE[k]&&PEOPLE[k].name)||k,formatTime:value=>{const time=fmtWhen(value);return time.d+" "+time.t;}});
+  const ticketHistory=createTicketHistory({api,getIssue:()=>issueByKey(dz.key),allowed:()=>IS_ADMIN&&!!dz.key&&!isOdoo(dz.key)&&!$("drawer").hidden,personName:k=>k?((PEOPLE[k]&&PEOPLE[k].name)||k):"Unassigned",formatTime:value=>{const time=fmtWhen(value);return time.d+" "+time.t;}});
   const drawerUI=createIssueDrawer({canViewHistory:()=>IS_ADMIN,canViewFullHistory:()=>IS_ADMIN&&!!dz.key&&!isOdoo(dz.key),onSelect:id=>{if(id==="history")ticketHistory.load(dz.key);if(id==="notes")ticketNotes.load(dz.key);},isDirty:()=>{if(business.dirty(dz.key)||ticketNotes.dirty(dz.key))return true;const issue=issueByKey(dz.key);if(!issue)return !!$("d-reply").value.trim();return !!$("d-reply").value.trim()||!!$("d-newdev").value.trim()||dz.devs.size!==issue.devs.length||issue.devs.some(d=>!dz.devs.has(d));}});
   const ticketNotes=createTicketNotes({api,isAdmin:IS_ADMIN});
   BELL=createInboxBell({api,button:$("inbox-btn"),count:$("inbox-count"),panel:$("inbox-panel"),issues:()=>state.issues,toast,
