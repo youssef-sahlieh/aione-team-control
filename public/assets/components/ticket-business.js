@@ -203,12 +203,25 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   const linkText=p=>p.mapped?[...p.links.projects.map(l=>l.name),...p.links.epics,...(p.links.helpdesk?['Helpdesk']:[]),...Object.entries(p.links.tickets.byProject).map(([k,n])=>k+': '+n+(n===1?' ticket':' tickets'))].join('; '):'Not mapped';
   const SORTS={name:p=>p.name.toLowerCase(),links:p=>p.mapped?linkText(p).toLowerCase():'~',allocated:p=>p.allocatedHours??-1,logged:p=>p.loggedHours,remaining:p=>p.remainingHours??Infinity,status:p=>({over:0,near:1,on_track:2,not_set:3})[p.status]*1e7-p.overHours};
   let budgetView={q:'',status:'',client:'',sort:'status',dir:1};
-  async function renderOdooProjects(target){
-    const panel=el('section','panel business-panel odoo-projects');target.append(panel);panel.append(el('h2','','Odoo projects'));
+  // Odoo's hours are re-read this often while the page is open, so the table follows the 5-minute work log sync.
+  const ODOO_REFRESH_MS=2*60*1000;
+  async function renderOdooProjects(target,prefetched,before){
+    const panel=el('section','panel business-panel odoo-projects');target.insertBefore(panel,before??null);panel.append(el('h2','','Odoo projects'));
     panel.append(el('p','business-guidance','Every project in Odoo, linked to Jira or not. Logged hours are the Odoo timesheet hours on the project, counted once whether they came from the work log, agreed hours or Odoo itself. Allocated hours are saved on the Odoo project.'));
-    const msg=el('p','msg','Loading projects from Odoo…');panel.append(msg);
-    let data;try{data=await api('/clients/odoo-projects');}catch(err){message(msg,err);return;}
+    const msg=el('p','msg',prefetched?'':'Loading projects from Odoo…');panel.append(msg);
+    let data=prefetched;if(!data){try{data=await api('/clients/odoo-projects');}catch(err){message(msg,err);return;}}
     msg.textContent='';
+    // Re-reads the figures and redraws the panel in place. Skipped while the tab is hidden, a row is being edited, or the
+    // panel has focus (search or an open editor), so nothing typed is lost. Stops once the panel leaves the page.
+    let refreshing=false;
+    const busy=()=>panel.querySelector('.budget-edit')||panel.contains(document.activeElement);
+    const timer=setInterval(async()=>{
+      if(!panel.isConnected){clearInterval(timer);return;}
+      if(refreshing||document.hidden||busy())return;
+      refreshing=true;
+      try{const fresh=await api('/clients/odoo-projects');if(panel.isConnected&&!busy()){const next=panel.nextSibling;panel.remove();renderOdooProjects(target,fresh,next);clearInterval(timer);}}
+      catch{}finally{refreshing=false;}
+    },ODOO_REFRESH_MS);
     const rows=data.projects,count=(s,n)=>n+' '+s+(n===1?'':'s');
     const summary=el('div','board-summary'),chip=(text,cls,status)=>{const b=button(text,()=>{budgetView.status=budgetView.status===status?'':status;statusSel.value=budgetView.status;draw();},'board-chip'+(cls?' '+cls:''));return b;};
     const n=s=>rows.filter(p=>s==='unmapped'?!p.mapped:p.status===s).length;
