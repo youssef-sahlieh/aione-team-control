@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {NEAR_LIMIT,budgetStatus,budgetText,budgetRows,budgetCsvRows,budgetCounts,projectChoices,percent,signedHours,DEFAULT_VIEW} from '../../public/assets/models/odoo-projects.js';
+import {NEAR_LIMIT,budgetStatus,budgetText,budgetRows,budgetCsvRows,budgetCounts,projectChoices,percent,signedHours,DEFAULT_VIEW,hiddenFilterCount,assignableProjects,mappingSuggestion,mappingRows,mappingCounts} from '../../public/assets/models/odoo-projects.js';
 
 const p=o=>({odooId:1,name:'P',client:'Acme',createdAt:'2026-01-01T00:00:00Z',allocatedHours:null,loggedHours:0,remainingHours:null,overHours:0,usedPercent:null,status:'not_set',mapped:true,missingClient:false,ticketCount:0,openTickets:0,reviewTickets:0,lastWorkDate:null,pendingHours:0,company:'All in One',links:{projects:[],epics:[],helpdesk:false,tickets:{count:0,byProject:{},keys:[]}},...o});
 
@@ -48,4 +48,24 @@ test('project picker: only active projects with a client; the ticket keeps its a
  assert.deepEqual(projectChoices(list,2).choices.at(-1),{id:2,label:'Acme → Old (archived)',clientName:'Acme',disabled:true});
  assert.equal(projectChoices(list,3).choices.at(-1).label,'No client → Loose (no client)');
  assert.deepEqual(projectChoices(list,99).choices.at(-1),{id:99,label:'Odoo project #99 (not found)',clientName:'',disabled:true});
+});
+
+test('Map tickets: the table’s assignable rows are the choices; a suggestion only for a ready ticket whose project is offered',()=>{
+ const choices=assignableProjects([p({odooId:2,name:'Web',label:'Acme → Web',assignable:true}),p({odooId:3,name:'Old',assignable:false}),p({odooId:1,name:'App',client:'',assignable:true})]);
+ assert.deepEqual(choices.map(c=>[c.id,c.label]),[[2,'Acme → Web'],[1,'No client → App']]);
+ assert.deepEqual(mappingSuggestion({kind:'ready',odooProjectId:2},choices),{id:2,linked:[]});
+ assert.deepEqual(mappingSuggestion({kind:'ready',odooProjectId:3},choices),{id:null,linked:[]});
+ assert.deepEqual(mappingSuggestion({kind:'ambiguous',candidates:[{id:2},{id:3},{id:1}]},choices),{id:null,linked:[2,1]});
+ assert.deepEqual(mappingSuggestion({kind:'missing',linked:{id:2}},choices),{id:null,linked:[]});
+ assert.equal(hiddenFilterCount({...DEFAULT_VIEW,q:'x',client:'Acme'}),0);
+ assert.equal(hiddenFilterCount({...DEFAULT_VIEW,status:'over',tickets:'with'}),2);
+});
+
+test('Map tickets: rows filter by kind and search; one project’s own tickets first; counts leave out applied tickets',()=>{
+ const rows=[{key:'A-1',kind:'missing',client:'',project:''},{key:'A-2',kind:'ready',odooProjectId:5,client:'Acme',project:'Web'},{key:'A-3',kind:'ambiguous',candidates:[{id:5},{id:6}],client:'Acme',project:'Site'},{key:'A-4',kind:'conflict',client:'Globex',project:'Shop'}];
+ assert.deepEqual(mappingRows(rows,{kind:'ready'}).map(r=>r.key),['A-2']);
+ assert.deepEqual(mappingRows(rows,{q:'globex'}).map(r=>r.key),['A-4']);
+ assert.deepEqual(mappingRows(rows,{q:'login',titles:{'A-1':'Login page'}}).map(r=>r.key),['A-1']);
+ assert.deepEqual(mappingRows(rows,{project:5}).map(r=>r.key),['A-2','A-3','A-1','A-4']);
+ assert.deepEqual(mappingCounts(rows,new Set(['A-2'])),{all:3,ready:0,missing:1,ambiguous:1,conflict:1});
 });

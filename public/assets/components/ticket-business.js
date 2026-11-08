@@ -1,6 +1,6 @@
 import {createReportBrowser} from './report-browser.js';
 import { createdDate, DASH_PRIORITIES } from '../models/ticket-business.js';
-import { BUDGET_LABEL, DEFAULT_VIEW, budgetStatus, hours, signedHours, percent, budgetText, budgetRows, budgetCsvRows, budgetCounts, projectChoices } from '../models/odoo-projects.js';
+import { BUDGET_LABEL, DEFAULT_VIEW, budgetStatus, hours, signedHours, percent, budgetText, budgetRows, budgetCsvRows, budgetCounts, projectChoices, hiddenFilterCount, assignableProjects, MAPPING_KINDS, mappingSuggestion, mappingRows, mappingCounts } from '../models/odoo-projects.js';
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
 const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.addEventListener('click',fn);return b;};
 const field=(parent,label,node)=>{const l=el('label','business-field');node.setAttribute('aria-label',label);l.append(el('span','',label),node);parent.append(l);return node;};
@@ -219,30 +219,114 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   function matches(i,f={}){return (!f.clientId||(f.clientId==='__none'?!i.clientId:i.clientId===f.clientId))&&(odooOn||!f.subClientId||i.subClientId===f.subClientId)&&(!odooOn||!f.odooProjectId||(f.odooProjectId==='__none'?i.odooProjectId==null:String(i.odooProjectId)===f.odooProjectId))&&(!f.missing||!i[f.missing])&&(!admin()||!f.billing||(f.billing==='__none'?!i.billing:i.billing===f.billing));}
   function renderReports(target){reportBrowser.render(target);}
   let catalogNote={text:'',at:0};
+  // The Clients page. With Odoo and the projects table (administrators) it is the page below (renderClientsPage); without
+  // them, the catalog page.
   function renderCatalog(target,note){
+    if(enabled&&odooOn&&projectBudget&&admin())return renderClientsPage(target);
     const panel=el('section','panel business-panel');target.append(panel);panel.append(el('h2','','Clients & Projects'));
     if(!enabled){panel.append(el('p','msg err','The updated backend is required.'));return;}
-    // Clients are Odoo contacts and projects their Odoo projects, refreshed automatically; new ones are created in Odoo.
-    const msg=el('p','msg'),sync=el('div','catalog-sync');sync.append(el('p','business-guidance','Clients are Odoo’s Contacts › Companies with the All in One company selected; projects are each company’s Odoo projects. New contacts and projects in Odoo appear here automatically every few minutes.'),button('Sync from Odoo now',async e=>{const b=e.currentTarget;b.disabled=true;msg.className='msg';msg.textContent='Reading contacts and projects from Odoo…';try{const r=await api('/clients/odoo-sync?force=1',{method:'POST',body:{}});if(r.odoo===false){msg.textContent='Odoo is not connected.';return;}if(r.changed)await loadCatalog();else await loadProjects().catch(()=>{});syncLine();const counts=(r.customers!=null?r.customers+' contacts, ':'')+r.projects+' projects',done=r.changed?r.added+' new from Odoo ('+counts+').':'Already up to date ('+counts+').';msg.textContent=done;if(r.changed){catalogNote={text:done,at:Date.now()};await onChange();if(target.isConnected){target.replaceChildren();renderCatalog(target,done);}}}catch(err){await loadProjects().catch(()=>{});syncLine();message(msg,err);}finally{b.disabled=false;}},'btn primary'));
-    // The last sync that worked, and the last failure with Odoo's reason while no sync has worked since.
-    const status=el('p','catalog-sync-status');sync.append(status);
-    const when=t=>t?new Date(t).toLocaleString('en-GB',{timeZone:'Asia/Jerusalem',dateStyle:'medium',timeStyle:'short'}):'never';
-    function syncLine(){status.replaceChildren();if(!odooOn||!syncState)return;
-      status.append(el('span','','Last successful sync: '+when(syncState.syncedAt)+(syncState.projectsSyncedAt?' · Odoo projects read '+when(syncState.projectsSyncedAt):'')+'.'));
-      if(syncState.error)status.append(el('span','msg err',' Last sync failed '+when(syncState.error.at)+': '+syncState.error.message+' Check the Odoo connection in Settings, then press Sync from Odoo now.'));}
-    syncLine();
-    if(odooOn){const create=(key,text,open)=>{const b=button(text,e=>open(e.currentTarget,target),'btn');b.dataset.create=key;return b;};sync.append(create('contact','+ Create contact',openContactDialog),create('project','+ Create project',openProjectDialog));}panel.append(sync,msg);{const n=note||(Date.now()-catalogNote.at<15000?catalogNote.text:'');if(n)msg.textContent=n;}
+    const msg=el('p','msg');
+    if(odooOn){const sync=el('div','catalog-sync');sync.append(button('Sync from Odoo now',async e=>{const b=e.currentTarget;b.disabled=true;msg.className='msg';msg.textContent='Reading contacts and projects from Odoo…';try{const r=await api('/clients/odoo-sync?force=1',{method:'POST',body:{}});if(r.odoo===false){msg.textContent='Odoo is not connected.';return;}if(r.changed)await loadCatalog();else await loadProjects().catch(()=>{});const counts=(r.customers!=null?r.customers+' contacts, ':'')+r.projects+' projects',done=r.changed?r.added+' new from Odoo ('+counts+').':'Already up to date ('+counts+').';msg.textContent=done;if(r.changed){catalogNote={text:done,at:Date.now()};await onChange();await catalogChanged(target,done);}}catch(err){message(msg,err);}finally{b.disabled=false;}},'btn primary'));
+      const create=(key,text,open)=>{const b=button(text,e=>open(e.currentTarget,target),'btn');b.dataset.create=key;return b;};sync.append(create('contact','+ Create contact',openContactDialog),create('project','+ Create project',openProjectDialog));panel.append(sync);}
+    panel.append(msg);{const n=note||(Date.now()-catalogNote.at<15000?catalogNote.text:'');if(n)msg.textContent=n;}
     // Without Odoo a client or project is added here. With Odoo, contacts and projects are created in Odoo from their dialogs.
     if(!odooOn){
     const add=el('div','business-form'),name=field(add,'New client or project name',input('text','')),parent=field(add,'Parent (optional)',el('select','fsel'));option(parent,'Top-level client','');for(const c of clients())option(parent,c.name,c.id);add.append(button('Add',async()=>{try{catalog=await api('/clients',{method:'POST',body:{revision:catalog.revision,name:name.value,parentId:parent.value||null}});await onChange();target.replaceChildren();renderCatalog(target);}catch(err){message(msg,err);}}));panel.append(add);}
-    if(odooOn&&admin())renderNeedsMapping(target);
-    if(projectBudget&&odooOn&&admin())renderOdooProjects(target);
     if(projectAdmin&&admin())renderProjects(target);
     if(epicMapping&&admin())renderEpicMap(target);
   }
-  // Create contact and Create project in Odoo, each in its own dialog. A failed save keeps what was typed. Escape, Close and
-  // Cancel ask before unsaved values are discarded. A save that works closes the dialog, reloads the panel and returns focus to
-  // the button that opened it.
+  // After a change made from the Clients page: the Odoo page refreshes its table and Map tickets count in place (parts picks
+  // which); the page without Odoo is drawn again.
+  async function catalogChanged(target,note,parts){
+    if(clientsPage?.root.isConnected){if(note)clientsPage.say(note);await clientsPage.refresh(parts);return;}
+    if(target?.isConnected&&!target.classList.contains('board-host')){target.replaceChildren();renderCatalog(target,note);}
+  }
+  // ---- Clients & Projects with Odoo (administrators) ----
+  // A heading with the page's actions, a one-line sync status (the failure's details only when the last sync failed), and
+  // the Odoo projects table. The page reads its data when it opens and again only after Sync from Odoo now or a change made
+  // on it: nothing runs on a timer, and dashboard renders leave the page in place (data-keep, see workspace.js), so filters,
+  // scroll position and open dialogs stay as they are. A change refreshes the table rows and the Map tickets count only.
+  let clientsPage=null;
+  const reads=new Map();
+  // One request per path at a time. A caller while one runs waits for it, then shares one fresh request with everyone else
+  // who asked meanwhile, so figures read after a change are never from before it. shared: the running answer will do.
+  function readOnce(path,fresh=true){
+    const cur=reads.get(path);
+    if(cur){if(!fresh)return cur.p;return cur.next||=cur.p.catch(()=>{}).then(()=>{if(reads.get(path)===cur)reads.delete(path);return readOnce(path,false);});}
+    const entry={p:api(path).finally(()=>{if(reads.get(path)===entry&&!entry.next)reads.delete(path);})};
+    reads.set(path,entry);return entry.p;
+  }
+  const when=t=>t?new Date(t).toLocaleString('en-GB',{timeZone:'Asia/Jerusalem',dateStyle:'medium',timeStyle:'short'}):'never';
+  function renderClientsPage(target){
+    const root=el('section','panel business-panel clients-page');root.dataset.keep='clients';target.append(root);
+    const head=el('div','clients-head'),actions=el('div','clients-actions'),sync=el('div','clients-sync'),msg=el('p','msg');msg.setAttribute('role','status');
+    const say=(text,err)=>{msg.className=err?'msg err':'msg';msg.textContent=text||'';};
+    const syncBtn=button('Sync from Odoo now',()=>syncNow(),'btn primary');
+    const createBtn=button('+ Create project',e=>openProjectDialog(e.currentTarget,target),'btn');createBtn.dataset.create='project';
+    const mapBtn=button('Map tickets',e=>openMapTickets({opener:e.currentTarget}),'btn');mapBtn.dataset.map='all';
+    const more=moreMenu('More',[['Export CSV',()=>exportBudget(table.shown())],['Create contact',opener=>openContactDialog(opener,target)],
+      ...(projectAdmin?[['Dashboard clients & projects',opener=>hostDialog('Dashboard clients & projects',opener,renderProjects)]]:[]),
+      ...(epicMapping?[['Jira epics → Odoo projects',opener=>hostDialog('Jira epics → Odoo projects',opener,renderEpicMap)]]:[]),
+      ['How figures are counted',opener=>figuresDialog(opener)]]);
+    head.append(el('h2','','Clients & Projects'),actions);actions.append(syncBtn,createBtn,mapBtn,more);root.append(head,sync,msg);
+    const table=projectsTable(root,{say,onMap:(p,opener)=>openMapTickets({opener,project:p})});
+    let plan=null,syncing=false;
+    function syncLine(){
+      sync.replaceChildren();const s=syncState;if(!s)return;
+      sync.append(el('span','clients-sync-ok','Synced from Odoo '+when(s.syncedAt)));
+      if(s.error){const d=el('details','clients-sync-error');d.append(el('summary','','Last sync failed '+when(s.error.at)),el('p','',s.error.message),el('p','business-guidance','Check the Odoo connection in Settings, then press Sync from Odoo now.'));sync.append(d);}
+    }
+    const mapCount=()=>{mapBtn.textContent=plan?'Map tickets ('+plan.rows.length+')':'Map tickets';};
+    async function refresh({projects=true,mapping=true}={}){
+      await Promise.all([
+        projects&&readOnce('/clients/odoo-projects').then(d=>{if(d.sync)syncState=d.sync;table.update(d);syncLine();}).catch(err=>table.failed(err)),
+        mapping&&readOnce('/clients/needs-mapping').then(p=>{plan=p;mapCount();}).catch(()=>{})]);
+    }
+    // Sync from Odoo now: one at a time (the button waits, and the backend answers busy while another sync runs).
+    async function syncNow(){
+      if(syncing)return;syncing=true;syncBtn.disabled=true;syncBtn.textContent='Syncing…';say('Reading contacts and projects from Odoo…');
+      try{
+        const r=await api('/clients/odoo-sync?force=1',{method:'POST',body:{}});
+        if(r.odoo===false){say('Odoo is not connected.',true);return;}
+        if(r.busy){say('A sync from Odoo is already running. Try again in a minute.');return;}
+        if(r.changed)await loadCatalog();else await loadProjects().catch(()=>{});
+        await refresh();
+        const counts=(r.customers!=null?r.customers+' contacts, ':'')+r.projects+' projects';
+        say(r.changed?r.added+' new from Odoo ('+counts+').':'Up to date ('+counts+').');
+        if(r.changed)await onChange();
+      }catch(err){await loadProjects().catch(()=>{});syncLine();message(msg,err);}
+      finally{syncing=false;syncBtn.disabled=false;syncBtn.textContent='Sync from Odoo now';}
+    }
+    clientsPage={root,refresh,say,table};
+    syncLine();refresh();
+  }
+  // A small menu for secondary actions: a disclosure button and its list. A choice, Escape or a click elsewhere closes it;
+  // each action gets the menu button back, so the dialog it opens can return focus there.
+  function moreMenu(label,items){
+    const box=el('details','clients-more'),sum=el('summary','btn',label),list=el('div','clients-more-list');box.append(sum,list);
+    for(const [text,fn] of items)list.append(button(text,()=>{box.open=false;fn(sum);},'clients-more-item'));
+    box.addEventListener('keydown',e=>{if(e.key==='Escape'&&box.open){e.preventDefault();e.stopPropagation();box.open=false;sum.focus();}});
+    const outside=e=>{if(!box.isConnected){document.removeEventListener('click',outside);return;}if(box.open&&!box.contains(e.target))box.open=false;};
+    document.addEventListener('click',outside);
+    return box;
+  }
+  // A secondary panel (the clients board, the epic map) in a wide dialog; render(body) draws it there.
+  function hostDialog(title,opener,render){
+    const {d,body}=dialog(title);d.classList.add('business-dialog-wide');body.classList.add('board-host');
+    d.addEventListener('close',()=>{if(opener?.isConnected)opener.focus();});render(body);
+  }
+  function figuresDialog(opener){
+    const {d,body}=dialog('How figures are counted'),data=clientsPage?.table.data;d.addEventListener('close',()=>{if(opener?.isConnected)opener.focus();});
+    for(const t of ['Every active project in Odoo is listed, including those with no tickets, newest first. Clients are Odoo’s Contacts › Companies with the All in One company selected; projects are each company’s Odoo projects.',
+      'The page reads Odoo when it opens. Sync from Odoo now reads new contacts and projects; changes made here update their rows. Nothing refreshes on its own while the page is open.',
+      'Logged hours are the Odoo timesheet hours on the project, counted once whether they came from the work log, agreed hours or Odoo itself. Work log time not in Odoo yet (waiting or failed) is shown in the project’s row details and not counted.',
+      'Near limit: '+Math.round((data?.nearLimit??0.8)*100)+'% or more of the allocated hours logged. Allocated hours are saved on the Odoo project; empty means not set, which is not the same as 0.',
+      ...(data?.unplacedPendingHours>0?[hours(data.unplacedPendingHours)+' of work log time is not in Odoo yet and has no Odoo project. See Work log setup.']:[]),
+      'Map tickets gives an Odoo project to tickets saved before every ticket had one. The client comes from the project, Jira links stay as they are, and work already logged stays where it went.'])body.append(el('p','business-guidance',t));
+  }
+  // Create contact and Create project in Odoo, each in its own dialog. A failed save keeps what was typed and the dialog
+  // stays open; Save is disabled while saving. Escape, Close and Cancel ask before unsaved values are discarded. A save that
+  // works closes the dialog, refreshes the table and returns focus to the button that opened it.
   function createDialog({opener,target,key,title,noun,submitLabel,fields,save,done}){
     const {d,body,msg}=dialog(title,()=>requestClose());d.classList.add('catalog-dialog');
     d.setAttribute('aria-label',title);
@@ -278,9 +362,10 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
         const r=await save();
         catalog=r.catalog;await loadProjects().catch(()=>{});
         const note=done();catalogNote={text:note,at:Date.now()};
-        d.close();
+        saving=false;d.close();
         await onChange();
-        if(target.isConnected){target.replaceChildren();renderCatalog(target,note);target.querySelector('[data-create="'+key+'"]')?.focus();}
+        const kept=clientsPage?.root.isConnected;await catalogChanged(target,note);
+        if(!kept)target.querySelector('[data-create="'+key+'"]')?.focus();
       }catch(err){message(msg,err);}
       finally{saving=false;setBusy(false);}
     });
@@ -311,105 +396,171 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       save:()=>api('/clients/odoo/project',{method:'POST',body:{name:name.value,clientId:contact.value,allocatedHours:hours.value}}),
       done:()=>'Project “'+name.value.trim()+'” created in Odoo.'});
   }
-  // Needs mapping (administrators): tickets saved before each ticket had an Odoo project. Only the Odoo project a ticket's
-  // project is already linked to is applied; missing, ambiguous and conflicting tickets are listed to be fixed by hand.
-  // Nothing is matched by name, and an Odoo project already on a ticket is never replaced.
-  const MAPPING_LABEL={ready:'Ready',missing:'Missing',ambiguous:'Ambiguous',conflict:'Conflict'};
-  const MAPPING_SHOWN=200;
-  async function renderNeedsMapping(target){
-    const panel=el('section','panel business-panel needs-mapping');target.append(panel);panel.append(el('h2','','Needs mapping'));
-    const loading=el('p','msg','Checking tickets…');panel.append(loading);
-    let plan;try{plan=await api('/clients/needs-mapping');}catch(err){message(loading,err);return;}
-    const draw=note=>{
-      panel.replaceChildren(el('h2','','Needs mapping'),el('p','business-guidance','Tickets with no Odoo project yet. Ready tickets get the Odoo project their project is already linked to. Open the others and choose their Odoo project. Work logs and Jira links stay as they are.'));
-      const summary=el('div','board-summary');
-      summary.append(el('span','board-chip','All tickets: '+plan.mapped+' of '+plan.scanned+' have an Odoo project'),...Object.entries(MAPPING_LABEL).map(([k,l])=>el('span','board-chip'+(plan[k]&&k!=='ready'?(k==='conflict'?' conflict':' needs'):''),plan[k]+' '+l.toLowerCase())));
-      const msg=el('p','msg',note||'');panel.append(summary,msg);
-      if(!plan.rows.length){panel.append(el('p','business-guidance','Every ticket has an Odoo project.'));return;}
-      const bar=el('div','budget-bar'),filter=el('select','fsel');filter.setAttribute('aria-label','Show tickets that need mapping');option(filter,'All ('+plan.rows.length+')','');
-      for(const [k,l] of Object.entries(MAPPING_LABEL))if(plan[k])option(filter,l+' ('+plan[k]+')',k);
-      bar.append(filter);if(plan.ready)bar.append(button('Apply all ready ('+plan.ready+')',ev=>apply(ev.currentTarget,null,msg),'btn primary'));
-      const list=el('div','mapping-list'),more=el('p','business-guidance');
-      const fill=()=>{const rows=plan.rows.filter(r=>!filter.value||r.kind===filter.value);list.replaceChildren(...rows.slice(0,MAPPING_SHOWN).map(r=>mappingRow(r,msg)));more.textContent=rows.length>MAPPING_SHOWN?'Showing the first '+MAPPING_SHOWN+' of '+rows.length+'.':'';};
-      filter.addEventListener('change',fill);panel.append(bar,list,more);fill();
-    };
-    const mappingRow=(r,msg)=>{
-      const row=el('div','board-row'),info=el('div','board-row-info'),actions=el('div','board-row-actions');
-      info.append(el('strong','',r.key),el('span','',[r.client,r.project].filter(Boolean).join(' / ')||'No client or project'),el('span','business-guidance',r.message));
-      if(r.closed)info.append(el('span','project-status archived','Closed ticket'));
-      if(r.archived)info.append(el('span','project-status archived','Archived in Odoo'));
-      row.append(info,el('span','project-status '+(r.kind==='ready'?'mapped':r.kind==='conflict'?'conflict':'unmapped'),MAPPING_LABEL[r.kind]),actions);
-      if(r.kind==='ready')actions.append(button('Apply',ev=>apply(ev.currentTarget,[r.key],msg),'btn primary'));
-      actions.append(button('Open ticket',()=>openIssue(r.key),'btn'));
-      return row;};
-    async function apply(b,keys,msg){
-      b.disabled=true;msg.className='msg';msg.textContent='Linking tickets to their Odoo projects…';
-      try{const r=await api('/clients/needs-mapping/apply',{method:'POST',body:keys?{keys}:{}});plan=r.plan;
-        const note=r.applied+(r.applied===1?' ticket':' tickets')+' linked.'+(r.skipped.length?' Skipped (changed since the check, refresh to see them): '+r.skipped.map(s=>s.key).join(', ')+'.':'');catalogNote={text:note,at:Date.now()};draw(note);
-        if(Object.keys(records).length)await load(Object.keys(records));await onChange();}
-      catch(err){message(msg,err);b.disabled=false;}
+  // Map tickets (administrators): tickets with no Odoo project get one from the table's own projects (active, with a
+  // client), and the client follows the project. A ticket is suggested a project only when its catalog project links
+  // exactly one of them (Ready); nothing is matched by name. Nothing is saved until Apply, and each ticket is sent with the
+  // revision read when the dialog opened, so one changed since is skipped with the reason shown. A conflict (work already
+  // logged in another Odoo project) is applied only on its own, after a confirm; Apply all ready never includes one.
+  // Opened from a project's row, the project is fixed: tick the tickets to give it, then confirm. The page's refreshes never
+  // touch the dialog's list or choices.
+  const MAP_SHOWN=50,KIND_CLASS={ready:'mapped',missing:'unmapped',ambiguous:'unmapped',conflict:'conflict'};
+  async function openMapTickets({opener,project=null}={}){
+    if(document.querySelector('dialog.map-dialog'))return;
+    const title=project?'Map tickets to '+project.name:'Map tickets';
+    let busy=false,plan=null,choices=[],byId=new Map(),fixed=null,shownRows=[];
+    const done=new Map(),why=new Map(),chosen=new Map(),picked=new Set(),view={kind:'',q:'',shown:MAP_SHOWN};
+    const {d,body,msg}=dialog(title,()=>requestClose());d.classList.add('map-dialog','business-dialog-wide');d.setAttribute('aria-label',title);msg.setAttribute('role','status');
+    d.addEventListener('cancel',e=>{e.preventDefault();requestClose();});
+    d.addEventListener('close',()=>{if(opener?.isConnected)opener.focus();});
+    const suggestionOf=r=>mappingSuggestion(r,choices).id;
+    function requestClose(){
+      if(busy)return;
+      const unsaved=plan&&([...picked].some(k=>!done.has(k))||[...chosen].some(([k,v])=>!done.has(k)&&v&&v!==String(suggestionOf(plan.rows.find(r=>r.key===k))??'')));
+      if(unsaved&&!window.confirm('Close Map tickets? The projects chosen and not applied will be lost.'))return;
+      d.close();
     }
-    draw();
+    msg.className='msg';msg.textContent='Checking tickets…';
+    try{const [p,data]=await Promise.all([readOnce('/clients/needs-mapping',false),clientsPage?.table.data||readOnce('/clients/odoo-projects',false)]);plan=p;choices=assignableProjects(data.projects);}
+    catch(err){message(msg,err);return;}
+    if(!d.open)return;
+    byId=new Map(choices.map(c=>[c.id,c]));fixed=project?byId.get(project.odooId)||null:null;
+    if(project&&!fixed){msg.className='msg err';msg.textContent='Tickets cannot be given “'+project.name+'”: '+(project.blocked||'it is not in the last sync from Odoo.');return;}
+    msg.textContent='';
+    const tickets=context().tickets()||[],titles=Object.fromEntries(tickets.map(i=>[i.key,i.summary])),status=Object.fromEntries(tickets.map(i=>[i.key,i.status]));
+    const intro=el('div','map-intro');
+    if(fixed){const t=el('dl','map-target');t.append(el('dt','','Odoo project'),el('dd','',fixed.label),el('dt','','Client'),el('dd','',fixed.client||'—'));intro.append(t,el('p','business-guidance','Tick the tickets to give this project, then assign them. Tickets whose work went to another Odoo project are mapped on their own.'));}
+    else intro.append(el('p','business-guidance','Choose each ticket’s Client → Project and press Apply. The client comes from the project; work already logged stays where it went.'));
+    const bar=el('div','map-bar'),kinds=el('div','map-kinds'),search=input('search','');search.placeholder='Search key, title, client or project';search.setAttribute('aria-label','Search tickets to map');
+    const kindBtn={};for(const [k,l] of [['','All'],...Object.entries(MAPPING_KINDS)]){const b=button(l,()=>{view.kind=k;view.shown=MAP_SHOWN;draw();},'board-chip map-kind'+(k?' '+k:''));b.dataset.kind=k||'all';kindBtn[k]=[b,l];kinds.append(b);}
+    const bulkBtn=button('',()=>fixed?assignPicked():applyReady(),'btn primary');bulkBtn.dataset.bulk='1';
+    const tools=el('div','map-tools');tools.append(search);
+    if(fixed)tools.append(button('Select all shown',()=>{for(const r of shownRows)if(r.kind!=='conflict'&&!done.has(r.key))picked.add(r.key);draw();},'btn'));
+    tools.append(bulkBtn);bar.append(kinds,tools);
+    const list=el('div','map-list'),more=el('div','map-more');body.append(intro,bar,list,more);
+    search.addEventListener('input',()=>{view.q=search.value;view.shown=MAP_SHOWN;draw();});
+    function bulkLabel(){
+      if(fixed){const n=[...picked].filter(k=>!done.has(k)).length;bulkBtn.textContent='Assign '+count2(n,'ticket')+' to '+fixed.label;bulkBtn.disabled=busy||!n;}
+      else{const n=readyRows().length;bulkBtn.textContent='Apply all ready ('+n+')';bulkBtn.disabled=busy||!n;}
+    }
+    const readyRows=()=>plan.rows.filter(r=>r.kind==='ready'&&!done.has(r.key)&&byId.has(r.odooProjectId));
+    function draw(){
+      const c=mappingCounts(plan.rows,new Set(done.keys()));
+      for(const [k,[b,l]] of Object.entries(kindBtn)){b.textContent=l+' '+c[k||'all'];b.setAttribute('aria-pressed',String(view.kind===k));}
+      shownRows=mappingRows(plan.rows,{kind:view.kind,q:view.q,titles,project:fixed?.id??null});
+      list.replaceChildren(...shownRows.slice(0,view.shown).map(row));
+      if(!shownRows.length)list.append(el('p','business-guidance',plan.rows.length?'No tickets match.':'Every ticket has an Odoo project.'));
+      more.replaceChildren();if(shownRows.length>view.shown)more.append(button('Show more ('+(shownRows.length-view.shown)+' more)',()=>{view.shown+=MAP_SHOWN;draw();},'btn'));
+      bulkLabel();
+    }
+    function row(r){
+      const item=el('div','map-row'+(done.has(r.key)?' done':'')),info=el('div','map-ticket'),pick=el('div','map-pick'),result=el('p','map-result');item.dataset.key=r.key;
+      const line=el('div','map-key');line.append(el('strong','',r.key),el('span','project-status '+KIND_CLASS[r.kind],MAPPING_KINDS[r.kind]),el('span','map-status',status[r.key]||(r.closed?'Closed':'Open')));
+      const t=el('span','map-title',titles[r.key]||'');t.dir='auto';
+      info.append(line,t,el('span','map-why',([r.client,r.project].filter(Boolean).length?'Saved as '+[r.client,r.project].filter(Boolean).join(' / ')+'. ':'')+r.message));
+      if(done.has(r.key)){result.className='map-result ok';result.textContent='✓ Linked to '+done.get(r.key)+'.';item.append(info,result);return item;}
+      if(why.has(r.key)){result.className='map-result err';result.textContent='Skipped: '+why.get(r.key);}
+      if(fixed){
+        const ck=el('input');ck.type='checkbox';ck.checked=picked.has(r.key);ck.setAttribute('aria-label','Give '+r.key+' '+fixed.label);
+        if(r.kind==='conflict'){ck.disabled=true;ck.title='Its work went to another Odoo project: map it on its own.';}
+        else ck.addEventListener('change',()=>{if(ck.checked)picked.add(r.key);else picked.delete(r.key);bulkLabel();});
+        item.classList.add('map-row-check');pick.append(ck);item.append(pick,info,result);return item;
+      }
+      const sug=mappingSuggestion(r,choices),first=[...(sug.id!=null?[sug.id]:[]),...sug.linked],sel=el('select','fsel');
+      option(sel,'Choose Client → Project…','');
+      for(const id of first)option(sel,byId.get(id).label+(id===sug.id?' · suggested':' · linked from its project'),String(id));
+      for(const c of choices)if(!first.includes(c.id))option(sel,c.label,String(c.id));
+      sel.value=chosen.has(r.key)?chosen.get(r.key):sug.id!=null?String(sug.id):'';
+      pick.append(sel);combobox(sel).input.setAttribute('aria-label','Odoo project for '+r.key);
+      const apply=button('Apply',()=>applyOne(r,sel.value),'btn primary');apply.disabled=!sel.value;apply.setAttribute('aria-label','Apply the project to '+r.key);
+      sel.addEventListener('change',()=>{chosen.set(r.key,sel.value);apply.disabled=!sel.value;});
+      pick.append(apply);item.append(info,pick,result);return item;
+    }
+    async function applyOne(r,value){
+      if(!value||busy)return;const id=Number(value),p=byId.get(id);
+      if(r.kind==='conflict'&&!window.confirm(r.key+': '+r.message+'\n\nGive it '+p.label+' (client: '+(p.client||'—')+')? Work already logged stays where it went; only new work goes to this project.'))return;
+      const suggested=r.kind==='ready'&&r.odooProjectId===id;
+      await send([{key:r.key,revision:r.revision,...(suggested?{}:{odooProjectId:id}),...(r.kind==='conflict'?{resolveConflict:true}:{})}]);
+    }
+    async function applyReady(){
+      const ready=readyRows();if(!ready.length||busy)return;
+      if(!window.confirm('Link '+count2(ready.length,'ready ticket')+' to the Odoo project their project already links? Tickets changed since this list opened are skipped.'))return;
+      await send(ready.map(r=>({key:r.key,revision:r.revision})));
+    }
+    async function assignPicked(){
+      const rev=new Map(plan.rows.map(r=>[r.key,r.revision])),keys=[...picked].filter(k=>!done.has(k));if(!keys.length||busy)return;
+      if(!window.confirm('Give '+count2(keys.length,'ticket')+' the Odoo project '+fixed.label+' (client: '+(fixed.client||'—')+')?\n\nTickets that got a project or changed since this list opened are skipped. Work already logged stays where it went.'))return;
+      await send(keys.map(key=>({key,revision:rev.get(key),odooProjectId:fixed.id})));
+    }
+    // One request at a time; the dialog stays open and shows what was linked and why anything was skipped.
+    async function send(items){
+      busy=true;bulkLabel();d.setAttribute('aria-busy','true');msg.className='msg';msg.textContent='Saving…';
+      try{
+        const r=await api('/clients/needs-mapping/apply',{method:'POST',body:{items}});
+        for(const l of r.linked){done.set(l.key,l.label);why.delete(l.key);picked.delete(l.key);chosen.delete(l.key);}
+        for(const s of r.skipped)why.set(s.key,s.message);
+        msg.className=r.skipped.length?'msg err':'msg';
+        msg.textContent=count2(r.applied,'ticket')+' linked.'+(r.skipped.length?' '+count2(r.skipped.length,'ticket')+' skipped: the reason is under each one.':'');
+        busy=false;draw();
+        const keys=r.linked.map(l=>l.key);
+        if(keys.length){if(Object.keys(records).length)await load(keys).catch(()=>{});await onChange(keys);clientsPage?.refresh();}
+      }catch(err){message(msg,err);}
+      finally{busy=false;d.removeAttribute('aria-busy');bulkLabel();}
+    }
+    draw();search.focus();
   }
-  // Every active Odoo project with its allocated and logged hours (administrators, project-budget-v1). Logged hours are
-  // Odoo's timesheet lines on the project, so each hour counts once; work not in Odoo yet is shown apart and not added.
-  // Filters, sorting and the CSV rows are in models/odoo-projects.js.
+  // The Odoo projects table (administrators, project-budget-v1): every active Odoo project with its allocated and logged
+  // hours. Logged hours are Odoo's timesheet lines on the project, so each hour counts once; work not in Odoo yet is shown
+  // in the row details and not added. Search and the client filter stay in view; the other filters and the sort are behind
+  // Filters. update(data) redraws the rows in place, keeping filters, open rows, focus and scroll; while an allocation is
+  // being edited the redraw waits until it closes. Filters, sorting and the CSV rows are in models/odoo-projects.js.
   const BUDGET_PAGE=25;
   let budgetView={...DEFAULT_VIEW};
-  // Odoo's hours are re-read this often while the page is open, so the table follows the 5-minute work log sync.
-  const ODOO_REFRESH_MS=2*60*1000;
   const dateText=d=>d?new Date(d.length===10?d+'T00:00:00':d).toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'}):'—';
-  const COLS=[['name','Odoo Project'],['client','Client'],['created','Created'],['allocated','Allocated'],['logged','Logged'],['remaining','Remaining'],['used','Used'],['status','Budget Status'],['open','Open Tickets'],['review','Needs PR Review'],['lastWork','Last Work Log'],[null,'Actions']];
-  async function renderOdooProjects(target,prefetched,before){
-    const panel=el('section','panel business-panel odoo-projects');target.insertBefore(panel,before??null);panel.append(el('h2','','Odoo projects'));
-    const msg=el('p','msg',prefetched?'':'Loading projects from Odoo…');panel.append(msg);
-    let data=prefetched;if(!data){try{data=await api('/clients/odoo-projects');}catch(err){message(msg,err);return;}}
-    msg.textContent='';
-    panel.insertBefore(el('p','business-guidance','Every active project in Odoo. Logged hours are the Odoo timesheet hours on the project, counted once whether they came from the work log, agreed hours or Odoo itself; work log time not in Odoo yet (waiting or failed) is shown apart and not counted. Near limit: '+Math.round((data.nearLimit??0.8)*100)+'% or more of the allocated hours logged. Allocated hours are saved on the Odoo project; empty means not set, which is not the same as 0.'),msg);
-    // Re-reads the figures and redraws the panel in place. Skipped while the tab is hidden, a row is being edited, or the
-    // panel has focus (search or an open editor), so nothing typed is lost. Stops once the panel leaves the page.
-    let refreshing=false;
-    const busy=()=>panel.querySelector('.budget-edit')||panel.contains(document.activeElement)||document.querySelector('dialog.project-details');
-    const timer=setInterval(async()=>{
-      if(!panel.isConnected){clearInterval(timer);return;}
-      if(refreshing||document.hidden||busy())return;
-      refreshing=true;
-      try{const fresh=await api('/clients/odoo-projects');if(panel.isConnected&&!busy()){const next=panel.nextSibling;panel.remove();renderOdooProjects(target,fresh,next);clearInterval(timer);}}
-      catch{}finally{refreshing=false;}
-    },ODOO_REFRESH_MS);
-    const rows=data.projects,count=(s,n)=>n+' '+s+(n===1?'':'s');
-    // Summary chips: always all active projects (each one a filter); a second line counts the rows the filters leave.
-    const summary=el('div','board-summary'),scoped=el('p','business-guidance budget-scope');
-    const chip=(text,cls,status)=>button(text,()=>{budgetView.status=budgetView.status===status?'':status;statusSel.value=budgetView.status;budgetView.page=0;draw();},'board-chip'+(cls?' '+cls:''));
-    const all=budgetCounts(rows);
-    summary.append(el('span','board-chip','All active projects: '+all.projects),chip(all.over+' over budget',all.over?'conflict':'','over'),chip(all.near+' near limit',all.near?'needs':'','near'),chip(all.notSet+' allocation not set','','not_set'),chip(all.unmapped+' not linked','','unmapped'));
-    if(all.missingClient)summary.append(button(all.missingClient+' without a client',()=>{budgetView.missingClient=budgetView.missingClient==='missing'?'':'missing';missingSel.value=budgetView.missingClient;budgetView.page=0;draw();},'board-chip needs'));
-    panel.append(summary,scoped);
-    if(!data.allocation)panel.append(el('p','msg err','This Odoo has no allocated hours on projects. Turn on Timesheets in Odoo to set them.'));
-    if(data.unplacedPendingHours>0)panel.append(el('p','business-guidance',hours(data.unplacedPendingHours)+' of work log time is not in Odoo yet and has no Odoo project. See Work log setup.'));
-    const bar=el('div','budget-bar'),search=input('search',budgetView.q);search.placeholder='Search projects or clients';search.setAttribute('aria-label','Search Odoo projects by project or client');
-    const select=(label,options,key)=>{const s=el('select','fsel');s.setAttribute('aria-label',label);for(const [v,l] of options)option(s,l,v);s.value=budgetView[key]||'';s.addEventListener('change',()=>{budgetView[key]=s.value;budgetView.page=0;draw();});return s;};
-    const statusSel=select('Filter by budget status',[['','All budget statuses'],...Object.entries(BUDGET_LABEL),['unmapped','Not linked']],'status');
-    const clientSel=select('Filter by client',[['','All clients'],...[...new Set(rows.map(p=>p.client).filter(Boolean))].sort().map(c=>[c,c]),['__none','No client']],'client');
-    const missingSel=select('Filter by missing client',[['','With or without a client'],['missing','Missing client'],['present','Has a client']],'missingClient');
-    const ticketSel=select('Filter by linked tickets',[['','With or without tickets'],['with','With linked tickets'],['without','Without linked tickets']],'tickets');
+  const COLS=[['name','Project'],['client','Client'],['allocated','Allocated'],['logged','Logged'],['remaining','Remaining'],['status','Budget status'],['open','Open tickets'],[null,'Actions']];
+  const SORT_LABEL={created:'Created',name:'Project',client:'Client',allocated:'Allocated',logged:'Logged',remaining:'Remaining',used:'Budget used',status:'Budget status',open:'Open tickets',review:'Needs PR review',lastWork:'Last work log'};
+  const sortDir=(k,dir)=>k==='created'||k==='lastWork'?(dir<0?'newest first':'oldest first'):k==='name'||k==='client'?(dir>0?'A–Z':'Z–A'):(dir>0?'ascending':'descending');
+  function projectsTable(root,{say,onMap}){
+    const box=el('div','odoo-projects'),bar=el('div','budget-bar'),filters=el('div','budget-filters'),info=el('span','budget-scope'),warn=el('div'),msg=el('p','msg','Loading projects from Odoo…');
+    filters.id='budget-filters';filters.hidden=true;
+    const search=input('search',budgetView.q);search.placeholder='Search projects or clients';search.setAttribute('aria-label','Search Odoo projects by project or client');
+    const pick=(label,options)=>{const s=el('select','fsel');s.setAttribute('aria-label',label);for(const [v,l] of options)option(s,l,v);return s;};
+    const clientSel=pick('Filter by client',[]);
+    const statusSel=pick('Filter by budget status',[['','All budget statuses'],...Object.entries(BUDGET_LABEL),['unmapped','Not linked']]);
+    const missingSel=pick('Filter by missing client',[['','With or without a client'],['missing','Missing client'],['present','Has a client']]);
+    const ticketSel=pick('Filter by linked tickets',[['','With or without tickets'],['with','With linked tickets'],['without','Without linked tickets']]);
+    const sortSel=pick('Sort projects',Object.entries(SORT_LABEL).flatMap(([k,l])=>[-1,1].map(dir=>[k+':'+dir,l+', '+sortDir(k,dir)])));
+    const filtersBtn=button('Filters',()=>{filters.hidden=!filters.hidden;filtersBtn.setAttribute('aria-expanded',String(!filters.hidden));},'btn');filtersBtn.setAttribute('aria-controls',filters.id);filtersBtn.setAttribute('aria-expanded','false');
     // A new search or filter starts again from the first page; the chosen sort stays.
+    for(const [s,key] of [[clientSel,'client'],[statusSel,'status'],[missingSel,'missingClient'],[ticketSel,'tickets']])s.addEventListener('change',()=>{budgetView[key]=s.value;budgetView.page=0;draw();});
+    sortSel.addEventListener('change',()=>{const [k,dir]=sortSel.value.split(':');budgetView.sort=k;budgetView.dir=Number(dir);budgetView.page=0;draw();});
     search.addEventListener('input',()=>{budgetView.q=search.value;budgetView.page=0;draw();});
-    bar.append(search,statusSel,clientSel,missingSel,ticketSel,button('Export CSV',()=>exportBudget(shown()),'btn'));panel.append(bar);
-    const wrap=el('div','table-wrap'),table=el('table','budget-table'),head=el('thead'),body=el('tbody'),foot=el('tfoot');table.append(head,body,foot);wrap.append(table);panel.append(wrap);
-    const pager=el('div','budget-pager');panel.append(pager);
-    const shown=()=>budgetRows(rows,budgetView);
-    const draw=()=>{
+    const labelled=(text,node)=>{const l=el('label','business-field');l.append(el('span','',text),node);return l;};
+    filters.append(labelled('Budget status',statusSel),labelled('Client in Odoo',missingSel),labelled('Tickets',ticketSel),labelled('Sort',sortSel),
+      button('Clear filters',()=>{Object.assign(budgetView,{status:'',missingClient:'',tickets:'',sort:DEFAULT_VIEW.sort,dir:DEFAULT_VIEW.dir,page:0});draw();},'linkbtn'));
+    bar.append(search,clientSel,filtersBtn,info);
+    const wrap=el('div','table-wrap'),table=el('table','budget-table'),head=el('thead'),body=el('tbody'),foot=el('tfoot'),pager=el('div','budget-pager');table.append(head,body,foot);wrap.append(table);
+    box.append(bar,filters,warn,msg,wrap,pager);root.append(box);
+    let data=null,pending=false;
+    const rows=()=>data?data.projects:[],shown=()=>budgetRows(rows(),budgetView),count=(s,n)=>n+' '+s+(n===1?'':'s');
+    const ctx={data:()=>data,say,onMap,closed:()=>{if(pending){pending=false;draw();}}};
+    // The controls follow the view (after Clear filters, or a header click changing the sort).
+    function controls(){statusSel.value=budgetView.status;missingSel.value=budgetView.missingClient;ticketSel.value=budgetView.tickets;sortSel.value=budgetView.sort+':'+budgetView.dir;clientSel.value=budgetView.client||'';
+      const n=hiddenFilterCount(budgetView);filtersBtn.textContent=n?'Filters ('+n+')':'Filters';}
+    function clientOptions(){const v=budgetView.client,names=[...new Set(rows().map(p=>p.client).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+      clientSel.replaceChildren(new Option('All clients',''),...names.map(c=>new Option(c,c)),new Option('No client','__none'));if(v&&v!=='__none'&&!names.includes(v))clientSel.append(new Option(v,v));}
+    function draw(){
+      controls();
       const tr=el('tr');for(const [k,l] of COLS){const th=el('th');th.scope='col';if(!k){th.textContent=l;tr.append(th);continue;}
-        const b=button(l+(budgetView.sort===k?(budgetView.dir>0?' ▲':' ▼'):''),()=>{budgetView.dir=budgetView.sort===k?-budgetView.dir:(k==='created'||k==='lastWork'?-1:1);budgetView.sort=k;budgetView.page=0;draw();},'th-sort');th.setAttribute('aria-sort',budgetView.sort===k?(budgetView.dir>0?'ascending':'descending'):'none');th.append(b);tr.append(th);}
+        const b=button(l+(budgetView.sort===k?(budgetView.dir>0?' ▲':' ▼'):''),()=>{budgetView.dir=budgetView.sort===k?-budgetView.dir:1;budgetView.sort=k;budgetView.page=0;draw();},'th-sort');th.setAttribute('aria-sort',budgetView.sort===k?(budgetView.dir>0?'ascending':'descending'):'none');th.append(b);tr.append(th);}
       head.replaceChildren(tr);
+      if(!data)return;
       // Paging works on the whole sorted list; the totals and the Export CSV cover every matching project, not one page.
-      const list=shown(),pages=Math.max(1,Math.ceil(list.length/BUDGET_PAGE));budgetView.page=Math.min(budgetView.page,pages-1);
+      const all=rows(),list=shown(),pages=Math.max(1,Math.ceil(list.length/BUDGET_PAGE));budgetView.page=Math.min(budgetView.page,pages-1);
       const from=budgetView.page*BUDGET_PAGE,pageRows=list.slice(from,from+BUDGET_PAGE);
-      body.replaceChildren(...pageRows.flatMap(p=>budgetRow(p,data,msg,target)));
+      body.replaceChildren(...pageRows.flatMap(p=>budgetRow(p,ctx)));
       if(!list.length){const r=el('tr'),td=el('td','business-guidance','No Odoo projects match.');td.colSpan=COLS.length;r.append(td);body.append(r);}
       const c=budgetCounts(list);
-      scoped.textContent=list.length===rows.length?'Showing all '+count('project',list.length)+'.':'Matching the filters: '+count('project',c.projects)+', '+c.over+' over budget, '+c.near+' near limit, '+c.notSet+' allocation not set.';
+      info.textContent=(list.length===all.length?count('project',all.length):list.length+' of '+count('project',all.length))+(c.over?' · '+c.over+' over budget':'')+(c.near?' · '+c.near+' near limit':'');
       pager.replaceChildren();
       if(list.length>BUDGET_PAGE){
         const prev=button('← Previous',()=>{budgetView.page--;draw();},'btn'),next=button('Next →',()=>{budgetView.page++;draw();},'btn');
@@ -417,53 +568,71 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
         pager.append(el('span','',(from+1)+'–'+(from+pageRows.length)+' of '+count('project',list.length)),prev,next);
       }
       const sum=f=>list.reduce((s,p)=>s+(f(p)||0),0),total=el('tr');
-      total.append(el('th','',list.length===rows.length?'Total (all projects)':'Total ('+count('project',list.length)+' shown)'),el('td'),el('td'),el('td','num',hours(sum(p=>p.allocatedHours))),el('td','num',hours(sum(p=>p.loggedHours))),el('td','num',signedHours(sum(p=>p.remainingHours))),el('td'),el('td','',c.over+' over'),el('td','num',String(sum(p=>p.openTickets))),el('td','num',String(sum(p=>p.reviewTickets))),el('td'),el('td'));
+      total.append(el('th','',list.length===all.length?'Total':'Total ('+count('project',list.length)+' shown)'),el('td'),el('td','num',hours(sum(p=>p.allocatedHours))),el('td','num',hours(sum(p=>p.loggedHours))),el('td','num',signedHours(sum(p=>p.remainingHours))),el('td','',c.over+' over'),el('td','num',String(sum(p=>p.openTickets))),el('td'));
       total.firstChild.scope='row';foot.replaceChildren(total);
-    };
+    }
+    function update(next){
+      const open=new Set(rows().filter(p=>p._open).map(p=>p.odooId));for(const p of next.projects)if(open.has(p.odooId))p._open=true;
+      data=next;msg.textContent='';
+      warn.replaceChildren(...(data.allocation?[]:[el('p','msg err','This Odoo has no allocated hours on projects. Turn on Timesheets in Odoo to set them.')]));
+      clientOptions();if(body.querySelector('.budget-edit'))pending=true;else draw();
+    }
+    function failed(err){if(!data)message(msg,err);else say('Couldn’t refresh the projects from Odoo: '+(err.message||err),true);}
     draw();
+    return {update,failed,shown,get data(){return data;}};
   }
-  // One project: its main row, and a second row (shown with the ▸ button) with the company, links and time not in Odoo yet.
-  function budgetRow(p,data,msg,target){
-    const tr=el('tr','budget-main budget-'+p.status),detail=el('tr','budget-detail'),detailId='budget-detail-'+p.odooId;detail.id=detailId;detail.hidden=!p._open;
+  // One project: its main row, and a second row (the ▸ button) with the rest: created, budget used, pull requests waiting
+  // for review, the last work log, time not in Odoo yet, the company and Odoo id, and what links it to Jira.
+  function budgetRow(p,ctx){
+    const data=ctx.data(),tr=el('tr','budget-main budget-'+p.status),detail=el('tr','budget-detail'),detailId='budget-detail-'+p.odooId;tr.dataset.odooId=p.odooId;detail.id=detailId;detail.hidden=!p._open;
     const name=el('td','budget-name'),toggle=button(p._open?'▾':'▸',()=>{p._open=!p._open;detail.hidden=!p._open;toggle.textContent=p._open?'▾':'▸';toggle.setAttribute('aria-expanded',String(!!p._open));},'budget-toggle');
     toggle.setAttribute('aria-expanded',String(!!p._open));toggle.setAttribute('aria-controls',detailId);toggle.setAttribute('aria-label','More about '+p.name);
-    const open=button(p.name,()=>openProjectDetails(p.odooId,toggle),'linkbtn');open.dir='auto';name.append(toggle,open);
+    const open=button(p.name,()=>openProjectDetails(p.odooId,open),'linkbtn');open.dir='auto';name.append(toggle,open);
     const client=el('td');if(p.client)client.textContent=p.client;else client.append(el('span','project-status unmapped','No client'));
     const alloc=el('td','num');allocationCell(alloc,p);
-    const logged=el('td','num',hours(p.loggedHours));if(p.pendingHours>0)logged.append(el('div','budget-sub','+'+hours(p.pendingHours)+' not in Odoo yet'));
     const remaining=el('td','num'+(p.remainingHours<0?' over':''),p.remainingHours==null?'—':signedHours(p.remainingHours));
     const status=el('td');status.append(el('span','budget-status '+p.status,budgetText(p)));
-    const review=el('td','num',String(p.reviewTickets||0));if(p.reviewKeys?.length)review.title=p.reviewKeys.join(', ');
-    const actions=el('td','budget-actions'),odooLink=el('a','btn','Open in Odoo');odooLink.href=p.url;odooLink.target='_blank';odooLink.rel='noopener';odooLink.setAttribute('aria-label','Open '+p.name+' in Odoo');actions.append(odooLink);
-    if(data.allocation){const edit=button(p.allocatedHours==null?'Set allocation':'Edit allocation',()=>editAllocation(alloc,p,data,msg,target),'btn budget-edit-btn');edit.setAttribute('aria-label',edit.textContent+' for '+p.name);actions.append(edit);}
-    tr.append(name,client,el('td','',dateText(p.createdAt)),alloc,logged,remaining,el('td','num',percent(p.usedPercent)),status,el('td','num',String(p.openTickets||0)),review,el('td','',dateText(p.lastWorkDate)),actions);
-    // The secondary row: what links the project to Jira, its company and Odoo id, and the tickets waiting for review.
+    const actions=el('td','budget-actions');
+    if(data.allocation){const edit=button(p.allocatedHours==null?'Set allocation':'Edit allocation',()=>editAllocation(alloc,p,ctx),'btn budget-edit-btn');edit.setAttribute('aria-label',edit.textContent+' for '+p.name);actions.append(edit);}
+    const map=button('Map tickets',e=>ctx.onMap(p,e.currentTarget),'btn budget-map-btn');map.setAttribute('aria-label','Map tickets to '+p.name);
+    if(!p.assignable){map.disabled=true;map.title=(p.blocked||'Not in the last sync from Odoo.')+' Tickets cannot be given this project.';}
+    actions.append(map);
+    tr.append(name,client,alloc,el('td','num',hours(p.loggedHours)),remaining,status,el('td','num',String(p.openTickets||0)),actions);
     const cell=el('td','budget-links');cell.colSpan=COLS.length;detail.append(cell);
-    cell.append(el('div','budget-sub',[p.company&&'Company: '+p.company,'Odoo #'+p.odooId,p.ticketCount?count2(p.ticketCount,'dashboard ticket'):'',p.missingClient?'No client in Odoo: tickets cannot be given this project until it has one.':''].filter(Boolean).join(' · ')));
-    if(!p.mapped)cell.append(el('span','project-status unmapped','Not linked'));
-    for(const l of p.links.projects){const tag=el('span','budget-link',l.name);tag.dir='auto';tag.append(button('×',()=>linkProject(p,l.id,true,msg,target),'budget-unlink'));tag.lastChild.setAttribute('aria-label','Unlink '+l.name+' from '+p.name);cell.append(tag);}
-    for(const k of p.links.epics)cell.append(el('span','budget-link','Epic '+k));
-    if(p.links.helpdesk)cell.append(el('span','budget-link','Helpdesk'));
+    const facts=el('dl','budget-facts');
+    for(const [k,v] of [['Created',dateText(p.createdAt)],['Budget used',percent(p.usedPercent)],['Needs PR review',String(p.reviewTickets||0)+(p.reviewKeys?.length?' ('+p.reviewKeys.join(', ')+')':'')],['Last work log',dateText(p.lastWorkDate)],
+      ...(p.pendingHours>0?[['Not in Odoo yet',hours(p.pendingHours)]]:[]),...(p.company?[['Company',p.company]]:[]),['Odoo ID','#'+p.odooId],...(p.ticketCount?[['Dashboard tickets',String(p.ticketCount)]]:[])])facts.append(el('dt','',k),el('dd','',v));
+    cell.append(facts);
+    if(p.blocked)cell.append(el('p','budget-sub',p.blocked+' Tickets cannot be given this project until it is fixed in Odoo and synced.'));
+    const links=el('div','budget-link-row');links.append(el('span','budget-sub','Linked to Jira:'));
+    if(!p.mapped)links.append(el('span','project-status unmapped','Not linked'));
+    for(const l of p.links.projects){const tag=el('span','budget-link',l.name);tag.dir='auto';tag.append(button('×',()=>linkProject(p,l.id,true,ctx),'budget-unlink'));tag.lastChild.setAttribute('aria-label','Unlink '+l.name+' from '+p.name);links.append(tag);}
+    for(const k of p.links.epics)links.append(el('span','budget-link','Epic '+k));
+    if(p.links.helpdesk)links.append(el('span','budget-link','Helpdesk'));
+    if(p.linkable)links.append(linkControl(p,ctx));else links.append(el('span','budget-sub','Other Odoo company: link in Odoo'));
+    cell.append(links);
     const t=p.links.tickets;if(t.count){const d=el('details','budget-tickets'),s=el('summary','','Odoo tasks: '+Object.entries(t.byProject).map(([k,n])=>k+': '+n).join(' · ')+(t.count===1?' ticket':' tickets'));d.append(s,el('p','budget-keys',t.keys.join(', ')+(t.count>t.keys.length?' …':'')));cell.append(d);}
-    if(p.reviewKeys?.length)cell.append(el('p','budget-sub','Needs PR review: '+p.reviewKeys.join(', ')));
-    if(p.linkable)cell.append(linkControl(p,msg,target));else cell.append(el('span','budget-sub','Other Odoo company: link in Odoo'));
+    const more=el('div','budget-detail-actions'),odooLink=el('a','btn','Open in Odoo');odooLink.href=p.url;odooLink.target='_blank';odooLink.rel='noopener';odooLink.setAttribute('aria-label','Open '+p.name+' in Odoo');
+    const hist=button('Tickets, work logs & history',()=>openProjectDetails(p.odooId,hist),'btn');more.append(odooLink,hist);cell.append(more);
     return [tr,detail];
   }
   const count2=(n,s)=>n+' '+s+(n===1?'':'s');
   function allocationCell(cell,p){cell.replaceChildren(p.allocatedHours==null?el('span','budget-unset','Not set'):document.createTextNode(hours(p.allocatedHours)));}
   // Edit allocation (from the row's Actions): saved on the Odoo project, kept in the project's history. Empty clears it.
-  function editAllocation(cell,p,data,msg,target){
+  // Only this row is redrawn.
+  function editAllocation(cell,p,ctx){
     if(cell.querySelector('.budget-edit')){cell.querySelector('input').focus();return;}
-    const box=el('div','budget-edit'),n=input('number',p.allocatedHours??'');n.min='0';n.step='any';n.setAttribute('aria-label','Allocated hours for '+p.name);
-    const redraw=()=>{const tr=cell.closest('tr'),[a,b]=budgetRow(p,data,msg,target);tr.nextElementSibling?.replaceWith(b);tr.replaceWith(a);};
-    const save=async()=>{if(n.value!==''&&!(Number(n.value)>=0)){msg.className='msg err';msg.textContent='Enter 0 or more hours, or leave it empty for not set.';return;}
-      save.btn.disabled=true;msg.className='msg';msg.textContent='Saving allocated hours to Odoo…';
+    const data=ctx.data(),box=el('div','budget-edit'),n=input('number',p.allocatedHours??'');n.min='0';n.step='any';n.setAttribute('aria-label','Allocated hours for '+p.name);
+    const redraw=()=>{const tr=cell.closest('tr'),[a,b]=budgetRow(p,ctx);tr.nextElementSibling?.replaceWith(b);tr.replaceWith(a);a.querySelector('.budget-edit-btn')?.focus();};
+    const cancel=()=>{allocationCell(cell,p);ctx.closed();};
+    const save=async()=>{if(save.btn.disabled)return;if(n.value!==''&&!(Number(n.value)>=0)){ctx.say('Enter 0 or more hours, or leave it empty for not set.',true);return;}
+      save.btn.disabled=true;ctx.say('Saving allocated hours to Odoo…');
       try{const r=await api('/clients/odoo-projects/allocation',{method:'PUT',body:{odooId:p.odooId,hours:n.value===''?null:Number(n.value)}});
-        Object.assign(p,{allocatedHours:r.allocatedHours},budgetStatus(r.allocatedHours,p.loggedHours,data.nearLimit));msg.textContent='Saved for “'+p.name+'”.';redraw();}
-      catch(err){message(msg,err);save.btn.disabled=false;}};
+        Object.assign(p,{allocatedHours:r.allocatedHours},budgetStatus(r.allocatedHours,p.loggedHours,data.nearLimit));ctx.say('Saved for “'+p.name+'”.');redraw();ctx.closed();}
+      catch(err){ctx.say(err.message||String(err),true);save.btn.disabled=false;}};
     save.btn=button('Save',save,'btn primary');
-    n.addEventListener('keydown',e=>{if(e.key==='Enter')save();else if(e.key==='Escape')allocationCell(cell,p);});
-    box.append(n,save.btn,button('Cancel',()=>allocationCell(cell,p),'btn'));cell.append(box);n.focus();
+    n.addEventListener('keydown',e=>{if(e.key==='Enter')save();else if(e.key==='Escape'){e.stopPropagation();cancel();}});
+    box.append(n,save.btn,button('Cancel',cancel,'btn'));cell.append(box);n.focus();
   }
   // Project details: the budget, its tickets, pull requests waiting for review, the latest Odoo timesheet lines and history.
   const PROJECT_EVENT={created:h=>'Created from the dashboard'+(h.allocatedHours!=null?' with '+hours(h.allocatedHours)+' allocated':''),allocation:h=>'Allocated hours: '+(h.from==null?'Not set':hours(h.from))+' → '+(h.to==null?'Not set':hours(h.to))};
@@ -493,22 +662,25 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     for(const h of [...r.history].reverse()){const line=el('div','business-history-entry');line.append(el('strong','',(h.by?.name||h.by?.email||'System')+' · '+new Date(h.at).toLocaleString('en-GB',{timeZone:'Asia/Jerusalem'})),el('div','',(PROJECT_EVENT[h.type]||(()=>h.type))(h)));body.append(line);}
   }
   // Link a dashboard project (the client and project on Jira tickets) to this Odoo project.
-  function linkControl(p,msg,target){
+  function linkControl(p,ctx){
     return button('Link project',ev=>{
       const free=projects().filter(x=>!(catalog.entries.find(e=>e.id===x.id)?.sources||[]).some(s=>s.source==='odoo'));
       const box=el('div','budget-edit'),pick=el('select','fsel');pick.setAttribute('aria-label','Dashboard project to link to '+p.name);
       option(pick,free.length?'Choose project…':'No unlinked project','');for(const x of free)option(pick,x.name,x.id);
-      box.append(pick,button('Link',()=>{if(pick.value)linkProject(p,pick.value,false,msg,target);},'btn primary'),button('Cancel',()=>box.replaceWith(linkControl(p,msg,target)),'btn'));
+      box.append(pick,button('Link',()=>{if(pick.value)linkProject(p,pick.value,false,ctx);},'btn primary'),button('Cancel',()=>{box.replaceWith(linkControl(p,ctx));ctx.closed();},'btn'));
       ev.currentTarget.replaceWith(box);combobox(pick);box.querySelector('input')?.focus();
     },'btn budget-link-btn');
   }
-  async function linkProject(p,entryId,unlink,msg,target){
+  async function linkProject(p,entryId,unlink,ctx){
     const name=projects().find(x=>x.id===entryId)?.name||'the project';
     if(unlink&&!confirm('Unlink '+name+' from the Odoo project “'+p.name+'”? Work logged on its tickets will need another Odoo project.'))return;
-    msg.className='msg';msg.textContent=unlink?'Unlinking…':'Linking…';
+    ctx.say(unlink?'Unlinking…':'Linking…');
     try{catalog=await api('/clients/odoo-projects/link',{method:'POST',body:{revision:catalog.revision,odooId:p.odooId,entryId,unlink}});
-      catalogNote={text:(unlink?'Unlinked ':'Linked ')+name+(unlink?' from ':' to ')+'“'+p.name+'”.',at:Date.now()};await onChange();target.replaceChildren();renderCatalog(target);}
-    catch(err){if(err.code==='conflict')await loadCatalog();message(msg,err);}
+      const note=(unlink?'Unlinked ':'Linked ')+name+(unlink?' from ':' to ')+'“'+p.name+'”.';
+      // The link's box is gone once saved, so the table may redraw.
+      document.querySelectorAll('.budget-links .budget-edit').forEach(b=>b.remove());
+      await onChange();await catalogChanged(null,note);}
+    catch(err){if(err.code==='conflict')await loadCatalog();ctx.say(err.message||String(err),true);}
   }
   function exportBudget(list){
     // Text that a spreadsheet would run as a formula gets a leading quote; numbers (negative remaining hours) stay numbers.
@@ -578,14 +750,20 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     if(p.unmapped&&!p.archived&&odooOn&&client&&!NO_CLIENT.includes(client.name)){
       const inOdoo=inOdooContact(client);
       if(!inOdoo)actions.append(button('Add client to Odoo',async ev=>{const b=ev.currentTarget;b.disabled=true;msg.className='msg';msg.textContent='Adding “'+client.name+'” to Odoo…';
-        try{await addContactToOdoo(client.name);target.replaceChildren();renderCatalog(target,'“'+client.name+'” added to Odoo.');}catch(err){message(msg,err);b.disabled=false;}},'btn'));
+        try{await addContactToOdoo(client.name);await boardChanged(target,'“'+client.name+'” added to Odoo.');}catch(err){message(msg,err);b.disabled=false;}},'btn'));
       const add=button('Add to Odoo',async ev=>{const b=ev.currentTarget;b.disabled=true;msg.className='msg';msg.textContent='Adding “'+p.name+'” to Odoo…';
-        try{await addProjectToOdoo(p.name,client.id);target.replaceChildren();renderCatalog(target,'Project “'+p.name+'” added to Odoo.');}catch(err){message(msg,err);b.disabled=false;}},'btn primary');
+        try{await addProjectToOdoo(p.name,client.id);await boardChanged(target,'Project “'+p.name+'” added to Odoo.');}catch(err){message(msg,err);b.disabled=false;}},'btn primary');
       add.disabled=!inOdoo;if(!inOdoo)add.title='Add the client to Odoo first';
       actions.append(add);
       mapControl(p,actions,msg,target);
     }
     return row;
+  }
+  // After a change on the clients board: in its dialog (Odoo page) the board is drawn again and the page refreshes in place;
+  // on the page without Odoo the page is drawn again.
+  async function boardChanged(target,note){
+    if(!target.classList.contains('board-host'))return catalogChanged(target,note);
+    target.replaceChildren();renderProjects(target);if(clientsPage?.root.isConnected){if(note)clientsPage.say(note);await clientsPage.refresh();}
   }
   // The client report: the clients and projects its tickets use that are not in Odoo yet, each with an Add to Odoo action.
   function reportAddPanel({rows,refresh}){
@@ -618,7 +796,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
         if(!candidates.length){b.remove();cell.append(el('span','business-guidance','No match: no unlinked Odoo project named “'+p.name+'” under “'+p.contact.name+'”. To create one, use Add to Odoo.'));return;}
         const pick=el('select','fsel');pick.setAttribute('aria-label','Odoo project for '+p.name);option(pick,'Choose Odoo project…','');for(const c of candidates)option(pick,'#'+c.odooId+' '+c.name,String(c.odooId));
         const link=button('Link',async e=>{if(!pick.value)return;link.disabled=true;msg.className='msg';msg.textContent='Linking “'+p.name+'” to Odoo…';
-          try{catalog=await api('/clients/odoo/link',{method:'POST',body:{revision:catalog.revision,id:p.id,odooId:Number(pick.value)}});catalogNote={text:'Linked “'+p.name+'” to Odoo #'+pick.value+'.',at:Date.now()};await onChange();target.replaceChildren();renderCatalog(target,catalogNote.text);}
+          try{catalog=await api('/clients/odoo/link',{method:'POST',body:{revision:catalog.revision,id:p.id,odooId:Number(pick.value)}});catalogNote={text:'Linked “'+p.name+'” to Odoo #'+pick.value+'.',at:Date.now()};await onChange();await boardChanged(target,catalogNote.text);}
           catch(err){message(msg,err);link.disabled=false;}},'btn primary');
         b.replaceWith(pick,link);
       }catch(err){message(msg,err);b.disabled=false;}},'btn'));

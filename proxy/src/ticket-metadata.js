@@ -495,12 +495,12 @@ async function mapCandidates(env,catalog,entry){
 // ---- Needs mapping (administrators): tickets without a usable Odoo project ----
 // Tickets saved before the Odoo project rule have only a catalog client and project. Their Odoo project is what the catalog
 // already links to that project (or Work log setup's mapping for it, as the work log used), never a match by name:
-//   ready       exactly one Odoo project, consistent with where the ticket's work went: applying saves it
-//   missing     no project chosen, or a project with no Odoo project
+//   ready       exactly one Odoo project, active and with a client, consistent with where the ticket's work went
+//   missing     no project chosen, a project with no Odoo project, or one whose Odoo project is archived or has no client
 //   ambiguous   the project links several Odoo projects
 //   conflict    the link and the ticket's work disagree (its Odoo task or posted lines are in another project),
 //               or the Odoo project is not in the main company's projects
-// Applying only fills an empty Odoo project and changes nothing else, so Jira links and logged work stay as they are.
+// Applying saves the Odoo project (its client follows) and nothing else, so Jira links and logged work stay as they are.
 export async function ticketKeys(env){
   const store=requireStore(env),start=prefix(env)+'ticket:';
   if(!store.scanKeys)return [];
@@ -515,7 +515,7 @@ export async function mappingPlan(env){
   const [all,catalog,snapshot,cfg]=await Promise.all([readAllMetadata(env),readCatalog(env),readOdooProjects(env),readConfig(env).catch(()=>({mapping:{}}))]);
   const projects=projectIndex(snapshot),find=id=>catalog.entries.find(e=>e.id===id),labelOf=id=>projects.get(id)?.label||'Odoo project #'+id,out=[];
   for(const [key,m] of all){
-    const base={key,revision:m.revision,client:shownName(find(m.clientId)),project:shownName(find(m.subClientId)),closed:!!m.completedAt};
+    const base={key,revision:m.revision,current:m.odooProjectId??null,client:shownName(find(m.clientId)),project:shownName(find(m.subClientId)),closed:!!m.completedAt};
     if(m.odooProjectId!=null){if(snapshot.syncedAt&&!projects.has(m.odooProjectId))out.push({...base,kind:'conflict',odooProjectId:m.odooProjectId,message:'Odoo project #'+m.odooProjectId+" is not among the main company's Odoo projects (deleted, or moved to another company)."});continue;}
     let ids;
     if(!m.clientId&&!m.subClientId){out.push({...base,kind:'missing',message:'No client or project chosen.'});continue;}
@@ -528,25 +528,49 @@ export async function mappingPlan(env){
     const elsewhere=[...new Set([...(task.projectId&&task.projectId!==id?[task.projectId]:[]),...posted.filter(p=>p!==id)])];
     if(elsewhere.length){out.push({...base,kind:'conflict',candidates:[id,...elsewhere].map(x=>({id:x,label:labelOf(x)})),message:'Its project links Odoo project #'+id+', but its work went to '+elsewhere.map(x=>'#'+x).join(', ')+'.'});continue;}
     if(snapshot.syncedAt&&!projects.has(id)){out.push({...base,kind:'conflict',odooProjectId:id,message:'Its Odoo project #'+id+" is not among the main company's Odoo projects."});continue;}
-    out.push({...base,kind:'ready',odooProjectId:id,label:labelOf(id),archived:projects.get(id)?.active===false,message:'Will be linked to '+labelOf(id)+'.'});
+    // Only a project a ticket can be given now is suggested: never an archived one, or one with no client.
+    const p=projects.get(id);
+    if(!p){out.push({...base,kind:'missing',message:'Odoo projects have not been read yet. Press Sync from Odoo now.'});continue;}
+    if(!p.active||!p.clientId){out.push({...base,kind:'missing',linked:{id,label:p.label},message:'Its project links '+p.label+(p.active?', which has no client in Odoo':', which is archived in Odoo')+'. Choose another Odoo project.'});continue;}
+    out.push({...base,kind:'ready',odooProjectId:id,label:p.label,message:'Its project links '+p.label+'.'});
   }
   const count=k=>out.filter(r=>r.kind===k).length;
   return {scanned:all.size,mapped:[...all.values()].filter(m=>m.odooProjectId!=null).length,ready:count('ready'),missing:count('missing'),ambiguous:count('ambiguous'),conflict:count('conflict'),projectsSyncedAt:snapshot.syncedAt,rows:out};
 }
-// Saves the ready rows (all of them, or the keys given). Each ticket is re-checked under its lock and skipped when it
-// changed since the plan or already has an Odoo project.
-async function applyMapping(env,me,keys){
-  const plan=await mappingPlan(env),rows=plan.rows.filter(r=>r.kind==='ready'&&(!keys||keys.includes(r.key)));let applied=0;const skipped=[];
-  for(const r of rows){
-    try{await withTicketLock(env,r.key,async()=>{
-      const store=requireStore(env),raw=await store.get(metadataKey(env,r.key)),m={...empty(),...JSON.parse(raw||'{}')};
-      if(m.revision!==r.revision||m.odooProjectId!=null)problem('Changed since the check.',409,'conflict');
-      m.odooProjectId=r.odooProjectId;m.revision++;m.updatedAt=new Date().toISOString();
-      m.history.push({type:'edit',at:m.updatedAt,by:{email:me.email,name:me.name},changes:{odooProjectId:{from:null,to:r.odooProjectId}},project:{from:null,to:r.label},note:'Linked to the Odoo project its project already had.'});
-      await persist(env,r.key,m,raw);applied++;
-    });}catch(e){if(!(e instanceof BusinessError))throw e;skipped.push({key:r.key,message:e.message});}
+// Saves Odoo projects on tickets that need one. items: [{key, revision, odooProjectId?, resolveConflict?}]; a ticket without
+// an odooProjectId gets its ready suggestion. keys (or nothing) applies the ready rows. Each project is checked as on a ticket
+// (active, with a client) and the client follows it. Each ticket is re-checked under its lock and skipped, with the reason,
+// when it changed since the list was read, got a project meanwhile, or is no longer ready. A conflict is resolved only when
+// asked for, ticket by ticket. Work already logged stays where it went.
+async function applyMapping(env,me,{keys=null,items=null}={}){
+  const [plan,catalog,snapshot]=await Promise.all([mappingPlan(env),readCatalog(env),readOdooProjects(env)]);
+  const byKey=new Map(plan.rows.map(r=>[r.key,r])),known=projectIndex(snapshot);
+  const work=items||plan.rows.filter(r=>r.kind==='ready'&&(!keys||keys.includes(r.key))).map(r=>({key:r.key}));
+  let applied=0;const skipped=[],linked=[];
+  for(const item of work){
+    const r=byKey.get(item.key);
+    try{
+      if(!r)problem('It already has an Odoo project.',409,'mapped');
+      if(item.revision!=null&&item.revision!==r.revision)problem('Changed since the list was opened. Refresh the list to see it.',409,'conflict');
+      const suggested=item.odooProjectId==null;
+      if(suggested&&r.kind!=='ready')problem('Not ready: '+r.message,409,'not_ready');
+      if(r.kind==='conflict'&&!item.resolveConflict)problem('Its work went to another Odoo project. Choose its project on its own.',409,'mapping_conflict');
+      const id=suggested?r.odooProjectId:item.odooProjectId,p=await chosenProject(env,id),sub=catalogProjectFor(catalog,id,p);
+      await withTicketLock(env,r.key,async()=>{
+        const store=requireStore(env),raw=await store.get(metadataKey(env,r.key)),m={...empty(),...JSON.parse(raw||'{}')};
+        if(m.revision!==r.revision||(m.odooProjectId??null)!==r.current)problem('Changed since the check. Refresh the list to see it.',409,'conflict');
+        // A suggestion keeps the catalog client and project it came from when the catalog cannot name one for the Odoo project.
+        const next={odooProjectId:id,...(sub?{clientId:sub.parentId,subClientId:sub.id}:suggested?{}:{clientId:null,subClientId:null})},changes={};
+        for(const [k,v] of Object.entries(next))if((m[k]??null)!==v)changes[k]={from:m[k]??null,to:v};
+        Object.assign(m,next,{epicKey:null});m.revision++;m.updatedAt=new Date().toISOString();
+        m.history.push({type:'edit',at:m.updatedAt,by:{email:me.email,name:me.name},changes,project:{from:r.current==null?null:known.get(r.current)?.label||'Odoo project #'+r.current,to:p.label},
+          note:(suggested?'Linked to the Odoo project its project already had.':'Chosen in Map tickets.')+(r.kind==='conflict'?' Work already logged stays where it went.':'')});
+        await persist(env,r.key,m,raw);
+      });
+      applied++;linked.push({key:r.key,odooProjectId:id,label:p.label});
+    }catch(e){if(!(e instanceof BusinessError))throw e;skipped.push({key:item.key,message:e.message});}
   }
-  return {applied,skipped};
+  return {applied,skipped,linked};
 }
 export async function catalogRoutes(request,env,url,me) {
   // The Odoo projects a ticket can be given (anyone signed in): active ones are offered; archived ones are listed so a
@@ -562,7 +586,9 @@ export async function catalogRoutes(request,env,url,me) {
     if(request.method!=='POST'||!url.pathname.endsWith('/apply'))problem('Use GET, or POST to apply.',405);
     let b={};try{b=JSON.parse(await request.text()||'{}');}catch{problem('Invalid request.');}
     if(b.keys!=null&&(!Array.isArray(b.keys)||b.keys.length>1000||b.keys.some(k=>typeof k!=='string')))problem('Supply up to 1,000 ticket keys.');
-    return Response.json({...(await applyMapping(env,me,b.keys||null)),plan:await mappingPlan(env)},{headers:{'Cache-Control':'no-store'}});
+    const int=v=>v==null||Number.isInteger(v);
+    if(b.items!=null&&(!Array.isArray(b.items)||b.items.length>1000||b.items.some(i=>!i||typeof i.key!=='string'||!int(i.revision)||!int(i.odooProjectId)||(i.resolveConflict!=null&&typeof i.resolveConflict!=='boolean'))))problem('Supply up to 1,000 tickets, each with its key, revision and Odoo project.');
+    return Response.json({...(await applyMapping(env,me,{keys:b.keys||null,items:b.items||null})),plan:await mappingPlan(env)},{headers:{'Cache-Control':'no-store'}});
   }
   if(url.pathname==='/clients/details'&&request.method==='GET'){
     if(me.role!=='admin')problem('Only administrators manage the client catalog.',403,'forbidden');

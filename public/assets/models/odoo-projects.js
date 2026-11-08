@@ -68,3 +68,32 @@ export function projectChoices(projects, currentId = null) {
   if (currentId != null && !current) choices.push({ id: currentId, label: 'Odoo project #' + currentId + ' (not found)', clientName: '', disabled: true });
   return { choices, noClient: sorted.filter(p => !p.archived && p.missingClient) };
 }
+
+// The filters behind the Clients page's Filters button (search and client stay in view), for its count.
+export const hiddenFilterCount = v => ['status', 'missingClient', 'tickets'].filter(k => v[k]).length;
+// Map tickets offers the table's own rows: the projects a ticket can be given (in the last sync, active, with a client).
+export const assignableProjects = rows => rows.filter(p => p.assignable)
+  .map(p => ({ id: p.odooId, label: p.label || (p.client || 'No client') + ' → ' + p.name, client: p.client, name: p.name }))
+  .sort((a, b) => a.label.localeCompare(b.label));
+export const MAPPING_KINDS = { ready: 'Ready', missing: 'Missing', ambiguous: 'Ambiguous', conflict: 'Conflict' };
+// A ticket's suggested project: only a ready ticket's, the one Odoo project its catalog project links, and only while the
+// table offers it. linked: the projects an ambiguous ticket's project links, listed first in its picker but not chosen.
+export function mappingSuggestion(row, choices) {
+  const offered = id => choices.some(c => c.id === id);
+  return { id: row.kind === 'ready' && offered(row.odooProjectId) ? row.odooProjectId : null,
+    linked: row.kind === 'ambiguous' ? (row.candidates || []).map(c => c.id).filter(offered) : [] };
+}
+// The rows Map tickets lists: by kind and by search over key, title, client and project. For one project, the tickets
+// already pointing at it (ready or linked) come first; otherwise the plan's order (by key) stays.
+export function mappingRows(rows, { kind = '', q = '', titles = {}, project = null } = {}) {
+  const s = String(q || '').trim().toLowerCase();
+  const out = rows.filter(r => (!kind || r.kind === kind) && (!s || [r.key, titles[r.key], r.client, r.project].some(x => String(x || '').toLowerCase().includes(s))));
+  if (project == null) return out;
+  const near = r => r.odooProjectId === project || (r.candidates || []).some(c => c.id === project);
+  return [...out.filter(near), ...out.filter(r => !near(r))];
+}
+export const mappingCounts = (rows, done = new Set()) => {
+  const left = rows.filter(r => !done.has(r.key)), c = { all: left.length };
+  for (const k of Object.keys(MAPPING_KINDS)) c[k] = left.filter(r => r.kind === k).length;
+  return c;
+};

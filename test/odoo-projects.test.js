@@ -92,32 +92,75 @@ test('changing the project is recorded in history; it cannot be cleared, and arc
   assert.equal((await s.edit(key,{estimatedHours:3})).status,200);
 });
 
-test('Needs mapping: only what the catalog already links is applied; missing, ambiguous and conflicting tickets are shown and left alone',async()=>{
-  const s=await setup();
-  // Shop was active when the legacy tickets got it, and has been archived in Odoo since.
-  const shopProject=s.odoo.projects.find(p=>p.id===22);shopProject.active=true;await s.sync();shopProject.active=false;await s.sync();
+// Legacy tickets: AION-501 on Website (linked to #20 and #21), AION-502 on Shop (#22), AION-503 with nothing, AION-504 on
+// Shop with its work already in Internal tools (#24).
+async function legacy(s){
   const cat=await readCatalog(s.env),find=(n,parent)=>cat.entries.find(e=>e.name===n&&(parent?e.parentId:!e.parentId));
   const acme=find('Acme'),beta=find('Beta'),website=find('Website',true),shop=find('Shop',true);
+  const rows={'AION-501':{clientId:acme.id,subClientId:website.id},'AION-502':{clientId:beta.id,subClientId:shop.id,jiraLinks:['AION-9']},'AION-503':{},'AION-504':{clientId:beta.id,subClientId:shop.id}};
+  for(const [key,m] of Object.entries(rows))await s.env.STORE.set(metadataKey(s.env,key),JSON.stringify({revision:3,history:[],...m}));
+  await s.env.STORE.set('tw:AION:task:AION-504',JSON.stringify({taskId:8,projectId:24}));
+  return {acme,beta,website,shop};
+}
+test('Needs mapping: only what the catalog already links is suggested, never an archived project; the rest is shown and left alone',async()=>{
+  const s=await setup(),shopProject=s.odoo.projects.find(p=>p.id===22);
+  shopProject.active=true;await s.sync();
+  const {beta,website}=await legacy(s);
   // The two "Website" projects are one catalog project linked to both Odoo projects.
   assert.deepEqual(website.sources.filter(x=>x.source==='odoo').map(x=>x.row).sort(),[20,21]);
-  const legacy={'AION-501':{clientId:acme.id,subClientId:website.id},'AION-502':{clientId:beta.id,subClientId:shop.id,jiraLinks:['AION-9']},'AION-503':{},'AION-504':{clientId:beta.id,subClientId:shop.id}};
-  for(const [key,m] of Object.entries(legacy))await s.env.STORE.set(metadataKey(s.env,key),JSON.stringify({revision:3,history:[],...m}));
-  // AION-504's work already went to another Odoo project.
-  await s.env.STORE.set('tw:AION:task:AION-504',JSON.stringify({taskId:8,projectId:24}));
   assert.equal((await s.call('/clients/needs-mapping','GET',undefined,user)).status,403);
+  assert.equal((await s.call('/clients/needs-mapping/apply','POST',{},user)).status,403);
   const plan=(await s.call('/clients/needs-mapping')).data,row=k=>plan.rows.find(r=>r.key===k);
   assert.equal(row('AION-501').kind,'ambiguous');assert.deepEqual(row('AION-501').candidates.map(c=>c.id).sort(),[20,21]);
-  assert.equal(row('AION-502').kind,'ready');assert.equal(row('AION-502').odooProjectId,22);assert.equal(row('AION-502').archived,true);
+  assert.equal(row('AION-502').kind,'ready');assert.equal(row('AION-502').odooProjectId,22);assert.equal(row('AION-502').revision,3);
   assert.equal(row('AION-503').kind,'missing');
   assert.equal(row('AION-504').kind,'conflict');assert.match(row('AION-504').message,/#24/);
   assert.deepEqual([plan.ready,plan.missing,plan.ambiguous,plan.conflict],[1,1,1,1]);
+  // Archived in Odoo: no longer suggested.
+  shopProject.active=false;await s.sync();
+  const archived=(await s.call('/clients/needs-mapping')).data.rows.find(r=>r.key==='AION-502');
+  assert.equal(archived.kind,'missing');assert.match(archived.message,/archived/);
+  assert.equal((await s.call('/clients/needs-mapping/apply','POST',{})).data.applied,0);
+  shopProject.active=true;await s.sync();
   // Applying to one ticket that isn't ready changes nothing; applying all saves only the ready one.
   assert.equal((await s.call('/clients/needs-mapping/apply','POST',{keys:['AION-503']})).data.applied,0);
   const applied=(await s.call('/clients/needs-mapping/apply','POST',{})).data;assert.equal(applied.applied,1);
+  assert.deepEqual(applied.linked,[{key:'AION-502',odooProjectId:22,label:'Beta → Shop'}]);
   const m=await readMetadata(s.env,'AION-502');
-  assert.equal(m.odooProjectId,22);assert.equal(m.clientId,beta.id);assert.deepEqual(m.jiraLinks,['AION-9']);assert.equal(m.history.at(-1).project.to,'Beta → Shop');
+  assert.equal(m.odooProjectId,22);assert.equal(m.clientId,beta.id);assert.deepEqual(m.jiraLinks,['AION-9']);
+  assert.equal(m.history.at(-1).project.to,'Beta → Shop');assert.equal(m.history.at(-1).note,'Linked to the Odoo project its project already had.');
   for(const k of ['AION-501','AION-503','AION-504'])assert.equal((await readMetadata(s.env,k)).odooProjectId,null,k);
   assert.equal(applied.plan.rows.some(r=>r.key==='AION-502'),false);assert.equal(applied.plan.mapped,1);
+});
+
+test('Map tickets: a chosen project gives the client; stale, archived, client-less and conflicting tickets are skipped with the reason',async()=>{
+  // Shop was active when the legacy tickets got it, and has been archived in Odoo since.
+  const s=await setup(),shopProject=s.odoo.projects.find(p=>p.id===22);shopProject.active=true;await s.sync();shopProject.active=false;await s.sync();
+  const {acme}=await legacy(s);
+  const apply=items=>s.call('/clients/needs-mapping/apply','POST',{items});
+  assert.equal((await s.call('/clients/needs-mapping/apply','POST',{items:[{key:'AION-501',odooProjectId:20}]},user)).status,403);
+  assert.equal((await apply([{key:'AION-501',revision:'3'}])).status,400);
+  const r=(await apply([
+    {key:'AION-501',revision:3,odooProjectId:20},   // ambiguous: the admin chose one
+    {key:'AION-503',revision:2,odooProjectId:20},   // changed since the list was read
+    {key:'AION-502',revision:3,odooProjectId:22},   // archived
+    {key:'AION-503',revision:3,odooProjectId:23},   // no client
+    {key:'AION-504',revision:3,odooProjectId:20},   // its work went elsewhere: not without resolving
+    {key:'AION-502',revision:3}])).data;            // no suggestion (Shop is archived)
+  assert.equal(r.applied,1);assert.deepEqual(r.linked.map(x=>x.key),['AION-501']);
+  const why=Object.fromEntries(r.skipped.map(x=>[x.key+':'+r.skipped.filter(y=>y.key===x.key).indexOf(x),x.message]));
+  assert.match(why['AION-503:0'],/Changed since the list was opened/);assert.match(why['AION-502:0'],/archived/);
+  assert.match(why['AION-503:1'],/no client/);assert.match(why['AION-504:0'],/work went to another Odoo project/);assert.match(why['AION-502:1'],/Not ready/);
+  const m=await readMetadata(s.env,'AION-501');
+  assert.equal(m.odooProjectId,20);assert.equal(m.clientId,acme.id);assert.equal(m.revision,4);
+  assert.equal(m.history.at(-1).note,'Chosen in Map tickets.');assert.equal(m.history.at(-1).by.email,admin.email);assert.deepEqual(m.history.at(-1).changes.odooProjectId,{from:null,to:20});
+  // A conflict is resolved ticket by ticket, on request; its work stays where it went.
+  const done=(await apply([{key:'AION-504',revision:3,odooProjectId:20,resolveConflict:true}])).data;assert.equal(done.applied,1);
+  const c=await readMetadata(s.env,'AION-504');assert.equal(c.odooProjectId,20);assert.match(c.history.at(-1).note,/Work already logged stays where it went/);
+  assert.deepEqual(JSON.parse(await s.env.STORE.get('tw:AION:task:AION-504')),{taskId:8,projectId:24});
+  // Already mapped: skipped, not replaced.
+  const again=(await apply([{key:'AION-501',revision:4,odooProjectId:21}])).data;
+  assert.equal(again.applied,0);assert.match(again.skipped[0].message,/already has an Odoo project/);assert.equal((await readMetadata(s.env,'AION-501')).odooProjectId,20);
 });
 
 test('a failing sync is kept with its reason for the Clients page until a sync works',async()=>{

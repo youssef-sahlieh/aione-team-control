@@ -87,6 +87,9 @@ export async function projectBudgets(env,{only=null}={}){
     return {odooId:p.id,name:String(p.name||''),client:client?.name||'',clientId:client?.id||null,missingClient:!client,archived:p.active===false,company:company?.name||'',url:odooLink(env,p.id),
       // Work is logged in the main company, so only its projects (and those of no company) can be linked here.
       linkable:!company||main==null||company.id===main,
+      // Map tickets offers the same projects a ticket can be given: in the last sync, active, with a client.
+      label:snap?.label||null,assignable:!!(snap&&snap.active&&snap.clientId),
+      blocked:!snap?'Not in the last sync from Odoo.':!snap.active?'Archived in Odoo.':!snap.clientId?'No client in Odoo.':null,
       links:{projects:entries.map(e=>({id:e.id,name:label(e)})),epics,helpdesk:helpdesk===p.id,tickets:{count:keys.length,byProject:byPrefix,keys:keys.slice(0,200)}},
       mapped:!!(entries.length||epics.length||keys.length||own.all.length||helpdesk===p.id),
       ticketCount:own.all.length,openTickets:own.open.length,reviewTickets:review.length,reviewKeys:review.slice(0,50),lastWorkDate:last[p.id]||null,
