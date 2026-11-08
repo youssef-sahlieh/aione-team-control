@@ -311,3 +311,68 @@
 .project-budget-summary dd{margin:0;font-variant-numeric:tabular-nums}
 .project-ticket-list{list-style:none;padding:0;margin:6px 0;display:flex;flex-direction:column;gap:6px}
 .project-ticket-list li{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}
+/* Clients & Projects with Odoo: heading and actions on one line, a one-line sync status, secondary actions under More. */
+.clients-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 12px}
+.clients-head h2{margin:0}
+.clients-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.clients-sync{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;margin:6px 0 0;font-size:13px;color:var(--muted)}
+.clients-sync-error summary{cursor:pointer;color:var(--crit);font-weight:600}
+.clients-sync-error p{margin:4px 0;color:var(--text,#222)}
+.clients-page>.msg:empty{display:none}
+.clients-more{position:relative}
+.clients-more>summary{list-style:none;cursor:pointer}
+.clients-more>summary::-webkit-details-marker{display:none}
+.clients-more>summary::after{content:' ▾'}
+.clients-more-list{position:absolute;right:0;top:calc(100% + 4px);z-index:20;min-width:240px;display:flex;flex-direction:column;padding:4px;background:var(--surface,#fff);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgb(0 0 0 / .15)}
+.clients-more-item{background:none;border:0;text-align:left;padding:10px 12px;border-radius:6px;cursor:pointer;font:inherit;color:inherit;min-height:40px}
+.clients-more-item:hover,.clients-more-item:focus-visible{background:var(--sunk)}
+.budget-filters{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;margin:0 0 10px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--sunk)}
+.budget-filters[hidden]{display:none}
+.budget-filters .business-field{flex:0 1 200px;min-width:0}
+.budget-facts{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:4px 16px;margin:0 0 8px}
+.budget-facts dt{color:var(--muted);font-size:12px}
+.budget-facts dd{margin:0}
+.budget-link-row{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.budget-link-row .budget-sub{display:inline;margin:0 4px 0 0}
+.budget-detail-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.budget-map-btn:disabled{cursor:not-allowed}
+.business-dialog.business-dialog-wide{max-width:1040px;box-sizing:border-box}
+/* Map tickets: a filter row (kinds and search), then one row per ticket: what it is, its Client → Project and Apply. */
+.map-target{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;margin:6px 0}
+.map-target dt{color:var(--muted)}
+.map-target dd{margin:0;font-weight:600}
+.map-bar{display:flex;flex-direction:column;gap:8px;margin:8px 0}
+.map-kinds{display:flex;flex-wrap:wrap;gap:6px}
+.map-kind{background:var(--surface,#fff);color:inherit;cursor:pointer;font:inherit;font-size:13px;font-weight:600}
+.map-kind[aria-pressed=true]{background:var(--fg,#222);color:var(--surface,#fff);border-color:var(--fg,#222)}
+.map-tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.map-tools input[type=search]{flex:1 1 260px;min-width:0}
+.map-list{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px}
+.map-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,380px);gap:6px 12px;padding:10px 12px;border-bottom:1px solid var(--line);align-items:start}
+.map-row:last-child{border-bottom:0}
+.map-row.map-row-check{grid-template-columns:auto minmax(0,1fr)}
+.map-row-check .map-pick input{width:20px;height:20px;margin:2px 0 0}
+.map-row.done{background:var(--ok-soft,#f0fdf4)}
+.map-ticket{display:flex;flex-direction:column;gap:2px;min-width:0}
+.map-key{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.map-status{font-size:12px;color:var(--muted)}
+.map-title{word-break:break-word}
+.map-why{font-size:12px;color:var(--muted)}
+.map-pick{display:flex;gap:6px;align-items:flex-start}
+.map-pick .combo{flex:1;min-width:0}
+.map-result{grid-column:1/-1;margin:0;font-size:13px}
+.map-result:empty{display:none}
+.map-result.ok{color:var(--ok)}
+.map-result.err{color:var(--crit)}
+.map-more{display:flex;justify-content:center;margin-top:8px}
+.map-more:empty{display:none}
+@media (max-width:820px){
+  .clients-actions{width:100%}
+  .clients-actions>.btn,.clients-more{flex:1 1 calc(50% - 8px)}
+  .clients-more>summary{display:block;text-align:center}
+  .clients-more-list{left:0;right:auto;width:100%}
+  .business-dialog.business-dialog-wide{width:calc(100% - 24px);padding:14px}
+  .map-row{grid-template-columns:1fr}
+  .map-row.map-row-check{grid-template-columns:auto 1fr}
+  .map-tools>.btn{flex:1 1 100%}
+}

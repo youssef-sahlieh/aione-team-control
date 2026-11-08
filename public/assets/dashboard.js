@@ -1500,7 +1500,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   });
   $("d-reply-customer").addEventListener("click",()=>sendComment(true));
 
-  setInterval(()=>{ const a=$("auto"); if(!a||!lastLoad) return; const left=Math.max(0,120-Math.round((Date.now()-lastLoad)/1000)); a.textContent="next refresh in "+(left>=60?Math.floor(left/60)+"m "+(left%60)+"s":left+"s");
+  // The Clients page loads its own data and refreshes only when asked, so the ticket auto-refresh waits while it is open.
+  setInterval(()=>{ const a=$("auto"); if(!a||!lastLoad) return; if(workspace.route().page==="clients"){ a.textContent="auto-refresh paused on this page"; lastLoad=Date.now(); return; } const left=Math.max(0,120-Math.round((Date.now()-lastLoad)/1000)); a.textContent="next refresh in "+(left>=60?Math.floor(left/60)+"m "+(left%60)+"s":left+"s");
     if(Date.now()-lastLoad>120000&&document.visibilityState==="visible"&&!batchBusy&&!reloading&&$("pop").hidden&&!drag){ lastLoad=Date.now(); reload(); } },1000);
   $("signout").addEventListener("click",()=>signOut());
   // The Work view re-fits its columns when the window size changes.

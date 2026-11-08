@@ -193,6 +193,8 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     $("tickets-area").hidden = custom; $("workspace-content").hidden = !custom;
     if (!custom) return false;
     const target = $("workspace-content");
+    // The Clients page keeps itself up to date once open: a dashboard render leaves its filters, scroll and dialogs alone.
+    if (route.page === "clients" && target.querySelector(':scope > [data-keep="clients"]')) return true;
     target.replaceChildren();
     if(context().filterCount&&!["requests","reports","analytics","clients","worklog","errors","calendar","reviews"].includes(route.page)){const info=node("div","summary-filter-info");info.append(node("span","","Using your current ticket filters"),button("Adjust filters →","linkbtn",()=>navigate("tickets")));target.appendChild(info);}
     // Respect all active filters but include closed tickets for summary metrics.

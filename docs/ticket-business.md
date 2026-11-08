@@ -32,28 +32,35 @@ When Odoo is connected, **each ticket picks one Odoo project and its client come
 - New tickets need a project. Older tickets without one stay readable and editable; a project is required only when it is set or changed.
 - A ticket on a project later archived in Odoo keeps it and shows **Archived**.
 - Users choose the project when the ticket has none; afterwards only administrators change it. Changing it on a ticket with work logs asks first; existing entries stay on their Odoo project and only new entries go to the new one. The change is in the ticket history ("Odoo project: from → to").
-- The project list is a snapshot of Odoo (`business:<P>:odoo-projects`) refreshed by every Odoo sync (automatic, **Sync from Odoo now**, and after **Create project**). The Clients page shows the last successful sync, when projects were last read, and the last error with what to do.
+- The project list is a snapshot of Odoo (`business:<P>:odoo-projects`) refreshed by every Odoo sync (once when the dashboard loads, **Sync from Odoo now**, and after **Create project**). The Clients page shows when the last sync worked and, only when the last one failed, the error with what to do.
 
-### Odoo projects table (administrators)
+### Clients & Projects page (administrators, with Odoo)
 
-Every active Odoo project, newest first: name (opens its details), client, created, allocated, logged and remaining hours, % used, budget status, open tickets, tickets needing PR review, last work log, and the actions **Open in Odoo** and **Edit allocation**. The ▸ button shows the company, Odoo id, Jira links and the link control. Search covers project, client and ticket keys; filters are budget status, client, missing client and with/without tickets. Totals, the scope line and **Export CSV** follow the filters; the summary chips always count all active projects and say so.
+The page has the heading, **Sync from Odoo now**, **+ Create project**, **Map tickets (N)** (tickets without an Odoo project) and a **More** menu (Export CSV, Create contact, the clients board, the epic map when enabled, and *How figures are counted*), a one-line sync status, and the Odoo projects table.
+
+**Refreshing.** The page reads its data when it opens and again only after **Sync from Odoo now** or a change made on it. Nothing runs on a timer: the ticket auto-refresh pauses while the page is open, and dashboard renders leave the page in place (`data-keep="clients"`), so search, filters, open rows, scroll position and open dialogs stay as they are. One request per data source runs at a time; a second Sync press while one runs does nothing, and the backend answers *busy* to a sync from elsewhere. After a change only the table rows and the Map tickets count are read again; an allocation edit redraws its own row, and a refresh that arrives while an allocation is being edited waits until it closes.
+
+### Odoo projects table
+
+Every active Odoo project, including those with no tickets, newest first. Columns: Project (opens its details), Client, Allocated, Logged, Remaining, Budget status, Open tickets, and the actions **Set/Edit allocation** and **Map tickets**. The ▸ button shows the rest: created, % used, tickets needing PR review, last work log, time not in Odoo yet, company, Odoo id, **Open in Odoo**, Jira links with the link control, and the details dialog (tickets, work logs and history). Search (project or client) and the client filter are always shown; budget status, missing client, with/without tickets and the sort (including Created and Last work log) are behind **Filters (n)**. Totals, the count line and **Export CSV** follow the filters.
 
 - **Logged** is Odoo's timesheet total (each line once). Work log time not in Odoo yet (pending or failed) is shown apart and not counted.
 - **Remaining** = allocated − logged, and can be negative. An empty allocation is **Allocation not set**, not zero; an allocation of 0 is over budget as soon as any time is logged.
 - **Near limit** starts at **80%** of the allocated hours (`NEAR_LIMIT`, sent with the list); over 100% is **Over budget**, below 80% **Within budget**.
 - **Open tickets** are linked tickets the dashboard has not recorded as completed. **Needs PR review** counts linked tickets with an open pull request waiting for review (needs `GITHUB_TOKEN` and `GITHUB_REPOS`).
-- The details dialog shows the budget summary, the tickets with their pull requests, pull requests awaiting review, the latest Odoo timesheet lines and the history (creation from the dashboard and allocation changes, with who and when).
+- Each row says whether tickets can be given the project (`assignable`: in the last sync, active, with a client) and why not (`blocked`); **Map tickets** is disabled with that reason otherwise.
 
-### Needs mapping (administrators)
+### Map tickets
 
-Above the table, **Needs mapping** lists tickets without an Odoo project:
+A dialog listing tickets without an Odoo project, with filters **Ready**, **Missing**, **Ambiguous** and **Conflict** and a search over key, title, client and project. Each ticket has a searchable "Client → Project" picker with the same projects as the table (`assignable` rows) and its own **Apply**. The client always comes from the project.
 
-- **Ready**: the ticket's client/project is linked to exactly one Odoo project (from the catalog's Odoo source or the epic map). **Apply** saves it with the ticket's revision; a ticket changed since the check is skipped and reported.
-- **Missing**: no client/project, or a project with no Odoo link.
-- **Ambiguous**: the project links several Odoo projects (for example two same-named projects under one client).
-- **Conflict**: the ticket's work logs already went to a different Odoo project than its project's link, or its Odoo project (stored or linked) is not among the main company's synced projects (deleted or moved to another company).
-
-Names are never matched and nothing is overwritten. Work logs, Jira links and Jira project membership are unchanged.
+- **Ready**: the ticket's catalog project links exactly one Odoo project that is active and has a client. Only then is it suggested (preselected). Names are never matched.
+- **Missing**: no client/project, a project with no Odoo link, or one whose Odoo project is archived or has no client.
+- **Ambiguous**: the project links several Odoo projects; they are listed first in the picker, none is chosen.
+- **Conflict**: the ticket's work already went to a different Odoo project, or its Odoo project is not among the synced ones. It is mapped only on its own, after a confirm (`resolveConflict`); bulk actions never include it.
+- **Apply all ready** sends the ready tickets only. Opened from a project's row, the dialog shows that project and its client; tick tickets (conflicts cannot be ticked) and confirm **Assign N tickets**.
+- Every ticket is sent with the revision read when the dialog opened and re-checked under its lock; one changed since, given a project meanwhile, or no longer valid is skipped and the reason shown under it. The dialog stays open, keeps its own list and choices through page refreshes, and asks before closing with choices not applied.
+- Saving sets `odooProjectId` and the derived client/project (`epicKey` cleared) with a history entry (who, when, from → to, and whether it was suggested or chosen). Work logs keep their Odoo project; Jira links and Jira project membership are unchanged. `POST /clients/needs-mapping/apply` (administrators) takes `{items:[{key,revision,odooProjectId?,resolveConflict?}]}` (up to 1,000) and returns `{applied,skipped,linked,plan}`.
 
 ## API and storage
 
