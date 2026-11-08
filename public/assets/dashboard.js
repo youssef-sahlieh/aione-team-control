@@ -362,8 +362,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
           x.addEventListener("click",go); x.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" ") go(e); }); return x; };
         st.appendChild(mk("−",-1,"Fewer days")); st.appendChild(el("span","stepv",v+"d")); st.appendChild(mk("+",1,"More days")); b.appendChild(st);
       } else { b.appendChild(el("span","l",fd.l)); b.appendChild(el("span","h",fd.h)); }
-      // "All open" and "All tickets" start from their built-in views, so the filters reset too.
-      b.addEventListener("click",()=>{ if(fd.id==="open"){ applyBuiltIn("__current"); return; } if(fd.id==="all"){ applyBuiltIn("__all"); return; } state.focus=fd.id; state.sel.clear(); render(); });
+      // "All open" and "All tickets" start from their built-in views, so a user's filters reset too; administrators keep theirs.
+      b.addEventListener("click",()=>{ if(fd.id==="open"&&!IS_ADMIN){ applyBuiltIn("__current"); return; } if(fd.id==="all"){ applyBuiltIn("__all"); return; } state.focus=fd.id; state.sel.clear(); render(); });
       if(extra&&!primaryFocus.includes(fd.id))extra.appendChild(b);else box.appendChild(b);
     });
     if(extra)box.appendChild(extra);

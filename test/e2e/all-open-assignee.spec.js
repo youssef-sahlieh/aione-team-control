@@ -159,3 +159,19 @@ test("All tickets in the sidebar resets a user's search to the All open view", a
   await expect(page.getByRole("searchbox", { name: "Search tickets" })).toHaveValue("");
   await expect(page.locator("#page-heading")).toHaveText("All open");
 });
+
+test("An administrator going from No due date back to All open keeps the filters", async ({ page }) => {
+  await mockDashboard(page);
+  await page.goto("/dashboard.html?page=tickets");
+  await expect(page.locator("#view")).toContainText("Ticket AION-1");
+  const search = page.getByRole("searchbox", { name: "Search tickets" }), tile = l => page.locator("button.tile", { hasText: l });
+  await search.fill("AION");
+  await tile("No due date").click();
+  await page.locator('a[data-page="tickets"]').click();
+  await expect(page.locator("#page-heading")).toHaveText("All open");
+  await expect(search).toHaveValue("AION");
+  await tile("No due date").click();
+  await tile("All open").click();
+  await expect(tile("All open")).toHaveAttribute("aria-pressed", "true");
+  await expect(search).toHaveValue("AION");
+});
