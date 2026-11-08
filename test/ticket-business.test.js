@@ -6,6 +6,7 @@ import {memoryStore,saveUser} from '../proxy/src/users.js';
 import {readMetadata,readCatalog,prepareImport,catalogKey,metadataKey,publicHistory,publicMetadata,saveMetadata,withTicketLock,guardedTransition,closureErrors,INTERNAL_ASSIGNEE} from '../proxy/src/ticket-metadata.js';
 import {buildReport,reportPeriod} from '../proxy/src/reports.js';
 import {createReadTools} from '../proxy/src/ai.js';
+import {readTicketLog} from '../proxy/src/ticket-log.js';
 const admin={email:'admin@example.invalid',name:'Manager',role:'admin',dev:'builder',v:1};
 const user={email:'user@example.invalid',name:'Developer',role:'user',dev:'builder',v:1};
 async function setup(){
@@ -164,6 +165,31 @@ test('with BILLING_REQUIRED on, administrator assignment requires explicit billi
  assert.equal((await s.call('/internal/'+t.key,'PUT',{assignee:'lead'},admin)).status,200);
  await s.call('/ticket-metadata','PUT',{key:'AION-1',fields:{revision:0,billing:'billable'}},admin);
  assert.equal((await s.call('/jira/issue/AION-1','PUT',{fields:{assignee:{accountId:'lead'}}},admin)).status,200);
+});
+test('assignee changes: only administrators, Unassigned clears a Jira owner, history records who changed it, and Developers are not sent',async()=>{
+ const s=await setup();
+ assert.equal((await s.call('/jira/issue/AION-1','PUT',{fields:{assignee:{accountId:'lead'}}},user)).status,403);
+ assert.equal(s.calls.filter(c=>c.method==='PUT').length,0);
+ assert.equal((await s.call('/jira/issue/AION-1','PUT',{fields:{assignee:{accountId:'lead'}},assigneeName:'Lead'},admin)).status,200);
+ assert.equal((await s.call('/jira/issue/AION-1','PUT',{fields:{assignee:null},assigneeName:'Unassigned'},admin)).status,200);
+ assert.deepEqual(s.calls.filter(c=>c.method==='PUT').map(c=>Object.keys(c.body.fields)),[['assignee'],['assignee']]);
+ const log=await readTicketLog(s.env,'AION-1');
+ assert.deepEqual(log.map(e=>e.action),['assignee','assignee']);
+ assert.deepEqual(log[0].changes.assignee,{from:'Unassigned',to:'Lead'});
+ assert.equal(log[1].changes.assignee.to,'Unassigned');
+ assert.equal(log[0].by.email,admin.email);
+ assert.ok(!Number.isNaN(Date.parse(log[0].at)));
+ assert.equal(log[0].changes.developers,undefined);
+ const t=await s.create();
+ const r=await s.call('/internal/'+t.key,'PUT',{assignee:'lead'},admin);
+ assert.equal(r.status,200);
+ assert.deepEqual((await r.json()).ticket.devs,['builder']);
+ assert.equal((await s.call('/internal/'+t.key,'PUT',{assignee:INTERNAL_ASSIGNEE},user)).status,400);
+ const last=(await readTicketLog(s.env,t.key)).at(-1);
+ assert.equal(last.action,'assignee');
+ assert.deepEqual(last.changes.assignee,{from:INTERNAL_ASSIGNEE,to:'lead'});
+ assert.equal(last.by.email,admin.email);
+ assert.equal(last.changes.developers,undefined);
 });
 test('user initial dates, submissions and revisions require a saved positive estimate',async()=>{
  const s=await setup(),t=await s.create(),body={key:t.key,proposedDate:'2026-11-01',reason:'Schedule the work'};

@@ -290,6 +290,19 @@ export async function projectSetup(env){
   for(const f of COPIED)if(f in r)values[f]=r[f];
   return {reference:ref.id,values};
 }
+// Allocated hours on an Odoo project (Timesheets). Odoo keeps nothing for a project with no value (it reads as false),
+// so an empty allocation is told apart from an explicit zero, which is stored as 0.
+export async function allocationField(env){
+  const f=await odoo(env,'project.project','fields_get',[['allocated_hours']],{attributes:['type','readonly']}).catch(()=>({}));
+  return f.allocated_hours?.type==='float';
+}
+// The hours typed in a form: undefined when empty (not known yet), else zero or a positive number with at most 2 decimals.
+export function allocatedHoursInput(value){
+  if(value==null||value==='')return undefined;
+  const n=typeof value==='number'?value:Number(String(value).trim());
+  if(!(Number.isFinite(n)&&n>=0&&n<=1000000&&Math.round(n*100)/100===n))throw new BusinessError('Enter the allocated hours as zero or a positive number with at most 2 decimals, or leave it empty.',400,'project_budget');
+  return n;
+}
 export async function clientDetails(env,clientId){
   const catalog=await readCatalog(env),client=catalog.entries.find(e=>e.id===clientId&&!e.parentId);
   if(!client)problem('Client not found.',404,'not_found');
@@ -343,7 +356,10 @@ async function createInOdoo(env,url,me,b){
       const same=catalog.entries.find(e=>e.parentId===client.id&&nameKey(e.name)===nameKey(name));
       const linked=(same?.sources||[]).filter(s=>s.source==='odoo').map(s=>s.row);
       if(linked.length){const [found]=await odoo(env,'project.project','search_read',[[['id','in',linked]]],{fields:['id'],context:{active_test:false},limit:1});if(found)problem('This project is already in Odoo (#'+found.id+').',409,'exists');}
-      created=await odoo(env,'project.project','create',[{name,partner_id:partner,...(await projectSetup(env)).values}]);
+      // The allocation is the same Odoo field the Allocated Hours column edits; left out when it is not known yet.
+      const hours=allocatedHoursInput(b.allocatedHours);
+      if(hours!==undefined&&!await allocationField(env))problem("This Odoo has no allocated hours on projects (Timesheets).",501,'no_allocation');
+      created=await odoo(env,'project.project','create',[{name,partner_id:partner,...(await projectSetup(env)).values,...(hours!==undefined?{allocated_hours:hours}:{})}]);
     }
   }catch(e){if(e instanceof BusinessError)throw e;problem("Odoo didn't create it: "+String(e.message||'unknown error').slice(0,200),502,'odoo');}
   await syncCatalogFromOdoo(env,{force:true});

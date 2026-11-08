@@ -186,7 +186,13 @@
 .report-filter-form .business-field { min-width:0; }
 .report-filter-form > .btn { align-self:end; min-height:44px; }
 .catalog-missing{margin:12px 0}.catalog-missing h3{margin:0 0 4px;font-size:13px}.catalog-missing-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 0;border-top:1px solid var(--line,#e5e7eb)}.catalog-missing-row span{min-width:0;overflow-wrap:anywhere}
-.catalog-create{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin:12px 0}.catalog-create h3{grid-column:1/-1;margin:0;font-size:13px}
+.catalog-sync{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center}.catalog-sync .business-guidance{flex-basis:100%;margin:0}
+.catalog-dialog{width:calc(100% - 64px);box-sizing:border-box}
+.catalog-form{grid-template-columns:1fr;gap:12px;margin:12px 0 0}
+.catalog-field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.catalog-error{color:var(--crit);font-size:12px;font-weight:600}.catalog-error:empty{display:none}
+.catalog-dialog-actions{display:flex;flex-wrap:wrap;gap:8px}
+@media(max-width:640px){.catalog-dialog{width:calc(100% - 24px);padding:14px}.catalog-dialog-actions .btn{flex:1 1 auto}}
 /* Clients page: projects table, status pills, conflicts panel (administrators). */
 .business-panel select.fsel{height:38px;padding:6px 10px;font-size:13px;border-radius:8px;max-width:100%;box-sizing:border-box;background-color:var(--surface)}
 .project-filter{margin:8px 0}
@@ -280,3 +286,6 @@
 .budget-status.near{color:var(--warn);background:var(--warn-soft);border-color:var(--warn)}
 .budget-status.on_track{color:var(--ok);background:var(--ok-soft);border-color:var(--ok)}
 .budget-status.not_set{color:var(--muted);background:var(--sunk)}
+
+.budget-pager{display:flex;align-items:center;justify-content:flex-end;gap:.5rem;flex-wrap:wrap;margin-top:.5rem;font-size:.9rem}
+.budget-pager:empty{display:none}
