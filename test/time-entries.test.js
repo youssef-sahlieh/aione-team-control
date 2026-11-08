@@ -3,7 +3,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import worker,{makeToken} from '../proxy/src/handler.js';
 import {memoryStore,saveUser} from '../proxy/src/users.js';
-import {prepareImport,catalogKey,readCatalog} from '../proxy/src/ticket-metadata.js';
+import {prepareImport,catalogKey,readCatalog,odooProjectsKey,metadataKey} from '../proxy/src/ticket-metadata.js';
 import {todayIn,suggestFields,formatMinutes} from '../proxy/src/time-entries.js';
 
 const admin={email:'admin@example.invalid',name:'Manager',role:'admin',dev:'builder',v:1};
@@ -69,10 +69,12 @@ async function setup({mode='on',pilot=[]}={}){
   const imported=await prepareImport({revision:0,entries:[]},[{customer:'Acme',displayName:'Branch A',sourceRow:10}],'odoo');
   await env.STORE.set(catalogKey(env),JSON.stringify({...imported.next,revision:1}));
   const cat=await readCatalog(env),client=cat.entries.find(e=>e.name==='Acme'),sub=cat.entries.find(e=>e.name==='Branch A');
+  // The Odoo projects tickets can be given, as the catalog sync keeps them.
+  await env.STORE.set(odooProjectsKey(env),JSON.stringify({syncedAt:Date.now(),projects:[{id:10,name:'Branch A',active:true,clientId:900,clientName:'Acme',label:'Acme → Branch A'},{id:11,name:'Old',active:false,clientId:900,clientName:'Acme',label:'Acme → Old'},{id:12,name:'Support',active:true,clientId:900,clientName:'Acme',label:'Acme → Support'}]}));
   const odoo=fakeOdoo();
   globalThis.fetch=async(url,init={})=>String(url).startsWith('https://odoo.invalid')?odoo.fetch(url,init):Response.json({errorMessages:['no jira here']},{status:404});
   const call=async(path,method='GET',body,me=user,headers={})=>{const r=await worker.fetch(new Request('https://proxy.invalid'+path,{method,headers:{Authorization:'Bearer '+tokens[me.email],'Content-Type':'application/json',...headers},...(body===undefined?{}:{body:JSON.stringify(body)})}),env);return {status:r.status,data:await r.json()};};
-  const ticket=async(metadata={clientId:client.id,subClientId:sub.id})=>{const r=await call('/internal','POST',{summary:'Fix the report',devs:['builder'],metadata:{...metadata,billing:'billable'}},admin);assert.equal(r.status,201,JSON.stringify(r.data));return r.data.ticket.key;};
+  const ticket=async(metadata={odooProjectId:10})=>{const r=await call('/internal','POST',{summary:'Fix the report',devs:['builder'],metadata:{...metadata,billing:'billable'}},admin);assert.equal(r.status,201,JSON.stringify(r.data));return r.data.ticket.key;};
   if(mode!=='off'){const s=await call('/time-entries/setup','GET',undefined,admin);const r=await call('/time-entries/setup','PUT',{revision:s.data.config.revision,mode,pilot,fields:FIELDS},admin);assert.equal(r.status,200,JSON.stringify(r.data));}
   const log=(key,extra={},me=user)=>call('/time-entries','POST',{id:crypto.randomUUID(),ticket:key,date:todayIn(),minutes:90,description:'Investigated the export',...extra},me);
   const cron=(secret=env.TIME_SYNC_SECRET)=>worker.fetch(new Request('https://proxy.invalid/cron/time-sync',{method:'POST',headers:{Authorization:'Bearer '+secret}}),env);
@@ -213,11 +215,16 @@ test('Odoo refusing the line sends it to Needs review with the reason',async()=>
   const r=await s.log(key);assert.equal(r.data.entry.status,'review');assert.match(r.data.entry.reason,/locked period/);
 });
 
-test('no client, or no Odoo project: Needs setup, then the worker sends it once the ticket is set',async()=>{
-  const s=await setup(),key=await s.ticket({clientId:null,subClientId:null});
-  const r=await s.log(key);assert.equal(r.data.entry.status,'setup');assert.match(r.data.entry.reason,/Internal/);
+test('no Odoo project (a ticket from before the rule): Needs setup, then the worker sends it once the project is chosen',async()=>{
+  const s=await setup(),key=await s.ticket();
+  // New tickets need a project; a legacy one has none.
+  const raw=JSON.parse(await s.env.STORE.get(metadataKey(s.env,key)));await s.env.STORE.set(metadataKey(s.env,key),JSON.stringify({...raw,odooProjectId:null,clientId:null,subClientId:null}));
+  const r=await s.log(key);assert.equal(r.data.entry.status,'setup');assert.match(r.data.entry.reason,/Choose the Odoo project/);
   const m=await s.call('/ticket-metadata?key='+key,'GET',undefined,admin);
-  assert.equal((await s.call('/ticket-metadata','PUT',{key,fields:{revision:m.data.metadata.revision,clientId:s.client.id,subClientId:s.sub.id}},admin)).status,200);
+  // With Odoo connected the client and project are not chosen apart.
+  assert.equal((await s.call('/ticket-metadata','PUT',{key,fields:{revision:m.data.metadata.revision,clientId:s.client.id,subClientId:s.sub.id}},admin)).data.code,'project_required');
+  const set=await s.call('/ticket-metadata','PUT',{key,fields:{revision:m.data.metadata.revision,odooProjectId:10}},admin);
+  assert.equal(set.status,200,JSON.stringify(set.data));assert.equal(set.data.metadata.clientId,s.client.id);assert.equal(set.data.metadata.subClientId,s.sub.id);assert.equal(set.data.metadata.odooProject.label,'Acme → Branch A');
   const res=await s.cron();const out=await res.json();assert.equal(res.status,200);assert.equal(out.synced,1);
   assert.equal((await s.call('/time-entries?ticket='+key)).data.entries[0].status,'synced');
 });
@@ -305,7 +312,7 @@ test('the entry and its "waiting to sync" place are saved together',async()=>{
 async function agreedSetup(){
   const s=await setup();
   s.env.TEAM_CONFIG=JSON.stringify({devEmails:{builder:'builder@x'},people:{'Dana Developer':{}}});
-  const r=await s.call('/internal','POST',{summary:'Fix the report',devs:['builder'],assignee:'Dana Developer',metadata:{clientId:s.client.id,subClientId:s.sub.id,billing:'billable'}},admin);
+  const r=await s.call('/internal','POST',{summary:'Fix the report',devs:['builder'],assignee:'Dana Developer',metadata:{odooProjectId:10,billing:'billable'}},admin);
   assert.equal(r.status,201,JSON.stringify(r.data));
   return {...s,key:r.data.ticket.key};
 }
@@ -398,4 +405,31 @@ test('agreed hours: closing waits for the agreed line in Odoo',async()=>{
   await s.call('/time-entries/'+id+'/sync','POST',{action:'resend'},admin);
   assert.equal(agreedLines(s).length,1);
   const closed=await s.call('/internal/'+s.key,'PUT',{status:'Closed'},admin);assert.equal(closed.status,200,JSON.stringify(closed.data));
+});
+
+test('a project change sends only new work to the new project: lines already posted stay, the old task is kept, and the destination is shown first',async()=>{
+  const s=await setup(),key=await s.ticket();
+  assert.equal((await s.log(key)).data.entry.status,'synced');
+  const before=await s.call('/time-entries?ticket='+key);
+  assert.equal(before.data.destination.label,'Acme → Branch A');assert.equal(before.data.destination.clientName,'Acme');assert.equal(before.data.destination.earlierProjects,undefined);
+  // The ticket has work: the change is allowed, and its history says where the work stays.
+  const m=await s.call('/ticket-metadata?key='+key,'GET',undefined,admin);assert.equal(m.data.workEntries,1);
+  const moved=await s.call('/ticket-metadata','PUT',{key,fields:{revision:m.data.metadata.revision,odooProjectId:12}},admin);assert.equal(moved.status,200,JSON.stringify(moved.data));
+  const h=(await s.call('/ticket-metadata?key='+key,'GET',undefined,admin)).data.history.at(-1);
+  assert.deepEqual(h.project,{from:'Acme → Branch A',to:'Acme → Support'});assert.match(h.note,/stays on the previous project/);
+  const after=await s.call('/time-entries?ticket='+key);
+  assert.equal(after.data.destination.projectId,12);assert.equal(after.data.destination.label,'Acme → Support');assert.deepEqual(after.data.destination.earlierProjects,['Acme → Branch A']);
+  assert.match(after.data.destination.taskName,/created with the first entry/);
+  assert.equal((await s.log(key,{minutes:30})).data.entry.status,'synced');
+  const tasks=[...s.odoo.tasks.values()],lines=[...s.odoo.lines.values()];
+  assert.deepEqual(tasks.map(t=>t.project_id[0]),[10,12]);
+  // Each line on its own project's task; the first line is untouched.
+  assert.deepEqual(lines.map(l=>[l.project_id[0],l.task_id[0]]),[[10,tasks[0].id],[12,tasks[1].id]]);
+  // Moving back reuses the first task.
+  const m2=await s.call('/ticket-metadata?key='+key,'GET',undefined,admin);
+  await s.call('/ticket-metadata','PUT',{key,fields:{revision:m2.data.metadata.revision,odooProjectId:10}},admin);
+  await s.log(key,{minutes:15});assert.equal(s.odoo.tasks.size,2);assert.equal([...s.odoo.lines.values()].at(-1).task_id[0],tasks[0].id);
+  // Users cannot move a ticket that already has a project.
+  const m3=await s.call('/ticket-metadata?key='+key,'GET',undefined,admin);
+  assert.equal((await s.call('/ticket-metadata','PUT',{key,fields:{revision:m3.data.metadata.revision,odooProjectId:12}},user)).status,403);
 });

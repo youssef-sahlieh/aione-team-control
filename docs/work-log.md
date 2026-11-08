@@ -9,7 +9,9 @@ People log time on Jira, internal and Odoo Helpdesk tickets with **Log work** (i
 - **Form:** ticket and user (read-only), work date (today in Israel time; earlier dates are allowed, future
   dates and dates in Odoo's lock are not), duration as **Hours** (0–24) and **Minutes** (0–59) boxes, and a
   required description. The shortcuts 15m / 30m / 1h / 2h fill both boxes. Zero in total and more than 24 hours
-  are refused. It shows the Odoo project and task the work goes to. **Save**, or **Save and add another**.
+  are refused. It shows the Odoo project ("Client → Project") and task the work goes to, from the ticket's Odoo
+  project. When the ticket's project changed, earlier entries stay where they were sent; only new entries go to the
+  current project. **Save**, or **Save and add another**.
   The API still takes total minutes.
 - **Statuses:** Syncing, Synced, Needs setup (e.g. the ticket has no client or project), Needs review (an
   administrator must reconcile).

@@ -14,7 +14,7 @@ export function validateView(v) {
   if (!v || v.version !== 1 || typeof v.name !== "string" || !v.name.trim() || v.name.length > 60 || !focuses.includes(v.focus) || !modes.includes(v.mode) || !["", "reporter", "epic", "assignee", "dev", "status"].includes(v.group)) return false;
   if (typeof v.query !== "string" || v.query.length > 500 || !v.filters) return false;
   if(v.sort!=null&&!validSort(v.sort,true))return false;
-  if(v.businessFilter&&(typeof v.businessFilter!=="object"||Object.entries(v.businessFilter).some(([k,value])=>!["clientId","subClientId","missing","billing"].includes(k)||typeof value!=="string"||value.length>100)))return false;
+  if(v.businessFilter&&(typeof v.businessFilter!=="object"||Object.entries(v.businessFilter).some(([k,value])=>!["clientId","subClientId","odooProjectId","missing","billing"].includes(k)||typeof value!=="string"||value.length>100)))return false;
   const f = v.filters;
   return fields.every(key => Array.isArray(f[key]) && f[key].length <= 100 && f[key].every(x => typeof x === "string" && x.length <= 255)) &&
     typeof f.epic === "string" && f.epic.length <= 255 && ["any", "overdue", "today", "week", "later", "none"].includes(f.due) && ["any", "reply", "new3", "upd1"].includes(f.activity) && (f.source===undefined||["all","internal","jira","odoo"].includes(f.source));
