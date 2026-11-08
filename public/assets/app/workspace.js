@@ -56,7 +56,8 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
   window.addEventListener("popstate", () => { const next = readRoute(new URL(location.href), context().admin); if (next.page === route.page && next.mode === route.mode) { if (next.page === "analytics") context().syncAnalytics(); return; } route = next; synchronize(); render(); });
   const nav = $("main-nav");
   // "All open" starts from the same built-in view as the dashboard's All open tile, so the filters reset too.
-  buildNav(nav, { onPage: id => (id === "tickets" ? context().openAllOpen() : navigate(id)) });
+  // All tickets resets to the All open view for users; administrators keep the filters they set.
+  buildNav(nav, { onPage: id => (id === "tickets" && !context().admin ? context().openAllOpen() : navigate(id)) });
   // Pages only administrators see; the breadcrumb names the section they belong to.
   function configure() {
     route = readRoute(new URL(location.href), context().admin);

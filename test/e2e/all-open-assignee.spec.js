@@ -138,3 +138,24 @@ for (const [name, viewport] of [["desktop", { width: 1280, height: 900 }], ["mob
     await expect(page.getByRole("button", { name: /Log work/ }).first()).toBeVisible();
   });
 }
+
+test("All tickets in the sidebar keeps an administrator's filters", async ({ page }) => {
+  await mockDashboard(page);
+  await page.goto("/dashboard.html?page=tickets");
+  await expect(page.locator("#view")).toContainText("Ticket AION-1");
+  await page.getByRole("searchbox", { name: "Search tickets" }).fill("AION-2");
+  await page.locator('a[data-page="overview"]').click();
+  await page.locator('a[data-page="tickets"]').click();
+  await expect(page.getByRole("searchbox", { name: "Search tickets" })).toHaveValue("AION-2");
+});
+
+test("All tickets in the sidebar resets a user's search to the All open view", async ({ page }) => {
+  await mockDashboard(page, { role: "user" });
+  await page.goto("/dashboard.html?page=tickets");
+  await expect(page.locator("#view")).toContainText("Ticket AION-1");
+  await page.getByRole("searchbox", { name: "Search tickets" }).fill("AION-2");
+  await page.locator('a[data-page="overview"]').click();
+  await page.locator('a[data-page="tickets"]').click();
+  await expect(page.getByRole("searchbox", { name: "Search tickets" })).toHaveValue("");
+  await expect(page.locator("#page-heading")).toHaveText("All open");
+});
