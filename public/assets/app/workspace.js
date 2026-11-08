@@ -21,7 +21,7 @@ const icons = {
 };
 const pages = [
   ["overview", "Overview", "Your work, at a glance."],
-  ["tickets", "All tickets", "A clear view of your team's work, from first task to final delivery."],
+  ["tickets", "All open", "A clear view of your team's work, from first task to final delivery."],
   ["workload", "Workload", "Understand assignments, deadlines, and where support is needed."],
   ["calendar", "Calendar", "Make space for what's next. Plan around your ticket due dates."],
   ["requests", "Date requests", "Review and decide proposed date changes."],
@@ -103,7 +103,8 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     if (id === "tickets") { const count = node("span", "nav-count", "—"); count.id = "nav-ticket-count"; a.appendChild(count); }
     if(id==="requests"){const count=node("span","nav-count","0");count.id="nav-date-count";a.append(count);}
     if (id === "errors") { const count = node("span", "nav-count nav-alert", "0"); count.id = "nav-error-count"; count.hidden = true; a.appendChild(count); }
-    a.addEventListener("click", e => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate(id); });
+    // "All open" starts from the same built-in view as the dashboard's All open tile, so the filters reset too.
+    a.addEventListener("click", e => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); if (id === "tickets") context().openAllOpen(); else navigate(id); });
     nav.appendChild(a);
   }
   // Databases report is its own admin-only page; shown when Odoo is connected (set in applyConfig).
@@ -255,11 +256,13 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     if (!ready) return false;
     const page = pages.find(p => p[0] === route.page);
     document.body.dataset.workspacePage = route.page;
-    $("page-heading").textContent = page[1]; $("page-description").textContent = route.page==="tickets"&&!context().admin?"The tickets you’re authorized to work on.":page[2]; $("breadcrumbs").textContent = adminPages.has(route.page) ? "Admin" : "Workspace";
+    // The tickets page is named after the view it shows (All open, Closed, Overdue…), so the heading never disagrees with the list.
+    $("page-heading").textContent = route.page === "tickets" ? context().focusLabel() : page[1]; $("page-description").textContent = route.page==="tickets"&&!context().admin?"The tickets you’re authorized to work on.":page[2]; $("breadcrumbs").textContent = adminPages.has(route.page) ? "Admin" : "Workspace";
     for (const link of nav.querySelectorAll("a[data-page]")) { if (link.dataset.page === route.page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); }
     if(context().admin&&route.page==="history")moreNav.open=true;
     $("nav-date-count").textContent=String(context().pendingDates||0);
-    $("nav-ticket-count").textContent = String(state.issues?.length || 0);
+    // Same count as the All open tile: open tickets in the current scope (see openCount in dashboard.js).
+    $("nav-ticket-count").textContent = String(context().openCount());
     const custom = ["overview", "requests", "workload", "calendar", "reports", "analytics", "clients", "worklog", "errors", "reviews"].includes(route.page);
     $("tickets-area").hidden = custom; $("workspace-content").hidden = !custom;
     if (!custom) return false;

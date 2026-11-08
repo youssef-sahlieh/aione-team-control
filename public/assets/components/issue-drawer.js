@@ -33,6 +33,8 @@ export function createIssueDrawer({ isDirty, canViewHistory, canViewFullHistory 
   panels.activity.prepend(el("p", "msg", "Recorded due date changes. This timeline is not a complete ticket audit."));
   Object.values(panels).forEach(panel => activity.append(panel));
   main.append(activity);
+  // The Work log comes last in the main column, after Activity.
+  const workLogPart = pick("#work-log"); if (workLogPart) main.append(workLogPart);
   // Anything not placed above stays in the main column, so nothing is lost.
   for (const child of blocks) if (!layout.contains(child)) main.insertBefore(child, activity);
   body.replaceChildren(layout);
