@@ -73,7 +73,10 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
     const fact=(k,v)=>{facts.append(el('dt','',k));const dd=el('dd');if(v instanceof Node)dd.append(v);else dd.textContent=v;facts.append(dd);};
     fact('Ticket',key+(title?' · '+title:''));fact('User',me().name||me().email);
     const dest=view.destination;
-    fact('Goes to Odoo',!dest?'Odoo project shown after setup':dest.setup?el('span','msg err',dest.setup):dest.error?el('span','msg err',dest.error):dest.projectName+' › '+dest.taskName);
+    fact('Goes to Odoo',!dest?'Odoo project shown after setup':dest.setup?el('span','msg err',dest.setup):dest.error?el('span','msg err',dest.error):(dest.label||dest.projectName)+' › '+dest.taskName);
+    if(dest?.clientName)fact('Client',dest.clientName);
+    // After a project change, earlier entries stay where they were posted; only this and later entries use the new project.
+    if(dest?.earlierProjects?.length)fact('Earlier entries',el('span','wl-note','Stay on '+dest.earlierProjects.join(', ')+'. Only new entries go to the project above.'));
     body.append(facts);
     // Work date on its own row; the note spells the day out so day and month can't be confused.
     const minDate=view.lockDate?new Date(Date.parse(view.lockDate+'T12:00:00Z')+86400000).toISOString().slice(0,10):'';
@@ -259,6 +262,7 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
     if(view.closed&&view.logging)target.append(el('p','msg','Closed ticket: reopen it to log work.'));
     else if(view.logging&&!view.canLog&&!view.closed)target.append(el('p','msg','Work logging isn\'t switched on for you yet.'));
     if(view.canLog&&view.destination&&(view.destination.setup||view.destination.error))target.append(el('p','msg err',view.destination.setup||view.destination.error));
+    else if(view.canLog&&view.destination?.projectId)target.append(el('p','wl-note','New work goes to '+(view.destination.label||view.destination.projectName)+'.'+(view.destination.earlierProjects?.length?' Earlier entries stay on '+view.destination.earlierProjects.join(', ')+'.':'')));
     if(view.entries.length){const list=el('ol','wl-list');for(const e of view.entries)list.append(entryRow(e,view));target.append(list);}
   }
   function openFor(key,title){const view=views[key];if(view&&view.canLog)openForm(key,title,view);}

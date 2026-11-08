@@ -24,6 +24,37 @@ Users choose a client/sub-client during internal creation. Administrators manage
 
 All dashboard transitions into a completed status require client selection, estimated hours, actual hours and Work done. Administrators can override missing requirements with a recorded reason. The same server guard protects drawer, board, bulk and direct API calls. Bulk actions report per-ticket failures. Closing directly in Jira bypasses dashboard validation; the next authoritative read locks the business fields. Created date always uses the original ticket timestamp and displays in Asia/Jerusalem time.
 
+## Odoo project on tickets
+
+When Odoo is connected, **each ticket picks one Odoo project and its client comes from that project**. The picker in create, details, quick edit, bulk edit and the ticket filters lists "Client → Project" labels (with the Odoo id when two read the same). The client is shown read-only. The ticket stores `odooProjectId`; `clientId`/`subClientId` are derived from it and can no longer be set on their own (400 `project_required`).
+
+- Only active projects with a client are offered. A project without a client is listed as not available (400 `project_no_client`), archived ones are refused for new choices (400 `project_archived`), unknown ids get 400 `project_unknown`.
+- New tickets need a project. Older tickets without one stay readable and editable; a project is required only when it is set or changed.
+- A ticket on a project later archived in Odoo keeps it and shows **Archived**.
+- Users choose the project when the ticket has none; afterwards only administrators change it. Changing it on a ticket with work logs asks first; existing entries stay on their Odoo project and only new entries go to the new one. The change is in the ticket history ("Odoo project: from → to").
+- The project list is a snapshot of Odoo (`business:<P>:odoo-projects`) refreshed by every Odoo sync (automatic, **Sync from Odoo now**, and after **Create project**). The Clients page shows the last successful sync, when projects were last read, and the last error with what to do.
+
+### Odoo projects table (administrators)
+
+Every active Odoo project, newest first: name (opens its details), client, created, allocated, logged and remaining hours, % used, budget status, open tickets, tickets needing PR review, last work log, and the actions **Open in Odoo** and **Edit allocation**. The ▸ button shows the company, Odoo id, Jira links and the link control. Search covers project, client and ticket keys; filters are budget status, client, missing client and with/without tickets. Totals, the scope line and **Export CSV** follow the filters; the summary chips always count all active projects and say so.
+
+- **Logged** is Odoo's timesheet total (each line once). Work log time not in Odoo yet (pending or failed) is shown apart and not counted.
+- **Remaining** = allocated − logged, and can be negative. An empty allocation is **Allocation not set**, not zero; an allocation of 0 is over budget as soon as any time is logged.
+- **Near limit** starts at **80%** of the allocated hours (`NEAR_LIMIT`, sent with the list); over 100% is **Over budget**, below 80% **Within budget**.
+- **Open tickets** are linked tickets the dashboard has not recorded as completed. **Needs PR review** counts linked tickets with an open pull request waiting for review (needs `GITHUB_TOKEN` and `GITHUB_REPOS`).
+- The details dialog shows the budget summary, the tickets with their pull requests, pull requests awaiting review, the latest Odoo timesheet lines and the history (creation from the dashboard and allocation changes, with who and when).
+
+### Needs mapping (administrators)
+
+Above the table, **Needs mapping** lists tickets without an Odoo project:
+
+- **Ready**: the ticket's client/project is linked to exactly one Odoo project (from the catalog's Odoo source or the epic map). **Apply** saves it with the ticket's revision; a ticket changed since the check is skipped and reported.
+- **Missing**: no client/project, or a project with no Odoo link.
+- **Ambiguous**: the project links several Odoo projects (for example two same-named projects under one client).
+- **Conflict**: the ticket's work logs already went to a different Odoo project than its project's link, or its Odoo project (stored or linked) is not among the main company's synced projects (deleted or moved to another company).
+
+Names are never matched and nothing is overwritten. Work logs, Jira links and Jira project membership are unchanged.
+
 ## API and storage
 
 All routes require the existing authenticated session:
@@ -35,6 +66,9 @@ All routes require the existing authenticated session:
 - GET /clients/projects (administrators, capability `project-admin-v1`): every project with its local ID, the Odoo projects it is linked to, its contact and status (mapped, unmapped, conflict, archived).
 - GET /clients/odoo/candidates?id= (administrators): unlinked Odoo projects with the same name under the same contact as an unmapped project.
 - POST /clients/odoo/link {revision, id, odooId} (administrators): links an unmapped project to one of those candidates. Refused with 400 `not_candidate` for any other Odoo project, and with 409 when the project is already linked or the revision is stale.
+- GET /clients/odoo-projects/options: the active Odoo projects a ticket can take (any user). GET /clients/odoo-sync: last successful sync, project snapshot time and last error.
+- GET /clients/odoo-projects (administrators): the projects table rows. GET /clients/odoo-projects/details?id=: one project's budget, tickets, pull requests, timesheet lines and history. PUT /clients/odoo-projects/allocation {odooId, hours|null}: saves allocated hours in Odoo and records the change.
+- GET /clients/needs-mapping and POST /clients/needs-mapping/apply {keys?} (administrators): the migration check and applying its ready rows.
 - GET /epic-map (administrators): Jira epics and the Odoo project each is mapped to. PUT /epic-map {revision, epicKey, entryId|null} saves one mapping and updates its tickets.
 - POST /epic-map/sync: brings tickets under mapped epics in line (at most every 10 minutes; administrators may add ?force=1). Tickets with no client, or whose client came from an epic, take the epic's project; a client chosen by hand is kept; completed tickets only get an empty client filled.
 - POST /ticket-metadata/batch: read metadata for up to 100 authorized ticket keys.

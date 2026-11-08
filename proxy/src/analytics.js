@@ -4,7 +4,7 @@
 //
 // Rules: administrators only; an allowlist of fields (no billing, history, emails or descriptions); an unknown
 // value is null, never zero; days are Asia/Jerusalem calendar days.
-import { BusinessError, requireStore, readCatalog, metadataKey, shownName } from './ticket-metadata.js';
+import { BusinessError, requireStore, readCatalog, metadataKey, shownName, selectionOf } from './ticket-metadata.js';
 import { entriesBetween, readSummaries, todayIn } from './time-entries.js';
 import { localDate } from './reports.js';
 
@@ -28,12 +28,13 @@ export function windowStart(now = new Date(), months = WINDOW_MONTHS) {
 // One ticket in the shape the page uses. `meta` is the raw business record, `me` decides what an admin-only field shows.
 export function normalize(t, meta, catalog, loggedMinutes, me) {
   const completedAt = t.closed ? (t.completedAt || t.closedAt || meta.completedAt || null) : null;
-  const name = (id) => shownName(catalog.entries.find((e) => e.id === id)) || null;
+  const name = (id) => shownName(catalog.entries.find((e) => e.id === id)) || null, sel = selectionOf(meta, catalog);
   return {
     key: t.key, source: t.internal ? 'internal' : 'jira', title: String(t.title || t.summary || '').slice(0, 200),
     status: t.status, cat: t.cat || (t.closed ? 'done' : 'indeterminate'),
     createdDay: dayOf(t.created), completedDay: completedAt ? dayOf(completedAt) : null, dueDay: dateOnly(t.due),
-    clientId: meta.clientId || null, clientName: name(meta.clientId), subClientId: meta.subClientId || null, subClientName: name(meta.subClientId),
+    // The client and project follow the ticket's Odoo project when it has one.
+    clientId: sel.clientId, clientName: name(sel.clientId), subClientId: sel.subClientId, subClientName: name(sel.subClientId),
     devs: Array.isArray(t.devs) ? t.devs : [],
     estimatedHours: hours(meta.estimatedHours), agreedHours: me.role === 'admin' ? hours(meta.agreedHours) : null,
     loggedMinutes,

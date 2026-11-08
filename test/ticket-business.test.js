@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import worker,{makeToken} from '../proxy/src/handler.js';
 import {agreedImportPreview,agreedImportApply} from '../proxy/src/ticket-metadata.js';
 import {memoryStore,saveUser} from '../proxy/src/users.js';
-import {readMetadata,readCatalog,prepareImport,catalogKey,metadataKey,publicHistory,publicMetadata,saveMetadata,withTicketLock,guardedTransition,closureErrors,INTERNAL_ASSIGNEE} from '../proxy/src/ticket-metadata.js';
+import {readMetadata,readCatalog,prepareImport,catalogKey,metadataKey,odooProjectsKey,publicHistory,publicMetadata,saveMetadata,withTicketLock,guardedTransition,closureErrors,INTERNAL_ASSIGNEE} from '../proxy/src/ticket-metadata.js';
 import {buildReport,reportPeriod} from '../proxy/src/reports.js';
 import {createReadTools} from '../proxy/src/ai.js';
 import {readTicketLog} from '../proxy/src/ticket-log.js';
@@ -457,7 +457,8 @@ test('client details come from Odoo (only fields it has); a name chosen in the d
   // Chosen AI name: stored on the client and shown on tickets; clearing it shows the Odoo name again.
   const rev=(await readCatalog(s.env)).revision;
   assert.equal((await s.call('/clients','PUT',{revision:rev,id:acme.id,aiName:'Acme Retail'},admin)).status,200);
-  const t=await s.create(admin,{metadata:{clientId:acme.id,subClientId:branch.id,billing:'billable'}});
+  await s.env.STORE.set(odooProjectsKey(s.env),JSON.stringify({syncedAt:Date.now(),projects:[{id:10,name:'Branch A',active:true,clientId:1,clientName:'Acme Ltd',label:'Acme Ltd → Branch A'}]}));
+  const t=await s.create(admin,{metadata:{odooProjectId:10,billing:'billable'}});
   const meta=(await (await s.call('/ticket-metadata/batch','POST',{keys:[t.key]},admin)).json()).records[t.key];assert.equal(meta.clientName,'Acme Retail');
   assert.equal((await s.call('/clients','PUT',{revision:rev+1,id:acme.id,aiName:''},admin)).status,200);
   assert.equal((await readCatalog(s.env)).entries.find(e=>e.id===acme.id).aiName,undefined);

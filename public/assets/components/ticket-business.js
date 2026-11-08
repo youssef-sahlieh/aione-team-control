@@ -1,5 +1,6 @@
 import {createReportBrowser} from './report-browser.js';
 import { createdDate, DASH_PRIORITIES } from '../models/ticket-business.js';
+import { BUDGET_LABEL, DEFAULT_VIEW, budgetStatus, hours, signedHours, percent, budgetText, budgetRows, budgetCsvRows, budgetCounts, projectChoices } from '../models/odoo-projects.js';
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
 const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.addEventListener('click',fn);return b;};
 const field=(parent,label,node)=>{const l=el('label','business-field');node.setAttribute('aria-label',label);l.append(el('span','',label),node);parent.append(l);return node;};
@@ -42,13 +43,49 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   let billingNeeded=false,enabled=false,epicMapping=false,projectAdmin=false,projectBudget=false,catalog={revision:0,entries:[]},records={},editor=null;
   const reportBrowser=createReportBrowser({api,openIssue,clientsPanel:reportAddPanel});
   const admin=()=>context().admin;
-  let odooOn=false;
+  let odooOn=false,odooProjects=[],syncState=null;
   const clients=()=>catalog.entries.filter(e=>!e.parentId&&!e.archived);
   const children=id=>catalog.entries.filter(e=>e.parentId===id&&!e.archived);
-  async function loadCatalog(){catalog=await api('/clients');return catalog;}
+  async function loadCatalog(){catalog=await api('/clients');if(odooOn)await loadProjects().catch(()=>{});return catalog;}
+  // The Odoo projects a ticket can be given (from the catalog sync's snapshot), and the sync's last result.
+  async function loadProjects(){const [o,s]=await Promise.all([api('/clients/odoo-projects/options'),api('/clients/odoo-sync').catch(()=>null)]);odooProjects=o.projects;syncState=s;return odooProjects;}
   // A client's shown name: the AI name an administrator chose, else its Odoo name.
   const label=e=>e?(e.aiName||e.name):'';
-  function names(m){return {...m,clientName:label(catalog.entries.find(e=>e.id===m.clientId)),subClientName:label(catalog.entries.find(e=>e.id===m.subClientId))};}
+  // With an Odoo project the ticket shows that project (marked when archived) and its client.
+  function names(m){const client=label(catalog.entries.find(e=>e.id===m.clientId)),p=m.odooProject;
+    return p?{...m,clientName:client||p.clientName||'',subClientName:p.name+(p.archived?' (archived)':'')}:{...m,clientName:client,subClientName:label(catalog.entries.find(e=>e.id===m.subClientId))};}
+  // The Odoo project picker: one searchable list of "Client → Project", active projects with a client only. The client is
+  // shown read-only, from the project. read() gives odooProjectId when it was chosen or changed (required: always).
+  function projectPicker(parent,values={},{disabled=false,required=false}={}){
+    const current=values.odooProjectId??null,{choices,noClient}=projectChoices(odooProjects,current);
+    const select=field(parent,'Odoo project',el('select','fsel'));option(select,'Choose Odoo project…','');
+    for(const c of choices){const o=new Option(c.label,String(c.id));o.disabled=c.disabled;select.append(o);}
+    select.value=current!=null?String(current):'';select.disabled=disabled;if(required)select.setAttribute('aria-required','true');
+    const info=el('p','business-client-readonly'),badge=el('div','business-project-flags');parent.append(info,badge);
+    const show=()=>{const p=odooProjects.find(x=>String(x.id)===select.value)||(current!=null&&select.value===String(current)?values.odooProject:null);
+      info.textContent='Client: '+(p?(p.clientName||'No client'):'—');badge.replaceChildren();
+      if(p?.archived)badge.append(el('span','project-status archived','Archived in Odoo'));
+      if(p&&p.known===false)badge.append(el('span','project-status conflict','Not in the synced Odoo projects'));};
+    if(current==null&&values.clientId&&!required)parent.append(el('p','msg err','Saved before tickets had an Odoo project: choose one. Its work log needs it.'));
+    if(noClient.length)parent.append(el('p','business-guidance','Not offered, no client in Odoo: '+noClient.map(p=>p.name).join(', ')+'. Set the customer on the project in Odoo, then sync.'));
+    const box=combobox(select);select.addEventListener('change',show);show();
+    return {select,first:box.input,read:()=>{
+      if(!select.value){if(required)throw new Error('Choose the Odoo project for this ticket.');return {};}
+      const id=Number(select.value);return required||id!==current?{odooProjectId:id}:{};}};
+  }
+  // Where the ticket's client comes from: the Odoo project when Odoo is connected, else the catalog client and project.
+  const placement=(parent,values,{disabled=false,required=false,optional=true}={})=>odooOn?projectPicker(parent,values,{disabled,required}):(s=>({...s,first:s.client}))(selections(parent,values,disabled,optional));
+  const placed=v=>v.odooProjectId!=null||!!(v.clientId||v.subClientId);
+  // Moving a ticket that has work logs: those stay on the old project, so say so first.
+  const confirmMove=(fields,r)=>!('odooProjectId' in fields)||r.metadata.odooProjectId==null||fields.odooProjectId===r.metadata.odooProjectId||!(r.workEntries>0)||confirm('This ticket has '+r.workEntries+' work log '+(r.workEntries===1?'entry':'entries')+'. They stay on '+(r.metadata.odooProject?.label||'the current project')+'; only new work goes to the new project. Change the project?');
+  // One history line. A project change shows the project names, not the ids behind them.
+  function historyText(h){
+    if(h.type==='override')return 'Closure override: '+h.reason+' — '+h.missing.join('; ');
+    if(h.type!=='edit')return h.type;
+    const hide=h.project?['odooProjectId','clientId','subClientId']:[],parts=Object.entries(h.changes||{}).filter(([k])=>!hide.includes(k)).map(([k,v])=>k+': '+(v.from??'Not set')+' → '+(v.to??'Not set'));
+    if(h.project)parts.unshift('Odoo project: '+(h.project.from||'Not set')+' → '+h.project.to+(h.note?' ('+h.note+')':''));
+    return parts.join('; ');
+  }
   function selections(parent,values={},disabled=false,optional=false){
     const client=field(parent,'Client',el('select','fsel')),sub=field(parent,'Project',el('select','fsel'));
     option(client,optional?'No client (optional)':'Choose client…','');for(const c of clients().sort((a,b)=>label(a).localeCompare(label(b))))option(client,label(c),c.id);
@@ -67,8 +104,10 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   }
   function createFields(parent,{values={},creating=false,closed=false}={}){
     const box=el('div','business-form');parent.append(box);
-    const clientGroup=el('fieldset','business-section business-client-section');clientGroup.append(el('legend','','Client & billing'));box.append(clientGroup);
-    const selects=selections(clientGroup,values,closed||(!admin()&&!creating&&!!(values.clientId||values.subClientId)),true);
+    const clientGroup=el('fieldset','business-section business-client-section');clientGroup.append(el('legend','',odooOn?'Odoo project & billing':'Client & billing'));box.append(clientGroup);
+    // Once set, only administrators change it (the backend checks this too).
+    const locked=!admin()&&!creating&&placed(values),selects=placement(clientGroup,values,{disabled:closed||locked,required:creating});
+    if(locked&&odooOn)clientGroup.append(el('p','business-guidance','Ask an administrator to move this ticket to another Odoo project.'));
     let billing;if(admin()){billing=field(clientGroup,'Billing (administrators only)',el('select','fsel'));billingOptions(billing,values.billing);billing.disabled=closed;if(creating&&billingNeeded)billing.setAttribute('aria-required','true');}
     const workGroup=el('fieldset','business-section business-work-section');workGroup.append(el('legend','','Work summary'));box.append(workGroup);
     const logged=values.loggedMinutes>0;
@@ -80,7 +119,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     // Once set, the estimate is changed by administrators only.
     if(!admin()&&!creating&&values.estimatedHours!=null){estimated.disabled=true;estimated.title='The estimate is set. Ask an administrator to change it.';}
     const work=field(workGroup,'Work done',el('textarea','inp'));work.value=values.workDone||'';work.maxLength=5000;work.rows=4;work.dir='auto';work.disabled=closed;
-    const read=()=>{if(creating&&admin()&&billingNeeded&&!billing.value)throw new Error('Choose Billable or Not billable before assigning this ticket.');for(const n of [estimated,actual])if(!n.checkValidity())throw new Error('Hours must be greater than zero, with up to two decimal places.');const out={estimatedHours:estimated.value===''?null:Number(estimated.value),actualHours:actual.value===''?null:Number(actual.value),workDone:work.value};if(admin()||creating||!(values.clientId||values.subClientId))Object.assign(out,selects.read());if(billing)out.billing=billing.value||null;if(agreed){if(!agreed.checkValidity())throw new Error('Agreed hours must be greater than zero, with up to two decimal places.');const hours=agreed.value===''?null:Number(agreed.value);if(hours!==(values.agreedHours??null))out.agreedHours=hours;}return out;};
+    const read=()=>{if(creating&&admin()&&billingNeeded&&!billing.value)throw new Error('Choose Billable or Not billable before assigning this ticket.');for(const n of [estimated,actual])if(!n.checkValidity())throw new Error('Hours must be greater than zero, with up to two decimal places.');const out={estimatedHours:estimated.value===''?null:Number(estimated.value),actualHours:actual.value===''?null:Number(actual.value),workDone:work.value};if(admin()||creating||!placed(values))Object.assign(out,selects.read());if(billing)out.billing=billing.value||null;if(agreed){if(!agreed.checkValidity())throw new Error('Agreed hours must be greater than zero, with up to two decimal places.');const hours=agreed.value===''?null:Number(agreed.value);if(hours!==(values.agreedHours??null))out.agreedHours=hours;}return out;};
     return {read,box,selects};
   }
   async function load(keys){
@@ -92,21 +131,22 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   // One field (or the client pair) edited straight from the ticket list, with the same rules as the ticket panel
   // (client and billing for administrators; closed tickets locked). The server checks all of it again.
   const QUICK={client:'Client',billing:'Billing',estimatedHours:'Estimated hours',actualHours:'Actual hours',workDone:'Work done',dashPriority:'Priority'};
-  function canQuickEdit(i,name){if(!enabled||!i||i.odoo||i.cat==='done'||!(name in QUICK))return false;if(name==='estimatedHours'&&!admin()&&i.estimatedHours!=null)return false;if(name==='dashPriority')return admin();if(name==='client')return admin()||!i.clientId;return name==='billing'?admin():true;}
+  const quickLabel=name=>name==='client'&&odooOn?'Odoo project':QUICK[name];
+  function canQuickEdit(i,name){if(!enabled||!i||i.odoo||i.cat==='done'||!(name in QUICK))return false;if(name==='estimatedHours'&&!admin()&&i.estimatedHours!=null)return false;if(name==='dashPriority')return admin();if(name==='client')return admin()||!placed(i);return name==='billing'?admin():true;}
   async function quickEdit(box,key,name,done){
     const msg=el('p','msg','Loading…');box.replaceChildren(msg);
     let r;try{r=await api('/ticket-metadata?key='+encodeURIComponent(key));}catch(e){message(msg,e);return;}
     records[key]=r.metadata;box.replaceChildren();
     if(r.closed){box.append(el('p','msg','Closed ticket: reopen it to edit these fields.'));return;}
     const v=r.metadata,form=el('div','quick-edit');box.append(form);let read,first;
-    if(name==='client'){const s=selections(form,v);read=s.read;first=s.client;}
+    if(name==='client'){const s=placement(form,v,{required:odooOn,optional:false});read=s.read;first=s.first;}
     else if(name==='billing'){const b=field(form,'Billing',el('select','fsel'));billingOptions(b,v.billing);read=()=>{if(!b.value)throw new Error('Choose Billable or Not billable.');return {billing:b.value};};first=b;}
     else if(name==='workDone'){const t=field(form,'Work done',el('textarea','inp'));t.value=v.workDone||'';t.maxLength=5000;t.rows=4;t.dir='auto';read=()=>({workDone:t.value});first=t;}
     else if(name==='dashPriority'){const p=field(form,'Priority',el('select','fsel'));option(p,'Not set','');DASH_PRIORITIES.forEach(x=>option(p,x,x));p.value=v.dashPriority||'';const o=field(form,'Order within priority',input('number',v.dashOrder));o.min='1';o.max='99';o.step='1';o.placeholder='Last';read=()=>{if(o.value!==''&&!o.checkValidity())throw new Error('The order must be a whole number from 1 to 99.');return {dashPriority:p.value||null,dashOrder:o.value===''?null:Number(o.value)};};first=p;}
     else{const n=field(form,QUICK[name],input('number',v[name]));n.min='0.01';n.max='1000000';n.step='0.01';read=()=>{if(!n.checkValidity())throw new Error('Hours must be greater than zero, with up to two decimal places.');return {[name]:n.value===''?null:Number(n.value)};};first=n;}
     const status=el('p','msg'),save=button('Save',async()=>{
       save.disabled=true;
-      try{const data=await api('/ticket-metadata',{method:'PUT',body:{key,fields:{revision:v.revision,...read()}}});records[key]=data.metadata;done();}
+      try{const fields=read();if(!confirmMove(fields,r)){save.disabled=false;return;}const data=await api('/ticket-metadata',{method:'PUT',body:{key,fields:{revision:v.revision,...fields}}});records[key]=data.metadata;done();}
       catch(err){message(status,err);save.disabled=false;}
     },'btn primary');
     form.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.target.tagName!=='TEXTAREA'||e.ctrlKey||e.metaKey)){e.preventDefault();save.click();}});
@@ -120,8 +160,8 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     try{
       const r=await api('/ticket-metadata?key='+encodeURIComponent(key));if(context().key!==key)return;
       records[key]=r.metadata;target.replaceChildren(el('h3','','Ticket work & client'));
-      target.append(el('p','business-guidance',r.closed?'Completed work is read-only. Reopen the ticket to make corrections.':'Complete the hours and work summary before closing. The client is optional.'));
-      if(r.metadata.epicKey)target.append(el('p','business-guidance','The client comes from epic '+r.metadata.epicKey+' and follows it. Choosing another client here stops that.'));
+      target.append(el('p','business-guidance',r.closed?'Completed work is read-only. Reopen the ticket to make corrections.':odooOn?'Complete the hours and work summary before closing. The client comes from the Odoo project; new work logs go to that project.':'Complete the hours and work summary before closing. The client is optional.'));
+      if(r.metadata.epicKey&&!odooOn)target.append(el('p','business-guidance','The client comes from epic '+r.metadata.epicKey+' and follows it. Choosing another client here stops that.'));
       if(r.metadata.overage==='overage')target.append(checkupNote(r.metadata));
       const controls=createFields(target,{values:r.metadata,closed:r.closed}),msg=el('p','msg');let initial=JSON.stringify(controls.read()),editorRevision=r.metadata.revision;
       const readiness=el('div','work-readiness');target.insertBefore(readiness,controls.box);
@@ -130,19 +170,22 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       if(r.closed)target.append(el('p','msg','Closed ticket. An administrator must reopen it before these fields can be edited.'));
       else target.append(button('Save ticket fields',async e=>{
         const save=e.currentTarget;save.disabled=true;
-        try{const data=await api('/ticket-metadata',{method:'PUT',body:{key,fields:{revision:editorRevision,...controls.read()}}});records[key]=data.metadata;editorRevision=data.metadata.revision;initial=JSON.stringify(controls.read());msg.className='msg';msg.textContent='Ticket fields saved.'+(data.warning?' '+data.warning:'');await onChange();}
+        try{const fields=controls.read();if(!confirmMove(fields,r))return;const data=await api('/ticket-metadata',{method:'PUT',body:{key,fields:{revision:editorRevision,...fields}}});records[key]=data.metadata;editorRevision=data.metadata.revision;msg.className='msg';msg.textContent='Ticket fields saved.'+(data.warning?' '+data.warning:'');await onChange();
+          // A new project: redraw, so the picker, history and work log destination start from it.
+          if('odooProjectId' in fields){editor=null;await renderEditor(key);return;}initial=JSON.stringify(controls.read());}
         catch(err){message(msg,err);}finally{save.disabled=false;}
       },'btn primary'));
       target.append(msg);
       const history=el('details','business-history');history.append(el('summary','','Business field history'));
-      for(const h of [...r.history].reverse()){const line=el('div','business-history-entry');line.append(el('strong','',(h.by?.name||h.by?.email||'System')+' · '+new Date(h.at).toLocaleString('en-GB',{timeZone:'Asia/Jerusalem'})),el('div','',h.type==='override'?'Closure override: '+h.reason+' — '+h.missing.join('; '):h.type==='edit'?Object.entries(h.changes).map(([k,v])=>k+': '+(v.from??'Not set')+' → '+(v.to??'Not set')).join('; '):h.type));history.append(line);}
+      for(const h of [...r.history].reverse()){const line=el('div','business-history-entry');line.append(el('strong','',(h.by?.name||h.by?.email||'System')+' · '+new Date(h.at).toLocaleString('en-GB',{timeZone:'Asia/Jerusalem'})),el('div','',historyText(h)));history.append(line);}
       target.append(history);
     }catch(e){if(context().key===key){target.replaceChildren(el('h3','','Ticket work & client'));const msg=el('p','msg');message(msg,e);target.append(msg,button('Retry',()=>renderEditor(key)));}}
   }
   function dialog(title,onClose){const d=el('dialog','business-dialog'),head=el('div','business-dialog-head'),body=el('div'),msg=el('p','msg');head.append(el('h2','',title),button('Close',()=>onClose?onClose():d.close()));d.append(head,body,msg);document.body.append(d);d.addEventListener('close',()=>d.remove());d.showModal();return {d,body,msg};}
   async function bulk(keys){
-    if(!enabled)throw new Error('Updated backend required.');const {d,body,msg}=dialog('Assign client to selected tickets');const selects=selections(body);
-    body.append(button('Apply to '+keys.length+' tickets',async e=>{const action=e.currentTarget;action.disabled=true;const failures=[];for(const key of keys){try{const r=await api('/ticket-metadata?key='+encodeURIComponent(key));await api('/ticket-metadata',{method:'PUT',body:{key,fields:{revision:r.metadata.revision,...selects.read()}}});}catch(err){failures.push(key+': '+err.message);}}await onChange(keys);if(failures.length){msg.textContent=failures.join('\n');action.disabled=false;}else d.close();},'btn primary'));
+    if(!enabled)throw new Error('Updated backend required.');const {d,body,msg}=dialog(odooOn?'Assign Odoo project to selected tickets':'Assign client to selected tickets');const selects=placement(body,{},{required:odooOn});
+    if(odooOn)body.append(el('p','business-guidance','Work already logged on these tickets stays on its current project; only new work goes to the one chosen here.'));
+    body.append(button('Apply to '+keys.length+' tickets',async e=>{const action=e.currentTarget;let fields;try{fields=selects.read();}catch(err){message(msg,err);return;}action.disabled=true;const failures=[];for(const key of keys){try{const r=await api('/ticket-metadata?key='+encodeURIComponent(key));await api('/ticket-metadata',{method:'PUT',body:{key,fields:{revision:r.metadata.revision,...fields}}});}catch(err){failures.push(key+': '+err.message);}}await onChange(keys);if(failures.length){msg.textContent=failures.join('\n');action.disabled=false;}else d.close();},'btn primary'));
   }
   async function ensureBilling(key){
     if(!admin()||!billingNeeded)return;
@@ -165,21 +208,34 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   function filters(parent,filter,onFilter){
     const client=el('select','fsel');client.setAttribute('aria-label','Filter by client');option(client,'All clients','');option(client,'Client not set','__none');for(const c of clients())option(client,c.name,c.id);client.value=filter.clientId||'';
     client.addEventListener('change',()=>{filter.clientId=client.value;filter.subClientId='';onFilter();});parent.append(client);
-    const sub=el('select','fsel');sub.setAttribute('aria-label','Filter by project');option(sub,'All projects','');for(const c of children(filter.clientId))option(sub,c.name,c.id);sub.value=filter.subClientId||'';sub.addEventListener('change',()=>{filter.subClientId=sub.value;onFilter();});parent.append(sub);
+    // With Odoo: the Odoo project (archived ones included, so their tickets can be found); "not set" finds tickets to map.
+    if(odooOn){const p=el('select','fsel');p.setAttribute('aria-label','Filter by Odoo project');option(p,'All Odoo projects','');option(p,'Odoo project not set','__none');
+      for(const x of [...odooProjects].sort((a,b)=>a.label.localeCompare(b.label)))option(p,x.label+(x.archived?' (archived)':''),String(x.id));
+      p.value=filter.odooProjectId||'';p.addEventListener('change',()=>{filter.odooProjectId=p.value;onFilter();});parent.append(p);}
+    else{const sub=el('select','fsel');sub.setAttribute('aria-label','Filter by project');option(sub,'All projects','');for(const c of children(filter.clientId))option(sub,c.name,c.id);sub.value=filter.subClientId||'';sub.addEventListener('change',()=>{filter.subClientId=sub.value;onFilter();});parent.append(sub);}
     const missing=el('select','fsel');missing.setAttribute('aria-label','Missing business information');for(const [v,l]of [['','Any work information'],['estimatedHours','Missing estimate'],['actualHours','Missing actual hours'],['workDone','Missing work done']])option(missing,l,v);missing.value=filter.missing||'';missing.addEventListener('change',()=>{filter.missing=missing.value;onFilter();});parent.append(missing);
     if(admin()){const billing=el('select','fsel');billing.setAttribute('aria-label','Filter by billing');for(const [v,l]of [['','All billing'],['__none','Billing not set'],['billable','Billable'],['not_billable','Not billable']])option(billing,l,v);billing.value=filter.billing||'';billing.addEventListener('change',()=>{filter.billing=billing.value;onFilter();});parent.append(billing);}
   }
-  function matches(i,f={}){return (!f.clientId||(f.clientId==='__none'?!i.clientId:i.clientId===f.clientId))&&(!f.subClientId||i.subClientId===f.subClientId)&&(!f.missing||!i[f.missing])&&(!admin()||!f.billing||(f.billing==='__none'?!i.billing:i.billing===f.billing));}
+  function matches(i,f={}){return (!f.clientId||(f.clientId==='__none'?!i.clientId:i.clientId===f.clientId))&&(odooOn||!f.subClientId||i.subClientId===f.subClientId)&&(!odooOn||!f.odooProjectId||(f.odooProjectId==='__none'?i.odooProjectId==null:String(i.odooProjectId)===f.odooProjectId))&&(!f.missing||!i[f.missing])&&(!admin()||!f.billing||(f.billing==='__none'?!i.billing:i.billing===f.billing));}
   function renderReports(target){reportBrowser.render(target);}
   let catalogNote={text:'',at:0};
   function renderCatalog(target,note){
     const panel=el('section','panel business-panel');target.append(panel);panel.append(el('h2','','Clients & Projects'));
     if(!enabled){panel.append(el('p','msg err','The updated backend is required.'));return;}
     // Clients are Odoo contacts and projects their Odoo projects, refreshed automatically; new ones are created in Odoo.
-    const msg=el('p','msg'),sync=el('div','catalog-sync');sync.append(el('p','business-guidance','Clients are Odoo’s Contacts › Companies with the All in One company selected; projects are each company’s Odoo projects. New contacts and projects in Odoo appear here automatically every few minutes.'),button('Sync from Odoo now',async e=>{const b=e.currentTarget;b.disabled=true;msg.className='msg';msg.textContent='Reading contacts and projects from Odoo…';try{const r=await api('/clients/odoo-sync?force=1',{method:'POST',body:{}});if(r.odoo===false){msg.textContent='Odoo is not connected.';return;}if(r.changed)await loadCatalog();const counts=(r.customers!=null?r.customers+' contacts, ':'')+r.projects+' projects',done=r.changed?r.added+' new from Odoo ('+counts+').':'Already up to date ('+counts+').';msg.textContent=done;if(r.changed){catalogNote={text:done,at:Date.now()};await onChange();if(target.isConnected){target.replaceChildren();renderCatalog(target,done);}}}catch(err){message(msg,err);}finally{b.disabled=false;}},'btn primary'));if(odooOn){const create=(key,text,open)=>{const b=button(text,e=>open(e.currentTarget,target),'btn');b.dataset.create=key;return b;};sync.append(create('contact','+ Create contact',openContactDialog),create('project','+ Create project',openProjectDialog));}panel.append(sync,msg);{const n=note||(Date.now()-catalogNote.at<15000?catalogNote.text:'');if(n)msg.textContent=n;}
+    const msg=el('p','msg'),sync=el('div','catalog-sync');sync.append(el('p','business-guidance','Clients are Odoo’s Contacts › Companies with the All in One company selected; projects are each company’s Odoo projects. New contacts and projects in Odoo appear here automatically every few minutes.'),button('Sync from Odoo now',async e=>{const b=e.currentTarget;b.disabled=true;msg.className='msg';msg.textContent='Reading contacts and projects from Odoo…';try{const r=await api('/clients/odoo-sync?force=1',{method:'POST',body:{}});if(r.odoo===false){msg.textContent='Odoo is not connected.';return;}if(r.changed)await loadCatalog();else await loadProjects().catch(()=>{});syncLine();const counts=(r.customers!=null?r.customers+' contacts, ':'')+r.projects+' projects',done=r.changed?r.added+' new from Odoo ('+counts+').':'Already up to date ('+counts+').';msg.textContent=done;if(r.changed){catalogNote={text:done,at:Date.now()};await onChange();if(target.isConnected){target.replaceChildren();renderCatalog(target,done);}}}catch(err){await loadProjects().catch(()=>{});syncLine();message(msg,err);}finally{b.disabled=false;}},'btn primary'));
+    // The last sync that worked, and the last failure with Odoo's reason while no sync has worked since.
+    const status=el('p','catalog-sync-status');sync.append(status);
+    const when=t=>t?new Date(t).toLocaleString('en-GB',{timeZone:'Asia/Jerusalem',dateStyle:'medium',timeStyle:'short'}):'never';
+    function syncLine(){status.replaceChildren();if(!odooOn||!syncState)return;
+      status.append(el('span','','Last successful sync: '+when(syncState.syncedAt)+(syncState.projectsSyncedAt?' · Odoo projects read '+when(syncState.projectsSyncedAt):'')+'.'));
+      if(syncState.error)status.append(el('span','msg err',' Last sync failed '+when(syncState.error.at)+': '+syncState.error.message+' Check the Odoo connection in Settings, then press Sync from Odoo now.'));}
+    syncLine();
+    if(odooOn){const create=(key,text,open)=>{const b=button(text,e=>open(e.currentTarget,target),'btn');b.dataset.create=key;return b;};sync.append(create('contact','+ Create contact',openContactDialog),create('project','+ Create project',openProjectDialog));}panel.append(sync,msg);{const n=note||(Date.now()-catalogNote.at<15000?catalogNote.text:'');if(n)msg.textContent=n;}
     // Without Odoo a client or project is added here. With Odoo, contacts and projects are created in Odoo from their dialogs.
     if(!odooOn){
     const add=el('div','business-form'),name=field(add,'New client or project name',input('text','')),parent=field(add,'Parent (optional)',el('select','fsel'));option(parent,'Top-level client','');for(const c of clients())option(parent,c.name,c.id);add.append(button('Add',async()=>{try{catalog=await api('/clients',{method:'POST',body:{revision:catalog.revision,name:name.value,parentId:parent.value||null}});await onChange();target.replaceChildren();renderCatalog(target);}catch(err){message(msg,err);}}));panel.append(add);}
+    if(odooOn&&admin())renderNeedsMapping(target);
     if(projectBudget&&odooOn&&admin())renderOdooProjects(target);
     if(projectAdmin&&admin())renderProjects(target);
     if(epicMapping&&admin())renderEpicMap(target);
@@ -220,7 +276,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       saving=true;setBusy(true);msg.className='msg';msg.textContent='Saving to Odoo…';
       try{
         const r=await save();
-        catalog=r.catalog;
+        catalog=r.catalog;await loadProjects().catch(()=>{});
         const note=done();catalogNote={text:note,at:Date.now()};
         d.close();
         await onChange();
@@ -255,29 +311,65 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       save:()=>api('/clients/odoo/project',{method:'POST',body:{name:name.value,clientId:contact.value,allocatedHours:hours.value}}),
       done:()=>'Project “'+name.value.trim()+'” created in Odoo.'});
   }
-  // Every Odoo project with its allocated and logged hours (administrators, project-budget-v1). Logged hours are Odoo's
-  // timesheet lines on the project, so each hour counts once; work not in Odoo yet is shown apart and not added.
-  const hours=n=>n==null?'':(Math.round(n*100)/100).toLocaleString(undefined,{maximumFractionDigits:2})+' h';
-  const signed=n=>n<0?'−'+hours(-n):hours(n);
-  const BUDGET_LABEL={over:'Over budget',near:'Near limit',on_track:'On track',not_set:'Allocation not set'};
-  const budgetText=p=>p.status==='over'?'Over by '+hours(p.overHours):p.status==='near'?'Near limit ('+Math.round(p.loggedHours/p.allocatedHours*100)+'%)':BUDGET_LABEL[p.status];
-  const linkText=p=>p.mapped?[...p.links.projects.map(l=>l.name),...p.links.epics,...(p.links.helpdesk?['Helpdesk']:[]),...Object.entries(p.links.tickets.byProject).map(([k,n])=>k+': '+n+(n===1?' ticket':' tickets'))].join('; '):'Not mapped';
-  const SORTS={name:p=>p.name.toLowerCase(),links:p=>p.mapped?linkText(p).toLowerCase():'~',allocated:p=>p.allocatedHours??-1,logged:p=>p.loggedHours,remaining:p=>p.remainingHours??Infinity,status:p=>({over:0,near:1,on_track:2,not_set:3})[p.status]*1e7-p.overHours,created:p=>p.createdAt?Date.parse(p.createdAt):null};
-  // Newest first by default. Projects with no creation date sort last whichever way the table goes.
+  // Needs mapping (administrators): tickets saved before each ticket had an Odoo project. Only the Odoo project a ticket's
+  // project is already linked to is applied; missing, ambiguous and conflicting tickets are listed to be fixed by hand.
+  // Nothing is matched by name, and an Odoo project already on a ticket is never replaced.
+  const MAPPING_LABEL={ready:'Ready',missing:'Missing',ambiguous:'Ambiguous',conflict:'Conflict'};
+  const MAPPING_SHOWN=200;
+  async function renderNeedsMapping(target){
+    const panel=el('section','panel business-panel needs-mapping');target.append(panel);panel.append(el('h2','','Needs mapping'));
+    const loading=el('p','msg','Checking tickets…');panel.append(loading);
+    let plan;try{plan=await api('/clients/needs-mapping');}catch(err){message(loading,err);return;}
+    const draw=note=>{
+      panel.replaceChildren(el('h2','','Needs mapping'),el('p','business-guidance','Tickets with no Odoo project yet. Ready tickets get the Odoo project their project is already linked to. Open the others and choose their Odoo project. Work logs and Jira links stay as they are.'));
+      const summary=el('div','board-summary');
+      summary.append(el('span','board-chip','All tickets: '+plan.mapped+' of '+plan.scanned+' have an Odoo project'),...Object.entries(MAPPING_LABEL).map(([k,l])=>el('span','board-chip'+(plan[k]&&k!=='ready'?(k==='conflict'?' conflict':' needs'):''),plan[k]+' '+l.toLowerCase())));
+      const msg=el('p','msg',note||'');panel.append(summary,msg);
+      if(!plan.rows.length){panel.append(el('p','business-guidance','Every ticket has an Odoo project.'));return;}
+      const bar=el('div','budget-bar'),filter=el('select','fsel');filter.setAttribute('aria-label','Show tickets that need mapping');option(filter,'All ('+plan.rows.length+')','');
+      for(const [k,l] of Object.entries(MAPPING_LABEL))if(plan[k])option(filter,l+' ('+plan[k]+')',k);
+      bar.append(filter);if(plan.ready)bar.append(button('Apply all ready ('+plan.ready+')',ev=>apply(ev.currentTarget,null,msg),'btn primary'));
+      const list=el('div','mapping-list'),more=el('p','business-guidance');
+      const fill=()=>{const rows=plan.rows.filter(r=>!filter.value||r.kind===filter.value);list.replaceChildren(...rows.slice(0,MAPPING_SHOWN).map(r=>mappingRow(r,msg)));more.textContent=rows.length>MAPPING_SHOWN?'Showing the first '+MAPPING_SHOWN+' of '+rows.length+'.':'';};
+      filter.addEventListener('change',fill);panel.append(bar,list,more);fill();
+    };
+    const mappingRow=(r,msg)=>{
+      const row=el('div','board-row'),info=el('div','board-row-info'),actions=el('div','board-row-actions');
+      info.append(el('strong','',r.key),el('span','',[r.client,r.project].filter(Boolean).join(' / ')||'No client or project'),el('span','business-guidance',r.message));
+      if(r.closed)info.append(el('span','project-status archived','Closed ticket'));
+      if(r.archived)info.append(el('span','project-status archived','Archived in Odoo'));
+      row.append(info,el('span','project-status '+(r.kind==='ready'?'mapped':r.kind==='conflict'?'conflict':'unmapped'),MAPPING_LABEL[r.kind]),actions);
+      if(r.kind==='ready')actions.append(button('Apply',ev=>apply(ev.currentTarget,[r.key],msg),'btn primary'));
+      actions.append(button('Open ticket',()=>openIssue(r.key),'btn'));
+      return row;};
+    async function apply(b,keys,msg){
+      b.disabled=true;msg.className='msg';msg.textContent='Linking tickets to their Odoo projects…';
+      try{const r=await api('/clients/needs-mapping/apply',{method:'POST',body:keys?{keys}:{}});plan=r.plan;
+        const note=r.applied+(r.applied===1?' ticket':' tickets')+' linked.'+(r.skipped.length?' Skipped (changed since the check, refresh to see them): '+r.skipped.map(s=>s.key).join(', ')+'.':'');catalogNote={text:note,at:Date.now()};draw(note);
+        if(Object.keys(records).length)await load(Object.keys(records));await onChange();}
+      catch(err){message(msg,err);b.disabled=false;}
+    }
+    draw();
+  }
+  // Every active Odoo project with its allocated and logged hours (administrators, project-budget-v1). Logged hours are
+  // Odoo's timesheet lines on the project, so each hour counts once; work not in Odoo yet is shown apart and not added.
+  // Filters, sorting and the CSV rows are in models/odoo-projects.js.
   const BUDGET_PAGE=25;
-  let budgetView={q:'',status:'',client:'',sort:'created',dir:-1,page:0};
+  let budgetView={...DEFAULT_VIEW};
   // Odoo's hours are re-read this often while the page is open, so the table follows the 5-minute work log sync.
   const ODOO_REFRESH_MS=2*60*1000;
+  const dateText=d=>d?new Date(d.length===10?d+'T00:00:00':d).toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'}):'—';
+  const COLS=[['name','Odoo Project'],['client','Client'],['created','Created'],['allocated','Allocated'],['logged','Logged'],['remaining','Remaining'],['used','Used'],['status','Budget Status'],['open','Open Tickets'],['review','Needs PR Review'],['lastWork','Last Work Log'],[null,'Actions']];
   async function renderOdooProjects(target,prefetched,before){
     const panel=el('section','panel business-panel odoo-projects');target.insertBefore(panel,before??null);panel.append(el('h2','','Odoo projects'));
-    panel.append(el('p','business-guidance','Every project in Odoo, linked to Jira or not. Logged hours are the Odoo timesheet hours on the project, counted once whether they came from the work log, agreed hours or Odoo itself. Allocated hours are saved on the Odoo project.'));
     const msg=el('p','msg',prefetched?'':'Loading projects from Odoo…');panel.append(msg);
     let data=prefetched;if(!data){try{data=await api('/clients/odoo-projects');}catch(err){message(msg,err);return;}}
     msg.textContent='';
+    panel.insertBefore(el('p','business-guidance','Every active project in Odoo. Logged hours are the Odoo timesheet hours on the project, counted once whether they came from the work log, agreed hours or Odoo itself; work log time not in Odoo yet (waiting or failed) is shown apart and not counted. Near limit: '+Math.round((data.nearLimit??0.8)*100)+'% or more of the allocated hours logged. Allocated hours are saved on the Odoo project; empty means not set, which is not the same as 0.'),msg);
     // Re-reads the figures and redraws the panel in place. Skipped while the tab is hidden, a row is being edited, or the
     // panel has focus (search or an open editor), so nothing typed is lost. Stops once the panel leaves the page.
     let refreshing=false;
-    const busy=()=>panel.querySelector('.budget-edit')||panel.contains(document.activeElement);
+    const busy=()=>panel.querySelector('.budget-edit')||panel.contains(document.activeElement)||document.querySelector('dialog.project-details');
     const timer=setInterval(async()=>{
       if(!panel.isConnected){clearInterval(timer);return;}
       if(refreshing||document.hidden||busy())return;
@@ -286,37 +378,38 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       catch{}finally{refreshing=false;}
     },ODOO_REFRESH_MS);
     const rows=data.projects,count=(s,n)=>n+' '+s+(n===1?'':'s');
-    const summary=el('div','board-summary'),chip=(text,cls,status)=>{const b=button(text,()=>{budgetView.status=budgetView.status===status?'':status;statusSel.value=budgetView.status;draw();},'board-chip'+(cls?' '+cls:''));return b;};
-    const n=s=>rows.filter(p=>s==='unmapped'?!p.mapped:p.status===s).length;
-    summary.append(el('span','board-chip',count('project',rows.length)),chip(n('over')+' over budget',n('over')?'conflict':'','over'),chip(n('near')+' near limit',n('near')?'needs':'','near'),chip(n('unmapped')+' not mapped','','unmapped'),chip(n('not_set')+' allocation not set','','not_set'));
-    panel.append(summary);
+    // Summary chips: always all active projects (each one a filter); a second line counts the rows the filters leave.
+    const summary=el('div','board-summary'),scoped=el('p','business-guidance budget-scope');
+    const chip=(text,cls,status)=>button(text,()=>{budgetView.status=budgetView.status===status?'':status;statusSel.value=budgetView.status;budgetView.page=0;draw();},'board-chip'+(cls?' '+cls:''));
+    const all=budgetCounts(rows);
+    summary.append(el('span','board-chip','All active projects: '+all.projects),chip(all.over+' over budget',all.over?'conflict':'','over'),chip(all.near+' near limit',all.near?'needs':'','near'),chip(all.notSet+' allocation not set','','not_set'),chip(all.unmapped+' not linked','','unmapped'));
+    if(all.missingClient)summary.append(button(all.missingClient+' without a client',()=>{budgetView.missingClient=budgetView.missingClient==='missing'?'':'missing';missingSel.value=budgetView.missingClient;budgetView.page=0;draw();},'board-chip needs'));
+    panel.append(summary,scoped);
     if(!data.allocation)panel.append(el('p','msg err','This Odoo has no allocated hours on projects. Turn on Timesheets in Odoo to set them.'));
     if(data.unplacedPendingHours>0)panel.append(el('p','business-guidance',hours(data.unplacedPendingHours)+' of work log time is not in Odoo yet and has no Odoo project. See Work log setup.'));
-    const bar=el('div','budget-bar'),search=input('search',budgetView.q);search.placeholder='Search projects, clients, tickets';search.setAttribute('aria-label','Search Odoo projects');
-    const statusSel=el('select','fsel');statusSel.setAttribute('aria-label','Filter by budget status');for(const [v,l] of [['','All statuses'],['over','Over budget'],['near','Near limit'],['on_track','On track'],['not_set','Allocation not set'],['unmapped','Not mapped']])option(statusSel,l,v);statusSel.value=budgetView.status;
-    const clientSel=el('select','fsel');clientSel.setAttribute('aria-label','Filter by client');option(clientSel,'All clients','');for(const c of [...new Set(rows.map(p=>p.client).filter(Boolean))].sort())option(clientSel,c,c);option(clientSel,'No client','__none');clientSel.value=budgetView.client;
+    const bar=el('div','budget-bar'),search=input('search',budgetView.q);search.placeholder='Search projects or clients';search.setAttribute('aria-label','Search Odoo projects by project or client');
+    const select=(label,options,key)=>{const s=el('select','fsel');s.setAttribute('aria-label',label);for(const [v,l] of options)option(s,l,v);s.value=budgetView[key]||'';s.addEventListener('change',()=>{budgetView[key]=s.value;budgetView.page=0;draw();});return s;};
+    const statusSel=select('Filter by budget status',[['','All budget statuses'],...Object.entries(BUDGET_LABEL),['unmapped','Not linked']],'status');
+    const clientSel=select('Filter by client',[['','All clients'],...[...new Set(rows.map(p=>p.client).filter(Boolean))].sort().map(c=>[c,c]),['__none','No client']],'client');
+    const missingSel=select('Filter by missing client',[['','With or without a client'],['missing','Missing client'],['present','Has a client']],'missingClient');
+    const ticketSel=select('Filter by linked tickets',[['','With or without tickets'],['with','With linked tickets'],['without','Without linked tickets']],'tickets');
     // A new search or filter starts again from the first page; the chosen sort stays.
-    search.addEventListener('input',()=>{budgetView.q=search.value;budgetView.page=0;draw();});statusSel.addEventListener('change',()=>{budgetView.status=statusSel.value;budgetView.page=0;draw();});clientSel.addEventListener('change',()=>{budgetView.client=clientSel.value;budgetView.page=0;draw();});
-    bar.append(search,statusSel,clientSel,button('Export CSV',()=>exportBudget(shown()),'btn'));panel.append(bar);
+    search.addEventListener('input',()=>{budgetView.q=search.value;budgetView.page=0;draw();});
+    bar.append(search,statusSel,clientSel,missingSel,ticketSel,button('Export CSV',()=>exportBudget(shown()),'btn'));panel.append(bar);
     const wrap=el('div','table-wrap'),table=el('table','budget-table'),head=el('thead'),body=el('tbody'),foot=el('tfoot');table.append(head,body,foot);wrap.append(table);panel.append(wrap);
     const pager=el('div','budget-pager');panel.append(pager);
-    const COLS=[['name','Odoo Project'],['created','Created'],['links','Linked Jira Project / Tickets'],['allocated','Allocated Hours'],['logged','Logged Hours'],['remaining','Remaining Hours'],['status','Budget Status']];
-    const shown=()=>{const q=budgetView.q.trim().toLowerCase(),key=SORTS[budgetView.sort];
-      return rows.filter(p=>(!budgetView.status||(budgetView.status==='unmapped'?!p.mapped:p.status===budgetView.status))&&(!budgetView.client||(budgetView.client==='__none'?!p.client:p.client===budgetView.client))
-        &&(!q||[p.name,p.client,p.company,linkText(p),...p.links.tickets.keys].join(' ').toLowerCase().includes(q)))
-        .sort((a,b)=>{const x=key(a),y=key(b);
-          // Same value (or none for both): name, then Odoo ID, so the order is the same on every redraw.
-          const tie=a.name.localeCompare(b.name)||a.odooId-b.odooId;
-          if(x==null||y==null)return x==null&&y==null?tie:x==null?1:-1;
-          return (x<y?-1:x>y?1:0)*budgetView.dir||tie;});};
+    const shown=()=>budgetRows(rows,budgetView);
     const draw=()=>{
-      const tr=el('tr');for(const [k,l] of COLS){const th=el('th');th.scope='col';const b=button(l+(budgetView.sort===k?(budgetView.dir>0?' ▲':' ▼'):''),()=>{budgetView.dir=budgetView.sort===k?-budgetView.dir:(k==='created'?-1:1);budgetView.sort=k;budgetView.page=0;draw();},'th-sort');th.setAttribute('aria-sort',budgetView.sort===k?(budgetView.dir>0?'ascending':'descending'):'none');th.append(b);tr.append(th);}
+      const tr=el('tr');for(const [k,l] of COLS){const th=el('th');th.scope='col';if(!k){th.textContent=l;tr.append(th);continue;}
+        const b=button(l+(budgetView.sort===k?(budgetView.dir>0?' ▲':' ▼'):''),()=>{budgetView.dir=budgetView.sort===k?-budgetView.dir:(k==='created'||k==='lastWork'?-1:1);budgetView.sort=k;budgetView.page=0;draw();},'th-sort');th.setAttribute('aria-sort',budgetView.sort===k?(budgetView.dir>0?'ascending':'descending'):'none');th.append(b);tr.append(th);}
       head.replaceChildren(tr);
       // Paging works on the whole sorted list; the totals and the Export CSV cover every matching project, not one page.
       const list=shown(),pages=Math.max(1,Math.ceil(list.length/BUDGET_PAGE));budgetView.page=Math.min(budgetView.page,pages-1);
       const from=budgetView.page*BUDGET_PAGE,pageRows=list.slice(from,from+BUDGET_PAGE);
-      body.replaceChildren(...pageRows.map(p=>budgetRow(p,data,msg,target)));
+      body.replaceChildren(...pageRows.flatMap(p=>budgetRow(p,data,msg,target)));
       if(!list.length){const r=el('tr'),td=el('td','business-guidance','No Odoo projects match.');td.colSpan=COLS.length;r.append(td);body.append(r);}
+      const c=budgetCounts(list);
+      scoped.textContent=list.length===rows.length?'Showing all '+count('project',list.length)+'.':'Matching the filters: '+count('project',c.projects)+', '+c.over+' over budget, '+c.near+' near limit, '+c.notSet+' allocation not set.';
       pager.replaceChildren();
       if(list.length>BUDGET_PAGE){
         const prev=button('← Previous',()=>{budgetView.page--;draw();},'btn'),next=button('Next →',()=>{budgetView.page++;draw();},'btn');
@@ -324,48 +417,80 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
         pager.append(el('span','',(from+1)+'–'+(from+pageRows.length)+' of '+count('project',list.length)),prev,next);
       }
       const sum=f=>list.reduce((s,p)=>s+(f(p)||0),0),total=el('tr');
-      total.append(el('th','',list.length===rows.length?'Total':'Total ('+count('project',list.length)+')'),el('td'),el('td'),el('td','num',hours(sum(p=>p.allocatedHours))),el('td','num',hours(sum(p=>p.loggedHours))),el('td','num',signed(sum(p=>p.remainingHours))),el('td','',count('project',list.filter(p=>p.status==='over').length)+' over'));
+      total.append(el('th','',list.length===rows.length?'Total (all projects)':'Total ('+count('project',list.length)+' shown)'),el('td'),el('td'),el('td','num',hours(sum(p=>p.allocatedHours))),el('td','num',hours(sum(p=>p.loggedHours))),el('td','num',signedHours(sum(p=>p.remainingHours))),el('td'),el('td','',c.over+' over'),el('td','num',String(sum(p=>p.openTickets))),el('td','num',String(sum(p=>p.reviewTickets))),el('td'),el('td'));
       total.firstChild.scope='row';foot.replaceChildren(total);
     };
     draw();
   }
+  // One project: its main row, and a second row (shown with the ▸ button) with the company, links and time not in Odoo yet.
   function budgetRow(p,data,msg,target){
-    const tr=el('tr','budget-'+p.status),name=el('td'),a=el('a','',p.name);a.href=p.url;a.target='_blank';a.rel='noopener';a.dir='auto';name.append(a);
-    const sub=[p.client,p.company].filter(Boolean).join(' · ');if(sub)name.append(el('div','budget-sub',sub));
-    const links=el('td','budget-links');
-    if(!p.mapped)links.append(el('span','project-status unmapped','Not mapped'));
-    for(const l of p.links.projects){const tag=el('span','budget-link',l.name);tag.dir='auto';tag.append(button('×',()=>linkProject(p,l.id,true,msg,target),'budget-unlink'));tag.lastChild.setAttribute('aria-label','Unlink '+l.name+' from '+p.name);links.append(tag);}
-    for(const k of p.links.epics)links.append(el('span','budget-link','Epic '+k));
-    if(p.links.helpdesk)links.append(el('span','budget-link','Helpdesk'));
-    const t=p.links.tickets;if(t.count){const d=el('details','budget-tickets'),s=el('summary','',Object.entries(t.byProject).map(([k,n])=>k+': '+n).join(' · ')+(t.count===1?' ticket':' tickets'));d.append(s,el('p','budget-keys',t.keys.join(', ')+(t.count>t.keys.length?' …':'')));links.append(d);}
-    if(p.linkable)links.append(linkControl(p,msg,target));else links.append(el('span','budget-sub','Other Odoo company: link in Odoo'));
-    const alloc=el('td','num');allocationCell(alloc,p,data,msg,target);
+    const tr=el('tr','budget-main budget-'+p.status),detail=el('tr','budget-detail'),detailId='budget-detail-'+p.odooId;detail.id=detailId;detail.hidden=!p._open;
+    const name=el('td','budget-name'),toggle=button(p._open?'▾':'▸',()=>{p._open=!p._open;detail.hidden=!p._open;toggle.textContent=p._open?'▾':'▸';toggle.setAttribute('aria-expanded',String(!!p._open));},'budget-toggle');
+    toggle.setAttribute('aria-expanded',String(!!p._open));toggle.setAttribute('aria-controls',detailId);toggle.setAttribute('aria-label','More about '+p.name);
+    const open=button(p.name,()=>openProjectDetails(p.odooId,toggle),'linkbtn');open.dir='auto';name.append(toggle,open);
+    const client=el('td');if(p.client)client.textContent=p.client;else client.append(el('span','project-status unmapped','No client'));
+    const alloc=el('td','num');allocationCell(alloc,p);
     const logged=el('td','num',hours(p.loggedHours));if(p.pendingHours>0)logged.append(el('div','budget-sub','+'+hours(p.pendingHours)+' not in Odoo yet'));
-    const remaining=el('td','num'+(p.remainingHours<0?' over':''),p.remainingHours==null?'—':signed(p.remainingHours));
+    const remaining=el('td','num'+(p.remainingHours<0?' over':''),p.remainingHours==null?'—':signedHours(p.remainingHours));
     const status=el('td');status.append(el('span','budget-status '+p.status,budgetText(p)));
-    const created=el('td','',p.createdAt?new Date(p.createdAt).toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'}):'—');
-    tr.append(name,created,links,alloc,logged,remaining,status);return tr;
+    const review=el('td','num',String(p.reviewTickets||0));if(p.reviewKeys?.length)review.title=p.reviewKeys.join(', ');
+    const actions=el('td','budget-actions'),odooLink=el('a','btn','Open in Odoo');odooLink.href=p.url;odooLink.target='_blank';odooLink.rel='noopener';odooLink.setAttribute('aria-label','Open '+p.name+' in Odoo');actions.append(odooLink);
+    if(data.allocation){const edit=button(p.allocatedHours==null?'Set allocation':'Edit allocation',()=>editAllocation(alloc,p,data,msg,target),'btn budget-edit-btn');edit.setAttribute('aria-label',edit.textContent+' for '+p.name);actions.append(edit);}
+    tr.append(name,client,el('td','',dateText(p.createdAt)),alloc,logged,remaining,el('td','num',percent(p.usedPercent)),status,el('td','num',String(p.openTickets||0)),review,el('td','',dateText(p.lastWorkDate)),actions);
+    // The secondary row: what links the project to Jira, its company and Odoo id, and the tickets waiting for review.
+    const cell=el('td','budget-links');cell.colSpan=COLS.length;detail.append(cell);
+    cell.append(el('div','budget-sub',[p.company&&'Company: '+p.company,'Odoo #'+p.odooId,p.ticketCount?count2(p.ticketCount,'dashboard ticket'):'',p.missingClient?'No client in Odoo: tickets cannot be given this project until it has one.':''].filter(Boolean).join(' · ')));
+    if(!p.mapped)cell.append(el('span','project-status unmapped','Not linked'));
+    for(const l of p.links.projects){const tag=el('span','budget-link',l.name);tag.dir='auto';tag.append(button('×',()=>linkProject(p,l.id,true,msg,target),'budget-unlink'));tag.lastChild.setAttribute('aria-label','Unlink '+l.name+' from '+p.name);cell.append(tag);}
+    for(const k of p.links.epics)cell.append(el('span','budget-link','Epic '+k));
+    if(p.links.helpdesk)cell.append(el('span','budget-link','Helpdesk'));
+    const t=p.links.tickets;if(t.count){const d=el('details','budget-tickets'),s=el('summary','','Odoo tasks: '+Object.entries(t.byProject).map(([k,n])=>k+': '+n).join(' · ')+(t.count===1?' ticket':' tickets'));d.append(s,el('p','budget-keys',t.keys.join(', ')+(t.count>t.keys.length?' …':'')));cell.append(d);}
+    if(p.reviewKeys?.length)cell.append(el('p','budget-sub','Needs PR review: '+p.reviewKeys.join(', ')));
+    if(p.linkable)cell.append(linkControl(p,msg,target));else cell.append(el('span','budget-sub','Other Odoo company: link in Odoo'));
+    return [tr,detail];
   }
-  function allocationCell(cell,p,data,msg,target){
-    cell.replaceChildren(p.allocatedHours==null?el('span','budget-unset','Allocation not set'):document.createTextNode(hours(p.allocatedHours)));
-    if(!data.allocation)return;
-    cell.append(button(p.allocatedHours==null?'Set':'Edit',()=>{
-      const box=el('div','budget-edit'),n=input('number',p.allocatedHours??'');n.min='0';n.step='any';n.setAttribute('aria-label','Allocated hours for '+p.name);
-      const save=async()=>{save.btn.disabled=true;msg.className='msg';msg.textContent='Saving allocated hours to Odoo…';
-        try{const r=await api('/clients/odoo-projects/allocation',{method:'PUT',body:{odooId:p.odooId,hours:n.value===''?null:Number(n.value)}});
-          Object.assign(p,{allocatedHours:r.allocatedHours},statusOf(r.allocatedHours,p.loggedHours,data.nearLimit));msg.textContent='Saved for “'+p.name+'”.';cell.closest('tr').replaceWith(budgetRow(p,data,msg,target));}
-        catch(err){message(msg,err);save.btn.disabled=false;}};
-      save.btn=button('Save',save,'btn primary');
-      n.addEventListener('keydown',e=>{if(e.key==='Enter')save();else if(e.key==='Escape')allocationCell(cell,p,data,msg,target);});
-      box.append(n,save.btn,button('Cancel',()=>allocationCell(cell,p,data,msg,target),'btn'));cell.replaceChildren(box);n.focus();
-    },'btn budget-edit-btn'));
-    cell.lastChild.setAttribute('aria-label',(p.allocatedHours==null?'Set':'Edit')+' allocated hours for '+p.name);
+  const count2=(n,s)=>n+' '+s+(n===1?'':'s');
+  function allocationCell(cell,p){cell.replaceChildren(p.allocatedHours==null?el('span','budget-unset','Not set'):document.createTextNode(hours(p.allocatedHours)));}
+  // Edit allocation (from the row's Actions): saved on the Odoo project, kept in the project's history. Empty clears it.
+  function editAllocation(cell,p,data,msg,target){
+    if(cell.querySelector('.budget-edit')){cell.querySelector('input').focus();return;}
+    const box=el('div','budget-edit'),n=input('number',p.allocatedHours??'');n.min='0';n.step='any';n.setAttribute('aria-label','Allocated hours for '+p.name);
+    const redraw=()=>{const tr=cell.closest('tr'),[a,b]=budgetRow(p,data,msg,target);tr.nextElementSibling?.replaceWith(b);tr.replaceWith(a);};
+    const save=async()=>{if(n.value!==''&&!(Number(n.value)>=0)){msg.className='msg err';msg.textContent='Enter 0 or more hours, or leave it empty for not set.';return;}
+      save.btn.disabled=true;msg.className='msg';msg.textContent='Saving allocated hours to Odoo…';
+      try{const r=await api('/clients/odoo-projects/allocation',{method:'PUT',body:{odooId:p.odooId,hours:n.value===''?null:Number(n.value)}});
+        Object.assign(p,{allocatedHours:r.allocatedHours},budgetStatus(r.allocatedHours,p.loggedHours,data.nearLimit));msg.textContent='Saved for “'+p.name+'”.';redraw();}
+      catch(err){message(msg,err);save.btn.disabled=false;}};
+    save.btn=button('Save',save,'btn primary');
+    n.addEventListener('keydown',e=>{if(e.key==='Enter')save();else if(e.key==='Escape')allocationCell(cell,p);});
+    box.append(n,save.btn,button('Cancel',()=>allocationCell(cell,p),'btn'));cell.append(box);n.focus();
   }
-  // The same rule as the backend's budgetStatus, for a row updated in place after an allocation change.
-  function statusOf(allocated,logged,near){
-    if(allocated==null)return {status:'not_set',remainingHours:null,overHours:0};
-    const remaining=Math.round((allocated-logged)*100)/100;
-    return {status:remaining<0?'over':allocated>0&&logged>=allocated*near?'near':'on_track',remainingHours:remaining,overHours:remaining<0?-remaining:0};
+  // Project details: the budget, its tickets, pull requests waiting for review, the latest Odoo timesheet lines and history.
+  const PROJECT_EVENT={created:h=>'Created from the dashboard'+(h.allocatedHours!=null?' with '+hours(h.allocatedHours)+' allocated':''),allocation:h=>'Allocated hours: '+(h.from==null?'Not set':hours(h.from))+' → '+(h.to==null?'Not set':hours(h.to))};
+  async function openProjectDetails(id,opener){
+    const {d,body,msg}=dialog('Odoo project');d.classList.add('project-details');d.addEventListener('close',()=>{if(opener?.isConnected)opener.focus();});
+    msg.className='msg';msg.textContent='Loading from Odoo…';
+    let r;try{r=await api('/clients/odoo-projects/details?id='+id);}catch(err){message(msg,err);return;}
+    msg.textContent='';const p=r.project;d.querySelector('h2').textContent=p.name;
+    const head=el('div','project-details-head');head.append(el('p','business-guidance',[p.client||'No client',p.company,'Odoo #'+p.odooId,'Created '+dateText(p.createdAt)].filter(Boolean).join(' · ')));
+    if(p.archived)head.append(el('span','project-status archived','Archived in Odoo'));if(p.missingClient)head.append(el('span','project-status unmapped','No client'));
+    const link=el('a','btn','Open in Odoo');link.href=p.url;link.target='_blank';link.rel='noopener';head.append(link);body.append(head);
+    const facts=el('dl','project-budget-summary');
+    for(const [k,v] of [['Allocated',p.allocatedHours==null?'Allocation not set':hours(p.allocatedHours)],['Logged in Odoo',hours(p.loggedHours)],['Remaining',p.remainingHours==null?'—':signedHours(p.remainingHours)],['Budget used',percent(p.usedPercent)],['Status',budgetText(p)],['Last work log',dateText(p.lastWorkDate)],...(p.pendingHours>0?[['Not in Odoo yet',hours(p.pendingHours)]]:[])])facts.append(el('dt','',k),el('dd','',v));
+    body.append(el('h3','','Budget'),facts,el('p','business-guidance','Near limit from '+Math.round(r.nearLimit*100)+'% of the allocated hours. Time not in Odoo yet is shown apart and not counted.'));
+    body.append(el('h3','','Tickets ('+r.tickets.length+')'));
+    if(!r.tickets.length)body.append(el('p','business-guidance','No dashboard ticket has this Odoo project.'));
+    else{const ul=el('ul','project-ticket-list');for(const t of r.tickets){const li=el('li');li.append(button(t.key,()=>{d.close();openIssue(t.key);},'linkbtn'),el('span','budget-sub',t.open?'Open':'Closed '+dateText(t.completedAt)));if(t.prs.length)li.append(el('span','project-status unmapped',count2(t.prs.length,'pull request')+' awaiting review'));ul.append(li);}body.append(ul);}
+    body.append(el('h3','','Pull requests awaiting review'));
+    if(!r.reviews.length)body.append(el('p','business-guidance','None. (Needs GitHub connected in Settings.)'));
+    else{const ul=el('ul','project-ticket-list');for(const t of r.reviews)for(const pr of t.prs){const li=el('li'),a=el('a','','#'+pr.number+' '+pr.title);a.href=pr.url;a.target='_blank';a.rel='noopener';a.dir='auto';li.append(el('strong','',t.key+' '),a,el('span','budget-sub',pr.state==='changes_requested'?'Changes requested':'Waiting for review'));ul.append(li);}body.append(ul);}
+    const w=r.workLogs;body.append(el('h3','','Work logs'+(w.total!=null?' ('+w.total+' in Odoo'+(w.total>w.lines.length?', latest '+w.lines.length+' shown':'')+')':'')));
+    if(!w.lines.length)body.append(el('p','business-guidance','No timesheet lines in Odoo yet.'));
+    else{const wrap=el('div','table-wrap'),table=el('table','budget-table'),tb=el('tbody'),hr=el('tr');for(const h of ['Date','Person','Task','Description','Hours']){const th=el('th','',h);th.scope='col';hr.append(th);}table.append(el('thead'),tb);table.tHead.append(hr);
+      for(const l of w.lines){const tr=el('tr');tr.append(el('td','',l.date),el('td','',l.person),el('td','',l.task),el('td','',l.description),el('td','num',hours(l.hours)));tb.append(tr);}wrap.append(table);body.append(wrap);}
+    body.append(el('h3','','History'));
+    if(!r.history.length)body.append(el('p','business-guidance','No changes made from the dashboard.'));
+    for(const h of [...r.history].reverse()){const line=el('div','business-history-entry');line.append(el('strong','',(h.by?.name||h.by?.email||'System')+' · '+new Date(h.at).toLocaleString('en-GB',{timeZone:'Asia/Jerusalem'})),el('div','',(PROJECT_EVENT[h.type]||(()=>h.type))(h)));body.append(line);}
   }
   // Link a dashboard project (the client and project on Jira tickets) to this Odoo project.
   function linkControl(p,msg,target){
@@ -386,9 +511,9 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     catch(err){if(err.code==='conflict')await loadCatalog();message(msg,err);}
   }
   function exportBudget(list){
-    const cell=v=>{const s=String(v??'');return /[",\n\r]/.test(s)||/^[=+\-@]/.test(s)?'"'+(/^[=+\-@]/.test(s)?"'":'')+s.replace(/"/g,'""')+'"':s;};
-    const lines=[['Odoo Project','Created','Client','Company','Linked Jira Project / Tickets','Allocated Hours','Logged Hours','Remaining Hours','Budget Status','Hours Over','Not in Odoo yet (h)','Odoo ID']]
-      .concat(list.map(p=>[p.name,p.createdAt?p.createdAt.slice(0,10):'',p.client,p.company,linkText(p),p.allocatedHours??'Allocation not set',p.loggedHours,p.remainingHours??'',budgetText(p),p.overHours||'',p.pendingHours||'',p.odooId]));
+    // Text that a spreadsheet would run as a formula gets a leading quote; numbers (negative remaining hours) stay numbers.
+    const cell=v=>{const s=String(v??''),formula=typeof v==='string'&&/^[=+\-@]/.test(s);return /[",\n\r]/.test(s)||formula?'"'+(formula?"'":'')+s.replace(/"/g,'""')+'"':s;};
+    const lines=budgetCsvRows(list);
     const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['﻿'+lines.map(r=>r.map(cell).join(',')).join('\r\n')],{type:'text/csv'}));a.download='odoo-projects-'+new Date().toISOString().slice(0,10)+'.csv';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
   }
   // Jira epics → Odoo projects (epic-map.js): tickets under a mapped epic take that project as their client.
@@ -533,5 +658,5 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       row.append(label,select);list.append(row);
     }
   }
-  return {configure:async cfg=>{reportBrowser.configure(cfg);odooOn=!!cfg.odoo;billingNeeded=cfg.billingRequired===true;enabled=cfg.capabilities?.includes('ticket-business-v1')===true;epicMapping=enabled&&cfg.capabilities?.includes('epic-map-v1')===true;projectAdmin=enabled&&cfg.capabilities?.includes('project-admin-v1')===true;projectBudget=enabled&&cfg.capabilities?.includes('project-budget-v1')===true;if(enabled){await loadCatalog();if(cfg.odoo)api('/clients/odoo-sync',{method:'POST',body:{}}).then(r=>{if(r.changed)return loadCatalog();}).catch(()=>{});if(epicMapping)api('/epic-map/sync',{method:'POST',body:{}}).then(async r=>{if(r.changed&&Object.keys(records).length){await load(Object.keys(records));await onChange();}}).catch(()=>{});}},enabled:()=>enabled,load,decorate,canQuickEdit,quickEdit,quickLabel:name=>QUICK[name],createFields,renderEditor,dirty:key=>editor?.key===key&&editor.dirty(),reset:()=>{editor=null;},bulk,ensureBilling,overrideReason,filters,matches,renderReports,renderCatalog,loadCatalog};
+  return {configure:async cfg=>{reportBrowser.configure(cfg);odooOn=!!cfg.odoo;billingNeeded=cfg.billingRequired===true;enabled=cfg.capabilities?.includes('ticket-business-v1')===true;epicMapping=enabled&&cfg.capabilities?.includes('epic-map-v1')===true;projectAdmin=enabled&&cfg.capabilities?.includes('project-admin-v1')===true;projectBudget=enabled&&cfg.capabilities?.includes('project-budget-v1')===true;if(enabled){await loadCatalog();if(cfg.odoo)api('/clients/odoo-sync',{method:'POST',body:{}}).then(r=>r.changed?loadCatalog():loadProjects()).catch(()=>{});if(epicMapping)api('/epic-map/sync',{method:'POST',body:{}}).then(async r=>{if(r.changed&&Object.keys(records).length){await load(Object.keys(records));await onChange();}}).catch(()=>{});}},enabled:()=>enabled,load,decorate,canQuickEdit,quickEdit,quickLabel,createFields,renderEditor,dirty:key=>editor?.key===key&&editor.dirty(),reset:()=>{editor=null;},bulk,ensureBilling,overrideReason,filters,matches,renderReports,renderCatalog,loadCatalog};
 }

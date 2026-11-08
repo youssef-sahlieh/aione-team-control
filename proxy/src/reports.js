@@ -1,4 +1,4 @@
-import { BusinessError, requireStore, readCatalog, readMetadata, publicMetadata, closureErrors, validHours, withLogged, overageOf } from './ticket-metadata.js';
+import { BusinessError, requireStore, readCatalog, readMetadata, publicMetadata, selectionOf, closureErrors, validHours, withLogged, overageOf } from './ticket-metadata.js';
 import { readSummaries, reportWork } from './time-entries.js';
 export const localDate=(date=new Date())=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Jerusalem',year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
 export function reportPeriod(options={},now=new Date()) {
@@ -30,7 +30,7 @@ export async function buildReport(env,me,{readSearch,readInternal,readHistory},o
     const m=metadata.get(t.key);let completedAt=t.closed?(t.completedAt||m.completedAt):null;
     if(t.closed&&!completedAt&&!t.internal&&readHistory&&historyReads<20&&Date.now()-started<25000){historyReads++;try{completedAt=await readHistory(t.key,t.status);}catch{} }
     if(t.closed&&!completedAt)unknownCompletion.push(t.key);
-    if(options.clientId&&options.clientId!==m.clientId)continue;if(options.subClientId&&options.subClientId!==m.subClientId)continue;
+    const sel=selectionOf(m,catalog);if(options.clientId&&options.clientId!==sel.clientId)continue;if(options.subClientId&&options.subClientId!==sel.subClientId)continue;
     if(options.source==='internal'&&!t.internal||options.source==='jira'&&t.internal)continue;
     const lastActivityAt=[t.updated,m.updatedAt].filter(v=>Number.isFinite(Date.parse(v))).sort((a,b)=>Date.parse(b)-Date.parse(a))[0]||null;
     // Agreed hours against the work the users logged: "Needs checkup" when logged is more than agreed (computed here, not stored).

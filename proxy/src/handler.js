@@ -539,7 +539,7 @@ async function route(request, env, url) {
     catch(e){if(e instanceof AIError||(e&&typeof e.status==="number"&&typeof e.code==="string"))return json({code:e.code,error:e.message},e.status);return fail("ai_unavailable","Could not improve the text. Please try again.",502);}
   }
   // All Odoo projects with allocated and logged hours (administrators).
-  if(path==="/clients/odoo-projects"||path.startsWith("/clients/odoo-projects/"))return projectBudgetRoutes(request,env,url,me);
+  if((path==="/clients/odoo-projects"||path.startsWith("/clients/odoo-projects/"))&&path!=="/clients/odoo-projects/options")return projectBudgetRoutes(request,env,url,me);
   if(path==="/clients"||path.startsWith("/clients/"))return catalogRoutes(request,env,url,me);
   if(path==="/epic-map"||path==="/epic-map/sync")return epicMapRoutes(request,env,url,me,(p,init)=>jira(env,p,init));
   // Work log (Odoo timesheets) on Jira, internal and Odoo Helpdesk tickets the signed-in person can see.
@@ -656,7 +656,6 @@ async function route(request, env, url) {
     // At most a short wait for Jira; when it's slow or down, the team setting's list is used.
     const fromJira = await Promise.race([jiraDevs(env).catch(() => []), new Promise((r) => setTimeout(() => r([]), 3000))]);
     team.devs = [...new Set([...(Array.isArray(team.devs) ? team.devs : []), ...fromJira])];
-    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE,knowledge:odooConfigured(env), capabilities:["ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1","db-report-pos-version-v1","epic-map-v1","ticket-bulk-import-v1"] });
     return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE,knowledgeLock:odooConfigured(env)&&!!env.STORE, capabilities:["ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1","db-report-pos-version-v1","epic-map-v1","ticket-bulk-import-v1","project-admin-v1","project-budget-v1"] });
   }
 

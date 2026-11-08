@@ -1,6 +1,6 @@
 // Private dashboard business data. Never include these fields in Jira mutations.
 import { odoo, odooConfigured } from './odoo.js';
-import { timeClosureErrors, ticketEntries, summarize, readSummaries, syncAgreedLine, agreedLineSent, syncedEntryCount, todayIn } from './time-entries.js';
+import { timeClosureErrors, ticketEntries, summarize, readSummaries, syncAgreedLine, agreedLineSent, syncedEntryCount, todayIn, readConfig, ticketTask } from './time-entries.js';
 export const INTERNAL_ASSIGNEE = '__internal_tickets';
 export class BusinessError extends Error {
   constructor(message, status=400, code='ticket_metadata', details={}) { super(message); Object.assign(this,{status,code,details}); }
@@ -12,7 +12,7 @@ export function requireStore(env) {
   return env.STORE;
 }
 const prefix=env=>'business:'+env.JIRA_PROJECT+':';
-const empty=()=>({revision:0,clientId:null,subClientId:null,billing:null,agreedHours:null,agreedDate:null,agreedDeveloper:null,estimatedHours:null,actualHours:null,workDone:'',dashPriority:null,dashOrder:null,completedAt:null,epicKey:null,history:[]});
+const empty=()=>({revision:0,odooProjectId:null,clientId:null,subClientId:null,billing:null,agreedHours:null,agreedDate:null,agreedDeveloper:null,estimatedHours:null,actualHours:null,workDone:'',dashPriority:null,dashOrder:null,completedAt:null,epicKey:null,history:[]});
 // The dashboard's own priority. It is stored only here, never sent to Jira (Jira's priority is a separate field).
 export const DASH_PRIORITIES=['High','Medium','Low'];
 // Priorities saved before the three levels existed, read as the nearest new value. Stored records are not rewritten
@@ -31,12 +31,16 @@ export async function readCatalog(env) { return JSON.parse(await requireStore(en
 export async function readMetadata(env,key) { return migrateDash({...empty(),...JSON.parse(await requireStore(env).get(metadataKey(env,key)) || '{}')}); }
 // The name shown for a client or project: the AI name an administrator chose, else its Odoo name.
 export const shownName=e=>e?(e.aiName||e.name):'';
-export function publicMetadata(record,me,catalog) {
+// projects: projectIndex(readOdooProjects) when the caller has it, for the Odoo project's name, client and archive flag.
+export function publicMetadata(record,me,catalog,projects) {
   const {history,...m}=record;
   const visible=me.role==='admin'?m:Object.fromEntries(Object.entries(m).filter(([k])=>!ADMIN_ONLY.includes(k)));
-  const client=catalog?.entries.find(e=>e.id===m.clientId),sub=catalog?.entries.find(e=>e.id===m.subClientId);
-  return {...visible,clientName:shownName(client),subClientName:shownName(sub)};
+  const sel=selectionOf(m,catalog,projects),client=catalog?.entries.find(e=>e.id===sel.clientId),sub=catalog?.entries.find(e=>e.id===sel.subClientId);
+  const p=m.odooProjectId?projects?.get(m.odooProjectId):null;
+  return {...visible,...sel,clientName:client?shownName(client):p?.clientName||'',subClientName:sub?shownName(sub):p?.name||'',odooProject:m.odooProjectId?projectView(m.odooProjectId,p):null};
 }
+// What a ticket shows of its Odoo project. known is false while the snapshot doesn't have it (not synced yet, or not in the main company).
+export const projectView=(id,p)=>p?{id,name:p.name,clientName:p.clientName||'',label:p.label,archived:!p.active,missingClient:!p.clientId,known:true}:{id,name:'Odoo project #'+id,clientName:'',label:'Odoo project #'+id,archived:false,missingClient:false,known:false};
 export function publicHistory(m,me) {
   return m.history.map(h=>me.role==='admin'?h:{...h,changes:Object.fromEntries(Object.entries(h.changes||{}).filter(([k])=>!ADMIN_ONLY.includes(k)))})
     .filter(h=>me.role==='admin'||h.type!=='override').filter(h=>h.type!=='edit'||Object.keys(h.changes).length);
@@ -87,22 +91,36 @@ export async function saveMetadata(env,key,patch,me,{closed=false,creating=false
   const store=requireStore(env),raw=await store.get(metadataKey(env,key)),old=migrateDash({...empty(),...JSON.parse(raw||'{}')}),m=structuredClone(old),catalog=await readCatalog(env);
   if(closed)problem('Reopen this ticket before editing its business fields.',409,'ticket_closed');
   if(!patch || typeof patch!=='object'||Array.isArray(patch))problem('Invalid ticket fields.');
-  const allowed=['revision','clientId','subClientId','billing','agreedHours','estimatedHours','actualHours','workDone','dashPriority','dashOrder'];
+  const allowed=['revision','odooProjectId','clientId','subClientId','billing','agreedHours','estimatedHours','actualHours','workDone','dashPriority','dashOrder'];
   if(Object.keys(patch).some(k=>!allowed.includes(k)))problem('Unknown ticket business field.');
   if(!Number.isInteger(patch.revision)||patch.revision!==old.revision)problem('Ticket fields changed. Refresh and retry.',409,'conflict');
   if(me.role!=='admin'&&'billing' in patch)problem('Only administrators can access billing.',403,'forbidden');
   if(me.role!=='admin'&&'agreedHours' in patch)problem('Only administrators can set agreed hours.',403,'forbidden');
   if(me.role!=='admin'&&!creating&&('dashPriority' in patch||'dashOrder' in patch))problem('Only administrators can set the priority.',403,'forbidden');
   // Anyone may choose a client or project while it is empty; after that only administrators can change it.
-  if(me.role!=='admin'&&!creating&&(old.clientId||old.subClientId)&&['clientId','subClientId'].some(k=>k in patch&&patch[k]!==old[k]))problem('Only administrators can change the client or project once it is set.',403,'forbidden');
+  const placed=old.odooProjectId!=null||!!old.clientId||!!old.subClientId;
+  if(me.role!=='admin'&&!creating&&placed&&['odooProjectId','clientId','subClientId'].some(k=>k in patch&&patch[k]!==old[k]))problem('Only administrators can change the client or project once it is set.',403,'forbidden');
+  // With Odoo connected the client is never chosen: it is the Odoo project's (selection by catalog ids is for a dashboard without Odoo).
+  const odooOn=odooConfigured(env);
+  if(odooOn&&['clientId','subClientId'].some(k=>k in patch))problem('The client comes from the Odoo project. Choose an Odoo project instead.',400,'project_required');
+  let moved=null;
+  if('odooProjectId' in patch&&patch.odooProjectId!==old.odooProjectId){
+    const id=patch.odooProjectId;
+    if(id===null)problem("A ticket's Odoo project can be changed but not removed.",400,'project_required');
+    const p=await chosenProject(env,id);
+    const sub=catalogProjectFor(catalog,id,p);
+    Object.assign(m,{odooProjectId:id,clientId:sub?sub.parentId:null,subClientId:sub?sub.id:null,epicKey:null});
+    moved={from:old.odooProjectId,to:id,toLabel:p.label};
+  }
   // Once an estimate is set, only an administrator can change it.
   if(me.role!=='admin'&&'estimatedHours' in patch&&old.estimatedHours!=null&&Number(patch.estimatedHours)!==Number(old.estimatedHours))problem('The estimate is already set. Ask an administrator to change it.',403,'estimate_locked');
   for(const k of ['clientId','subClientId'])if(k in patch){if(patch[k]!==null&&(typeof patch[k]!=='string'||patch[k].length>80))problem('Invalid client selection.');m[k]=patch[k];}
   if('clientId' in patch && patch.clientId!==old.clientId && !('subClientId' in patch))m.subClientId=null;
   // A client chosen by hand stops following the ticket's epic (see epic-map.js).
   if(m.clientId!==old.clientId||m.subClientId!==old.subClientId)m.epicKey=null;
-  // A new internal ticket may be opened without a client (it's needed later, to close it).
-  const noClient=creating&&!m.clientId&&!m.subClientId;
+  // A new internal ticket may be opened without a client (it's needed later, to close it). With Odoo, a new ticket needs its project.
+  if(creating&&odooOn&&m.odooProjectId==null)problem('Choose the Odoo project for this ticket.',400,'project_required');
+  const noClient=(creating&&!m.clientId&&!m.subClientId)||!!moved;
   if(('clientId' in patch||'subClientId' in patch)&&!noClient){const errors=selectionErrors(catalog,m,{active:m.clientId!==old.clientId||m.subClientId!==old.subClientId});if(errors.length)problem(errors.join('. '));}
   if('billing' in patch){if(![null,'billable','not_billable'].includes(patch.billing))problem('Choose Billable or Not billable.');m.billing=patch.billing;}
   for(const k of ['estimatedHours','actualHours'])if(k in patch){if(patch[k]!==null&&!validHours(patch[k]))problem(k+': enter a positive number with up to two decimal places (maximum 1,000,000).');m[k]=patch[k];}
@@ -125,10 +143,18 @@ export async function saveMetadata(env,key,patch,me,{closed=false,creating=false
   if(m.dashPriority===null)m.dashOrder=null;
   if(creating&&!noClient){const errors=selectionErrors(catalog,m,{active:true});if(errors.length)problem(errors.join('. '));}
   const changes={};for(const k of allowed.filter(k=>k!=='revision'))if(m[k]!==old[k])changes[k]={from:old[k],to:m[k]};
-  m.revision++;m.updatedAt=new Date().toISOString();m.history.push({type:'edit',at:m.updatedAt,by:{email:me.email,name:me.name},changes});
+  m.revision++;m.updatedAt=new Date().toISOString();
+  const entry={type:'edit',at:m.updatedAt,by:{email:me.email,name:me.name},changes};
+  // A project change: the names as they were (Odoo ids alone don't say much later), and whether logged work stays behind.
+  if(moved){
+    const before=moved.from!=null?(await readOdooProjects(env)).projects.find(x=>x.id===moved.from):null;
+    entry.project={from:moved.from==null?null:before?.label||'Odoo project #'+moved.from,to:moved.toLabel};
+    if(moved.from!=null&&(await ticketEntries(env,key)).length)entry.note='Work already logged stays on the previous project; new work goes to the new one.';
+  }
+  m.history.push(entry);
   await persist(env,key,m,raw);
   if('agreedHours' in patch)await syncAgreedLine(env,key,m,{title:ticket.title||'',me});
-  return publicMetadata(m,me,catalog);
+  return publicMetadata(m,me,catalog,projectIndex(await readOdooProjects(env)));
 }
 // Caller holds the same ticket lock used by metadata writes, and supplies an authoritative status read.
 export async function guardedTransition(env,key,me,{closing,overrideReason},apply) {
@@ -146,13 +172,17 @@ export async function guardedTransition(env,key,me,{closing,overrideReason},appl
 }
 // The client and sub-client of a ticket under a mapped Jira epic (epic-map.js). Only fills an empty client or
 // one that already came from an epic; a client chosen by hand is kept. Completed tickets only get an empty one filled.
+// The Odoo project comes with it when the epic's project links exactly one; else the ticket keeps the one it had.
 export async function applyEpicSelection(env,key,{epicKey,clientId,subClientId,closed=false}) {
+  const linked=subClientId?((await readCatalog(env)).entries.find(e=>e.id===subClientId)?.sources||[]).filter(s=>s.source==='odoo').map(s=>s.row):[];
   return withTicketLock(env,key,async()=>{
     const store=requireStore(env),raw=await store.get(metadataKey(env,key)),m={...empty(),...JSON.parse(raw||'{}')};
-    if((m.clientId||m.subClientId)&&(closed||!m.epicKey))return false;
-    if(m.clientId===clientId&&m.subClientId===subClientId&&m.epicKey===epicKey)return false;
+    const odooProjectId=linked.length===1?linked[0]:m.epicKey?null:m.odooProjectId;
+    if((m.clientId||m.subClientId||m.odooProjectId!=null)&&(closed||!m.epicKey))return false;
+    if(m.clientId===clientId&&m.subClientId===subClientId&&m.epicKey===epicKey&&m.odooProjectId===odooProjectId)return false;
     const changes={};if(m.clientId!==clientId)changes.clientId={from:m.clientId,to:clientId};if(m.subClientId!==subClientId)changes.subClientId={from:m.subClientId,to:subClientId};
-    Object.assign(m,{clientId,subClientId,epicKey});m.revision++;m.updatedAt=new Date().toISOString();
+    if(m.odooProjectId!==odooProjectId)changes.odooProjectId={from:m.odooProjectId,to:odooProjectId};
+    Object.assign(m,{clientId,subClientId,epicKey,odooProjectId});m.revision++;m.updatedAt=new Date().toISOString();
     m.history.push({type:'edit',at:m.updatedAt,by:{email:'',name:'Epic '+epicKey},changes});
     await persist(env,key,m,raw);return true;
   });
@@ -201,7 +231,68 @@ async function odooRows(env){
       return {displayName:String(p.display_name||'').trim(),customer:owner&&owner.name&&companies.has(owner.id)?owner.name:NO_CUSTOMER,sourceRow:p.id};}).filter(r=>fits(r.displayName)&&fits(r.customer))
   };
 }
+// ---- Odoo projects for tickets ----
+// A ticket's project is an Odoo project (odooProjectId, Odoo's own id, which a rename doesn't change). Its client is the
+// project's customer in Odoo (the company, when the customer is a person inside one) and is never chosen apart. The
+// projects tickets can use are kept as a snapshot, refreshed with each catalog sync: every project of the main company
+// and of no company, archived ones too, so a ticket on an archived project still shows it. A project whose customer is
+// missing (or is a person with no company) has no client: it is listed, flagged, and can't be given to a ticket.
+export const odooProjectsKey=env=>prefix(env)+'odoo-projects';
+const syncErrorKey=env=>prefix(env)+'catalog:odoo-sync-error';
+export async function readOdooProjects(env){const raw=await requireStore(env).get(odooProjectsKey(env));return raw?JSON.parse(raw):{syncedAt:null,projects:[]};}
+export const projectIndex=snapshot=>new Map((snapshot?.projects||[]).map(p=>[p.id,p]));
+async function snapshotOdooProjects(env,main){
+  const rows=await odoo(env,'project.project','search_read',[inCompany(main)],{fields:['name','partner_id','active','create_date'],order:'id',limit:5000,context:{active_test:false}});
+  const partners=[...new Set(rows.map(p=>Array.isArray(p.partner_id)?p.partner_id[0]:null).filter(Boolean))],commercial={},companies={};
+  if(partners.length)for(const c of await odoo(env,'res.partner','read',[partners],{fields:['commercial_partner_id']}))commercial[c.id]=Array.isArray(c.commercial_partner_id)?c.commercial_partner_id[0]:c.id;
+  const owners=[...new Set(Object.values(commercial))];
+  if(owners.length)for(const c of await odoo(env,'res.partner','read',[owners],{fields:['name','is_company']}))if(c.is_company)companies[c.id]=String(c.name||'').trim();
+  const projects=rows.map(p=>{const owner=Array.isArray(p.partner_id)?commercial[p.partner_id[0]]:null,clientName=owner&&companies[owner]||'';
+    return {id:p.id,name:String(p.name||'').trim()||'Project #'+p.id,active:p.active!==false,clientId:clientName?owner:null,clientName,createdAt:p.create_date?String(p.create_date).replace(' ','T')+'Z':null};});
+  // "Client → Project", with the Odoo id added where two projects would read the same.
+  const label=p=>(p.clientName||'No client')+' → '+p.name,count={};
+  for(const p of projects)count[nameKey(label(p))]=(count[nameKey(label(p))]||0)+1;
+  for(const p of projects)p.label=label(p)+(count[nameKey(label(p))]>1?' (#'+p.id+')':'');
+  const snapshot={syncedAt:Date.now(),projects};
+  await requireStore(env).set(odooProjectsKey(env),JSON.stringify(snapshot));
+  return snapshot;
+}
+// The Odoo project a ticket is being given: it must be in the snapshot, active, and have a client.
+export async function chosenProject(env,id){
+  if(!Number.isInteger(id)||id<1)problem('Choose the Odoo project for this ticket.',400,'project_required');
+  const p=(await readOdooProjects(env)).projects.find(x=>x.id===id);
+  if(!p)problem('That Odoo project is not available. Refresh the projects from Odoo and choose again.',400,'project_unknown');
+  if(!p.active)problem('Odoo project “'+p.name+'” is archived. Choose an active project.',400,'project_archived');
+  if(!p.clientId)problem('Odoo project “'+p.name+'” has no client. Set its customer in Odoo, refresh the projects, then choose it.',400,'project_no_client');
+  return p;
+}
+// The catalog project (so the catalog client, which reports group by) an Odoo project is under: the catalog project linked
+// to it, or among several, the one under the project's Odoo customer. Null when that can't be told (Needs mapping).
+export function catalogProjectFor(catalog,odooId,project){
+  const linked=(catalog?.entries||[]).filter(e=>e.parentId&&(e.sources||[]).some(s=>s.source==='odoo'&&s.row===odooId));
+  if(linked.length<=1)return linked[0]||null;
+  const parent=e=>catalog.entries.find(c=>c.id===e.parentId);
+  const same=linked.filter(e=>{const c=parent(e);return c&&(project?.clientId&&(c.sources||[]).some(s=>s.source==='odoo-customer'&&s.row===project.clientId)||nameKey(c.name)===nameKey(project?.clientName||NO_CUSTOMER));});
+  return same.length===1?same[0]:null;
+}
+// The client and project a ticket counts under: from its Odoo project when it has one, else what was saved before.
+export function selectionOf(m,catalog,projects){
+  const sub=m.odooProjectId&&catalog?catalogProjectFor(catalog,m.odooProjectId,projects?.get(m.odooProjectId)):null;
+  return sub?{clientId:sub.parentId,subClientId:sub.id}:{clientId:m.clientId||null,subClientId:m.subClientId||null};
+}
+export async function syncStatus(env){
+  const store=requireStore(env),[last,error,snapshot]=await Promise.all([store.get(odooSyncKey(env)),store.get(syncErrorKey(env)),readOdooProjects(env)]);
+  return {odoo:odooConfigured(env),syncedAt:Number(last)||null,projectsSyncedAt:snapshot.syncedAt,error:error?JSON.parse(error):null};
+}
 export async function syncCatalogFromOdoo(env,{force=false}={}){
+  try{return await syncCatalog(env,{force});}
+  catch(e){
+    // Kept so the Clients page can say what went wrong; cleared by the next sync that works.
+    if(env.STORE&&!(e instanceof BusinessError&&e.code==='conflict'))await env.STORE.set(syncErrorKey(env),JSON.stringify({at:Date.now(),message:String(e.message||'unknown error').slice(0,300)})).catch(()=>{});
+    throw e;
+  }
+}
+async function syncCatalog(env,{force=false}={}){
   if(!odooConfigured(env))return {odoo:false};
   const store=requireStore(env),last=Number(await store.get(odooSyncKey(env)))||0;
   if(!force&&Date.now()-last<10*60*1000)return {odoo:true,changed:false,syncedAt:last};
@@ -209,6 +300,7 @@ export async function syncCatalogFromOdoo(env,{force=false}={}){
   if(!await store.setIfAbsent(lock,owner,120))return {odoo:true,changed:false,busy:true,syncedAt:last};
   try{
     const {customers,projects,archivedOwners}=await odooRows(env);let changed=false,added=0;
+    await snapshotOdooProjects(env,await mainCompanyId(env));
     // Odoo projects the catalog links to that were deleted in Odoo (archived ones still exist): their links are
     // dropped, so a project made again in Odoo under the same name is the one work is logged to.
     const linked=[...new Set((await readCatalog(env)).entries.flatMap(e=>(e.sources||[]).filter(s=>s.source==='odoo').map(s=>s.row)))];
@@ -246,7 +338,7 @@ export async function syncCatalogFromOdoo(env,{force=false}={}){
       if(previous===null?await store.setIfAbsent(key,JSON.stringify(next),315360000):await store.compareAndSet(key,previous,JSON.stringify(next))){changed=true;added=count;break;}
       if(attempt>=2)problem('Catalog changed during the Odoo sync. Try again.',409,'conflict');
     }
-    const at=Date.now();await store.set(odooSyncKey(env),String(at));
+    const at=Date.now();await store.set(odooSyncKey(env),String(at));await store.del(syncErrorKey(env));
     return {odoo:true,changed,added,customers:customers.length,projects:projects.length,syncedAt:at};
   }finally{await store.deleteIfValue(lock,owner);}
 }
@@ -296,6 +388,16 @@ export async function allocationField(env){
   const f=await odoo(env,'project.project','fields_get',[['allocated_hours']],{attributes:['type','readonly']}).catch(()=>({}));
   return f.allocated_hours?.type==='float';
 }
+// What was done to an Odoo project from the dashboard (created, allocation changed), oldest first, for its details view.
+export const projectLogKey=(env,id)=>prefix(env)+'project-log:'+id;
+export async function recordProjectEvent(env,id,me,event){
+  const store=requireStore(env),k=projectLogKey(env,id);
+  for(let attempt=0;attempt<3;attempt++){
+    const raw=await store.get(k),next=JSON.stringify([...(raw?JSON.parse(raw):[]),{...event,at:new Date().toISOString(),by:{email:me.email,name:me.name}}].slice(-200));
+    if(raw===null?await store.setIfAbsent(k,next,315360000):await store.compareAndSet(k,raw,next))return;
+  }
+}
+export async function readProjectLog(env,id){const raw=await requireStore(env).get(projectLogKey(env,id));return raw?JSON.parse(raw):[];}
 // The hours typed in a form: undefined when empty (not known yet), else zero or a positive number with at most 2 decimals.
 export function allocatedHoursInput(value){
   if(value==null||value==='')return undefined;
@@ -360,6 +462,7 @@ async function createInOdoo(env,url,me,b){
       const hours=allocatedHoursInput(b.allocatedHours);
       if(hours!==undefined&&!await allocationField(env))problem("This Odoo has no allocated hours on projects (Timesheets).",501,'no_allocation');
       created=await odoo(env,'project.project','create',[{name,partner_id:partner,...(await projectSetup(env)).values,...(hours!==undefined?{allocated_hours:hours}:{})}]);
+      await recordProjectEvent(env,Number(created),me,{type:'created',allocatedHours:hours===undefined?null:hours}).catch(()=>{});
     }
   }catch(e){if(e instanceof BusinessError)throw e;problem("Odoo didn't create it: "+String(e.message||'unknown error').slice(0,200),502,'odoo');}
   await syncCatalogFromOdoo(env,{force:true});
@@ -389,7 +492,78 @@ async function mapCandidates(env,catalog,entry){
   return projects.filter(p=>contact&&p.customer===contact.name&&nameKey(p.displayName)===nameKey(entry.name)&&!linked.has(p.sourceRow))
     .map(p=>({odooId:p.sourceRow,name:p.displayName,contact:p.customer,url:odooLink(env,'project.project',p.sourceRow)}));
 }
+// ---- Needs mapping (administrators): tickets without a usable Odoo project ----
+// Tickets saved before the Odoo project rule have only a catalog client and project. Their Odoo project is what the catalog
+// already links to that project (or Work log setup's mapping for it, as the work log used), never a match by name:
+//   ready       exactly one Odoo project, consistent with where the ticket's work went: applying saves it
+//   missing     no project chosen, or a project with no Odoo project
+//   ambiguous   the project links several Odoo projects
+//   conflict    the link and the ticket's work disagree (its Odoo task or posted lines are in another project),
+//               or the Odoo project is not in the main company's projects
+// Applying only fills an empty Odoo project and changes nothing else, so Jira links and logged work stay as they are.
+export async function ticketKeys(env){
+  const store=requireStore(env),start=prefix(env)+'ticket:';
+  if(!store.scanKeys)return [];
+  return (await store.scanKeys(start)).filter(k=>!k.endsWith(':lock')).map(k=>k.slice(start.length)).filter(k=>/^[A-Z][A-Z0-9_]*-\d+$/.test(k)).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
+}
+export async function readAllMetadata(env){
+  const store=requireStore(env),keys=await ticketKeys(env),out=new Map();
+  for(let i=0;i<keys.length;i+=200){const part=keys.slice(i,i+200),raws=store.mget?await store.mget(part.map(k=>metadataKey(env,k))):await Promise.all(part.map(k=>store.get(metadataKey(env,k))));part.forEach((k,n)=>{if(raws[n])out.set(k,migrateDash({...empty(),...JSON.parse(raws[n])}));});}
+  return out;
+}
+export async function mappingPlan(env){
+  const [all,catalog,snapshot,cfg]=await Promise.all([readAllMetadata(env),readCatalog(env),readOdooProjects(env),readConfig(env).catch(()=>({mapping:{}}))]);
+  const projects=projectIndex(snapshot),find=id=>catalog.entries.find(e=>e.id===id),labelOf=id=>projects.get(id)?.label||'Odoo project #'+id,out=[];
+  for(const [key,m] of all){
+    const base={key,revision:m.revision,client:shownName(find(m.clientId)),project:shownName(find(m.subClientId)),closed:!!m.completedAt};
+    if(m.odooProjectId!=null){if(snapshot.syncedAt&&!projects.has(m.odooProjectId))out.push({...base,kind:'conflict',odooProjectId:m.odooProjectId,message:'Odoo project #'+m.odooProjectId+" is not among the main company's Odoo projects (deleted, or moved to another company)."});continue;}
+    let ids;
+    if(!m.clientId&&!m.subClientId){out.push({...base,kind:'missing',message:'No client or project chosen.'});continue;}
+    if(m.subClientId){const sub=find(m.subClientId);if(!sub){out.push({...base,kind:'missing',message:'Its project is no longer in the catalog.'});continue;}
+      ids=[...new Set([...(cfg.mapping?.[sub.id]?[Number(cfg.mapping[sub.id])]:[]),...(sub.sources||[]).filter(x=>x.source==='odoo').map(x=>x.row)])];}
+    else ids=cfg.mapping?.[m.clientId]?[Number(cfg.mapping[m.clientId])]:[];
+    if(!ids.length){out.push({...base,kind:'missing',message:m.subClientId?'Its project has no Odoo project.':'Only a client is chosen, with no project.'});continue;}
+    if(ids.length>1){out.push({...base,kind:'ambiguous',candidates:ids.map(id=>({id,label:labelOf(id)})),message:'Its project links '+ids.length+' Odoo projects.'});continue;}
+    const id=ids[0],task=await ticketTask(env,key),posted=[...new Set((await ticketEntries(env,key)).filter(e=>e.projectId&&e.lineId).map(e=>e.projectId))];
+    const elsewhere=[...new Set([...(task.projectId&&task.projectId!==id?[task.projectId]:[]),...posted.filter(p=>p!==id)])];
+    if(elsewhere.length){out.push({...base,kind:'conflict',candidates:[id,...elsewhere].map(x=>({id:x,label:labelOf(x)})),message:'Its project links Odoo project #'+id+', but its work went to '+elsewhere.map(x=>'#'+x).join(', ')+'.'});continue;}
+    if(snapshot.syncedAt&&!projects.has(id)){out.push({...base,kind:'conflict',odooProjectId:id,message:'Its Odoo project #'+id+" is not among the main company's Odoo projects."});continue;}
+    out.push({...base,kind:'ready',odooProjectId:id,label:labelOf(id),archived:projects.get(id)?.active===false,message:'Will be linked to '+labelOf(id)+'.'});
+  }
+  const count=k=>out.filter(r=>r.kind===k).length;
+  return {scanned:all.size,mapped:[...all.values()].filter(m=>m.odooProjectId!=null).length,ready:count('ready'),missing:count('missing'),ambiguous:count('ambiguous'),conflict:count('conflict'),projectsSyncedAt:snapshot.syncedAt,rows:out};
+}
+// Saves the ready rows (all of them, or the keys given). Each ticket is re-checked under its lock and skipped when it
+// changed since the plan or already has an Odoo project.
+async function applyMapping(env,me,keys){
+  const plan=await mappingPlan(env),rows=plan.rows.filter(r=>r.kind==='ready'&&(!keys||keys.includes(r.key)));let applied=0;const skipped=[];
+  for(const r of rows){
+    try{await withTicketLock(env,r.key,async()=>{
+      const store=requireStore(env),raw=await store.get(metadataKey(env,r.key)),m={...empty(),...JSON.parse(raw||'{}')};
+      if(m.revision!==r.revision||m.odooProjectId!=null)problem('Changed since the check.',409,'conflict');
+      m.odooProjectId=r.odooProjectId;m.revision++;m.updatedAt=new Date().toISOString();
+      m.history.push({type:'edit',at:m.updatedAt,by:{email:me.email,name:me.name},changes:{odooProjectId:{from:null,to:r.odooProjectId}},project:{from:null,to:r.label},note:'Linked to the Odoo project its project already had.'});
+      await persist(env,r.key,m,raw);applied++;
+    });}catch(e){if(!(e instanceof BusinessError))throw e;skipped.push({key:r.key,message:e.message});}
+  }
+  return {applied,skipped};
+}
 export async function catalogRoutes(request,env,url,me) {
+  // The Odoo projects a ticket can be given (anyone signed in): active ones are offered; archived ones are listed so a
+  // ticket still on one can show it.
+  if(url.pathname==='/clients/odoo-projects/options'&&request.method==='GET'){
+    const snapshot=await readOdooProjects(env);
+    return Response.json({syncedAt:snapshot.syncedAt,projects:snapshot.projects.map(p=>projectView(p.id,p))},{headers:{'Cache-Control':'no-store'}});
+  }
+  if(url.pathname==='/clients/odoo-sync'&&request.method==='GET')return Response.json(await syncStatus(env),{headers:{'Cache-Control':'no-store'}});
+  if(url.pathname==='/clients/needs-mapping'||url.pathname==='/clients/needs-mapping/apply'){
+    if(me.role!=='admin')problem('Only administrators manage the client catalog.',403,'forbidden');
+    if(request.method==='GET'&&!url.pathname.endsWith('/apply'))return Response.json(await mappingPlan(env),{headers:{'Cache-Control':'no-store'}});
+    if(request.method!=='POST'||!url.pathname.endsWith('/apply'))problem('Use GET, or POST to apply.',405);
+    let b={};try{b=JSON.parse(await request.text()||'{}');}catch{problem('Invalid request.');}
+    if(b.keys!=null&&(!Array.isArray(b.keys)||b.keys.length>1000||b.keys.some(k=>typeof k!=='string')))problem('Supply up to 1,000 ticket keys.');
+    return Response.json({...(await applyMapping(env,me,b.keys||null)),plan:await mappingPlan(env)},{headers:{'Cache-Control':'no-store'}});
+  }
   if(url.pathname==='/clients/details'&&request.method==='GET'){
     if(me.role!=='admin')problem('Only administrators manage the client catalog.',403,'forbidden');
     let details;try{details=await clientDetails(env,url.searchParams.get('id')||'');}catch(e){if(e instanceof BusinessError)throw e;problem("Couldn't read the client from Odoo: "+String(e.message||'unknown error').slice(0,200),502,'odoo');}
@@ -491,19 +665,19 @@ export async function metadataRoutes(request,env,url,me,readTicket,readTickets) 
     if(!Array.isArray(b?.keys)||b.keys.length>100||b.keys.some(k=>!validKey(k)))problem('Supply up to 100 valid ticket keys.');
     const store=env.STORE,keys=[...new Set(b.keys)],records={};
     // The whole list in a few round trips: visibility in bulk, then every ticket's fields in one read.
-    const [catalog,visible]=await Promise.all([readCatalog(env),readTickets?readTickets(keys):null]);
+    const [catalog,visible,snapshot]=await Promise.all([readCatalog(env),readTickets?readTickets(keys):null,readOdooProjects(env)]),projects=projectIndex(snapshot);
     let shown=keys;
     if(visible)shown=keys.filter(k=>visible[k]);
     else{const seen=[];for(let offset=0;offset<keys.length;offset+=8)await Promise.all(keys.slice(offset,offset+8).map(async k=>{if(await readTicket(k))seen.push(k);}));shown=seen;}
     const raws=!shown.length?[]:store.mget?await store.mget(shown.map(k=>metadataKey(env,k))):await Promise.all(shown.map(k=>store.get(metadataKey(env,k))));
     const sums=await readSummaries(env,shown);
-    shown.forEach((k,n)=>{const rec=migrateDash({...empty(),...JSON.parse(raws[n]||'{}')});records[k]=logged(publicMetadata(rec,me,catalog),sums[k],rec.agreedHours,me);});
+    shown.forEach((k,n)=>{const rec=migrateDash({...empty(),...JSON.parse(raws[n]||'{}')});records[k]=logged(publicMetadata(rec,me,catalog,projects),sums[k],rec.agreedHours,me);});
     return Response.json({records},{headers:{'Cache-Control':'no-store'}});
   }
   if(!validKey(key))problem('Choose a valid ticket.');
   return withTicketLock(env,key,async()=>{
     const t=await readTicket(key);if(!t)problem('Ticket unavailable.',404,'not_found');
-    if(request.method==='GET'){const m=await readMetadata(env,key);return Response.json({metadata:logged(publicMetadata(m,me,await readCatalog(env)),summarize(await ticketEntries(env,key)),m.agreedHours,me),history:publicHistory(m,me),closed:t.closed},{headers:{'Cache-Control':'no-store'}});}
+    if(request.method==='GET'){const m=await readMetadata(env,key),summary=summarize(await ticketEntries(env,key));return Response.json({metadata:logged(publicMetadata(m,me,await readCatalog(env),projectIndex(await readOdooProjects(env))),summary,m.agreedHours,me),workEntries:summary.entries,history:publicHistory(m,me),closed:t.closed},{headers:{'Cache-Control':'no-store'}});}
     if(request.method==='PUT'){
       const metadata=await saveMetadata(env,key,b.fields,me,{closed:t.closed,ticket:{title:t.title,assignee:t.assignee}});
       // Work already in Odoo as its own lines stays there: the administrator is told how many.
@@ -625,7 +799,12 @@ async function bulkPlan(env,rows,readTicket){
     const patch={};
     if(target.clientId!==current.clientId||target.subClientId!==current.subClientId){
       const errors=selectionErrors(catalog,target,{active:true});if(errors.length){fail(errors.join('. ')+'.');continue;}
-      Object.assign(patch,{clientId:target.clientId,subClientId:target.subClientId});
+      // With Odoo, the ticket gets the Odoo project its catalog project links to (the client follows from it).
+      if(odooConfigured(env)){
+        const linked=(catalog.entries.find(e=>e.id===target.subClientId)?.sources||[]).filter(s=>s.source==='odoo').map(s=>s.row);
+        if(linked.length!==1){fail(!target.subClientId?'Name a project: the client comes from it.':linked.length?'This project links several Odoo projects. Choose one on the ticket.':'This project has no Odoo project.');continue;}
+        patch.odooProjectId=linked[0];
+      }else Object.assign(patch,{clientId:target.clientId,subClientId:target.subClientId});
     }
     if(billing&&billing!==current.billing)patch.billing=billing;
     if(hours!==null&&hours!==current.agreedHours){
@@ -637,6 +816,7 @@ async function bulkPlan(env,rows,readTicket){
     if('agreedHours' in patch)changes.push({field:'agreedHours',from:current.agreedHours,to:patch.agreedHours});
     if('clientId' in patch&&patch.clientId!==current.clientId)changes.push({field:'client',from:nameOf(current.clientId),to:nameOf(patch.clientId)});
     if('subClientId' in patch&&patch.subClientId!==current.subClientId)changes.push({field:'project',from:nameOf(current.subClientId),to:nameOf(patch.subClientId)});
+    if('odooProjectId' in patch&&patch.odooProjectId!==current.odooProjectId){if(target.clientId!==current.clientId)changes.push({field:'client',from:nameOf(current.clientId),to:nameOf(target.clientId)});changes.push({field:'project',from:nameOf(current.subClientId),to:nameOf(target.subClientId)});}
     if('billing' in patch)changes.push({field:'billing',from:billingLabel(current.billing),to:billingLabel(patch.billing)});
     if(!changes.length){row.status='unchanged';row.message='No change. Blank cells are left unchanged.';out.push(row);continue;}
     const cleared=changes.some(c=>c.field==='project'&&c.to===null);

@@ -7,8 +7,10 @@
 //   e:<uuid>          one work entry (JSON); its id is the idempotency key the browser sends
 //   t:<KEY>           set of the ticket's entry ids        m:<YYYY-MM>  set of entry ids by work month
 //   pending           set of entries still to send          sum:<KEY>    the ticket's totals (for lists)
-//   task:<KEY>        the ticket's Odoo task {taskId, projectId} (or a pending create / a problem); in Odoo the
-//                     task is found by its name, "[KEY] Title", in the ticket's project
+//   task:<KEY>        the ticket's Odoo task {taskId, projectId, tasks} (or a pending create / a problem); in Odoo the
+//                     task is found by its name, "[KEY] Title", in the ticket's project. tasks maps each Odoo project
+//                     the ticket has had to its task there: when the project changes, new work gets a task in the new
+//                     project and lines already posted stay on the old one
 //   lock:e:<uuid>, lock:task:<KEY>   short locks: one sync per entry, one task create per ticket
 // An entry and its set memberships are written in one atomic step (store.writeIndexed).
 //
@@ -16,7 +18,7 @@
 // entry's id first. If a create's outcome is unclear (no answer), it is never blindly sent again: one exact
 // match is linked, no match or a conflicting one goes to "Needs review" for an administrator.
 import { odoo, odooConfigured, odooUid } from './odoo.js';
-import { requireStore, readMetadata, readCatalog, metadataKey, shownName, withTicketLock, overageOf, BusinessError } from './ticket-metadata.js';
+import { requireStore, readMetadata, readCatalog, metadataKey, shownName, withTicketLock, overageOf, BusinessError, selectionOf, readOdooProjects, projectIndex } from './ticket-metadata.js';
 import { recordTicketEvent } from './ticket-log.js';
 import { getUser, normEmail } from './users.js';
 
@@ -185,6 +187,7 @@ async function saveEntry(env,prevRaw,e){
   return await requireStore(env).writeIndexed(K.entry(env,e.id),prevRaw,next,add,rem)?next:null;
 }
 async function readEntry(env,id){const raw=await requireStore(env).get(K.entry(env,id));return raw?JSON.parse(raw):null;}
+export async function ticketTask(env,key){const raw=await requireStore(env).get(K.task(env,key));return raw?JSON.parse(raw):{};}
 export async function ticketEntries(env,key){
   const store=requireStore(env),ids=await store.smembers(K.ticket(env,key))||[];
   return (await mget(store,ids.map(id=>K.entry(env,id)))).filter(Boolean).map(r=>JSON.parse(r)).sort((a,b)=>a.date.localeCompare(b.date)||a.createdAt.localeCompare(b.createdAt));
@@ -208,8 +211,9 @@ export async function readSummaries(env,keys){
 export async function pendingByProject(env){
   const store=requireStore(env),ids=await store.smembers(K.pending(env))||[],out={};
   const entries=(await mget(store,ids.map(id=>K.entry(env,id)))).filter(Boolean).map(r=>JSON.parse(r)).filter(e=>!e.lineId);
-  const keys=[...new Set(entries.filter(e=>!e.projectId).map(e=>e.ticket))],tasks=await mget(store,keys.map(k=>K.task(env,k)));
-  const taskProject=Object.fromEntries(keys.map((k,n)=>[k,tasks[n]?JSON.parse(tasks[n]).projectId||null:null]));
+  // An entry not sent yet goes to its ticket's Odoo project (else, for older tickets, where its task is).
+  const keys=[...new Set(entries.filter(e=>!e.projectId).map(e=>e.ticket))],[tasks,metas]=await Promise.all([mget(store,keys.map(k=>K.task(env,k))),mget(store,keys.map(k=>metadataKey(env,k)))]);
+  const taskProject=Object.fromEntries(keys.map((k,n)=>[k,(metas[n]&&JSON.parse(metas[n]).odooProjectId)||(tasks[n]?JSON.parse(tasks[n]).projectId||null:null)]));
   for(const e of entries){const p=e.projectId||taskProject[e.ticket]||null;out[p]=(out[p]||0)+e.minutes;}
   return out;
 }
@@ -260,7 +264,9 @@ const taskName=e=>('['+e.ticket+'] '+(e.ticketTitle||'')).trim().slice(0,250);
 async function destination(env,cfg,e){
   if(e.source==='odoo'){const pid=e.hdProjectId||cfg.mapping.helpdesk||null;return pid?{projectId:Number(pid)}:{setup:'This Odoo Helpdesk ticket has no project, and Work log setup has no default project for Helpdesk tickets.'};}
   const m=await readMetadata(env,e.ticket);
-  if(!m.clientId)return {setup:'Choose a client and project for this ticket, so the work goes to the right Odoo project.'};
+  // The ticket's Odoo project. Older tickets without one use the catalog project's link, as before.
+  if(m.odooProjectId)return {projectId:m.odooProjectId};
+  if(!m.clientId)return {setup:'Choose the Odoo project for this ticket, so the work goes to the right place.'};
   const catalog=await readCatalog(env),client=catalog.entries.find(x=>x.id===m.clientId),sub=m.subClientId&&catalog.entries.find(x=>x.id===m.subClientId);
   if(sub){const pid=cfg.mapping[sub.id]||(sub.sources||[]).find(s=>s.source==='odoo')?.row;return pid?{projectId:Number(pid)}:{setup:'Project "'+shownName(sub)+'" has no Odoo project. Map it in Work log setup.'};}
   const pid=cfg.mapping[m.clientId];
@@ -272,17 +278,17 @@ async function verifyProject(env,pid){
 }
 async function ensureTask(env,cfg,e,projectId){
   const store=requireStore(env),k=K.task(env,e.ticket),raw=await store.get(k),t=raw?JSON.parse(raw):{};
-  const put=v=>store.set(k,JSON.stringify(v));
+  // The ticket's tasks in each project it has had: a project change starts a task in the new project, and the old
+  // task (with the lines already posted to it) stays where it is. A move back reuses it.
+  const tasks={...(t.tasks||{}),...(t.taskId&&t.projectId?{[t.projectId]:t.taskId}:{})};
+  const put=v=>store.set(k,JSON.stringify({...v,tasks:{...tasks,...(v.taskId?{[v.projectId]:v.taskId}:{})}}));
   if(t.review)return {review:t.review};
-  if(t.taskId){
-    if(t.projectId!==projectId)return {review:"The ticket's Odoo project changed after its task #"+t.taskId+' was created in another project. Move the task in Odoo, then send again.'};
-    return {taskId:t.taskId};
-  }
+  if(tasks[projectId]){if(t.projectId!==projectId)await put({taskId:tasks[projectId],projectId});return {taskId:tasks[projectId]};}
   // The ticket's task in this project: named "[KEY] …" (an existing one is reused).
   const found=await odoo(env,'project.task','search_read',[[['project_id','=',projectId],['name','=like','['+e.ticket+'] %']]],{fields:['name'],context:{active_test:false},limit:5});
   if(found.length>1){const review='More than one Odoo task in the project is named ['+e.ticket+'] (tasks '+found.map(f=>'#'+f.id).join(', ')+'). Rename or merge the extra ones, then send again.';await put({review});return {review};}
   if(found.length===1){await put({taskId:found[0].id,projectId});return {taskId:found[0].id};}
-  if(t.dispatch){const review='Creating the Odoo task for '+e.ticket+' had an unclear result and no task was found. Check Odoo, then send again.';await put({review});return {review};}
+  if(t.dispatch&&(t.dispatch.projectId??projectId)===projectId){const review='Creating the Odoo task for '+e.ticket+' had an unclear result and no task was found. Check Odoo, then send again.';await put({review});return {review};}
   await put({dispatch:{at:new Date().toISOString(),projectId}});
   let id;
   try{id=await odoo(env,'project.task','create',[{name:taskName(e),project_id:projectId}]);}
@@ -444,8 +450,12 @@ async function ticketView(env,me,key,t){
       const d=await destinationFor(env,cfg,{ticket:key,source,hdProjectId:t.projectId||null});
       if(d.setup)destination={setup:d.setup};
       else{
-        const p=await verifyProject(env,d.projectId),raw=await requireStore(env).get(K.task(env,key)),task=raw?JSON.parse(raw):{};
-        destination=!p?{setup:'Odoo project #'+d.projectId+' was not found or is archived.'}:{projectId:d.projectId,projectName:String(p.name||''),taskId:task.taskId||null,taskName:task.taskId&&task.projectId===d.projectId?'Task #'+task.taskId:'['+key+'] '+(t.title||'')+' (created with the first entry)'};
+        const p=await verifyProject(env,d.projectId),task=await ticketTask(env,key),taskId=task.projectId===d.projectId?task.taskId:(task.tasks||{})[d.projectId];
+        const index=projectIndex(await readOdooProjects(env)),known=index.get(d.projectId);
+        // Shown before saving: where the next entry goes. Earlier lines on another project stay there.
+        const earlier=[...new Set(entries.filter(x=>x.lineId&&x.projectId&&x.projectId!==d.projectId).map(x=>x.projectId))];
+        destination=!p?{setup:'Odoo project #'+d.projectId+' was not found or is archived. '+(source==='odoo'?'Fix the Helpdesk project.':'An administrator must choose an active project for this ticket.')}:{projectId:d.projectId,projectName:String(p.name||''),clientName:known?.clientName||'',label:known?.label||String(p.name||''),taskId:taskId||null,taskName:taskId?'Task #'+taskId:'['+key+'] '+(t.title||'')+' (created with the first entry)',
+          ...(earlier.length?{earlierProjects:earlier.map(id=>index.get(id)?.label||'Odoo project #'+id)}:{})};
       }
     }catch(e){destination={error:"Couldn't read the destination from Odoo: "+clean(e.message,200)};}
   }
@@ -531,7 +541,8 @@ async function syncAction(env,me,id,b,readTicket){
       let next={...cur,state:'syncing',review:null,error:'',attempts:0,nextTryAt:0};
       if(action==='resend'){
         next.dispatch=null;
-        if(cur.review?.kind==='task')await store.del(K.task(env,cur.ticket));
+        // The task problem is cleared; the ticket's tasks in other projects are kept.
+        if(cur.review?.kind==='task'){const t=await ticketTask(env,cur.ticket);await store.set(K.task(env,cur.ticket),JSON.stringify({tasks:t.tasks||{}}));}
       }else if(action==='link'){
         const lineId=Number(b.lineId),cfg=await readConfig(env);
         if(!Number.isInteger(lineId)||lineId<1)problem('Enter the Odoo timesheet line number.');
@@ -572,7 +583,7 @@ async function report(env,me,url){
   const name=id=>shownName(catalog.entries.find(e=>e.id===id));
   // canLog: the Work log page offers "Log work" only to people who may log (the ticket itself is checked when saving).
   return {from,to,timeZone:TIME_ZONE,statuses:STATUS,canLog:canLog(await readConfig(env),me),
-    rows:entries.map(e=>{const m=meta[e.ticket]||{};return {...publicEntry(e,me),user:e.author.name,clientId:m.clientId||null,clientName:name(m.clientId),subClientId:m.subClientId||null,subClientName:name(m.subClientId)};}),
+    rows:entries.map(e=>{const m=meta[e.ticket]||{},sel=selectionOf(m,catalog);return {...publicEntry(e,me),user:e.author.name,odooProjectId:m.odooProjectId||null,clientId:sel.clientId,clientName:name(sel.clientId),subClientId:sel.subClientId,subClientName:name(sel.subClientId)};}),
     // The hours entered before the work log (per ticket), kept apart from the logged entries.
     baselines:tickets.map(k=>({ticket:k,hours:meta[k].actualHours??null})).filter(b=>b.hours!=null)};
 }

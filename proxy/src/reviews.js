@@ -440,6 +440,21 @@ async function adminQueue(env, deps, me) {
   });
 }
 
+// The tickets with an open pull request that needs a review, by the administrators' queue rule, from the last synced
+// index (nothing is fetched from GitHub or Jira). For the Odoo projects table: key -> [{id, number, title, url, state}].
+export async function ticketsAwaitingReview(env) {
+  const out = new Map();
+  if (!githubConfigured(env) || !env.STORE) return out;
+  const open = Object.values((await pullIndex(env)).prs).filter((pr) => pr.state === "open" && pr.keys?.length);
+  const docs = await Promise.all(open.map((pr) => readDoc(env, pr.id)));
+  open.forEach((pr, i) => {
+    const review = prReviewState(pr, docs[i]?.assignments || []);
+    if (review.state === "approved" && !review.counts) return;
+    for (const key of pr.keys.filter((k) => TICKET.test(k))) out.set(key, [...(out.get(key) || []), { id: pr.id, number: pr.number, title: pr.title, url: pr.url, state: review.state, since: review.since || null }]);
+  });
+  return out;
+}
+
 // Reviewer and administrator routes. deps.jira is the proxy's Jira call (see handler.js).
 export async function reviewRoutes(request, env, url, me, deps) {
   const store = env.STORE, path = url.pathname, method = request.method;

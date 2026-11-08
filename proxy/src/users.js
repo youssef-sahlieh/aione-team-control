@@ -3,7 +3,7 @@
 //
 // The store is a small key-value database (Upstash Redis on Vercel; an in-memory one in tests) with:
 //   get(key) -> string|null, set(key, value, ttlSeconds?), del(key), incr(key, ttlSeconds) -> number,
-//   smembers(key) -> string[], sadd(key, member), srem(key, member).
+//   smembers(key) -> string[], sadd(key, member), srem(key, member), scanKeys(prefix) -> string[] (every key starting with prefix).
 // Keys: "u:<email>" user record (JSON), "users" set of emails, "rt:<sha256 of link token>" one-time link.
 
 const enc = new TextEncoder();
@@ -154,6 +154,7 @@ export function memoryStore() {
     async smembers(k) { return [...(sets.get(k) || [])]; },
     async sadd(k, m) { if (!sets.has(k)) sets.set(k, new Set()); sets.get(k).add(m); },
     async srem(k, m) { if (sets.has(k)) sets.get(k).delete(m); },
+    async scanKeys(prefix) { return [...data.keys()].filter((k) => k.startsWith(prefix) && alive(k)); },
     // Saves a record and updates sets in one step: only when the record is still `expected` (null: absent).
     async writeIndexed(k, expected, value, add = [], rem = []) {
       if (expected === null ? alive(k) : !alive(k) || data.get(k) !== expected) return false;
@@ -187,6 +188,13 @@ export function redisStore(url, token) {
     smembers: (k) => cmd("SMEMBERS", k),
     sadd: (k, m) => cmd("SADD", k, m),
     srem: (k, m) => cmd("SREM", k, m),
+    // SCAN in pages (never KEYS, which blocks the database). The prefix is matched literally.
+    async scanKeys(prefix) {
+      const pattern = prefix.replace(/[*?[\]\\]/g, (c) => "\\" + c) + "*", out = [];
+      let cursor = "0";
+      do { const [next, keys] = await cmd("SCAN", cursor, "MATCH", pattern, "COUNT", "1000"); cursor = String(next); out.push(...keys); } while (cursor !== "0" && out.length < 200000);
+      return [...new Set(out)];
+    },
     // One Lua script, so the record and its sets change together or not at all (removals first, then additions).
     writeIndexed: async (k, expected, value, add = [], rem = []) => !!(await cmd("EVAL",
       "local cur=redis.call('GET',KEYS[1]) if ARGV[1]=='0' then if cur then return 0 end elseif cur~=ARGV[2] then return 0 end " +
