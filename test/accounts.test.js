@@ -80,6 +80,22 @@ const tests = [
     const d = await login("bashar.b@aione.biz", "Bashar-pass-123", "5.5.5.5");
     assert.equal(d.role, "user");
   }],
+  ["a developer with an account is listed and emailed at the account's address, even with no ticket yet", async () => {
+    const admin = await login("youssef@aione.biz", "Team-password-1", "4.4.4.6");
+    assert.equal((await call("/users", { method: "POST", token: admin.token, body: { email: "alaa@aione.biz", name: "Alaa", role: "user", dev: "alaa" } })).status, 201);
+    // A second account on bashar's developer name (a test account): bashar.b@aione.biz stays bashar's address.
+    assert.equal((await call("/users", { method: "POST", token: admin.token, body: { email: "tester@example.invalid", name: "Tester", role: "user", dev: "bashar" } })).status, 201);
+    const cfg = (await call("/config", { token: admin.token })).data;
+    assert.ok(cfg.devs.includes("alaa")); assert.ok(cfg.devs.includes("bashar"));
+    assert.ok(cfg.devs.every((d) => typeof d === "string" && d), "accounts without a developer name (administrators) add nothing");
+    assert.ok(Object.keys(cfg.devEmails).every((d) => d && d !== "undefined"));
+    assert.equal(cfg.devEmails.alaa, "alaa@aione.biz");
+    assert.equal(cfg.devEmails.bashar, "bashar.b@aione.biz");
+    // The team setting's address stays first.
+    const saved = env.TEAM_CONFIG; env.TEAM_CONFIG = JSON.stringify({ devEmails: { alaa: "alaa.z@aione.biz" } });
+    try { assert.equal((await call("/config", { token: admin.token })).data.devEmails.alaa, "alaa.z@aione.biz"); } finally { env.TEAM_CONFIG = saved; }
+    for (const e of ["tester@example.invalid", "alaa@aione.biz"]) assert.equal((await call("/users/" + e, { method: "DELETE", token: admin.token })).status, 200);
+  }],
   ["user sees only their developer's tickets", async () => {
     const u = await login("bashar.b@aione.biz", "Bashar-pass-123", "5.5.5.5");
     const cfg = await call("/config", { token: u.token });
