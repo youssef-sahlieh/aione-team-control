@@ -31,6 +31,17 @@
 .epic-map-name{flex:1;min-width:180px}
 .epic-map-row .fsel{flex:1;min-width:180px;max-width:100%}
 .report-totals{display:flex;flex-wrap:wrap;gap:20px;margin:16px 0;font-weight:600}
+/* Exceptions strip: one button per check, the count first. Tinted when it has tickets; pressed when it is the filter. */
+.report-exceptions{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:16px 0}
+.report-exception{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--fg);font:inherit;font-size:13px;text-align:left;cursor:pointer}
+.report-exception strong{font-size:22px;line-height:1.2}
+.report-exception.has-items{border-color:var(--warn);background:var(--warn-soft)}
+.report-exception[aria-pressed=true]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);background:var(--accent-soft)}
+.report-exception:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.report-charts,.report-entries,.report-more{margin:12px 0}
+.report-charts>summary,.report-entries>summary{cursor:pointer;font-weight:600}
+/* Phones: the ticket table uses the workload card layout, two labelled values per line, Status included. */
+@media(max-width:480px){.panel .report-ticket-table tr{grid-template-columns:repeat(2,minmax(0,1fr))}.panel .report-ticket-table td:nth-child(3){display:block}}
 .report-ticket{padding:12px 0;border-bottom:1px solid var(--line)}
 .report-ticket p{margin:4px 0}
 .kp-__internal_tickets{--k:#5767b0}

@@ -110,3 +110,9 @@ body[data-workspace-page="calendar"] .sync-line{display:none}
 .nav-ext{margin-left:auto;font-size:12px;opacity:.7}
 /* Pages without the search box: the AIONE AI button, the bell and the account menu sit at the right. */
 .breadcrumbs+.account-menu,.breadcrumbs+.ai-launcher,.breadcrumbs+.ai-launcher[hidden]+.inbox{margin-left:auto}
+/* Workload: the tabs, when the tickets were read and Refresh on one line; the counts open the ticket list. */
+.workload-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}.workload-toolbar .workload-tabs{margin:0}
+.workload-count{font:inherit;font-weight:600;padding:0}.workload-summary{margin-bottom:20px}
+/* Checks & Reports and Analytics read their own saved data with their own Refresh; the header's ticket refresh and its
+   timer line are not about that data, so they are hidden there (one refresh per page). */
+body[data-workspace-page=reports] #refresh,body[data-workspace-page=analytics] #refresh,body[data-workspace-page=reports] .sync-meta,body[data-workspace-page=analytics] .sync-meta{display:none}

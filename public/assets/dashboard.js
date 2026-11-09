@@ -26,6 +26,7 @@ import { createReviews } from "./components/reviews.js";
 import { createCommentMentions } from "./components/comment-mentions.js";
 import { mountHeaderTools } from "./app/header-tools.js";
 import { setNavCount } from "./app/nav.js";
+import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
 
   // The dashboard keeps loading after the page itself has loaded; the browser's own scroll restore could then
   // move you while you scroll, so it is off (redraws keep your place, see render).
@@ -88,6 +89,7 @@ import { setNavCount } from "./app/nav.js";
   function applyBuiltIn(id){ const b=BUILT_IN_VIEWS[id]; Object.assign(state,{f:b.filters(),businessFilter:{},focus:b.focus,view:"list",q:"",...b.range}); state.sel.clear(); $("q").value=""; if(b.range.closedDays) loadClosed(); workspace.navigate("tickets"); render(); }
   const teamNames=()=>{ const n=Object.values(PEOPLE).map(p=>p.name); return n.length>1?n.slice(0,-1).join(", ")+" or "+n[n.length-1]:n.join(""); };
   let lastLoad=0;
+  const MANUAL_REFRESH=new Set(["clients","workload","reports","analytics"]);
   const NEW_STATUSES=["open","pending approval"];
   const HIST={};
 
@@ -304,14 +306,15 @@ import { setNavCount } from "./app/nav.js";
 
   const FOCUS=[
     {id:"open",k:"k1",l:"All open",h:"Everything not done",f:i=>i.cat!=="done"},
-    {id:"nodev",k:"k2",l:"No developer",h:"Waiting for a developer",f:i=>i.cat!=="done"&&!i.devs.length},
+    {id:"nodev",k:"k2",l:"No developer",h:"Waiting for a developer",f:hasNoDeveloper},
     {id:"reply",k:"k6",l:"Needs a reply",h:"Last comment from outside",f:i=>i.cat!=="done"&&needsReply(i)},
     // Odoo Helpdesk tickets don't use due dates here: never overdue, due today or missing a due date.
-    {id:"overdue",k:"k2",l:"Overdue",h:"Due date passed",f:(i,t)=>i.cat!=="done"&&!i.odoo&&i.due&&i.due<t},
+    // Overdue, No due date and No developer share their rule with the Workload page (models/workload.js).
+    {id:"overdue",k:"k2",l:"Overdue",h:"Due date passed",f:isOverdue},
     {id:"today",k:"k3",l:"Due today",h:"Finish by end of day",f:(i,t)=>i.cat!=="done"&&!i.odoo&&i.due===t},
     // Internal tickets never wait for approval; only Jira (and Odoo) tickets show here.
     {id:"approval",k:"k4",l:"Waiting approval",h:"Open · Pending Approval",f:i=>i.cat!=="done"&&isNew(i)&&!i.internal},
-    {id:"nodue",k:"k5",l:"No due date",h:"Open, no date set",f:i=>i.cat!=="done"&&!i.odoo&&!i.due},
+    {id:"nodue",k:"k5",l:"No due date",h:"Open, no date set",f:hasNoDueDate},
     {id:"recent",k:"k7",l:"Updated",range:"updDays",max:30,h:"Recent activity",f:i=>i.cat!=="done"&&Date.parse(i.updated)>=Date.now()-state.updDays*dayMs},
     {id:"datereq",k:"k3",l:"Date request pending",h:"Awaiting an admin decision",f:i=>!!dateRequests.activeFor(i.key)},
     // Closed and resolved tickets are left out; the Closed tile shows them.
@@ -1514,8 +1517,9 @@ import { setNavCount } from "./app/nav.js";
   });
   $("d-reply-customer").addEventListener("click",()=>sendComment(true));
 
-  // The Clients page loads its own data and refreshes only when asked, so the ticket auto-refresh waits while it is open.
-  setInterval(()=>{ const a=$("auto"); if(!a||!lastLoad) return; if(workspace.route().page==="clients"){ a.textContent="auto-refresh paused on this page"; lastLoad=Date.now(); return; } const left=Math.max(0,120-Math.round((Date.now()-lastLoad)/1000)); a.textContent="next refresh in "+(left>=60?Math.floor(left/60)+"m "+(left%60)+"s":left+"s");
+  // The admin pages (Clients, Workload, Checks & Reports, Analytics) refresh only when asked, so the ticket auto-refresh waits
+  // while one is open. Workload uses the header Refresh (it shows tickets); the others have their own and hide it (workspace.css).
+  setInterval(()=>{ const a=$("auto"); if(!a||!lastLoad) return; if(MANUAL_REFRESH.has(workspace.route().page)){ a.textContent="auto-refresh paused on this page"; lastLoad=Date.now(); return; } const left=Math.max(0,120-Math.round((Date.now()-lastLoad)/1000)); a.textContent="next refresh in "+(left>=60?Math.floor(left/60)+"m "+(left%60)+"s":left+"s");
     if(Date.now()-lastLoad>120000&&document.visibilityState==="visible"&&!batchBusy&&!reloading&&$("pop").hidden&&!drag){ lastLoad=Date.now(); reload(); } },1000);
   $("signout").addEventListener("click",()=>signOut());
   // The Work view re-fits its columns when the window size changes.
@@ -1536,7 +1540,7 @@ import { setNavCount } from "./app/nav.js";
   // Log work → Odoo timesheets: ticket section, form, corrections, and the Work log page.
   const workLog=createWorkLog({api,isAdmin:()=>IS_ADMIN,me:()=>({name:(getSession()||{}).name||ME,email:MY_EMAIL}),errorText,toast,openIssue:openDrawer,myTickets:()=>(state.issues||[]).map(i=>({key:i.key,title:i.summary,closed:i.closed})),onLogged:key=>refreshKeys([key])});
   $("d-logwork").addEventListener("click",()=>{ if(dz.key) workLog.openFor(dz.key,$("d-title").textContent); });
-  const business=createTicketBusiness({api,context:()=>({admin:IS_ADMIN,email:MY_EMAIL,key:dz.key,tickets:()=>state.issues||[]}),onChange:keys=>{if(keys)return refreshKeys(keys);mergeIssues();saveCache();render();},openIssue:openDrawer});
+  const business=createTicketBusiness({api,context:()=>({admin:IS_ADMIN,email:MY_EMAIL,key:dz.key,tickets:()=>state.issues||[],navigate:page=>workspace.navigate(page)}),onChange:keys=>{if(keys)return refreshKeys(keys);mergeIssues();saveCache();render();},openIssue:openDrawer});
   $('b-client').addEventListener('click',()=>business.bulk(selected()).catch(err=>toast('Client assignment failed',[errorText(err)],true)));
   // Changes that didn't go through, kept to retry, and the API keys' state (Sync errors page).
   const syncErrors=createSyncErrors({api,onApiWrite,isAdmin:()=>IS_ADMIN,storageKey:()=>"aion.syncErrors."+encodeURIComponent((getSession()||{}).email||""),formatTime:v=>{const w=fmtWhen(v);return w.d+" "+w.t;},
@@ -1544,7 +1548,7 @@ import { setNavCount } from "./app/nav.js";
     onChange:()=>{ const n=syncErrors?syncErrors.count():0, c=$("nav-error-count"); if(c){ c.textContent=String(n); c.hidden=!n; } if(workspace&&workspace.route().page==="errors"&&state.issues&&$("pop").hidden) render(); }});
   // The Analytics page and its chart library load only when an administrator opens it.
   let analyticsModule=null;
-  const analyticsPage=target=>import("./components/analytics.js").then(m=>{analyticsModule=analyticsModule||m.createAnalytics({api,today:todayStr,openIssue:key=>{if(issueByKey(key))openDrawer(key);}});analyticsModule.render(target);}).catch(err=>{target.appendChild(Object.assign(document.createElement("div"),{className:"state err",textContent:"Analytics could not be loaded: "+errorText(err)}));});
+  const analyticsPage=target=>import("./components/analytics.js").then(m=>{analyticsModule=analyticsModule||m.createAnalytics({api,today:todayStr});analyticsModule.render(target);}).catch(err=>{target.appendChild(Object.assign(document.createElement("div"),{className:"state err",textContent:"Analytics could not be loaded: "+errorText(err)}));});
   const workspace=createWorkspace({state,context:()=>({openCount,openAllOpen:()=>applyBuiltIn("__current"),focusLabel:()=>focusDef().l,renderErrors:target=>syncErrors.render(target),renderReviews:target=>REVIEWS.renderQueue(target),admin:IS_ADMIN,dev:MY_DEV,email:MY_EMAIL,people:PEOPLE,name:ME,internal:INTERNAL,filterCount:filterCount(),dateRequests:dateRequests.all(),pendingDates:dateRequests.pendingCount(),renderReports:target=>business.renderReports(target),renderAnalytics:target=>analyticsPage(target),syncAnalytics:()=>analyticsModule&&analyticsModule.syncFromUrl(),renderCatalog:target=>business.renderCatalog(target),renderWorkLog:target=>workLog.renderPage(target),renderRequests:(target,options)=>dateRequests.render(target,options)}),render,openIssue:openDrawer,today:todayStr,allowedItems:()=>(state.issues||[]).filter(i=>passFilters(i,todayStr())),canLeave:()=>{ if(!dz.key) return true; if(!closeDrawer(false,true)) return false; drawerPushed=false; if(location.hash) history.replaceState(history.state,"",location.pathname+location.search); return true; }});
   const aiAssistant=createAIAssistant({openIssue:openDrawer,beforeOpen:()=>{if(dz.key&&!closeDrawer())return false;closePop();return true;}});
   const ticketBriefs=createTicketBriefs({api});

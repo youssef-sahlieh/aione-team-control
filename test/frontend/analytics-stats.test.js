@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {priorPeriod,applyFilters,kpis,weeklyFlow,weeklyHours,hoursByClient,openByAge,openAt,isOverdue} from "../../public/assets/models/analytics-stats.js";
+import {priorPeriod,applyFilters,kpis,weeklyFlow,weeklyHours,hoursByClient,hoursByPerson,odooSplit} from "../../public/assets/models/analytics-stats.js";
 
 // Synthetic data only. Days are Asia/Jerusalem calendar days.
 const t=(over={})=>({key:"AION-1",source:"jira",title:"x",status:"Open",cat:"indeterminate",createdDay:"2026-10-01",completedDay:null,dueDay:null,clientId:"c1",clientName:"Acme",devs:["dana"],loggedMinutes:0,...over});
@@ -11,7 +11,7 @@ test("the prior period has the same length and ends the day before",()=>{
   assert.deepEqual(priorPeriod({from:"2026-03-01",to:"2026-03-01"}),{from:"2026-02-28",to:"2026-02-28"});
 });
 
-test("created, completed and open are counted by calendar day, and open at the period end ignores later completions",()=>{
+test("created and completed are counted by calendar day, and net backlog change is created minus completed",()=>{
   const tickets=[
     t({key:"A",createdDay:"2026-10-06"}),
     t({key:"B",createdDay:"2026-09-01",cat:"done",completedDay:"2026-10-08"}),
@@ -20,22 +20,15 @@ test("created, completed and open are counted by calendar day, and open at the p
   ];
   const k=kpis({tickets,entries:null},period,"2026-10-25");
   assert.equal(k.created.value,1);assert.equal(k.completed.value,1);
-  assert.equal(k.open.value,2); // A, and C which was still open on 2026-10-11; D did not exist yet
-  assert.equal(k.open.netFlow,0);
+  assert.deepEqual(k.netChange,{value:0,prior:0});
   assert.equal(k.created.prior,0);
+  assert.equal("open" in k,false); // no open-at-period-end figure: the snapshot has no status history
+  assert.equal(kpis({tickets:[t({key:"E",createdDay:"2026-10-06"}),t({key:"F",createdDay:"2026-10-07"})],entries:null},period).netChange.value,2);
 });
 
 test("a completed ticket with no completion day is reported, not counted",()=>{
   const k=kpis({tickets:[t({key:"A",cat:"done",completedDay:null})],entries:null},period,"2026-10-25");
   assert.equal(k.completed.value,0);assert.equal(k.completed.unknownCompletion,1);
-});
-
-test("overdue uses approved due dates on open tickets only",()=>{
-  const open=t({dueDay:"2026-10-10"}),done=t({key:"B",cat:"done",completedDay:"2026-10-09",dueDay:"2026-10-01"}),none=t({key:"C"});
-  assert.equal(isOverdue(open,"2026-10-11"),true);assert.equal(isOverdue(open,"2026-10-10"),false);
-  assert.equal(isOverdue(done,"2026-10-11"),false);assert.equal(isOverdue(none,"2026-10-11"),false);
-  const k=kpis({tickets:[open,done,none],entries:null},period,"2026-10-11");
-  assert.deepEqual(k.overdue,{value:1,withDueDate:1});
 });
 
 test("on-time percentage uses only completed tickets with a due date and shows its denominator",()=>{
@@ -87,11 +80,22 @@ test("hours by client puts work with no client in its own row and sorts largest 
   assert.equal(hoursByClient({tickets,entries:null},period),null);
 });
 
-test("open work by age counts unknown creation apart and never counts done tickets",()=>{
-  const tickets=[t({key:"A",createdDay:"2026-10-24"}),t({key:"B",createdDay:"2026-09-01"}),t({key:"C",createdDay:null}),t({key:"D",cat:"done",createdDay:"2026-01-01",completedDay:"2026-02-01"})];
-  const a=openByAge(tickets,"2026-10-25");
-  assert.equal(a.open,3);assert.equal(a.unknown,1);
-  assert.deepEqual(a.buckets.map(b=>b.count),[1,0,0,1,0]); // 1 day old, and 54 days old (31–60)
+test("work-log hours split into confirmed in Odoo, pending sync and held under agreed hours; an unrecorded state is unknown, not zero",()=>{
+  const entries=[["A","2026-10-05",0,60,0,1],["A","2026-10-06",0,30,0,0],["B","2026-10-07",1,90,0,2],["C","2026-10-08",1,120,0],["A","2026-10-12",0,600,0,1]];
+  assert.deepEqual(odooSplit(entries,period),{confirmed:1,pending:0.5,held:1.5,unknown:2});
+  assert.deepEqual(kpis({tickets:[],entries:[["A","2026-10-05",0,60,0]]},period).hours.odoo,{confirmed:0,pending:0,held:0,unknown:1});
+  assert.equal(kpis({tickets:[],entries:null},period).hours.odoo,null);
+  // The split adds up to the work-log total.
+  const k=kpis({tickets:[],entries},period),o=k.hours.odoo;assert.equal(o.confirmed+o.pending+o.held+o.unknown,k.hours.value);
 });
 
-test("openAt needs a creation day",()=>{assert.equal(openAt(t({createdDay:null}),"2026-10-11"),false);});
+test("period boundaries are the Asia/Jerusalem days the snapshot stores: the first and last day count, the next day does not",()=>{
+  const entries=[["A","2026-10-04",0,60,0,1],["A","2026-10-05",0,60,0,1],["A","2026-10-11",0,60,0,1],["A","2026-10-12",0,60,0,1]];
+  assert.equal(kpis({tickets:[],entries},period).hours.value,2);
+});
+
+test("hours by person count each entry once for the person who logged it, largest first",()=>{
+  const entries=[["A","2026-10-05",0,60,0,1],["A","2026-10-05",1,120,0,0],["B","2026-10-06",1,60,1,0],["A","2026-10-20",0,600,0,1],["C","2026-10-06",2,30,0]];
+  assert.deepEqual(hoursByPerson(entries,["Dana","Lee"],period),[{person:"Lee",hours:3},{person:"Dana",hours:1},{person:"Unknown",hours:0.5}]);
+  assert.equal(hoursByPerson(null,["Dana"],period),null);
+});

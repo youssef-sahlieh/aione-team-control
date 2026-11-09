@@ -174,7 +174,7 @@ async function saveSetup(env,me,b){
 }
 
 // ---- Entries ----
-const isSynced=e=>e.state==='synced'&&!!e.lineId&&e.syncedRevision===e.revision;
+export const isSynced=e=>e.state==='synced'&&!!e.lineId&&e.syncedRevision===e.revision;
 const monthOf=d=>d.slice(0,7);
 const pendingState=s=>s==='syncing'||s==='setup';
 async function saveEntry(env,prevRaw,e){

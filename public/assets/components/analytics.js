@@ -1,9 +1,9 @@
-// Analytics page (administrators): who is delivering what, how fast, and how many hours it takes.
-// Order follows the questions a manager asks: headline numbers with last period beside them, then the trend,
-// then where the hours go, then what needs attention. Numbers come from models/analytics-stats.js.
-import { applyFilters, kpis, weeklyFlow, weeklyHours, hoursByClient, openByAge, isOverdue, dayNumber } from "../models/analytics-stats.js";
+// Analytics page (administrators): how the selected period went, against the one before it.
+// Period trends only: current state (overdue now, open work) is Workload's, exceptions are Checks & Reports'
+// (docs/admin-pages-redesign.md). Numbers come from models/analytics-stats.js.
+import { applyFilters, kpis, weeklyFlow, weeklyHours, hoursByClient, hoursByPerson } from "../models/analytics-stats.js";
 import { PRESETS, SOURCE_CHOICES, readFilters, writeFilters, rangeEndingAt } from "../models/analytics-url.js";
-import { loadChartJs, drawBars, watchTheme, theme, shortDay } from "./analytics-charts.js";
+import { loadChartJs, drawBars, watchTheme, theme } from "./analytics-charts.js";
 
 const node = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const button = (text, cls, action) => { const b = node("button", cls, text); b.type = "button"; b.addEventListener("click", action); return b; };
@@ -23,7 +23,7 @@ function delta(value, prior, { good = null, unit = "" } = {}) {
 
 const ICON_REFRESH = "M21 12a9 9 0 1 1-2.64-6.36M21 4v5h-5";
 
-export function createAnalytics({ api, today, openIssue }) {
+export function createAnalytics({ api, today }) {
   let customOpen = false, snapshot = null, meta = null, filters = null, host = null, charts = [], stopTheme = null, status = "idle", problem = "", ChartJs = null;
 
   const destroyCharts = () => { charts.forEach(c => c.destroy()); charts = []; };
@@ -54,10 +54,10 @@ export function createAnalytics({ api, today, openIssue }) {
   }
 
   function refreshButton() {
-    const b = button("", "an-refresh", () => load(true)); b.title = "Rebuild the data from Jira, internal tickets and the work log";
+    const busy = status === "loading", b = button("", "an-refresh", () => load(true)); b.title = "The page does not refresh by itself. This rebuilds the data from Jira, internal tickets and the work log"; b.disabled = busy;
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"), path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("aria-hidden", "true"); path.setAttribute("d", ICON_REFRESH); svg.appendChild(path);
-    b.append(svg, node("span", "", "Refresh data")); return b;
+    b.append(svg, node("span", "", busy ? "Refreshing…" : "Refresh data")); return b;
   }
 
   function controls() {
@@ -113,25 +113,12 @@ export function createAnalytics({ api, today, openIssue }) {
     return card;
   }
 
-  function attention(data, day) {
-    const card = node("section", "an-card an-wide"), head = node("div", "an-card-head"), titles = node("div", "an-card-titles");
-    const rows = data.tickets.filter(t => isOverdue(t, day)).sort((a, b) => a.dueDay.localeCompare(b.dueDay));
-    titles.append(node("h3", "", "Overdue now"), node("p", "an-sub", "Open tickets past their approved due date, oldest first.")); head.appendChild(titles);
-    if (rows.length) head.appendChild(node("span", "an-count bad", `${rows.length} overdue`));
-    card.appendChild(head);
-    if (!rows.length) { card.appendChild(node("div", "an-empty ok", "✓ Nothing is overdue for the current filters.")); return card; }
-    const wrap = node("div", "an-table-wrap"), table = node("table", "an-table"), thead = node("thead"), tr = node("tr");
-    ["Ticket", "Title", "Client", "Developer", "Due", "Late by"].forEach(h => tr.appendChild(node("th", "", h))); thead.appendChild(tr);
-    const tbody = node("tbody");
-    for (const t of rows.slice(0, 10)) {
-      const row = node("tr"), key = node("td", "an-key"), late = Math.max(1, dayNumber(day) - dayNumber(t.dueDay)), badge = node("td"), pill = node("span", "an-pill bad", late + (late === 1 ? " day" : " days"));
-      if (openIssue) key.appendChild(button(t.key, "an-link", () => openIssue(t.key))); else key.textContent = t.key;
-      badge.appendChild(pill);
-      row.append(key, node("td", "an-title", t.title), node("td", "", t.clientName || "—"), node("td", "", t.devs.join(", ") || "—"), node("td", "", shortDay(t.dueDay)), badge); tbody.appendChild(row);
-    }
-    table.append(thead, tbody); wrap.appendChild(table); card.appendChild(wrap);
-    if (rows.length > 10) card.appendChild(node("p", "an-sub", `Showing the 10 oldest of ${rows.length}.`));
-    return card;
+  // Confirmed in Odoo / pending sync / held under agreed hours. On a snapshot that did not record it, say so instead of 0.
+  function odooNote(o) {
+    if (!o) return "";
+    const known = o.confirmed + o.pending + o.held;
+    if (o.unknown && !known) return "Odoo confirmation unknown for this data. Use Refresh data";
+    return [`${num(o.confirmed)} h confirmed in Odoo`, `${num(o.pending)} h pending sync`, o.held ? `${num(o.held)} h held under agreed hours` : "", o.unknown ? `${num(o.unknown)} h unknown` : ""].filter(Boolean).join(" · ");
   }
 
   const sentence = (iso, stale) => {
@@ -141,7 +128,7 @@ export function createAnalytics({ api, today, openIssue }) {
 
   function skeleton() {
     const wrap = node("div", "an-skeleton"); wrap.setAttribute("aria-busy", "true");
-    const tiles = node("div", "an-tiles"); for (let i = 0; i < 6; i++) tiles.appendChild(node("div", "an-tile an-sk"));
+    const tiles = node("div", "an-tiles"); for (let i = 0; i < 5; i++) tiles.appendChild(node("div", "an-tile an-sk"));
     const grid = node("div", "an-grid"); for (let i = 0; i < 4; i++) grid.appendChild(node("div", "an-card an-sk an-sk-card"));
     wrap.append(node("p", "an-sub", "Loading analytics…"), tiles, grid); return wrap;
   }
@@ -152,21 +139,21 @@ export function createAnalytics({ api, today, openIssue }) {
     const page = node("div", "an-page");
     if (status === "loading" && !snapshot) { page.appendChild(skeleton()); host.appendChild(page); return; }
     if (status === "error" && !snapshot) { page.append(node("div", "state err", problem), button("Try again", "btn", () => load(false))); host.appendChild(page); return; }
-    const day = today(), data = applyFilters(snapshot, filters), period = { from: filters.from, to: filters.to }, k = kpis(data, period, day);
+    const data = applyFilters(snapshot, filters), period = { from: filters.from, to: filters.to }, k = kpis(data, period);
     page.appendChild(controls());
     const notes = [...snapshot.warnings];
     if (meta?.refreshWarning) notes.push(meta.refreshWarning);
+    if (status === "loading") notes.push("Refreshing… the numbers below stay until the new data arrives.");
     if (problem) notes.push(problem);
     if (notes.length) { const box = node("div", "state"); box.setAttribute("role", "status"); notes.forEach(n => box.appendChild(node("div", "", n))); page.appendChild(box); }
 
-    const tiles = node("div", "an-tiles"), flow = k.open.netFlow;
+    const tiles = node("div", "an-tiles"), net = k.netChange.value, signed = v => (v > 0 ? "+" : v < 0 ? "−" : "") + num(Math.abs(v));
     tiles.append(
       tile("Created", num(k.created.value), delta(k.created.value, k.created.prior), "New tickets in the period", "Tickets created in the period"),
-      tile("Completed", num(k.completed.value), delta(k.completed.value, k.completed.prior, { good: "up" }), k.completed.unknownCompletion ? `${k.completed.unknownCompletion} done tickets have no completion date` : "Tickets finished in the period", "Tickets completed in the period"),
-      tile("Open at period end", num(k.open.value), (() => { const c = node("span", "an-delta " + (flow > 0 ? "bad" : flow < 0 ? "good" : "flat"), (flow > 0 ? "▲ +" : flow < 0 ? "▼ −" : "● ±") + Math.abs(flow) + " net"); return c; })(), "Created minus completed in the period", "Tickets not yet done on the last day of the period"),
-      tile("Overdue now", num(k.overdue.value), node("span", "an-delta " + (k.overdue.value > 0 ? "bad" : "good"), k.overdue.value > 0 ? "● Needs attention" : "✓ All on track"), `of ${k.overdue.withDueDate} open tickets with a due date`, "Open tickets past their approved due date, as of today"),
+      tile("Completed", num(k.completed.value), delta(k.completed.value, k.completed.prior, { good: "up" }), k.completed.unknownCompletion ? `${k.completed.unknownCompletion} done tickets have no completion date and are not counted` : "Tickets finished in the period", "Tickets completed in the period"),
+      tile("Net backlog change", signed(net), delta(net, k.netChange.prior, { good: "down" }), net > 0 ? "More came in than was finished" : net < 0 ? "More was finished than came in" : "As much came in as was finished", "Created minus completed in the period. A change, not the number of open tickets"),
       tile("On time", k.onTime.percent === null ? "—" : num(k.onTime.percent) + "%", node("span", "an-delta flat", k.onTime.of ? `${k.onTime.kept} of ${k.onTime.of} on or before due date` : "No completed ticket had a due date"), "Share finished by the approved due date", "Completed in the period on or before the approved due date"),
-      tile("Hours logged", k.hours.value === null ? "—" : num(k.hours.value) + " h", k.hours.value === null ? node("span", "an-delta flat", "Unknown, not zero") : delta(k.hours.value, k.hours.prior, { unit: " h" }), k.hours.value === null ? "The work log could not be read" : "Work dated inside the period", "Work dated inside the period"),
+      tile("Work-log hours", k.hours.value === null ? "—" : num(k.hours.value) + " h", k.hours.value === null ? node("span", "an-delta flat", "Unknown, not zero") : delta(k.hours.value, k.hours.prior, { unit: " h" }), k.hours.value === null ? "The work log could not be read" : odooNote(k.hours.odoo), "Work-log entries dated inside the period (not the ticket totals on Checks & Reports)"),
     );
     page.appendChild(tiles);
 
@@ -187,14 +174,14 @@ export function createAnalytics({ api, today, openIssue }) {
         const top = rows.slice(0, 12), t = theme();
         return { spec: { labels: top.map(r => r.client), horizontal: true, unit: " h", colors: top.map(r => filters.client && r.clientId !== filters.client ? t.line : t.series[0]), datasets: [{ label: "Hours", data: top.map(r => r.hours) }], onPick: i => top[i].clientId && set({ client: top[i].clientId }) }, rows, summary: `${rows.length} clients; the most hours: ${top[0].client}, ${num(top[0].hours)} hours.` };
       }, d => [["Client", "Hours"], d.rows.map(r => [r.client, r.hours])]),
-      chartCard("Open work by age", "How long has open work been waiting? (As of today, not the selected period.)", () => {
-        const a = openByAge(data.tickets, day);
-        if (!a.open) return { empty: "There is no open work for the current filters." };
-        const t = theme();
-        return { spec: { labels: a.buckets.map(b => b.label), colors: a.buckets.map((_, i) => t.ramp[Math.min(i, t.ramp.length - 1)]), datasets: [{ label: "Open tickets", data: a.buckets.map(b => b.count) }] }, a, summary: `${a.open} open tickets${a.unknown ? `, ${a.unknown} with no creation date` : ""}.` };
-      }, d => [["Age", "Open tickets"], [...d.a.buckets.map(b => [b.label, b.count]), ...(d.a.unknown ? [["Unknown creation date", d.a.unknown]] : [])]]),
+      chartCard("Hours by person", "Who logged the hours in this period? Each entry counts once, for the person who logged it.", () => {
+        const rows = hoursByPerson(data.entries, snapshot.people, period); if (!rows) return null;
+        if (!rows.length) return { empty: "No work was logged in this period for the current filters." };
+        const top = rows.slice(0, 12);
+        return { spec: { labels: top.map(r => r.person), horizontal: true, unit: " h", datasets: [{ label: "Hours", data: top.map(r => r.hours) }] }, rows, summary: `${rows.length} people; the most hours: ${top[0].person}, ${num(top[0].hours)} hours.` };
+      }, d => [["Person", "Hours"], d.rows.map(r => [r.person, r.hours])]),
     );
-    page.append(grid, attention(data, day));
+    page.append(grid);
     const foot = node("p", "an-foot", `${sentence(snapshot.builtAt, meta?.stale)} · ${data.tickets.length} tickets match the filters · Days are Asia/Jerusalem calendar days · “—” means unknown, not zero`);
     page.appendChild(foot);
     host.appendChild(page);
@@ -203,7 +190,9 @@ export function createAnalytics({ api, today, openIssue }) {
   return {
     // The page. The snapshot loads once; filters and period changes are calculated in the browser.
     render(target) {
-      host = target; filters = readFilters(location.search, today()); customOpen = false;
+      // A render that arrives before the last one finished loading replaces it instead of adding a second page.
+      host?.remove(); host = document.createElement("div"); host.dataset.keep = "analytics"; target.appendChild(host);
+      filters = readFilters(location.search, today()); customOpen = false;
       if (stopTheme) stopTheme();
       stopTheme = watchTheme(() => { if (host && host.isConnected && snapshot) draw(); });
       loadChartJs().then(c => { ChartJs = c; if (snapshot) draw(); }).catch(e => { problem = e.message; });

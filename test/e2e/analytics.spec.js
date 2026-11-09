@@ -8,12 +8,12 @@ const SNAPSHOT = {
   builtAt: new Date().toISOString(), timeZone: "Asia/Jerusalem", window: { from: ago(700), to: TODAY },
   complete: { jira: true, internal: true, time: true }, warnings: ["Synthetic warning for the test."], people: ["Dana"],
   tickets: [ticket({}), ticket({ key: "AION-2", title: "Late one", createdDay: ago(40), dueDay: ago(5), clientId: "c2", clientName: "Beta" }), ticket({ key: "AION-3", cat: "done", createdDay: ago(10), completedDay: ago(2), dueDay: ago(1) })],
-  entries: [["AION-1", ago(2), 0, 120, 0], ["AION-2", ago(1), 0, 60, 1]],
+  entries: [["AION-1", ago(2), 0, 120, 0, 1], ["AION-2", ago(1), 0, 60, 1, 0]],
 };
 
 const field = (page, label) => page.locator(".an-field", { hasText: label }).locator("select");
 
-async function open(page, snapshot = SNAPSHOT, role = "admin", search = "") {
+async function open(page, snapshot = SNAPSHOT, role = "admin", search = "", { refreshFails = false } = {}) {
   const errors = [], violations = [], requested = [];
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (m) => { if (/Content Security Policy/i.test(m.text())) violations.push(m.text()); });
@@ -34,6 +34,7 @@ async function open(page, snapshot = SNAPSHOT, role = "admin", search = "") {
     if (url.pathname === "/internal") return json({ tickets: [] });
     if (url.pathname === "/date-requests") return json({ requests: [] });
     if (url.pathname === "/analytics/snapshot") return json({ snapshot, cached: true, stale: false });
+    if (url.pathname === "/analytics/refresh") return refreshFails ? json({ code: "down", error: "Jira is not answering." }, 502) : json({ snapshot, cached: false, stale: false });
     return json({ code: "forbidden", error: "Unconfigured test request" }, 403);
   });
   await page.goto("http://127.0.0.1:4173/dashboard.html?page=analytics" + search);
@@ -44,19 +45,22 @@ test("Analytics: KPIs, charts, filters in the address, table view and no CSP vio
   const seen = await open(page);
   await expect(page.getByRole("link", { name: "Analytics" })).toBeVisible();
   const tiles = page.locator(".an-tile");
-  await expect(tiles).toHaveCount(6);
+  await expect(tiles).toHaveCount(5);
   await expect(tiles.nth(0)).toContainText("Created");
   await expect(tiles.nth(0).locator(".an-n")).toHaveText("2"); // AION-1 and AION-3 are inside the last 30 days; AION-2 is 40 days old
   await expect(tiles.nth(1).locator(".an-n")).toHaveText("1");
-  await expect(tiles.nth(3).locator(".an-n")).toHaveText("1"); // overdue now: AION-2
-  await expect(tiles.nth(5).locator(".an-n")).toHaveText("3 h");
+  await expect(tiles.nth(2)).toContainText("Net backlog change");
+  await expect(tiles.nth(2).locator(".an-n")).toHaveText("+1"); // 2 created − 1 completed
+  await expect(page.locator(".an-tile", { hasText: "Overdue" })).toHaveCount(0); // current state is Workload's
+  await expect(tiles.nth(4)).toContainText("Work-log hours");
+  await expect(tiles.nth(4).locator(".an-n")).toHaveText("3 h");
+  await expect(tiles.nth(4)).toContainText("2 h confirmed in Odoo · 1 h pending sync");
   await expect(page.locator(".an-page .state").first()).toContainText("Synthetic warning");
   // The vendored Chart.js drew its canvases from our own origin.
   await expect(page.locator(".an-chart canvas")).toHaveCount(4);
   expect(await page.evaluate(() => typeof window.Chart)).toBe("function");
-  // Overdue table lists the late ticket.
-  await expect(page.locator(".an-wide .an-table tbody tr")).toHaveCount(1);
-  await expect(page.locator(".an-wide .an-table")).toContainText("Late one");
+  await expect(page.locator(".an-card", { hasText: "Hours by person" })).toBeVisible();
+  await expect(page.locator(".an-card", { hasText: "Open work by age" })).toHaveCount(0);
 
   // A filter changes the numbers instantly (no new request) and is kept in the address.
   const before = seen.requested.filter((p) => p === "/analytics/snapshot").length;
@@ -85,7 +89,7 @@ test("Analytics: opens with the filters from the address, and leaving the page d
 
 test("Analytics: an unreadable work log shows hours as unknown, not zero", async ({ page }) => {
   await open(page, { ...SNAPSHOT, entries: null, complete: { jira: true, internal: true, time: false }, warnings: ["The work log could not be read, so logged hours are unknown."] });
-  await expect(page.locator(".an-tile").nth(5).locator(".an-n")).toHaveText("—");
+  await expect(page.locator(".an-tile").nth(4).locator(".an-n")).toHaveText("—");
   await expect(page.locator(".an-card", { hasText: "Hours by client" })).toContainText("could not be read");
 });
 
@@ -94,4 +98,25 @@ test("Analytics: a developer account cannot reach the page", async ({ page }) =>
   await expect(page.locator(".an-page")).toHaveCount(0);
   await expect(page.locator('a[data-page="analytics"]')).toBeHidden();
   expect(seen.requested).not.toContain("/analytics/snapshot");
+});
+
+test("Analytics: a snapshot built before the Odoo state was recorded shows it as unknown, not zero", async ({ page }) => {
+  await open(page, { ...SNAPSHOT, entries: SNAPSHOT.entries.map((e) => e.slice(0, 5)) });
+  await expect(page.locator(".an-tile").nth(4).locator(".an-n")).toHaveText("3 h");
+  await expect(page.locator(".an-tile").nth(4)).toContainText("Odoo confirmation unknown");
+});
+
+test("Analytics: no timer refreshes the page, and a failed Refresh data keeps the numbers and the filters", async ({ page }) => {
+  await page.clock.install();
+  const seen = await open(page, SNAPSHOT, "admin", "", { refreshFails: true });
+  const tiles = page.locator(".an-tile");
+  await field(page, "Developer").selectOption("dana");
+  await expect(tiles.nth(0).locator(".an-n")).toHaveText("2");
+  const reads = () => seen.requested.filter((p) => p.startsWith("/analytics") || p === "/jira/search").length, before = reads();
+  await page.clock.runFor(5 * 60 * 1000); // past the dashboard's 2-minute ticket refresh, twice
+  expect(reads()).toBe(before);
+  await page.getByRole("button", { name: "Refresh data" }).click();
+  await expect(page.locator(".an-page .state").first()).toContainText("Jira is not answering.");
+  await expect(tiles.nth(0).locator(".an-n")).toHaveText("2");
+  await expect(field(page, "Developer")).toHaveValue("dana");
 });
