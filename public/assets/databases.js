@@ -6,7 +6,7 @@
 // Flutter POS and order activity, and shows the columns you pick. Choices are kept in this browser.
 import { api, getSession, signOut } from "./session.js";
 import { startFrame, appConfig } from "./app/frame.js";
-import { monitorInstanceUrl, monitorOpenUrl, rememberMonitorPage } from "./models/monitor-links.js";
+import { monitorInstanceUrl, monitorOpenUrl, monitorOdooPath, rememberMonitorPage } from "./models/monitor-links.js";
 
 startFrame({ current: "databases" });
 
@@ -34,6 +34,7 @@ const COLUMNS = [
   { key: "database", label: "Database", value: (r) => databaseCell(r), sort: (r) => (r.database || r.instance || "").toLowerCase(), csv: (r) => r.database || r.instance || "" },
   { key: "url", label: "URL", value: (r) => r.url ? linkCell(r.url) : el("span", "db-muted", "—"), sort: (r) => r.url || null, csv: (r) => r.url || "" },
   { key: "adlink", label: "AI1 Monitor", value: (r) => adLinkCell(r), sort: (r) => (r.instance || null), csv: (r) => (r.instance ? monitorInstanceUrl(r.instance) : "") },
+  { key: "openodoo", label: "Open Odoo", value: (r) => openOdooCell(r), sort: (r) => (r.instance && !r.fromKnowledge ? r.instance : null), csv: () => "" },
   { key: "version", label: "Odoo", value: (r) => r.odooVersion ? el("span", "db-ver", r.odooVersion) : el("span", "db-muted", "—"), sort: (r) => Number(r.odooVersion) || null, csv: (r) => r.odooVersion || "" },
   { key: "users", label: "Users", num: true, value: (r) => numCell(r, "users"), sort: (r) => inside(r, r.users), csv: (r) => num(r.users) },
   { key: "pos", label: "POS", num: true, value: (r) => numCell(r, "pos"), sort: (r) => inside(r, r.pos), csv: (r) => num(r.pos) },
@@ -55,7 +56,16 @@ function adLinkCell(r) {
   a.addEventListener("click", () => rememberMonitorPage(r.instance));
   return a;
 }
-const WEIGHT = { company: 2.2, database: 1.6, url: 1.5, adlink: 1.1, version: 0.6, users: 0.75, pos: 0.6, branches: 0.85, created: 1, lastLogin: 1.3, lastOrder: 1.3, expired: 1.2, flutter: 0.95, posver: 1.1, addons: 2, control: 0.9 };
+// "Open Odoo" signs straight into the instance's Odoo as its administrator, as AI1 Monitor's Open Odoo button does:
+// the same one-click Monitor sign-in, then Monitor's Open Odoo. Needs Infrastructure Operator rights in Monitor.
+function openOdooCell(r) {
+  if (!r.instance || r.fromKnowledge) return el("span", "db-muted", "—");
+  const a = el("a", "db-link", "Open Odoo ↗"); a.href = monitorOpenUrl(r.instance); a.target = "_blank"; a.rel = "noopener";
+  a.title = "Signs into " + (r.database || r.instance) + " as its Odoo administrator, through AI1 Monitor";
+  a.addEventListener("click", () => rememberMonitorPage(r.instance, monitorOdooPath(r.instance, r.multi ? r.database : "")));
+  return a;
+}
+const WEIGHT = { company: 2.2, database: 1.6, url: 1.5, adlink: 1.1, openodoo: 1.1, version: 0.6, users: 0.75, pos: 0.6, branches: 0.85, created: 1, lastLogin: 1.3, lastOrder: 1.3, expired: 1.2, flutter: 0.95, posver: 1.1, addons: 2, control: 0.9 };
 // Every column shows by default; phones swipe the table sideways to see them all.
 
 

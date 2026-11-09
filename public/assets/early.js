@@ -20,7 +20,7 @@
     var saved = null;
     try { saved = JSON.parse(localStorage.getItem("aione-monitor-next") || "null"); localStorage.removeItem("aione-monitor-next"); } catch (e) { return null; }
     var page = saved && String(saved.page || "");
-    if (!page || !(Date.now() - saved.at < 120000) || !/^\/dashboard#instance\/[\w.%-]{1,80}\/info$/.test(page)) return null;
+    if (!page || !(Date.now() - saved.at < 120000) || !/^\/(dashboard#instance\/[\w.%-]{1,80}\/info|api\/monitor\/instances\/(?!\.+\/)[\w.%-]{1,80}\/open-odoo(\?database=[\w.%-]{1,120})?)$/.test(page)) return null;
     return page;
   }
   root.style.visibility = "hidden";

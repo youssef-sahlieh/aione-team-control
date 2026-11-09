@@ -46,8 +46,14 @@ test("Databases: POS version column, Actions preview, restart needs a confirm", 
   await expect(page.locator("#rows")).not.toContainText("db103");
   await expect(page.locator("#meta")).toContainText("3 of 3 databases · 2 with data · 1 offline not shown");
   // Open goes to the instance's page on AI1 Monitor, in a new tab.
-  await expect(ronit.getByRole("link", { name: "Open" })).toHaveAttribute("href", "https://monitor.ai1.host/auth/aione/start?next=%2Fdashboard%23instance%2Fodoo503%2Finfo");
-  await expect(ronit.getByRole("link", { name: "Open" })).toHaveAttribute("target", "_blank");
+  await expect(ronit.getByRole("link", { name: "Open", exact: true })).toHaveAttribute("href", "https://monitor.ai1.host/auth/aione/start?next=%2Fdashboard%23instance%2Fodoo503%2Finfo");
+  await expect(ronit.getByRole("link", { name: "Open", exact: true })).toHaveAttribute("target", "_blank");
+  // Open Odoo: the same Monitor sign-in, and Monitor's Open Odoo is kept for the hand-off page (early.js).
+  const openOdoo = ronit.getByRole("link", { name: "Open Odoo ↗" });
+  await expect(openOdoo).toHaveAttribute("target", "_blank");
+  await openOdoo.evaluate((a) => a.addEventListener("click", (e) => e.preventDefault()));
+  await openOdoo.click();
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("aione-monitor-next"))).page).toBe("/api/monitor/instances/odoo503/open-odoo");
 
   // Actions opens the preview with all three actions.
   await ronit.getByRole("button", { name: "Actions" }).click();
