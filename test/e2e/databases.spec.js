@@ -46,8 +46,14 @@ test("Databases: POS version column, Actions preview, restart needs a confirm", 
   await expect(page.locator("#rows")).not.toContainText("db103");
   await expect(page.locator("#meta")).toContainText("3 of 3 databases · 2 with data · 1 offline not shown");
   // Open goes to the instance's page on AI1 Monitor, in a new tab.
-  await expect(ronit.getByRole("link", { name: "Open" })).toHaveAttribute("href", "https://monitor.ai1.host/auth/aione/start?next=%2Fdashboard%23instance%2Fodoo503%2Finfo");
-  await expect(ronit.getByRole("link", { name: "Open" })).toHaveAttribute("target", "_blank");
+  await expect(ronit.getByRole("link", { name: "Open", exact: true })).toHaveAttribute("href", "https://monitor.ai1.host/auth/aione/start?next=%2Fdashboard%23instance%2Fodoo503%2Finfo");
+  await expect(ronit.getByRole("link", { name: "Open", exact: true })).toHaveAttribute("target", "_blank");
+  // Open Odoo: the same Monitor sign-in, and Monitor's Open Odoo is kept for the hand-off page (early.js).
+  const openOdoo = ronit.getByRole("link", { name: "Open Odoo ↗" });
+  await expect(openOdoo).toHaveAttribute("target", "_blank");
+  await openOdoo.evaluate((a) => a.addEventListener("click", (e) => e.preventDefault()));
+  await openOdoo.click();
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("aione-monitor-next"))).page).toBe("/api/monitor/instances/odoo503/open-odoo");
 
   // Actions opens the preview with all three actions.
   await ronit.getByRole("button", { name: "Actions" }).click();
@@ -159,5 +165,41 @@ test("Databases: Extend Database on a test copy picks a date, needs a confirm, a
   expect(posts).toEqual([{ instance: "odoo503test", action: "extend", date: picked }]);
   await expect(page.locator("#toast")).toContainText("now expires on " + picked);
   await expect(tr.locator("td.db-col-expired")).toContainText("Valid " + picked);
+  expect(errors).toEqual([]);
+});
+
+test("Databases: expiry is checked against the current time, under 7 days is highlighted, and a date moved earlier shows with Odoo's reason", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("aion-test-initialized")) return;
+    sessionStorage.setItem("aion-test-initialized", "1");
+    localStorage.clear();
+    localStorage.setItem("aione-session", JSON.stringify({ token: "synthetic-token", email: "boss@example.invalid", expiresAt: Date.now() + 3600000, role: "admin" }));
+    localStorage.setItem("aion.dbreport.view", JSON.stringify({ section: "tests" }));
+  });
+  const at = (days) => new Date(Date.now() + days * 86400000).toISOString().slice(0, 19).replace("T", " ");
+  const rows = [
+    // Saved as valid when the report was built, but its date has passed since: Expired now.
+    row({ database: "past_test", instance: "odoo601test", url: "https://601test.example.invalid", section: "tests", loginFound: true, loginOk: true, expires: at(-0.5), expired: false }),
+    row({ database: "soon_test", instance: "odoo602test", url: "https://602test.example.invalid", section: "tests", loginFound: true, loginOk: true, expires: at(3.5), expired: false }),
+    row({ database: "later_test", instance: "odoo603test", url: "https://603test.example.invalid", section: "tests", loginFound: true, loginOk: true, expires: at(40.5), expired: false }),
+    row({ database: "moved_test", instance: "odoo604test", url: "https://604test.example.invalid", section: "tests", loginFound: true, loginOk: true, expires: at(20.5), expired: false, expiryReason: "renewal", expiryMovedEarlier: { from: "2027-05-01 00:00:00", to: at(20.5), at: new Date().toISOString() } })
+  ];
+  await page.route("**/*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.origin === "http://127.0.0.1:4173") return route.continue();
+    if (url.hostname !== "aione-team-proxy.vercel.app") return route.abort();
+    if (url.pathname === "/config") return route.fulfill({ json: { role: "admin", odoo: true, email: "boss@example.invalid", people: {}, devs: [], capabilities: ["db-report-company-v1", "db-report-pos-version-v1"] } });
+    if (url.pathname === "/db-report") return route.fulfill({ json: { report: { ...REPORT, rows: [...REPORT.rows, ...rows] } } });
+    return route.fulfill({ status: 403, json: { code: "forbidden", error: "Unconfigured test request" } });
+  });
+  await page.goto("http://127.0.0.1:4173/databases.html");
+  const cell = (db) => page.locator("#rows tr", { hasText: db }).locator("td.db-col-expired");
+  await expect(cell("past_test")).toContainText("Expired");
+  await expect(cell("soon_test").locator(".db-pill.warn")).toHaveText(/in [34] days$/);
+  await expect(cell("later_test").locator(".db-pill.ok")).toHaveText(/^Valid .* · in 4[01] days$/);
+  await expect(cell("moved_test")).toContainText("Moved earlier: was 2027-05-01");
+  await expect(cell("moved_test")).toContainText("Reason: renewal");
   expect(errors).toEqual([]);
 });

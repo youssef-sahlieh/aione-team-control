@@ -6,7 +6,7 @@
 // Flutter POS and order activity, and shows the columns you pick. Choices are kept in this browser.
 import { api, getSession, signOut } from "./session.js";
 import { startFrame, appConfig } from "./app/frame.js";
-import { monitorInstanceUrl, monitorOpenUrl, rememberMonitorPage } from "./models/monitor-links.js";
+import { monitorInstanceUrl, monitorOpenUrl, monitorOdooPath, rememberMonitorPage } from "./models/monitor-links.js";
 
 startFrame({ current: "databases" });
 
@@ -34,6 +34,7 @@ const COLUMNS = [
   { key: "database", label: "Database", value: (r) => databaseCell(r), sort: (r) => (r.database || r.instance || "").toLowerCase(), csv: (r) => r.database || r.instance || "" },
   { key: "url", label: "URL", value: (r) => r.url ? linkCell(r.url) : el("span", "db-muted", "—"), sort: (r) => r.url || null, csv: (r) => r.url || "" },
   { key: "adlink", label: "AI1 Monitor", value: (r) => adLinkCell(r), sort: (r) => (r.instance || null), csv: (r) => (r.instance ? monitorInstanceUrl(r.instance) : "") },
+  { key: "openodoo", label: "Open Odoo", value: (r) => openOdooCell(r), sort: (r) => (r.instance && !r.fromKnowledge ? r.instance : null), csv: () => "" },
   { key: "version", label: "Odoo", value: (r) => r.odooVersion ? el("span", "db-ver", r.odooVersion) : el("span", "db-muted", "—"), sort: (r) => Number(r.odooVersion) || null, csv: (r) => r.odooVersion || "" },
   { key: "users", label: "Users", num: true, value: (r) => numCell(r, "users"), sort: (r) => inside(r, r.users), csv: (r) => num(r.users) },
   { key: "pos", label: "POS", num: true, value: (r) => numCell(r, "pos"), sort: (r) => inside(r, r.pos), csv: (r) => num(r.pos) },
@@ -41,7 +42,7 @@ const COLUMNS = [
   { key: "created", label: "Created", value: (r) => el("span", "", fmtDate(r.created)), sort: (r) => time(r.created), csv: (r) => fmtDate(r.created) },
   { key: "lastLogin", label: "Last login", value: (r) => timeCell(r, "lastLogin"), sort: (r) => inside(r, time(r.lastLogin)), csv: (r) => fmtDateTime(r.lastLogin) },
   { key: "lastOrder", label: "Last order", value: (r) => timeCell(r, "lastOrder"), sort: (r) => inside(r, time(r.lastOrder)), csv: (r) => fmtDateTime(r.lastOrder) },
-  { key: "expired", label: "Expiry", value: (r) => expiryCell(r), sort: (r) => inside(r, time(r.expires)), csv: (r) => !r.loginOk ? "" : r.expired === null ? "none" : r.expired ? "EXPIRED " + fmtDate(r.expires) : "ok " + fmtDate(r.expires) },
+  { key: "expired", label: "Expiry", value: (r) => expiryCell(r), sort: (r) => inside(r, time(r.expires)), csv: (r) => !r.loginOk ? "" : expiredNow(r) === null ? "none" : (expiredNow(r) ? "EXPIRED " : expiresSoon(r) ? "soon " : "ok ") + fmtDate(r.expires) + (r.expiryMovedEarlier ? " (moved earlier, was " + fmtDate(r.expiryMovedEarlier.from) + ")" : "") + (r.expiryReason ? " [" + r.expiryReason + "]" : "") },
   { key: "flutter", label: "Flutter POS", value: (r) => r.flutter ? el("span", "db-pill ok", "Installed") : el("span", "db-pill", "No"), sort: (r) => (r.flutter ? 1 : 0), csv: (r) => r.flutter ? "yes" : "no" },
   { key: "posver", label: "POS version", value: (r) => posVersionCell(r), sort: (r) => (r.posVersion ? r.posVersion.split(".").map((n) => n.padStart(6, "0")).join(".") : null), csv: (r) => posVersionText(r) },
   { key: "addons", label: "Add-ons", value: (r) => addonCell(r), sort: (r) => (r.addons || []).length, csv: (r) => (r.addons || []).join("; ") },
@@ -55,7 +56,16 @@ function adLinkCell(r) {
   a.addEventListener("click", () => rememberMonitorPage(r.instance));
   return a;
 }
-const WEIGHT = { company: 2.2, database: 1.6, url: 1.5, adlink: 1.1, version: 0.6, users: 0.75, pos: 0.6, branches: 0.85, created: 1, lastLogin: 1.3, lastOrder: 1.3, expired: 1.2, flutter: 0.95, posver: 1.1, addons: 2, control: 0.9 };
+// "Open Odoo" signs straight into the instance's Odoo as its administrator, as AI1 Monitor's Open Odoo button does:
+// the same one-click Monitor sign-in, then Monitor's Open Odoo. Needs Infrastructure Operator rights in Monitor.
+function openOdooCell(r) {
+  if (!r.instance || r.fromKnowledge) return el("span", "db-muted", "—");
+  const a = el("a", "db-link", "Open Odoo ↗"); a.href = monitorOpenUrl(r.instance); a.target = "_blank"; a.rel = "noopener";
+  a.title = "Signs into " + (r.database || r.instance) + " as its Odoo administrator, through AI1 Monitor";
+  a.addEventListener("click", () => rememberMonitorPage(r.instance, monitorOdooPath(r.instance, r.multi ? r.database : "")));
+  return a;
+}
+const WEIGHT = { company: 2.2, database: 1.6, url: 1.5, adlink: 1.1, openodoo: 1.1, version: 0.6, users: 0.75, pos: 0.6, branches: 0.85, created: 1, lastLogin: 1.3, lastOrder: 1.3, expired: 1.2, flutter: 0.95, posver: 1.1, addons: 2, control: 0.9 };
 // Every column shows by default; phones swipe the table sideways to see them all.
 
 
@@ -80,7 +90,23 @@ function linkCell(url) { const a = el("a", "db-link", url.replace(/^https?:\/\//
 function numCell(r, key) { if (!r.loginOk) return key === "users" ? el("span", "db-muted", r.offline ? "offline" : "no access") : el("span", "db-muted", "—"); return el("span", "", num(r[key])); }
 function branchCell(r) { if (!r.loginFound) return el("span", "db-muted", "—"); if (!r.loginOk) return el("span", "db-muted", "—"); if (!r.branches) return el("span", "db-muted", "none"); return el("span", "db-strong", String(r.branches)); }
 function timeCell(r, key) { if (!r.loginFound) return el("span", "db-muted", "—"); if (!r.loginOk) return el("span", "db-muted", "—"); if (!r[key]) return el("span", "db-muted", "never"); const s = el("span", "", fmtDateTime(r[key])); const a = ago(r[key]); if (a) s.append(el("small", "db-ago", " · " + a)); return s; }
-function expiryCell(r) { if (!r.loginFound || !r.loginOk) return el("span", "db-muted", "—"); if (r.expired === null) return el("span", "db-muted", "none"); return el("span", "db-pill " + (r.expired ? "bad" : "ok"), (r.expired ? "Expired " : "Valid ") + fmtDate(r.expires)); }
+// Expiry is worked out here against the current time (not when the report was built), so a database shows Expired
+// the moment it expires. Under 7 days left is highlighted; Tests and Dev databases are extended automatically then.
+const SOON_DAYS = 7;
+const expiredNow = (r) => (r.expires ? time(r.expires) < Date.now() : r.expired === true ? true : null);
+const daysLeft = (r) => (r.expires ? Math.ceil((time(r.expires) - Date.now()) / 86400000) : null);
+const expiresSoon = (r) => expiredNow(r) === false && daysLeft(r) <= SOON_DAYS;
+const inDays = (n) => (n <= 0 ? "today" : n === 1 ? "in 1 day" : "in " + n + " days");
+function expiryCell(r) {
+  if (!r.loginFound || !r.loginOk) return el("span", "db-muted", "—");
+  const gone = expiredNow(r);
+  if (gone === null) return el("span", "db-muted", "none");
+  const box = el("span", "db-expiry");
+  box.append(gone ? el("span", "db-pill bad", "Expired " + fmtDate(r.expires)) : el("span", "db-pill " + (expiresSoon(r) ? "warn" : "ok"), (expiresSoon(r) ? "" : "Valid ") + fmtDate(r.expires) + " · " + inDays(daysLeft(r))));
+  if (r.expiryMovedEarlier) box.append(el("span", "db-pill bad", "Moved earlier: was " + fmtDate(r.expiryMovedEarlier.from)));
+  if (r.expiryReason) box.append(el("small", "db-ago", "Reason: " + r.expiryReason));
+  return box;
+}
 // The installed POS add-on's version, with its date when Audit & Deploy gives one.
 const posVersionText = (r) => (r.posVersion ? r.posVersion + (r.posVersionDate ? " (" + fmtDate(r.posVersionDate) + ")" : "") : "");
 function posVersionCell(r) {
@@ -118,7 +144,7 @@ function addonCell(r) {
 // including a test database on a production server, so it's offered everywhere.
 const ACTIONS = [
   { key: "restart", title: "Restart Instance", desc: "Restart the container", tone: "warn", icon: "↻", note: "The site is unavailable for a short time while the container restarts.", enabled: (r) => !r.fromKnowledge, off: "not in Audit & Deploy" },
-  { key: "extend", title: "Extend Database", desc: "Move the expiry date forward", tone: "ok", icon: "⏱", note: "Signs in to the database with the login from Knowledge and sets its expiry date (database.expiration_date). The login needs Settings administrator rights. Use it on test databases. Every day, expired Tests and Dev databases the dashboard can sign in to are extended automatically for 30 days.", enabled: () => true, date: true },
+  { key: "extend", title: "Extend Database", desc: "Move the expiry date forward", tone: "ok", icon: "⏱", note: "Signs in to the database with the login from Knowledge and sets its expiry date (database.expiration_date). The login needs Settings administrator rights. Use it on test databases. Every day, Tests and Dev databases the dashboard can sign in to that are expired or expire within 7 days are extended automatically for 30 days.", enabled: () => true, date: true },
   { key: "start", title: "Start Instance", desc: "Scale to 1 replica", tone: "ok", icon: "▶", note: "", enabled: () => false },
   { key: "stop", title: "Stop Instance", desc: "Scale to 0 replicas", tone: "bad", icon: "■", note: "", enabled: () => false }
 ];
@@ -170,7 +196,7 @@ function openActions(r, opener) {
       confirm.textContent = "Confirm";
       dlg.close();
       if (picked.date) {
-        Object.assign(r, { expires: date.value + " 00:00:00", expired: false });
+        Object.assign(r, { expires: date.value + " 00:00:00", expired: false, expiryMovedEarlier: null });
         render();
         toast((r.database || r.instance) + " now expires on " + date.value + ".");
       } else toast(picked.title + " sent to " + r.instance + ". It can take a minute.");
@@ -193,7 +219,7 @@ function openActions(r, opener) {
 const FILTERS = [
   ["access", "Access", [["", "All", null], ["ok", "With data", (r) => r.loginOk], ["none", "No access", (r) => !r.loginOk]]],
   ["version", "Odoo", [["", "All versions", null]]],
-  ["expiry", "Expiry", [["", "Any", null], ["expired", "Expired", (r) => r.loginOk && r.expired === true], ["soon", "Expires in 30 days", (r) => r.loginOk && r.expired === false && time(r.expires) - Date.now() < 30 * 86400000], ["valid", "Valid", (r) => r.loginOk && r.expired === false], ["none", "No expiry", (r) => r.loginOk && r.expired === null]]],
+  ["expiry", "Expiry", [["", "Any", null], ["expired", "Expired", (r) => r.loginOk && expiredNow(r) === true], ["week", "Expires within 7 days", (r) => r.loginOk && expiresSoon(r)], ["soon", "Expires in 30 days", (r) => r.loginOk && expiredNow(r) === false && time(r.expires) - Date.now() < 30 * 86400000], ["moved", "Expiry moved earlier", (r) => r.loginOk && !!r.expiryMovedEarlier], ["valid", "Valid", (r) => r.loginOk && expiredNow(r) === false], ["none", "No expiry", (r) => r.loginOk && expiredNow(r) === null]]],
   ["flutter", "Flutter POS", [["", "Any", null], ["yes", "Installed", (r) => r.flutter], ["no", "Not installed", (r) => !r.flutter]]],
   ["activity", "Last order", [["", "Any time", null], ["7", "Within 7 days", (r) => r.loginOk && daysSince(r.lastOrder) !== null && daysSince(r.lastOrder) <= 7], ["30", "Within 30 days", (r) => r.loginOk && daysSince(r.lastOrder) !== null && daysSince(r.lastOrder) <= 30], ["idle", "None in 30+ days", (r) => r.loginOk && (daysSince(r.lastOrder) === null || daysSince(r.lastOrder) > 30)]]]
 ];

@@ -130,7 +130,7 @@
     <section class="blk" id="business-fields" aria-label="Ticket work and client"></section>
     <section class="blk work-log" id="work-log" aria-label="Work log" hidden></section>
     <div class="blk admin-only"><h3>Developers</h3><p class="blk-hint">The people doing the work. Used by the By developer view and the Developer filter.</p><div class="chips" id="d-devs"></div>
-      <div class="inline"><input class="inp" id="d-newdev" placeholder="Other developer name" aria-label="Add another developer"><button class="btn" id="d-adddev" type="button">Add</button><button class="btn primary" id="d-savedevs" type="button">Save developers</button><span class="msg" id="d-devmsg"></span></div></div>
+      <div class="inline"><select class="inp" id="d-newdev" aria-label="Add a developer from the users"></select><button class="btn" id="d-adddev" type="button">Add</button><button class="btn primary" id="d-savedevs" type="button">Save developers</button><span class="msg" id="d-devmsg"></span></div></div>
     <div class="blk"><h3>Due date</h3>
       <div class="inline"><input class="inp" type="date" id="d-due" aria-label="Approved due date" disabled><button class="btn primary" id="d-requestdate" type="button">Request date change</button><span class="msg" id="d-duemsg"></span></div><div id="d-date-requests" aria-live="polite"></div></div>
     <div class="blk"><h3>Due date history</h3><div id="d-hist"></div></div>

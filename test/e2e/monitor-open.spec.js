@@ -44,3 +44,20 @@ test("the Monitor sign-in without an Open link (or with an old or odd one) goes 
     await page.unrouteAll({ behavior: "ignoreErrors" });
   }
 });
+
+for (const path of ["/api/monitor/instances/odoo503/open-odoo", "/api/monitor/instances/odoo503/open-odoo?database=503_shop"]) {
+  test("Open Odoo from Databases: signed in to Monitor in the background, then Monitor's Open Odoo " + path.split("?")[1], async ({ page }) => {
+    const monitor = await handOff(page, { next: { page: path } });
+    await page.waitForURL("https://monitor.ai1.host" + path);
+    expect(monitor[0]).toMatchObject({ path: "/auth/aione/callback", navigation: false });
+    expect(monitor.filter((m) => m.navigation).map((m) => m.path)).toEqual(["/api/monitor/instances/odoo503/open-odoo"]);
+  });
+}
+
+for (const bad of ["/api/monitor/instances/odoo503/restart", "/api/monitor/instances/odoo503/open-odoo?database=x&next=https://evil.example", "/api/monitor/instances/../open-odoo"]) {
+  test("only Monitor's Open Odoo address is accepted besides instance pages: " + bad, async ({ page }) => {
+    const monitor = await handOff(page, { next: { page: bad } });
+    await page.waitForURL((u) => u.origin === "https://monitor.ai1.host");
+    expect(monitor.map((m) => [m.path, m.navigation])).toEqual([["/auth/aione/callback", true]]);
+  });
+}
