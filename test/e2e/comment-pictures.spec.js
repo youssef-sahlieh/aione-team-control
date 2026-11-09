@@ -337,3 +337,22 @@ test("a developer is added from the users list, not typed", async ({ page }) => 
   await expect.poll(() => saved && JSON.stringify(saved)).toContain("ai1_newbie");
   expect(mock.errors).toEqual([]);
 });
+
+// A row's developer list has a search box: by developer name or by the person's name.
+test("a row's developer list can be searched", async ({ page }) => {
+  const mock = await mockDashboard(page);
+  await page.goto("/dashboard.html?page=tickets");
+  await page.locator("button.devcell").first().click();
+  const find = page.getByRole("searchbox", { name: "Search developers" });
+  await expect(find).toBeFocused();
+  const opts = page.locator("#pop label.opt");
+  await find.fill("example");
+  await expect(opts.filter({ visible: true })).toHaveText(["ai1_builder"]);
+  await find.fill("REVIEW");
+  await expect(opts.filter({ visible: true })).toHaveText(["ai1_reviewer"]);
+  await find.fill("nobody");
+  await expect(opts.filter({ visible: true })).toHaveCount(0);
+  await find.fill("");
+  await expect(opts.filter({ visible: true })).toHaveCount(2);
+  expect(mock.errors).toEqual([]);
+});

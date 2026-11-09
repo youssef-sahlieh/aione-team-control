@@ -791,7 +791,11 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
   function devPopover(anchor,keys,mode){
     const p=$("pop"); p.replaceChildren(); const one=keys.length===1&&mode==="set";
     p.appendChild(el("h4",null,one?"Developers on "+keys[0]:mode==="add"?"Add developers to "+keys.length+" tickets":"Remove developers from "+keys.length+" tickets"));
+    const find=el("input","inp"); find.type="search"; find.placeholder="Search developers…"; find.setAttribute("aria-label","Search developers"); find.style.cssText="width:calc(100% - 24px);margin:0 12px 6px;";
+    p.appendChild(find);
     const body=el("div","body"); p.appendChild(body);
+    const filterOpts=()=>{ const q=find.value.trim().toLowerCase(); body.querySelectorAll("label.opt").forEach(o=>{ const d=o.querySelector("input").dataset.dev; o.hidden=!!q&&!("ai1_"+d+" "+(DEV_NAME[d]||"")).toLowerCase().includes(q); }); };
+    find.addEventListener("input",filterOpts);
     const chosen=new Set(one?(issueByKey(keys[0])||{devs:[]}).devs:[]);
     const counts={}; keys.forEach(k=>{ const i=issueByKey(k); (i?i.devs:[]).forEach(d=>counts[d]=(counts[d]||0)+1); });
     const names=new Set(allDevs()); chosen.forEach(d=>names.add(d));
@@ -802,7 +806,7 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
     if(mode!=="remove"){
       const inp=el("select","inp"); inp.style.maxWidth="150px"; inp.setAttribute("aria-label","Add a developer from the users");
       const add=el("button","btn","Add"); add.type="button"; add.disabled=!fillUserPicker(inp,names);
-      const doAdd=()=>{ const v=inp.value; if(!v) return; chosen.add(v); names.add(v); addOpt(v); add.disabled=!fillUserPicker(inp,names); };
+      const doAdd=()=>{ const v=inp.value; if(!v) return; chosen.add(v); names.add(v); addOpt(v); filterOpts(); add.disabled=!fillUserPicker(inp,names); };
       add.addEventListener("click",doAdd); inp.addEventListener("change",doAdd);
       foot.appendChild(inp); foot.appendChild(add);
     }
@@ -815,6 +819,7 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
       if(!ops.length){ toast("Nothing to change."); return; }
       await runBatch(ops,mode==="remove"?"Developers removed":"Developers saved"); });
     foot.appendChild(save); p.appendChild(foot); placePop(anchor);
+    try{ find.focus({preventScroll:true}); }catch(e){}
   }
   function duePopover(anchor,keys){
     if(keys.some(isOdoo)){toast("Odoo tickets use Odoo's SLA deadline, which can't be changed from here.");return;}
