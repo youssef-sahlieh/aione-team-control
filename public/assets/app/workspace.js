@@ -1,7 +1,7 @@
 import { readRoute, routeUrl } from "./router.js";
 import { calculateWorkload, workloadTotals } from "../models/workload.js";
 import { assigneeOptions } from "../models/assignees.js";
-import { pages, adminPages, buildNav, arrangeNav, wireSidebar } from "./nav.js";
+import { pages, adminPages, buildNav, arrangeNav, wireSidebar, setNavCount } from "./nav.js";
 const $ = id => document.getElementById(id);
 const node = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const button = (text, cls, action) => { const b = node("button", cls, text); b.type = "button"; b.addEventListener("click", action); return b; };
@@ -186,9 +186,10 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     // The tickets page is named after the view it shows (All open, Closed, Overdue…), so the heading never disagrees with the list.
     $("page-heading").textContent = route.page === "tickets" ? context().focusLabel() : page[1]; $("page-description").textContent = route.page==="tickets"&&!context().admin?"The tickets you’re authorized to work on.":route.page==="reviews"&&context().admin?"Open pull requests that name a ticket and are waiting for a review, longest wait first. Tickets are read-only here.":page[2]; $("breadcrumbs").textContent = adminPages.has(route.page) ? "Admin" : "Workspace";
     for (const link of nav.querySelectorAll("a[data-page]")) { if (link.dataset.page === route.page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); }
-    $("nav-date-count").textContent=String(context().pendingDates||0);
+    // Pending date requests (null until they have loaded once: the last known count stays until then).
+    setNavCount("requests", context().pendingDates);
     // Same count as the All open tile: open tickets in the current scope (see openCount in dashboard.js).
-    $("nav-ticket-count").textContent = String(context().openCount());
+    setNavCount("tickets", context().openCount());
     const custom = ["overview", "requests", "workload", "calendar", "reports", "analytics", "clients", "worklog", "errors", "reviews"].includes(route.page);
     $("tickets-area").hidden = custom; $("workspace-content").hidden = !custom;
     if (!custom) return false;

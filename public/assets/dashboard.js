@@ -24,10 +24,14 @@ import { createInboxBell } from "./components/inbox-bell.js";
 import { createDateRequests } from "./components/date-requests.js";
 import { createReviews } from "./components/reviews.js";
 import { createCommentMentions } from "./components/comment-mentions.js";
+import { mountHeaderTools } from "./app/header-tools.js";
+import { setNavCount } from "./app/nav.js";
 
   // The dashboard keeps loading after the page itself has loaded; the browser's own scroll restore could then
   // move you while you scroll, so it is off (redraws keep your place, see render).
   try{ history.scrollRestoration="manual"; }catch(_){}
+  // The AIONE AI button, the bell and the assistant's panel, the same as on every other page.
+  mountHeaderTools();
   // Filled in from the proxy's /config after sign-in (see applyConfig).
   let SITE="", PROJECT="", PEOPLE={}, DEVS=[], DEV_EMAIL={}, DEV_COLOR={}, BYID={}, JQL="", ME="", MAIL=false;
   // Administrators see and change everything. Users see only the tickets labelled ai1_<MY_DEV> (the proxy
@@ -998,7 +1002,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
       if(!Object.values(state.businessFilter||{}).some(Boolean)) renderIfIdle();
       setTimeout(()=>loadClosed(),0); loadPrs([...issues.map(i=>i.key),...state.internalIssues.map(i=>i.key)]);
       // The administrators' Needs review queue and its sidebar count refresh with the tickets (same button, same 120 s).
-      if(IS_ADMIN) REVIEWS.refreshQueue();
+      if(IS_ADMIN) REVIEWS.refreshQueue(); else setNavCount("reviews",0);
       await businessReady; await business.load([...issues.map(i=>i.key),...state.internalIssues.map(i=>i.key)]);
       mergeIssues(); saveCache(); renderIfIdle();
       if(dz.key)dateRequests.renderDrawer(dz.key);

@@ -3,10 +3,15 @@ const button=(text,action,cls='btn')=>{const b=node('button',cls,text);b.type='b
 const pending=r=>['pending','needs_review','applying'].includes(r.status);
 const date=v=>v?new Date(v+'T00:00:00Z').toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric',timeZone:'UTC'}):'Not set';
 const status=r=>({pending:'Awaiting approval',needs_review:'Needs another review',applying:'Applying date',set:'Initial date set',approved:'Approved',rejected:'Rejected',withdrawn:'Withdrawn'}[r.status]||r.status);
+// Every date request the proxy lets you see, page by page: the Date requests page, and the sidebar count on other pages.
+export async function fetchDateRequests(api){const all=[];let cursor=null;const seen=new Set();do{const page=await api('/date-requests'+(cursor?'?cursor='+encodeURIComponent(cursor):''));all.push(...(page.requests||[]));cursor=page.isLast===false?page.nextCursor:null;if(cursor&&seen.has(cursor))throw new Error('Request pagination stalled. Refresh to retry.');if(cursor)seen.add(cursor);}while(cursor);return all;}
+// Administrators see every request, developers their own.
+export const visibleDateRequests=(all,{admin,email})=>admin?all:all.filter(r=>r.requester.email===email);
+export const pendingDateCount=(all,who)=>visibleDateRequests(all,who).filter(pending).length;
 export function createDateRequests({api,context,openIssue,onChange,onApplied,renderHistory}){
- let requests=[],error='',filter='pending',developer='',selectedKey=null;
+ let requests=[],loaded=false,error='',filter='pending',developer='',selectedKey=null;
  const dialog=node('dialog','date-dialog');document.body.appendChild(dialog);
- async function load(){try{const all=[];let cursor=null;const seen=new Set();do{const page=await api('/date-requests'+(cursor?'?cursor='+encodeURIComponent(cursor):''));all.push(...(page.requests||[]));cursor=page.isLast===false?page.nextCursor:null;if(cursor&&seen.has(cursor))throw new Error('Request pagination stalled. Refresh to retry.');if(cursor)seen.add(cursor);}while(cursor);requests=context().admin?all:all.filter(r=>r.requester.email===context().email);error='';}catch(e){error=e.message||'Date requests could not be loaded.';}return requests;}
+ async function load(){try{requests=visibleDateRequests(await fetchDateRequests(api),context());loaded=true;error='';}catch(e){error=e.message||'Date requests could not be loaded.';}return requests;}
  const activeFor=key=>requests.find(r=>r.key===key&&pending(r));
  function fields(form,label,type,value=''){const wrap=node('label','date-field');wrap.append(node('span','',label));const input=node(type==='textarea'?'textarea':'input','inp');if(type!=='textarea')input.type=type;input.value=value??'';wrap.append(input);form.append(wrap);return input;}
  function show(title){dialog.replaceChildren();const heading=node('h2','',title);heading.id='date-dialog-title';dialog.setAttribute('aria-labelledby',heading.id);dialog.append(heading);const form=node('form','date-form');form.method='dialog';dialog.append(form);const msg=node('p','msg');msg.setAttribute('role','alert');form.append(msg);dialog.showModal();return {form,msg};}
@@ -96,5 +101,5 @@ export function createDateRequests({api,context,openIssue,onChange,onApplied,ren
  }
  function showTicket(key){selectedKey=key;const target=document.getElementById('d-date-requests');if(target)render(target,{key});openIssue(key);}
  function renderDrawer(key){selectedKey=key;const target=document.getElementById('d-date-requests');if(target)render(target,{key});const button=document.getElementById('d-requestdate');if(button){button.textContent=activeFor(key)?'Review pending date request':!context().ticket(key)?.due&&!requests.some(r=>r.key===key&&(r.appliedDate||r.original?.due))?'Set due date':context().admin?'Change approved date':'Request date change';button.onclick=()=>activeFor(key)?render(target,{key}):formRequest(key);}}
- return {load,formRequest,render,renderDrawer,activeFor,all:()=>requests,pendingCount:()=>requests.filter(pending).length,isDirty:()=>dialog.open,close:()=>dialog.close()};
+ return {load,formRequest,render,renderDrawer,activeFor,all:()=>requests,pendingCount:()=>loaded?requests.filter(pending).length:null,isDirty:()=>dialog.open,close:()=>dialog.close()};
 }

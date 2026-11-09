@@ -32,6 +32,9 @@ async function mockMonitor(page, { role = "user" } = {}) {
     if (path === "/monitor/pipeline-runs") return json({ runs: [] });
     if (path === "/monitor/odoo-audit") return json({ actions: [{ id: 1, action_type: "instance_view", target_name: "odoo101", result: "success", user_name: "Synthetic Person", create_date: "2026-10-15T08:00:00Z", details: "{}" }], has_more: false });
     if (path === "/monitor/log") return json({ entries: log, hasMore: false });
+    // The shared top bar and sidebar: the bell and the date requests count.
+    if (path === "/inbox") return json({ items: [], seenAt: null, readTickets: [] });
+    if (path === "/date-requests") return json({ requests: [], isLast: true });
     unexpected.push({ path, method });
     return route.fulfill({ status: 403, json: { code: "forbidden", error: "Unconfigured test request" } });
   });
