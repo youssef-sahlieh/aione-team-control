@@ -43,7 +43,7 @@ import { projectBudgetRoutes } from "./project-budget.js";
 import { billingRoutes, billingScanCron } from "./billing.js";
 import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
 import { recordLogin } from "./users.js";
-import { ROLES, checkPassword, createLinkToken, deleteUser, ensureAccountId, getUser, hashPassword, listUsers, newAccountId, normDev, normEmail, normGithub, passwordProblem, peekLinkToken, publicUser, saveUser, updateUser, useLinkToken, validDev, validEmail, validGithub } from "./users.js";
+import { ROLES, checkPassword, createLinkToken, deleteUser, developerAccounts, ensureAccountId, getUser, hashPassword, listUsers, newAccountId, normDev, normEmail, normGithub, passwordProblem, peekLinkToken, publicUser, saveUser, updateUser, useLinkToken, validDev, validEmail, validGithub } from "./users.js";
 
 const enc = new TextEncoder();
 // Saved sign-ins last up to one year; account version changes still revoke tokens.
@@ -664,11 +664,10 @@ async function route(request, env, url) {
     // Every dashboard account with a developer name is a developer too (even before any ticket has its label), and
     // its email is that developer's when the team setting has none. Several accounts on one name: the one whose email
     // starts with the name, then a company address, wins.
-    const accounts = env.STORE ? (await listUsers(env.STORE).catch(() => [])).filter((u) => typeof u.dev === "string" && u.dev && validDev(u.dev)) : [];
-    const rank = (u) => (normEmail(u.email).split("@")[0] === u.dev ? 0 : 1) + (/@aione\.biz$/i.test(u.email) ? 0 : 2);
+    const accounts = env.STORE ? await developerAccounts(env.STORE).catch(() => []) : [];
     team.devEmails = { ...(team.devEmails && typeof team.devEmails === "object" ? team.devEmails : {}) };
     team.devNames = {};
-    for (const u of [...accounts].sort((a, b) => rank(a) - rank(b))) {
+    for (const u of accounts) {
       if (!team.devEmails[u.dev]) team.devEmails[u.dev] = normEmail(u.email);
       if (!team.devNames[u.dev]) team.devNames[u.dev] = String(u.name || "").trim() || normEmail(u.email);
     }

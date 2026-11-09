@@ -94,6 +94,19 @@ export async function listUsers(store) {
   return users.filter(Boolean).sort((a, b) => (a.role === b.role ? a.name.localeCompare(b.name) : a.role === "admin" ? -1 : 1));
 }
 
+// Accounts with a developer name, best first for each name: the one whose email starts with the name, then a company
+// address, then a non-administrator (an administrator who shares a developer name is not taken for the developer).
+export async function developerAccounts(store) {
+  const rank = (u) => (normEmail(u.email).split("@")[0] === u.dev ? 0 : 1) + (/@aione\.biz$/i.test(u.email) ? 0 : 2) + (u.role === "admin" ? 0.5 : 0);
+  return (await listUsers(store)).filter((u) => typeof u.dev === "string" && u.dev && validDev(u.dev)).sort((a, b) => rank(a) - rank(b));
+}
+// A developer's name for display and for Odoo lines: the best account's name, else the developer name itself.
+export async function developerNames(store, devs) {
+  const accounts = store ? await developerAccounts(store).catch(() => []) : [], out = {};
+  for (const d of devs) out[d] = String(accounts.find((u) => u.dev === d)?.name || "").trim() || d;
+  return out;
+}
+
 // What the dashboard may see about a user (never the password hash).
 export const publicUser = (u) => ({ email: u.email, accountId: u.id || "", name: u.name, role: u.role, dev: u.dev || "", hasPassword: !!u.pw, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null, lastLoginIp: u.lastLoginIp || "", githubLogin: u.githubLogin || "" });
 
