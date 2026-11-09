@@ -40,6 +40,7 @@ import { recordTicketEvent, ticketLogRoutes, readTicketLog } from "./ticket-log.
 import { integrationRoutes } from "./integrations.js";
 import { epicMapRoutes } from "./epic-map.js";
 import { projectBudgetRoutes } from "./project-budget.js";
+import { billingRoutes, billingScanCron } from "./billing.js";
 import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
 import { recordLogin } from "./users.js";
 import { ROLES, checkPassword, createLinkToken, deleteUser, ensureAccountId, getUser, hashPassword, listUsers, newAccountId, normDev, normEmail, normGithub, passwordProblem, peekLinkToken, publicUser, saveUser, updateUser, useLinkToken, validDev, validEmail, validGithub } from "./users.js";
@@ -384,6 +385,8 @@ async function route(request, env, url) {
   if (path === "/cron/db-extend") return dbExtendCron(request, env);
   // The work log's background sync to Odoo (secret in the Authorization header, never a user session).
   if (path === "/cron/time-sync") return timeSyncCron(request, env);
+  // Billing: allowance consumption, the Odoo check and the "allocated hours exhausted" alert queue (same secret).
+  if (path === "/cron/billing-scan") return billingScanCron(request, env, { sendMail: (from, body) => sendMail(env, from, body) });
   // AI1 Monitor checks its tokens with this public key. It holds no private key.
   if (path === "/sso/monitor/keys" && method === "GET") {
     try { return json(monitorPublicKeys(env)); } catch { return fail("not_configured", "AI1 Monitor sign-in isn't set up.", 503); }
@@ -401,7 +404,7 @@ async function route(request, env, url) {
     if (!account || account.id !== grant.accountId) return fail("forbidden", "This account can't use AI1 Monitor.", 403);
     try { return json(await monitorToken(env, account)); } catch { return fail("not_configured", "AI1 Monitor sign-in isn't set up.", 503); }
   }
-  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1", "db-report-v1", "db-report-company-v1", "db-report-pos-version-v1", "time-entries-v1","epic-map-v1","analytics-v1","ticket-bulk-import-v1","project-admin-v1","project-budget-v1"], build: String(env.BUILD || "").slice(0, 7)});
+  if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1", "db-report-v1", "db-report-company-v1", "db-report-pos-version-v1", "time-entries-v1","epic-map-v1","analytics-v1","ticket-bulk-import-v1","project-admin-v1","project-budget-v1","billing-v1"], build: String(env.BUILD || "").slice(0, 7)});
 
   // Jira Automation uses its own secret, never a team password or a user's browser session.
   if (path === "/notifications/jira-created") {
@@ -543,10 +546,13 @@ async function route(request, env, url) {
   if(path==="/clients"||path.startsWith("/clients/"))return catalogRoutes(request,env,url,me);
   if(path==="/epic-map"||path==="/epic-map/sync")return epicMapRoutes(request,env,url,me,(p,init)=>jira(env,p,init));
   // Work log (Odoo timesheets) on Jira, internal and Odoo Helpdesk tickets the signed-in person can see.
-  if(path==="/time-entries"||path.startsWith("/time-entries/"))return timeRoutes(request,env,url,me,{readTicket:async key=>{
+  const readTimeTicket=async key=>{
     if(/^HD-\d+$/.test(key)){const t=await odooTicketForTime(env,key);return t&&(me.role==="admin"||(me.dev&&t.devs.includes(me.dev)))?t:null;}
     return readBusinessTicket(key);
-  }});
+  };
+  if(path==="/time-entries"||path.startsWith("/time-entries/"))return timeRoutes(request,env,url,me,{readTicket:readTimeTicket});
+  // Billable work, customer allowances, alerts and the billable export (administrators).
+  if(path.startsWith("/billing/"))return billingRoutes(request,env,url,me,{readTicket:readTimeTicket,sendMail:(from,body)=>sendMail(env,from,body)});
   // Many tickets at once (the dashboard's list): one database read for internal tickets and, for users, one
   // Jira search for their own tickets, instead of one Jira read per ticket. Administrators see every project ticket.
   const readBusinessTickets = async keys => {
@@ -667,7 +673,7 @@ async function route(request, env, url) {
       if (!team.devNames[u.dev]) team.devNames[u.dev] = String(u.name || "").trim() || normEmail(u.email);
     }
     team.devs = [...new Set([...(Array.isArray(team.devs) ? team.devs : []), ...fromJira, ...accounts.map((u) => u.dev)])];
-    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE,knowledge:odooConfigured(env), capabilities:["ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1","db-report-pos-version-v1","epic-map-v1","ticket-bulk-import-v1","project-admin-v1","project-budget-v1"] });
+    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE,knowledge:odooConfigured(env), capabilities:["ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1","db-report-pos-version-v1","epic-map-v1","ticket-bulk-import-v1","project-admin-v1","project-budget-v1","billing-v1"] });
   }
 
   // Jira people are searchable for everyone, so anyone can @mention them in a Jira comment.

@@ -1,6 +1,7 @@
 import {createReportBrowser} from './report-browser.js';
+import {createBillingAdmin} from './billing-admin.js';
 import { createdDate, DASH_PRIORITIES } from '../models/ticket-business.js';
-import { BUDGET_LABEL, DEFAULT_VIEW, budgetStatus, hours, signedHours, percent, budgetText, budgetRows, budgetCsvRows, budgetCounts, projectChoices, hiddenFilterCount, assignableProjects, MAPPING_KINDS, mappingSuggestion, mappingRows, mappingCounts } from '../models/odoo-projects.js';
+import { BUDGET_LABEL, DEFAULT_VIEW, budgetStatus, hours, signedHours, percent, budgetText, budgetRows, budgetCsvRows, budgetCounts, projectChoices, hiddenFilterCount, BILLING_DEFAULT, BILLING_FILTERS, billingFigures, assignableProjects, MAPPING_KINDS, mappingSuggestion, mappingRows, mappingCounts } from '../models/odoo-projects.js';
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
 const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.addEventListener('click',fn);return b;};
 const field=(parent,label,node)=>{const l=el('label','business-field');node.setAttribute('aria-label',label);l.append(el('span','',label),node);parent.append(l);return node;};
@@ -43,7 +44,10 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   let billingNeeded=false,enabled=false,epicMapping=false,projectAdmin=false,projectBudget=false,catalog={revision:0,entries:[]},records={},editor=null;
   const reportBrowser=createReportBrowser({api,openIssue,clientsPanel:reportAddPanel});
   const admin=()=>context().admin;
-  let odooOn=false,odooProjects=[],syncState=null;
+  let odooOn=false,odooProjects=[],syncState=null,billingOn=false;
+  const billing=createBillingAdmin({api,dialog:(t,c)=>dialog(t,c),openIssue});
+  // The Odoo projects for billing pickers: the Clients table's rows when it has loaded, else the ticket project list.
+  const billingProjects=()=>clientsPage?.table.data?clientsPage.table.data.projects.map(p=>({id:p.odooId,label:(p.client?p.client+' → ':'')+p.name})):odooProjects.map(p=>({id:p.id,label:p.label||p.name}));
   const clients=()=>catalog.entries.filter(e=>!e.parentId&&!e.archived);
   const children=id=>catalog.entries.filter(e=>e.parentId===id&&!e.archived);
   async function loadCatalog(){catalog=await api('/clients');if(odooOn)await loadProjects().catch(()=>{});return catalog;}
@@ -109,7 +113,8 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     // Once set, only administrators change it (the backend checks this too).
     const locked=!admin()&&!creating&&placed(values),selects=placement(clientGroup,values,{disabled:closed||locked,required:creating});
     if(locked&&odooOn)clientGroup.append(el('p','business-guidance','Ask an administrator to move this ticket to another Odoo project.'));
-    let billing;if(admin()){billing=field(clientGroup,'Billing (administrators only)',el('select','fsel'));billingOptions(billing,values.billing);billing.disabled=closed;if(creating&&billingNeeded)billing.setAttribute('aria-required','true');}
+    // With billing-v1 the ticket's billing has its own section (Inherit, Billable, Not billable); new tickets keep this one.
+    let billing;if(admin()&&(creating||!billingOn)){billing=field(clientGroup,'Billing (administrators only)',el('select','fsel'));billingOptions(billing,values.billing);billing.disabled=closed;if(creating&&billingNeeded)billing.setAttribute('aria-required','true');}
     const workGroup=el('fieldset','business-section business-work-section');workGroup.append(el('legend','','Work summary'));box.append(workGroup);
     const logged=values.loggedMinutes>0;
     const estimated=field(workGroup,'Estimated hours',input('number',values.estimatedHours)),actual=field(workGroup,logged?'Actual hours before the work log':'Actual hours',input('number',values.actualHours));
@@ -141,20 +146,27 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     if(r.closed){box.append(el('p','msg','Closed ticket: reopen it to edit these fields.'));return;}
     const v=r.metadata,form=el('div','quick-edit');box.append(form);let read,first;
     if(name==='client'){const s=placement(form,v,{required:odooOn,optional:false});read=s.read;first=s.first;}
+    else if(name==='billing'&&billingOn){const b=field(form,'Billing',el('select','fsel'));option(b,'Inherit from the project','inherit');option(b,'Billable','billable');option(b,'Not billable','not_billable');b.value=v.billing||'inherit';read=()=>({billing:b.value});first=b;}
     else if(name==='billing'){const b=field(form,'Billing',el('select','fsel'));billingOptions(b,v.billing);read=()=>{if(!b.value)throw new Error('Choose Billable or Not billable.');return {billing:b.value};};first=b;}
     else if(name==='workDone'){const t=field(form,'Work done',el('textarea','inp'));t.value=v.workDone||'';t.maxLength=5000;t.rows=4;t.dir='auto';read=()=>({workDone:t.value});first=t;}
     else if(name==='dashPriority'){const p=field(form,'Priority',el('select','fsel'));option(p,'Not set','');DASH_PRIORITIES.forEach(x=>option(p,x,x));p.value=v.dashPriority||'';const o=field(form,'Order within priority',input('number',v.dashOrder));o.min='1';o.max='99';o.step='1';o.placeholder='Last';read=()=>{if(o.value!==''&&!o.checkValidity())throw new Error('The order must be a whole number from 1 to 99.');return {dashPriority:p.value||null,dashOrder:o.value===''?null:Number(o.value)};};first=p;}
     else{const n=field(form,QUICK[name],input('number',v[name]));n.min='0.01';n.max='1000000';n.step='0.01';read=()=>{if(!n.checkValidity())throw new Error('Hours must be greater than zero, with up to two decimal places.');return {[name]:n.value===''?null:Number(n.value)};};first=n;}
     const status=el('p','msg'),save=button('Save',async()=>{
       save.disabled=true;
-      try{const fields=read();if(!confirmMove(fields,r)){save.disabled=false;return;}const data=await api('/ticket-metadata',{method:'PUT',body:{key,fields:{revision:v.revision,...fields}}});records[key]=data.metadata;done();}
+      try{const fields=read();if(!confirmMove(fields,r)){save.disabled=false;return;}
+        // Billing goes through the billing API, which recounts the ticket's consumption and updates its Odoo task.
+        if(name==='billing'&&billingOn){await api('/billing/ticket',{method:'PUT',body:{key,revision:v.revision,billing:fields.billing}});records[key]=(await api('/ticket-metadata?key='+encodeURIComponent(key))).metadata;done();return;}
+        const data=await api('/ticket-metadata',{method:'PUT',body:{key,fields:{revision:v.revision,...fields}}});records[key]=data.metadata;done();}
       catch(err){message(status,err);save.disabled=false;}
     },'btn primary');
     form.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.target.tagName!=='TEXTAREA'||e.ctrlKey||e.metaKey)){e.preventDefault();save.click();}});
     box.append(save,status);first.focus();
   }
   async function renderEditor(key){
-    const target=document.getElementById('business-fields');target.hidden=key.startsWith('HD-');if(target.hidden){editor=null;return;}target.replaceChildren(el('h3','','Ticket work & client'));
+    const target=document.getElementById('business-fields');target.hidden=key.startsWith('HD-')&&!(billingOn&&admin());
+    if(target.hidden){editor=null;return;}
+    // Helpdesk tickets have no business fields here, only their billing.
+    if(key.startsWith('HD-')){editor=null;target.replaceChildren(el('h3','','Billing'));const b=el('div','billing-ticket-host');target.append(b);billing.ticketSection(b,key);return;}target.replaceChildren(el('h3','','Ticket work & client'));
     if(!enabled){target.append(el('p','msg err','Deploy the updated backend to enable ticket business fields and validated closure.'));return;}
     if(editor?.key===key&&editor.dirty())return;
     editor=null;target.append(el('p','msg','Loading ticket fields…'));
@@ -177,12 +189,14 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
         catch(err){message(msg,err);}finally{save.disabled=false;}
       },'btn primary'));
       target.append(msg);
+      if(billingOn&&admin()){const b=el('div','billing-ticket-host');target.append(b);billing.ticketSection(b,key,{closed:r.closed});}
       const history=el('details','business-history');history.append(el('summary','','Business field history'));
       for(const h of [...r.history].reverse()){const line=el('div','business-history-entry');line.append(el('strong','',(h.by?.name||h.by?.email||'System')+' · '+new Date(h.at).toLocaleString('en-GB',{timeZone:'Asia/Jerusalem'})),el('div','',historyText(h)));history.append(line);}
       target.append(history);
     }catch(e){if(context().key===key){target.replaceChildren(el('h3','','Ticket work & client'));const msg=el('p','msg');message(msg,e);target.append(msg,button('Retry',()=>renderEditor(key)));}}
   }
-  function dialog(title,onClose){const d=el('dialog','business-dialog'),head=el('div','business-dialog-head'),body=el('div'),msg=el('p','msg');head.append(el('h2','',title),button('Close',()=>onClose?onClose():d.close()));d.append(head,body,msg);document.body.append(d);d.addEventListener('close',()=>d.remove());d.showModal();return {d,body,msg};}
+  let dialogSeq=0;
+  function dialog(title,onClose){const d=el('dialog','business-dialog'),head=el('div','business-dialog-head'),body=el('div'),msg=el('p','msg');const h=el('h2','',title);h.id='business-dialog-'+(++dialogSeq);d.setAttribute('aria-labelledby',h.id);head.append(h,button('Close',()=>onClose?onClose():d.close()));d.append(head,body,msg);document.body.append(d);d.addEventListener('close',()=>d.remove());d.showModal();return {d,body,msg};}
   async function bulk(keys){
     if(!enabled)throw new Error('Updated backend required.');const {d,body,msg}=dialog(odooOn?'Assign Odoo project to selected tickets':'Assign client to selected tickets');const selects=placement(body,{},{required:odooOn});
     if(odooOn)body.append(el('p','business-guidance','Work already logged on these tickets stays on its current project; only new work goes to the one chosen here.'));
@@ -268,6 +282,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const more=moreMenu('More',[['Export CSV',()=>exportBudget(table.shown())],['Create contact',opener=>openContactDialog(opener,target)],
       ...(projectAdmin?[['Dashboard clients & projects',opener=>hostDialog('Dashboard clients & projects',opener,renderProjects)]]:[]),
       ...(epicMapping?[['Jira epics → Odoo projects',opener=>hostDialog('Jira epics → Odoo projects',opener,renderEpicMap)]]:[]),
+      ...(billingOn&&admin()?[['Billing setup',opener=>billing.setupDialog(opener)],['Allowances & alerts',opener=>billing.allowancesDialog(opener,billingProjects)],['Billable export',opener=>billing.exportDialog(opener,billingProjects)]]:[]),
       ['How figures are counted',opener=>figuresDialog(opener)]]);
     head.append(el('h2','','Clients & Projects'),actions);actions.append(syncBtn,createBtn,mapBtn,more);root.append(head,sync,msg);
     const table=projectsTable(root,{say,onMap:(p,opener)=>openMapTickets({opener,project:p})});
@@ -518,7 +533,11 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   let budgetView={...DEFAULT_VIEW};
   const dateText=d=>d?new Date(d.length===10?d+'T00:00:00':d).toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'}):'—';
   const COLS=[['name','Project'],['client','Client'],['allocated','Allocated'],['logged','Logged'],['remaining','Remaining'],['status','Budget status'],['open','Open tickets'],[null,'Actions']];
-  const SORT_LABEL={created:'Created',name:'Project',client:'Client',allocated:'Allocated',logged:'Logged',remaining:'Remaining',used:'Budget used',status:'Budget status',open:'Open tickets',review:'Needs PR review',lastWork:'Last work log'};
+  // With billing on, two more: the project's billing default and what its billable work consumed of the allowance.
+  const BILLING_COLS=[[null,'Billing'],['consumed','Billable consumed']];
+  const billingShown=d=>!!d?.projects?.some(p=>p.billing);
+  const colsFor=d=>billingShown(d)?[...COLS.slice(0,-1),...BILLING_COLS,COLS[COLS.length-1]]:COLS;
+  const SORT_LABEL={consumed:'Billable consumed',created:'Created',name:'Project',client:'Client',allocated:'Allocated',logged:'Logged',remaining:'Remaining',used:'Budget used',status:'Budget status',open:'Open tickets',review:'Needs PR review',lastWork:'Last work log'};
   const sortDir=(k,dir)=>k==='created'||k==='lastWork'?(dir<0?'newest first':'oldest first'):k==='name'||k==='client'?(dir>0?'A–Z':'Z–A'):(dir>0?'ascending':'descending');
   function projectsTable(root,{say,onMap}){
     const box=el('div','odoo-projects'),bar=el('div','budget-bar'),filters=el('div','budget-filters'),info=el('span','budget-scope'),warn=el('div'),msg=el('p','msg','Loading projects from Odoo…');
@@ -529,15 +548,17 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const statusSel=pick('Filter by budget status',[['','All budget statuses'],...Object.entries(BUDGET_LABEL),['unmapped','Not linked']]);
     const missingSel=pick('Filter by missing client',[['','With or without a client'],['missing','Missing client'],['present','Has a client']]);
     const ticketSel=pick('Filter by linked tickets',[['','With or without tickets'],['with','With linked tickets'],['without','Without linked tickets']]);
+    const billingSel=pick('Filter by billing',[['','Any billing'],...Object.entries(BILLING_FILTERS)]);
     const sortSel=pick('Sort projects',Object.entries(SORT_LABEL).flatMap(([k,l])=>[-1,1].map(dir=>[k+':'+dir,l+', '+sortDir(k,dir)])));
     const filtersBtn=button('Filters',()=>{filters.hidden=!filters.hidden;filtersBtn.setAttribute('aria-expanded',String(!filters.hidden));},'btn');filtersBtn.setAttribute('aria-controls',filters.id);filtersBtn.setAttribute('aria-expanded','false');
     // A new search or filter starts again from the first page; the chosen sort stays.
-    for(const [s,key] of [[clientSel,'client'],[statusSel,'status'],[missingSel,'missingClient'],[ticketSel,'tickets']])s.addEventListener('change',()=>{budgetView[key]=s.value;budgetView.page=0;draw();});
+    for(const [s,key] of [[clientSel,'client'],[statusSel,'status'],[missingSel,'missingClient'],[ticketSel,'tickets'],[billingSel,'billing']])s.addEventListener('change',()=>{budgetView[key]=s.value;budgetView.page=0;draw();});
     sortSel.addEventListener('change',()=>{const [k,dir]=sortSel.value.split(':');budgetView.sort=k;budgetView.dir=Number(dir);budgetView.page=0;draw();});
     search.addEventListener('input',()=>{budgetView.q=search.value;budgetView.page=0;draw();});
     const labelled=(text,node)=>{const l=el('label','business-field');l.append(el('span','',text),node);return l;};
-    filters.append(labelled('Budget status',statusSel),labelled('Client in Odoo',missingSel),labelled('Tickets',ticketSel),labelled('Sort',sortSel),
-      button('Clear filters',()=>{Object.assign(budgetView,{status:'',missingClient:'',tickets:'',sort:DEFAULT_VIEW.sort,dir:DEFAULT_VIEW.dir,page:0});draw();},'linkbtn'));
+    const billingLabel=labelled('Billing',billingSel);
+    filters.append(labelled('Budget status',statusSel),labelled('Client in Odoo',missingSel),labelled('Tickets',ticketSel),billingLabel,labelled('Sort',sortSel),
+      button('Clear filters',()=>{Object.assign(budgetView,{status:'',missingClient:'',tickets:'',billing:'',sort:DEFAULT_VIEW.sort,dir:DEFAULT_VIEW.dir,page:0});draw();},'linkbtn'));
     bar.append(search,clientSel,filtersBtn,info);
     const wrap=el('div','table-wrap'),table=el('table','budget-table'),head=el('thead'),body=el('tbody'),foot=el('tfoot'),pager=el('div','budget-pager');table.append(head,body,foot);wrap.append(table);
     box.append(bar,filters,warn,msg,wrap,pager);root.append(box);
@@ -545,13 +566,13 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const rows=()=>data?data.projects:[],shown=()=>budgetRows(rows(),budgetView),count=(s,n)=>n+' '+s+(n===1?'':'s');
     const ctx={data:()=>data,say,onMap,closed:()=>{if(pending){pending=false;draw();}}};
     // The controls follow the view (after Clear filters, or a header click changing the sort).
-    function controls(){statusSel.value=budgetView.status;missingSel.value=budgetView.missingClient;ticketSel.value=budgetView.tickets;sortSel.value=budgetView.sort+':'+budgetView.dir;clientSel.value=budgetView.client||'';
+    function controls(){statusSel.value=budgetView.status;missingSel.value=budgetView.missingClient;ticketSel.value=budgetView.tickets;billingSel.value=budgetView.billing||'';billingLabel.hidden=!billingShown(data);sortSel.value=budgetView.sort+':'+budgetView.dir;clientSel.value=budgetView.client||'';
       const n=hiddenFilterCount(budgetView);filtersBtn.textContent=n?'Filters ('+n+')':'Filters';}
     function clientOptions(){const v=budgetView.client,names=[...new Set(rows().map(p=>p.client).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
       clientSel.replaceChildren(new Option('All clients',''),...names.map(c=>new Option(c,c)),new Option('No client','__none'));if(v&&v!=='__none'&&!names.includes(v))clientSel.append(new Option(v,v));}
     function draw(){
       controls();
-      const tr=el('tr');for(const [k,l] of COLS){const th=el('th');th.scope='col';if(!k){th.textContent=l;tr.append(th);continue;}
+      const tr=el('tr');for(const [k,l] of colsFor(data)){const th=el('th');th.scope='col';if(!k){th.textContent=l;tr.append(th);continue;}
         const b=button(l+(budgetView.sort===k?(budgetView.dir>0?' ▲':' ▼'):''),()=>{budgetView.dir=budgetView.sort===k?-budgetView.dir:1;budgetView.sort=k;budgetView.page=0;draw();},'th-sort');th.setAttribute('aria-sort',budgetView.sort===k?(budgetView.dir>0?'ascending':'descending'):'none');th.append(b);tr.append(th);}
       head.replaceChildren(tr);
       if(!data)return;
@@ -559,7 +580,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       const all=rows(),list=shown(),pages=Math.max(1,Math.ceil(list.length/BUDGET_PAGE));budgetView.page=Math.min(budgetView.page,pages-1);
       const from=budgetView.page*BUDGET_PAGE,pageRows=list.slice(from,from+BUDGET_PAGE);
       body.replaceChildren(...pageRows.flatMap(p=>budgetRow(p,ctx)));
-      if(!list.length){const r=el('tr'),td=el('td','business-guidance','No Odoo projects match.');td.colSpan=COLS.length;r.append(td);body.append(r);}
+      if(!list.length){const r=el('tr'),td=el('td','business-guidance','No Odoo projects match.');td.colSpan=colsFor(data).length;r.append(td);body.append(r);}
       const c=budgetCounts(list);
       info.textContent=(list.length===all.length?count('project',all.length):list.length+' of '+count('project',all.length))+(c.over?' · '+c.over+' over budget':'')+(c.near?' · '+c.near+' near limit':'');
       pager.replaceChildren();
@@ -569,7 +590,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
         pager.append(el('span','',(from+1)+'–'+(from+pageRows.length)+' of '+count('project',list.length)),prev,next);
       }
       const sum=f=>list.reduce((s,p)=>s+(f(p)||0),0),total=el('tr');
-      total.append(el('th','',list.length===all.length?'Total':'Total ('+count('project',list.length)+' shown)'),el('td'),el('td','num',hours(sum(p=>p.allocatedHours))),el('td','num',hours(sum(p=>p.loggedHours))),el('td','num',signedHours(sum(p=>p.remainingHours))),el('td','',c.over+' over'),el('td','num',String(sum(p=>p.openTickets))),el('td'));
+      total.append(el('th','',list.length===all.length?'Total':'Total ('+count('project',list.length)+' shown)'),el('td'),el('td','num',hours(sum(p=>p.allocatedHours))),el('td','num',hours(sum(p=>p.loggedHours))),el('td','num',signedHours(sum(p=>p.remainingHours))),el('td','',c.over+' over'),el('td','num',String(sum(p=>p.openTickets))),...(billingShown(data)?[el('td'),el('td','num',hours(sum(p=>billingFigures(p)?.consumedHours)))]:[]),el('td'));
       total.firstChild.scope='row';foot.replaceChildren(total);
     }
     function update(next){
@@ -598,12 +619,13 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const map=button('Map tickets',e=>ctx.onMap(p,e.currentTarget),'btn budget-map-btn');map.setAttribute('aria-label','Map tickets to '+p.name);
     if(!p.assignable){map.disabled=true;map.title=(p.blocked||'Not in the last sync from Odoo.')+' Tickets cannot be given this project.';}
     actions.append(map);
-    tr.append(name,client,alloc,el('td','num',hours(p.loggedHours)),remaining,status,el('td','num',String(p.openTickets||0)),actions);
-    const cell=el('td','budget-links');cell.colSpan=COLS.length;detail.append(cell);
+    tr.append(name,client,alloc,el('td','num',hours(p.loggedHours)),remaining,status,el('td','num',String(p.openTickets||0)),...(billingShown(data)?billingCells(p):[]),actions);
+    const cell=el('td','budget-links');cell.colSpan=colsFor(data).length;detail.append(cell);
     const facts=el('dl','budget-facts');
     for(const [k,v] of [['Created',dateText(p.createdAt)],['Budget used',percent(p.usedPercent)],['Needs PR review',String(p.reviewTickets||0)+(p.reviewKeys?.length?' ('+p.reviewKeys.join(', ')+')':'')],['Last work log',dateText(p.lastWorkDate)],
       ...(p.pendingHours>0?[['Not in Odoo yet',hours(p.pendingHours)]]:[]),...(p.company?[['Company',p.company]]:[]),['Odoo ID','#'+p.odooId],...(p.ticketCount?[['Dashboard tickets',String(p.ticketCount)]]:[])])facts.append(el('dt','',k),el('dd','',v));
     cell.append(facts);
+    if(p.billing)cell.append(billingDetail(p,ctx));
     if(p.blocked)cell.append(el('p','budget-sub',p.blocked+' Tickets cannot be given this project until it is fixed in Odoo and synced.'));
     const links=el('div','budget-link-row');links.append(el('span','budget-sub','Linked to Jira:'));
     if(!p.mapped)links.append(el('span','project-status unmapped','Not linked'));
@@ -618,6 +640,27 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     return [tr,detail];
   }
   const count2=(n,s)=>n+' '+s+(n===1?'':'s');
+  // Billing cells: the default, and consumed of the allowance with its status ("6h of 10h", Near limit).
+  function billingCells(p){
+    const f=billingFigures(p);if(!f)return [el('td','','—'),el('td','','—')];
+    const def=el('td');def.append(el('span','project-status'+(p.billing.default?'':' unmapped'),f.defaultLabel));if(f.unclassifiedHours)def.append(el('span','budget-sub',hours(f.unclassifiedHours)+' not classified'));
+    const used=el('td','num'+(f.remainingHours<0?' over':''),hours(f.consumedHours)+(f.allocatedHours!=null?' of '+hours(f.allocatedHours):''));
+    used.append(el('span','budget-sub',f.statusLabel+(f.pool?' · shared pool':'')+(f.emailLabel?' · '+f.emailLabel:'')));
+    return [def,used];
+  }
+  // In the row details: the billing figures, and the project default for administrators (Billable, Not billable or not set).
+  function billingDetail(p,ctx){
+    const f=billingFigures(p),box=el('div','budget-billing'),facts=el('dl','budget-facts');
+    for(const [k,v] of [['Worked',hours(f.workedHours)],['Billable',hours(f.billableHours)],['Consumed',hours(f.consumedHours)],...(f.allocatedHours!=null?[['Allowance',hours(f.allocatedHours)],['Allowance left',signedHours(f.remainingHours)]]:[]),['Billing status',f.statusLabel],...(f.emailLabel?[['Alert email',f.emailLabel]]:[]),...(p.billing.odooSync?[['Billing in Odoo',p.billing.odooSync.state]]:[])])facts.append(el('dt','',k),el('dd','',v));
+    box.append(facts);
+    if(!admin())return box;
+    const sel=el('select','fsel');sel.setAttribute('aria-label','Billing default for '+p.name);option(sel,'Not classified','');for(const [v,l] of Object.entries(BILLING_DEFAULT))option(sel,l,v);sel.value=p.billing.default||'';
+    sel.addEventListener('change',async()=>{sel.disabled=true;ctx.say('Saving the billing default…');
+      try{await billing.setProjectDefault(p.odooId,sel.value||null);ctx.say('Billing default saved for “'+p.name+'”. Its tickets are recounted.');await clientsPage?.refresh({mapping:false});}
+      catch(err){ctx.say(err.message||String(err),true);sel.value=p.billing.default||'';}finally{sel.disabled=false;}});
+    const l=el('label','business-field');l.append(el('span','','Billing default'),sel);box.append(l);
+    return box;
+  }
   function allocationCell(cell,p){cell.replaceChildren(p.allocatedHours==null?el('span','budget-unset','Not set'):document.createTextNode(hours(p.allocatedHours)));}
   // Edit allocation (from the row's Actions): saved on the Odoo project, kept in the project's history. Empty clears it.
   // Only this row is redrawn.
@@ -636,7 +679,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     box.append(n,save.btn,button('Cancel',cancel,'btn'));cell.append(box);n.focus();
   }
   // Project details: the budget, its tickets, pull requests waiting for review, the latest Odoo timesheet lines and history.
-  const PROJECT_EVENT={created:h=>'Created from the dashboard'+(h.allocatedHours!=null?' with '+hours(h.allocatedHours)+' allocated':''),allocation:h=>'Allocated hours: '+(h.from==null?'Not set':hours(h.from))+' → '+(h.to==null?'Not set':hours(h.to))};
+  const PROJECT_EVENT={created:h=>'Created from the dashboard'+(h.allocatedHours!=null?' with '+hours(h.allocatedHours)+' allocated':''),billing:h=>'Billing default: '+(BILLING_DEFAULT[h.from]||'Not classified')+' → '+(BILLING_DEFAULT[h.to]||'Not classified'),allocation:h=>'Allocated hours: '+(h.from==null?'Not set':hours(h.from))+' → '+(h.to==null?'Not set':hours(h.to))};
   async function openProjectDetails(id,opener){
     const {d,body,msg}=dialog('Odoo project');d.classList.add('project-details');d.addEventListener('close',()=>{if(opener?.isConnected)opener.focus();});
     msg.className='msg';msg.textContent='Loading from Odoo…';
@@ -831,5 +874,5 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       row.append(label,select);list.append(row);
     }
   }
-  return {configure:async cfg=>{reportBrowser.configure(cfg);odooOn=!!cfg.odoo;billingNeeded=cfg.billingRequired===true;enabled=cfg.capabilities?.includes('ticket-business-v1')===true;epicMapping=enabled&&cfg.capabilities?.includes('epic-map-v1')===true;projectAdmin=enabled&&cfg.capabilities?.includes('project-admin-v1')===true;projectBudget=enabled&&cfg.capabilities?.includes('project-budget-v1')===true;if(enabled){await loadCatalog();if(cfg.odoo)api('/clients/odoo-sync',{method:'POST',body:{}}).then(r=>r.changed?loadCatalog():loadProjects()).catch(()=>{});if(epicMapping)api('/epic-map/sync',{method:'POST',body:{}}).then(async r=>{if(r.changed&&Object.keys(records).length){await load(Object.keys(records));await onChange();}}).catch(()=>{});}},enabled:()=>enabled,load,decorate,canQuickEdit,quickEdit,quickLabel,createFields,renderEditor,dirty:key=>editor?.key===key&&editor.dirty(),reset:()=>{editor=null;},bulk,ensureBilling,overrideReason,filters,matches,renderReports,renderCatalog,loadCatalog};
+  return {configure:async cfg=>{reportBrowser.configure(cfg);odooOn=!!cfg.odoo;billingNeeded=cfg.billingRequired===true;enabled=cfg.capabilities?.includes('ticket-business-v1')===true;epicMapping=enabled&&cfg.capabilities?.includes('epic-map-v1')===true;projectAdmin=enabled&&cfg.capabilities?.includes('project-admin-v1')===true;projectBudget=enabled&&cfg.capabilities?.includes('project-budget-v1')===true;billingOn=enabled&&cfg.capabilities?.includes('billing-v1')===true;if(enabled){await loadCatalog();if(cfg.odoo)api('/clients/odoo-sync',{method:'POST',body:{}}).then(r=>r.changed?loadCatalog():loadProjects()).catch(()=>{});if(epicMapping)api('/epic-map/sync',{method:'POST',body:{}}).then(async r=>{if(r.changed&&Object.keys(records).length){await load(Object.keys(records));await onChange();}}).catch(()=>{});}},enabled:()=>enabled,load,decorate,canQuickEdit,quickEdit,quickLabel,createFields,renderEditor,dirty:key=>editor?.key===key&&editor.dirty(),reset:()=>{editor=null;},bulk,ensureBilling,overrideReason,filters,matches,renderReports,renderCatalog,loadCatalog};
 }
