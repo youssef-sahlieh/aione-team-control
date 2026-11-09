@@ -13,6 +13,8 @@
 // an admin, and runs daily from a Vercel cron.
 import { odoo, odooConfigured } from "./odoo.js";
 import { act } from "./monitor.js";
+import { addToInbox } from "./inbox.js";
+import { listUsers } from "./users.js";
 
 const REPORT_KEY = "dbreport:v1";          // the finished/most-recent report
 const PROGRESS_KEY = "dbreport:progress";  // an in-flight incremental build
@@ -303,13 +305,15 @@ async function readInsideDatabase(slot, dbHint, section = "main", only = null) {
     // bus.presence.last_presence is the last time any user was active online - another "last seen" source.
     one(kw("bus.presence", "search_read", [[]], { fields: ["last_presence"], order: "last_presence desc", limit: 1, ...allUsers }), []).catch(() => []),
     one(kw("pos.order", "search_read", [[]], { fields: ["date_order"], order: "date_order desc", limit: 1 }), []),
-    one(kw("ir.config_parameter", "search_read", [[["key", "=", "database.expiration_date"]]], { fields: ["value"], limit: 1 }), [])
+    // The expiry date, and why Odoo set it (database.expiration_reason: trial, renewal, demo...).
+    one(kw("ir.config_parameter", "search_read", [[["key", "in", ["database.expiration_date", "database.expiration_reason"]]]], { fields: ["key", "value"], limit: 2 }), [])
   ]);
   const companyNames = Array.isArray(companyRows) ? companyRows.map((c) => String(c.name || "").trim()).filter(Boolean) : [];
   const companies = Array.isArray(companyRows) ? companyRows.length : null;
   // Branches: prefer res.branch if that model exists; else "extra companies" beyond the first.
   const branches = Number.isInteger(branchModel) ? branchModel : (Number.isInteger(companies) ? Math.max(0, companies - 1) : null);
-  const expires = (expiry[0] && expiry[0].value) || null;
+  const param = (key) => { const p = (Array.isArray(expiry) ? expiry : []).find((x) => x.key === key); return (p && p.value) || null; };
+  const expires = param("database.expiration_date"), expiryReason = String(param("database.expiration_reason") || "").slice(0, 60) || null;
   // Last login = the most recent sign of a logged-in user: web login, POS session start, online presence,
   // or (as a last resort, so this is never blank when there's activity) the last order - an order means
   // a user was logged in at that moment.
@@ -321,7 +325,7 @@ async function readInsideDatabase(slot, dbHint, section = "main", only = null) {
     company: companyNames[0] || "", companyNames,
     lastLogin: logins.length ? logins.sort().at(-1) : null,
     lastOrder: (lastOrder[0] && lastOrder[0].date_order) || null,
-    expires, expired: expires ? Date.parse(expires + "Z") < Date.now() : null
+    expires, expiryReason, expired: expires ? Date.parse(expires + "Z") < Date.now() : null
   };
 }
 
@@ -513,6 +517,8 @@ export async function buildReport(env, { force = false } = {}) {
     }
     if (progress.done >= progress.instances.length) {
       const rows = oneRowPerSite(progress.rows);
+      const moved = expiryChanges((previous && previous.rows) || [], rows);
+      if (moved.length) await alertExpiryMoved(env, moved);
       const report = { builtAt: Date.now(), count: rows.length, format: REPORT_FORMAT, rows };
       await env.STORE.set(REPORT_KEY, JSON.stringify(report), 30 * DAY_MS / 1000);
       await env.STORE.del(PROGRESS_KEY);
@@ -520,6 +526,35 @@ export async function buildReport(env, { force = false } = {}) {
     }
     return { done: false, progress: { done: progress.done, total: progress.instances.length } };
   } finally { await env.STORE.deleteIfValue(LOCK_KEY, owner); }
+}
+
+// An expiry date that moved earlier since the last report (Odoo's own update check can shorten it: a test copy
+// sharing production's identity, a subscription problem). The row is flagged "was X, now Y" for 14 days, unless
+// the date changes again. Returns the rows that moved this time. Extends only move dates later, so never count.
+const MOVED_KEEP_MS = 14 * DAY_MS;
+export function expiryChanges(previousRows, rows, now = Date.now()) {
+  const moved = [];
+  for (const row of rows) {
+    const prev = previousRows.find((x) => x.instance === row.instance && (x.database || "") === (row.database || ""));
+    if (!prev || !row.loginOk || !row.expires) continue;
+    const was = Date.parse(prev.expires + "Z"), is = Date.parse(row.expires + "Z");
+    if (prev.expires && is < was) { row.expiryMovedEarlier = { from: prev.expires, to: row.expires, at: new Date(now).toISOString() }; moved.push(row); continue; }
+    const flag = prev.expiryMovedEarlier;
+    if (flag && flag.to === row.expires && now - Date.parse(flag.at) < MOVED_KEEP_MS) row.expiryMovedEarlier = flag;
+  }
+  return moved;
+}
+const SECTION_NAME = { main: "Main", tests: "Tests", dev: "Dev" };
+// Every dashboard administrator gets a notification (the bell) for each database whose expiry moved earlier.
+async function alertExpiryMoved(env, rows) {
+  try {
+    const admins = (await listUsers(env.STORE)).filter((u) => u.role === "admin").map((u) => u.email);
+    for (const r of rows) {
+      const day = (v) => String(v || "").slice(0, 10);
+      await addToInbox(env.STORE, admins, { type: "db-expiry", key: r.database || r.instance, title: (SECTION_NAME[r.section] || "") + " database" + (r.url ? " · " + r.url.replace(/^https?:\/\//, "") : ""), by: "Odoo",
+        text: "Expiry moved earlier: was " + day(r.expiryMovedEarlier.from) + ", now " + day(r.expires) + "." + (r.expiryReason ? " Reason: " + r.expiryReason + "." : "") }, "");
+    }
+  } catch { console.warn("db_expiry_alert_failed"); }
 }
 
 async function readReport(env) { try { return JSON.parse(await env.STORE.get(REPORT_KEY) || "null"); } catch { return null; } }
@@ -565,16 +600,17 @@ async function extendDatabase(env, report, row, date, login) {
   return { db: login.db, expires: value };
 }
 
-// Automatic extend: every Tests and Dev database of the report the dashboard can sign in to, and that is expired,
-// gets an expiry date 30 days ahead. The date is read again in the database first: one extended since the report
+// Automatic extend: every Tests and Dev database of the report the dashboard can sign in to, and that is expired or
+// expires within the next 7 days, gets an expiry date 30 days ahead. The date is read again in the database first: one extended since the report
 // was built is left as it is. Main databases are never touched. Each extend is in the action log, like one made by hand.
-export const AUTO_EXTEND_DAYS = 30;
+export const AUTO_EXTEND_DAYS = 30, EXTEND_BEFORE_DAYS = 7;
 const AUTOMATIC = { email: "automation@aion", name: "Automatic extend (daily)", role: "system" };
 const isExpired = (value) => !!value && Date.parse(String(value) + "Z") < Date.now();
+const expiresSoon = (value) => !!value && Date.parse(String(value) + "Z") < Date.now() + EXTEND_BEFORE_DAYS * DAY_MS;
 export async function autoExtend(env, { deadline = Date.now() + 50000 } = {}) {
   const report = await readReport(env), out = { extended: [], failed: [], current: [], notReached: [] }, changes = [];
   if (!report) return out;
-  const due = (report.rows || []).filter((r) => ["tests", "dev"].includes(r.section) && r.loginOk && r.expired === true);
+  const due = (report.rows || []).filter((r) => ["tests", "dev"].includes(r.section) && r.loginOk && (r.expired === true || expiresSoon(r.expires)));
   const date = new Date(Date.now() + AUTO_EXTEND_DAYS * DAY_MS).toISOString().slice(0, 10), creds = await readCredentialIndex(env);
   await pool(due, POOL, async (row) => {
     const name = row.database || row.instance;
@@ -583,9 +619,10 @@ export async function autoExtend(env, { deadline = Date.now() + 50000 } = {}) {
     try { login = await signInToRow(env, report, row, creds); }
     catch (e) { out.failed.push({ database: name, error: String(e.message || e).slice(0, 160) }); return; }
     const now = await login.kw("ir.config_parameter", "get_param", ["database.expiration_date"]).catch(() => null);
-    if (now !== null && !isExpired(now)) { out.current.push(name); changes.push([row, { expires: now || null, expired: now ? false : null }]); return; }
-    const res = await act(env, AUTOMATIC, { action: "Extend database", target: row.instance, details: "Expired" + (row.expires ? " on " + String(row.expires).slice(0, 10) : "") + ": expiry date → " + date + " (automatic, Databases page)", run: () => extendDatabase(env, report, row, date, login) });
-    if (res.ok) { out.extended.push({ database: name, expires: date }); changes.push([row, { expires: date + " 00:00:00", expired: false }]); }
+    if (now !== null && !expiresSoon(now)) { out.current.push(name); changes.push([row, { expires: now || null, expired: now ? false : null }]); return; }
+    const when = String(now || row.expires || "").slice(0, 10), past = isExpired(now || row.expires);
+    const res = await act(env, AUTOMATIC, { action: "Extend database", target: row.instance, details: (past ? "Expired" : "Expires") + (when ? " on " + when : "") + ": expiry date → " + date + " (automatic, Databases page)", run: () => extendDatabase(env, report, row, date, login) });
+    if (res.ok) { out.extended.push({ database: name, expires: date }); changes.push([row, { expires: date + " 00:00:00", expired: false, expiryMovedEarlier: null }]); }
     else out.failed.push({ database: name, error: String((await res.clone().json().catch(() => ({}))).error || "").slice(0, 160) });
   });
   // The saved report gets the new dates in one write (the extends run side by side).
@@ -633,7 +670,7 @@ export async function dbReportRoutes(request, env, url, me) {
       const date = expiryDate(b.date);
       if (!date) return fail("bad_date", "Choose a date after today, at most a year ahead.", 400);
       const res = await act(env, me, { action: "Extend database", target: instance, details: "Expiry date → " + date + " (Databases page)", run: () => extendDatabase(env, report, row, date) });
-      if (res.ok) await saveRow(env, row, { expires: date + " 00:00:00", expired: false });
+      if (res.ok) await saveRow(env, row, { expires: date + " 00:00:00", expired: false, expiryMovedEarlier: null });
       return res;
     }
     return fail("unsupported", "That action isn't available here.", 400);

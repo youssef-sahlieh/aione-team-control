@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker, { makeToken } from "../proxy/src/handler.js";
 import { memoryStore, saveUser } from "../proxy/src/users.js";
-import { parseCreds, isProductionName, knowledgeOnlySites } from "../proxy/src/db-report.js";
+import { parseCreds, isProductionName, knowledgeOnlySites, expiryChanges } from "../proxy/src/db-report.js";
 
 test("parseCreds gathers candidate logins, labeled or not", () => {
   const a = parseCreds('<p><strong>URL:</strong> <a href="https://540.ai1.host/web">link</a></p><p>User: admin@acme.co</p><p>Password: s3cr3t1</p>');
@@ -101,7 +101,7 @@ function setup() {
       if (model === "res.users" && method === "search_read") return Response.json({ result: [{ login_date: customer.lastLogin }] });
       if (model === "pos.session") return Response.json({ result: [{ start_at: customer.lastSession }] });
       if (model === "pos.order") return Response.json({ result: [{ date_order: customer.lastOrder }] });
-      if (model === "ir.config_parameter") return Response.json({ result: [{ value: customer.expires }] });
+      if (model === "ir.config_parameter") return Response.json({ result: [{ key: "database.expiration_date", value: customer.expires }, ...(customer.reason ? [{ key: "database.expiration_reason", value: customer.reason }] : [])] });
       return Response.json({ result: [] });
     }
     return Response.json({ result: [] });
@@ -361,7 +361,7 @@ test("Extend database sets database.expiration_date, checks it, and logs it", as
       const [, , , model, method, args] = p.args;
       if (model === "ir.config_parameter" && method === "set_param") { if (!canWrite) return Response.json({ error: { message: "Access Denied", data: { message: "You are not allowed to modify System Parameter" } } }); params[args[0]] = args[1]; return Response.json({ result: true }); }
       if (model === "ir.config_parameter" && method === "get_param") return Response.json({ result: params[args[0]] || false });
-      if (model === "ir.config_parameter") return Response.json({ result: [{ value: params["database.expiration_date"] }] });
+      if (model === "ir.config_parameter") return Response.json({ result: [{ key: "database.expiration_date", value: params["database.expiration_date"] }] });
       return Response.json({ result: method === "search_count" ? 1 : [] });
     }
     return inner(url, init);
@@ -408,7 +408,7 @@ test("the daily automatic extend gives expired Tests and Dev databases 30 more d
       const [, , , model, method, args] = p.args;
       if (model === "ir.config_parameter" && method === "set_param") { params[args[0]] = args[1]; return Response.json({ result: true }); }
       if (model === "ir.config_parameter" && method === "get_param") return Response.json({ result: params[args[0]] || false });
-      if (model === "ir.config_parameter") return Response.json({ result: [{ value: params["database.expiration_date"] }] });
+      if (model === "ir.config_parameter") return Response.json({ result: [{ key: "database.expiration_date", value: params["database.expiration_date"] }] });
       return Response.json({ result: method === "search_count" ? 1 : [] });
     }
     if (p.args && p.args[3] === "ir.config_parameter" && p.args[4] === "set_param") mainWrites.push(u);
@@ -434,6 +434,16 @@ test("the daily automatic extend gives expired Tests and Dev databases 30 more d
     params["database.expiration_date"] = "2027-06-01 00:00:00";
     const again = await (await call("/cron/db-extend", { token: "cron-secret-123" })).json();
     assert.equal(again.extended.length, 0); assert.equal(params["database.expiration_date"], "2027-06-01 00:00:00");
+    // Expiring within 7 days (not expired yet): extended now. With 20 days left: left alone.
+    const ahead = (days) => new Date(Date.now() + days * 86400000).toISOString().slice(0, 10) + " 00:00:00";
+    const setSaved = async (v) => { const r = JSON.parse(await env.STORE.get("dbreport:v1")); Object.assign(r.rows.find((x) => x.instance === "odoo503test"), { expires: v, expired: false }); await env.STORE.set("dbreport:v1", JSON.stringify(r)); };
+    params["database.expiration_date"] = ahead(3); await setSaved(ahead(3));
+    const soon = await (await call("/cron/db-extend", { token: "cron-secret-123" })).json();
+    assert.equal(soon.extended.length, 1); assert.equal(params["database.expiration_date"], d + " 00:00:00");
+    assert.match(JSON.parse(await env.STORE.get("mlog:2")).details, /^Expires on \d{4}-\d\d-\d\d: expiry date →/);
+    params["database.expiration_date"] = ahead(20); await setSaved(ahead(20));
+    assert.equal((await (await call("/cron/db-extend", { token: "cron-secret-123" })).json()).extended.length, 0);
+    assert.equal(params["database.expiration_date"], ahead(20));
   } finally { globalThis.fetch = inner; }
 });
 
@@ -564,4 +574,38 @@ test("a site Monitor's full list doesn't match is looked up by name, odoo507 and
     assert.equal((await call("/db-report/action", { method: "POST", token, body: { instance: "507", action: "restart" } })).status, 200);
     assert.deepEqual(actions.at(-1), { path: "/api/docker/odoo/restart", method: "POST", body: { instances: ["507"] } });
   } finally { globalThis.fetch = inner; }
+});
+
+test("an expiry date that moved earlier since the last report is flagged for 14 days; a later date (an extend) isn't", () => {
+  const prev = [{ instance: "a", database: "a_db", expires: "2026-12-30 00:00:00" }, { instance: "b", database: "", expires: "2026-11-20 00:00:00" }, { instance: "c", expires: "2026-12-01 00:00:00", expiryMovedEarlier: { from: "2027-01-01 00:00:00", to: "2026-12-01 00:00:00", at: "2026-11-01T03:00:00.000Z" } }];
+  const rows = [{ instance: "a", database: "a_db", loginOk: true, expires: "2026-11-15 00:00:00" }, { instance: "b", database: "", loginOk: true, expires: "2026-12-20 00:00:00" }, { instance: "c", loginOk: true, expires: "2026-12-01 00:00:00" }];
+  const now = Date.parse("2026-11-09T03:00:00Z");
+  const moved = expiryChanges(prev, rows, now);
+  assert.deepEqual(moved.map((r) => r.instance), ["a"]);
+  assert.deepEqual(rows[0].expiryMovedEarlier, { from: "2026-12-30 00:00:00", to: "2026-11-15 00:00:00", at: "2026-11-09T03:00:00.000Z" });
+  assert.equal(rows[1].expiryMovedEarlier, undefined, "moved later: not flagged");
+  assert.equal(rows[2].expiryMovedEarlier.from, "2027-01-01 00:00:00", "kept while the date stays and it is under 14 days old");
+  const later = [{ instance: "c", loginOk: true, expires: "2026-12-01 00:00:00" }];
+  expiryChanges(prev, later, Date.parse("2026-11-20T03:00:00Z"));
+  assert.equal(later[0].expiryMovedEarlier, undefined, "dropped after 14 days");
+});
+
+test("the report reads Odoo's expiry reason, and a date moved earlier alerts every administrator", async () => {
+  const { env, call, customer } = setup();
+  const admin = { email: "boss@aione.biz", name: "Boss", role: "admin", dev: "", v: 1 }, dev = { email: "dev@aione.biz", name: "Dev", role: "user", dev: "dev", v: 1 };
+  await saveUser(env.STORE, admin); await saveUser(env.STORE, dev);
+  const token = (await makeToken(env, admin.email, Date.now(), 1)).token;
+  const build = async () => { for (let i = 0; i < 5; i++) { const r = await (await call("/db-report/refresh", { method: "POST", token })).json(); if (r.done) return; } };
+  customer.expires = "2027-03-01 00:00:00";
+  await build();
+  assert.equal(await env.STORE.get("inbox:boss@aione.biz"), null);
+  customer.expires = "2026-12-01 00:00:00"; customer.reason = "renewal";
+  await build();
+  const row = (await (await call("/db-report", { token })).json()).report.rows.find((x) => x.expires === "2026-12-01 00:00:00");
+  assert.equal(row.expiryReason, "renewal");
+  assert.equal(row.expiryMovedEarlier.from, "2027-03-01 00:00:00");
+  const inbox = JSON.parse(await env.STORE.get("inbox:boss@aione.biz"));
+  assert.ok(inbox.length >= 1); assert.equal(inbox[0].type, "db-expiry"); assert.equal(inbox[0].by, "Odoo");
+  assert.match(inbox[0].text, /^Expiry moved earlier: was 2027-03-01, now 2026-12-01\. Reason: renewal\.$/);
+  assert.equal(await env.STORE.get("inbox:dev@aione.biz"), null, "administrators only");
 });
