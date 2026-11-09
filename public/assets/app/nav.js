@@ -1,5 +1,6 @@
 // The sidebar's links, shared by the dashboard and the pages beside it (Users, Databases, Knowledge base, Audit &
 // Deploy), so every page shows the same navigation in the same order.
+import { getSession } from "../session.js";
 const node = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const icons = {
   overview: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z",
@@ -46,16 +47,38 @@ export function icon(name) {
   const p = document.createElementNS(svg.namespaceURI, "path"); p.setAttribute("d", icons[name]); svg.appendChild(p); box.appendChild(svg); return box;
 }
 
+// The sidebar's counts, kept per account so every page (opened, reloaded or switched to) shows the last known
+// numbers straight away, never a blank or a zero, until the page that works each one out has its new value:
+// tickets (the All open count, dashboard.js), date requests (pending ones, date-requests.js) and, for
+// administrators, tickets waiting for review (reviews.js; shown only when there are some).
+const COUNTS = { tickets: "nav-ticket-count", requests: "nav-date-count", reviews: "nav-review-count" };
+const countsKey = () => "aion.navCounts." + (getSession()?.email || "");
+function savedCounts() { try { return JSON.parse(localStorage.getItem(countsKey()) || "{}") || {}; } catch { return {}; } }
+function paintCount(span, id, n) {
+  const known = Number.isFinite(n);
+  span.textContent = known ? String(n) : "";
+  span.hidden = !known || (id === "reviews" && !n);
+}
+// id: "tickets", "requests" or "reviews". A count not worked out yet (null) leaves the last known one on screen.
+export function setNavCount(id, n) {
+  if (!Number.isFinite(n)) return;
+  const span = document.getElementById(COUNTS[id]);
+  if (span) paintCount(span, id, n);
+  const saved = savedCounts();
+  if (saved[id] === n) return;
+  saved[id] = n;
+  try { localStorage.setItem(countsKey(), JSON.stringify(saved)); } catch { /* no storage */ }
+}
+
 // Fills the sidebar's nav. onPage(id, event) runs when a dashboard page link is clicked (the dashboard switches page
 // in place); without it the links are plain links to the dashboard.
 export function buildNav(nav, { onPage } = {}) {
+  const saved = savedCounts();
   for (const [id, label] of pages) {
     const a = node("a", "nav-link"); a.href = `dashboard.html?page=${id}`; a.dataset.page = id; a.title = label;
     a.append(icon(id), node("span", "", label));
-    if (id === "tickets") { const count = node("span", "nav-count", "—"); count.id = "nav-ticket-count"; count.hidden = !onPage; a.appendChild(count); }
-    if (id === "requests") { const count = node("span", "nav-count", "0"); count.id = "nav-date-count"; count.hidden = !onPage; a.append(count); }
-    // Administrators' count of tickets waiting for review; shown only when there are some (see components/reviews.js).
-    if (id === "reviews") { const count = node("span", "nav-count", "0"); count.id = "nav-review-count"; count.hidden = true; a.appendChild(count); }
+    // All tickets, Date requests and (administrators) Needs review: the last known counts, see setNavCount.
+    if (COUNTS[id]) { const count = node("span", "nav-count"); count.id = COUNTS[id]; paintCount(count, id, saved[id]); a.appendChild(count); }
     if (id === "errors") { const count = node("span", "nav-count nav-alert", "0"); count.id = "nav-error-count"; count.hidden = true; a.appendChild(count); }
     if (onPage) a.addEventListener("click", e => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); onPage(id); });
     nav.appendChild(a);

@@ -67,7 +67,8 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       if(p?.archived)badge.append(el('span','project-status archived','Archived in Odoo'));
       if(p&&p.known===false)badge.append(el('span','project-status conflict','Not in the synced Odoo projects'));};
     if(current==null&&values.clientId&&!required)parent.append(el('p','msg err','Saved before tickets had an Odoo project: choose one. Its work log needs it.'));
-    if(noClient.length)parent.append(el('p','business-guidance','Not offered, no client in Odoo: '+noClient.map(p=>p.name).join(', ')+'. Set the customer on the project in Odoo, then sync.'));
+    // Projects with no client in Odoo are left out of the list. The names go to the console, not the form.
+    if(noClient.length&&!projectPicker.logged){projectPicker.logged=true;console.info('Odoo projects not offered (no client in Odoo):',noClient.map(p=>p.name).join(', '));}
     const box=combobox(select);select.addEventListener('change',show);show();
     return {select,first:box.input,read:()=>{
       if(!select.value){if(required)throw new Error('Choose the Odoo project for this ticket.');return {};}

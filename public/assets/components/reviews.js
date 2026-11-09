@@ -3,6 +3,7 @@
 // proxy keeps the assignments (proxy/src/reviews.js); GitHub is asked for the review when the reviewer has a GitHub
 // username set by an administrator (Users page). Nothing here changes a Jira ticket.
 import { reviewLabel, sortQueue, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, queueStateLabel, queueReasonText, queueOptions, filterQueue, queueCounts, waitingFor, longestWaitFirst, NO_REVIEWER } from "../models/reviews.js";
+import { setNavCount } from "../app/nav.js";
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const btn = (text, cls, action) => { const b = el("button", cls, text); b.type = "button"; b.addEventListener("click", action); return b; };
@@ -189,10 +190,7 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
 
   // The sidebar's count for administrators: the tickets waiting, the same number the page's heading shows unfiltered.
   function setQueueBadge(count) {
-    const badge = document.getElementById("nav-review-count");
-    if (!badge) return;
-    badge.textContent = String(count);
-    badge.hidden = !count;
+    setNavCount("reviews", count);
   }
 
   // Reads the queue. A failed read keeps the last answer on screen and says so; it never shows as an empty queue.

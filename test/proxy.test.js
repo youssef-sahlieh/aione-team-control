@@ -109,6 +109,13 @@ const tests = [
   }],
   ["bad Jira token reported as a proxy problem, not a sign-in problem", async () => { jiraReply = () => new Response("", { status: 401 }); const r = await call("/jira/issue/AION-7/changelog", { token: await login() }); assert.equal(r.status, 502); assert.equal((await r.json()).code, "jira"); }],
 
+  ["the sidebar's Knowledge base link is offered exactly when Odoo is connected", async () => {
+    const t = await login();
+    assert.equal((await (await call("/config", { token: t })).json()).knowledge, false);
+    const odooEnv = { ...env, ODOO_URL: "https://odoo.example.invalid/", ODOO_DB: "db", ODOO_LOGIN: "bot", ODOO_API_KEY: "key" };
+    const cfg = await (await worker.fetch(new Request("https://p/config", { headers: { Authorization: "Bearer " + t } }), odooEnv)).json();
+    assert.equal(cfg.knowledge, true);
+  }],
   ["email off without Microsoft settings", async () => {
     const t = await login();
     assert.equal((await (await call("/config", { token: t })).json()).mail, false);

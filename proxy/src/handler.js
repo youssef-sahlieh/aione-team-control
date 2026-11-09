@@ -667,7 +667,7 @@ async function route(request, env, url) {
       if (!team.devNames[u.dev]) team.devNames[u.dev] = String(u.name || "").trim() || normEmail(u.email);
     }
     team.devs = [...new Set([...(Array.isArray(team.devs) ? team.devs : []), ...fromJira, ...accounts.map((u) => u.dev)])];
-    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE,knowledgeLock:odooConfigured(env)&&!!env.STORE, capabilities:["ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1","db-report-pos-version-v1","epic-map-v1","ticket-bulk-import-v1","project-admin-v1","project-budget-v1"] });
+    return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE,knowledge:odooConfigured(env), capabilities:["ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1","db-report-pos-version-v1","epic-map-v1","ticket-bulk-import-v1","project-admin-v1","project-budget-v1"] });
   }
 
   // Jira people are searchable for everyone, so anyone can @mention them in a Jira comment.
