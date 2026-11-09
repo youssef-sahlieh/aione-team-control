@@ -72,6 +72,6 @@
 @media(prefers-reduced-motion:reduce){.an-sk{animation:none}}
 
 @media(max-width:640px){
-  .an-controls{flex-direction:column;align-items:stretch}.an-grow{display:none}.an-seg{display:flex;overflow-x:auto}.an-seg-btn{flex:1;white-space:nowrap}
+  .an-controls{flex-direction:column;flex-wrap:nowrap;align-items:stretch}.an-grow{display:none}.an-seg{display:flex;overflow-x:auto;min-width:0}.an-seg-btn{flex:1;white-space:nowrap}
   .an-chart{height:230px}.an-n{font-size:30px}.an-card{padding:16px}
 }

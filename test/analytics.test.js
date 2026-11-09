@@ -26,6 +26,8 @@ test('the snapshot joins client names, agreed hours and logged time, and uses Je
   assert.equal(t.clientName,'Acme Ltd');assert.equal(t.subClientName,'Site');assert.equal(t.agreedHours,10);assert.equal(t.loggedMinutes,90);
   assert.deepEqual(t.devs,['dana']);assert.equal(t.dueDay,'2026-10-20');
   assert.equal(snap.entries.length,2);assert.deepEqual(snap.entries[0].slice(0,2),['AION-1','2026-10-12']);assert.equal(snap.entries[1][4],2);
+  // 'synced' without an Odoo line is not confirmed: the sixth element is the work log's own rule (isSynced).
+  assert.equal(snap.entries[0][5],0);
   assert.deepEqual(snap.complete,{jira:true,internal:true,time:true});
 });
 
@@ -75,4 +77,15 @@ test('a partial refresh cannot replace a complete snapshot',async()=>{
   s.deps.readSearch=async()=>({issues:[],isLast:false});
   const result=await analyticsSnapshot(s.env,admin,s.deps,{refresh:true});
   assert.equal(result.snapshot.builtAt,first.snapshot.builtAt);assert.match(result.refreshWarning,/incomplete/);
+});
+
+test('each entry carries its Odoo state, and an entry listed under two months counts once',async()=>{
+  const s=await setup(),store=s.env.STORE;
+  const add=async(id,over,months)=>{await store.set('tw:AION:e:'+id,JSON.stringify({id,ticket:'AION-1',source:'jira',date:'2026-10-01',minutes:60,author:{name:'Lee'},createdAt:'2026-10-01T10:00:00Z',...over}));for(const m of months)await store.sadd('tw:AION:m:'+m,id);};
+  await add('33333333-3333-4333-8333-333333333333',{state:'synced',lineId:7,revision:2,syncedRevision:2},['2026-09','2026-10']);
+  await add('44444444-4444-4444-8444-444444444444',{state:'agreed'},['2026-10']);
+  await add('55555555-5555-4555-8555-555555555555',{state:'synced',lineId:8,revision:3,syncedRevision:2},['2026-10']);
+  const lee=(await buildSnapshot(s.env,admin,s.deps,NOW)).entries.filter(e=>e[1]==='2026-10-01');
+  assert.equal(lee.length,3); // the entry in both month lists is read once
+  assert.deepEqual(lee.map(e=>e[5]).sort(),[0,1,2]); // confirmed, held under agreed hours, and edited after its sync (pending)
 });

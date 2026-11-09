@@ -5,14 +5,18 @@
 // Rules: administrators only; an allowlist of fields (no billing, history, emails or descriptions); an unknown
 // value is null, never zero; days are Asia/Jerusalem calendar days.
 import { BusinessError, requireStore, readCatalog, metadataKey, shownName, selectionOf } from './ticket-metadata.js';
-import { entriesBetween, readSummaries, todayIn } from './time-entries.js';
+import { entriesBetween, readSummaries, todayIn, isSynced } from './time-entries.js';
 import { localDate } from './reports.js';
 
 export const WINDOW_MONTHS = 24;
 const BUDGET_MS = 20000, MAX_PAGES = 40;
 export const snapshotKey = (env) => 'analytics:v1:' + encodeURIComponent(env.JIRA_SITE || '') + ':' + env.JIRA_PROJECT;
-// Entry source codes in snapshot.entries: [ticket, day, personIndex, minutes, source].
+// Entry source codes in snapshot.entries: [ticket, day, personIndex, minutes, source, odoo].
 export const SOURCES = ['jira', 'internal', 'odoo'];
+// The entry's Odoo state (the same rule as the work log's totals): confirmed in Odoo at its current revision, held under the
+// ticket's agreed hours (the agreed line goes to Odoo instead), or pending (syncing, needs setup, needs review).
+export const ODOO_PENDING = 0, ODOO_CONFIRMED = 1, ODOO_HELD = 2;
+const odooState = (e) => (isSynced(e) ? ODOO_CONFIRMED : e.state === 'agreed' ? ODOO_HELD : ODOO_PENDING);
 
 const dayOf = (value) => { const t = Date.parse(value); return Number.isFinite(t) ? localDate(new Date(t)) : null; };
 const dateOnly = (value) => (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(0, 10) : null);
@@ -103,7 +107,7 @@ export async function buildSnapshot(env, me, { readSearch, readInternal, readHis
   const flat = entries === null ? null : entries.map((e) => {
     const name = e.author?.name || 'Unknown';
     if (!personIndex.has(name)) { personIndex.set(name, people.length); people.push(name); }
-    return [e.ticket, e.date, personIndex.get(name), e.minutes, Math.max(0, SOURCES.indexOf(e.source))];
+    return [e.ticket, e.date, personIndex.get(name), e.minutes, Math.max(0, SOURCES.indexOf(e.source)), odooState(e)];
   });
   return {
     builtAt: now.toISOString(), timeZone: 'Asia/Jerusalem', window: { from: since, to: today },

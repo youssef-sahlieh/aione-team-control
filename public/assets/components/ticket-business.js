@@ -767,7 +767,9 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     target.replaceChildren();renderProjects(target);if(clientsPage?.root.isConnected){if(note)clientsPage.say(note);await clientsPage.refresh();}
   }
   // The client report: the clients and projects its tickets use that are not in Odoo yet, each with an Add to Odoo action.
-  function reportAddPanel({rows,refresh}){
+  // Clients and projects in the report that are not in Odoo yet. Adding and mapping them is the Clients page's job,
+  // so the report shows how many and links there.
+  function reportAddPanel({rows}){
     if(!odooOn||!projectAdmin||!admin())return null;
     const contactOf=id=>catalog.entries.find(e=>e.id===id&&!e.parentId),usable=c=>c&&!NO_CLIENT.includes(c.name);
     const reported=new Map(),contacts=new Map();
@@ -775,19 +777,11 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       if(t.subClientId&&t.subClientId!=='__none'){const p=catalog.entries.find(e=>e.id===t.subClientId&&e.parentId);if(p&&!p.archived)reported.set(p.id,p);}
       const c=t.clientId&&t.clientId!=='__none'?contactOf(t.clientId):null;if(usable(c))contacts.set(c.id,c);
     }
-    const missingProjects=[...reported.values()].filter(p=>!inOdooProject(p)).map(p=>({p,c:contactOf(p.parentId)})).filter(x=>usable(x.c));
-    for(const {c} of missingProjects)contacts.set(c.id,c);
-    const missingContacts=[...contacts.values()].filter(c=>!inOdooContact(c)).sort(byName);
-    missingProjects.sort((a,b)=>(a.c.name+' / '+a.p.name).localeCompare(b.c.name+' / '+b.p.name));
-    const box=el('section','report-odoo-add'),msg=el('p','msg');
-    if(!missingContacts.length&&!missingProjects.length){box.append(el('p','msg','Every client and project in this report is in Odoo.'));return box;}
-    const run=async(b,label,work)=>{b.disabled=true;msg.className='msg';msg.textContent=label;try{await work();refresh();}catch(err){message(msg,err);b.disabled=false;}};
-    const addRow=(kind,label,btn)=>{const row=el('div','report-add-row');row.append(el('span','board-kind',kind),el('span','report-add-name',label),btn);return row;};
-    box.append(el('h3','','In this report but not in Odoo'),el('p','business-guidance','Add them to Odoo from here. A project goes under its client, so add the client first.'),msg);
-    for(const c of missingContacts)box.append(addRow('Client',c.name,button('Add client to Odoo',ev=>run(ev.currentTarget,'Adding “'+c.name+'” to Odoo…',()=>addContactToOdoo(c.name)),'btn primary')));
-    for(const {p,c} of missingProjects){const inOdoo=inOdooContact(c),btn=button('Add to Odoo',ev=>run(ev.currentTarget,'Adding “'+p.name+'” to Odoo…',()=>addProjectToOdoo(p.name,c.id)),'btn primary');
-      btn.disabled=!inOdoo;if(!inOdoo)btn.title='Add the client to Odoo first';
-      box.append(addRow('Project',c.name+' / '+p.name,btn));}
+    const projects=[...reported.values()].filter(p=>!inOdooProject(p)&&usable(contactOf(p.parentId))).length,clients=[...contacts.values()].filter(c=>!inOdooContact(c)).length;
+    if(!projects&&!clients)return null;
+    const box=el('p','msg report-odoo-add');
+    box.append(document.createTextNode([clients&&clients+(clients===1?' client':' clients'),projects&&projects+(projects===1?' project':' projects')].filter(Boolean).join(' and ')+' in this report '+(clients+projects===1?'is':'are')+' not in Odoo yet. '),
+      button('Add them on Clients',()=>context().navigate?.('clients'),'linkbtn'));
     return box;
   }
   // "Map to Odoo" for an unmapped project: lists the unlinked Odoo projects it matches, then links the one chosen.

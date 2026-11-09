@@ -1,8 +1,10 @@
 // Analytics numbers from the snapshot (proxy/src/analytics.js). Pure functions, no DOM, so they can move to the
 // server if the snapshot ever grows too large. Days are Asia/Jerusalem calendar days as YYYY-MM-DD strings.
 // An unknown value is null and is never summed as zero; every KPI says how many tickets it could use.
+// Entries are [ticket, day, personIndex, minutes, source, odoo]; `odoo` is 0 pending, 1 confirmed, 2 held under agreed hours,
+// and missing on snapshots built before it was recorded (then the split is unknown, not zero).
 export const SOURCES = ['jira', 'internal', 'odoo'];
-export const AGE_BUCKETS = [['0–7 days', 0, 7], ['8–14 days', 8, 14], ['15–30 days', 15, 30], ['31–60 days', 31, 60], ['61+ days', 61, Infinity]];
+export const ODOO_STATES = ['pending', 'confirmed', 'held'];
 const DAY_MS = 86400000;
 export const dayNumber = day => { const [y, m, d] = day.split('-').map(Number); return Date.UTC(y, m - 1, d) / DAY_MS; };
 export const dayString = n => new Date(n * DAY_MS).toISOString().slice(0, 10);
@@ -30,21 +32,26 @@ export function applyFilters(snapshot, { client = '', dev = '', source = 'all' }
   return { tickets, entries };
 }
 
-export const openAt = (t, day) => !!t.createdDay && t.createdDay <= day && !(t.cat === 'done' && t.completedDay && t.completedDay <= day);
-export const isOverdue = (t, today) => t.cat !== 'done' && !!t.dueDay && t.dueDay < today;
-
 function count(tickets, period) {
   const created = tickets.filter(t => within(t.createdDay, period.from, period.to)).length;
   const completed = tickets.filter(t => within(t.completedDay, period.from, period.to)).length;
   const onTime = tickets.filter(t => within(t.completedDay, period.from, period.to) && t.dueDay);
   const onTimeKept = onTime.filter(t => t.completedDay <= t.dueDay).length;
-  return { created, completed, open: tickets.filter(t => openAt(t, period.to)).length, onTime: { kept: onTimeKept, of: onTime.length, percent: pct(onTimeKept, onTime.length) } };
+  return { created, completed, onTime: { kept: onTimeKept, of: onTime.length, percent: pct(onTimeKept, onTime.length) } };
 }
 // Minutes of work dated inside the period; null when the work log could not be read.
 export const loggedMinutes = (entries, period) => entries === null ? null : entries.reduce((s, [, day, , minutes]) => within(day, period.from, period.to) ? s + minutes : s, 0);
 const toHours = m => m === null ? null : round2(m / 60);
+// Work-log hours in the period by Odoo state. `unknown` is work whose state the snapshot did not record.
+export function odooSplit(entries, period) {
+  if (entries === null) return null;
+  const m = { confirmed: 0, pending: 0, held: 0, unknown: 0 };
+  for (const [, day, , minutes, , state] of entries) if (within(day, period.from, period.to)) m[ODOO_STATES[state] || 'unknown'] += minutes;
+  return { confirmed: toHours(m.confirmed), pending: toHours(m.pending), held: toHours(m.held), unknown: toHours(m.unknown) };
+}
 
-export function kpis({ tickets, entries }, period, today) {
+// There is no "open at period end": the snapshot has no status history (see docs/admin-pages-redesign.md).
+export function kpis({ tickets, entries }, period) {
   const prior = priorPeriod(period), now = count(tickets, period), before = count(tickets, prior);
   const done = tickets.filter(t => t.cat === 'done'), unknownCompletion = done.filter(t => !t.completedDay).length;
   const hours = toHours(loggedMinutes(entries, period)), priorHours = toHours(loggedMinutes(entries, prior));
@@ -53,10 +60,10 @@ export function kpis({ tickets, entries }, period, today) {
     period, prior, total: tickets.length,
     created: { value: now.created, prior: before.created },
     completed: { value: now.completed, prior: before.completed, unknownCompletion },
-    open: { value: now.open, prior: before.open, netFlow: now.created - now.completed },
-    overdue: { value: tickets.filter(t => isOverdue(t, today)).length, withDueDate: tickets.filter(t => t.cat !== 'done' && t.dueDay).length },
+    // Created minus completed: positive when more work came in than was finished. A change, not an open count.
+    netChange: { value: now.created - now.completed, prior: before.created - before.completed },
     onTime: { ...now.onTime, prior: before.onTime.percent },
-    hours: { value: hours, prior: priorHours, bySource },
+    hours: { value: hours, prior: priorHours, bySource, odoo: odooSplit(entries, period) },
   };
 }
 
@@ -93,14 +100,11 @@ export function hoursByClient({ tickets, entries }, { from, to }) {
   return [...rows.values()].map(r => ({ ...r, hours: round2(r.hours) })).sort((a, b) => b.hours - a.hours);
 }
 
-// Open work now, by age since creation; tickets with no readable creation day are counted apart, not hidden.
-export function openByAge(tickets, today) {
-  const open = tickets.filter(t => t.cat !== 'done'), buckets = AGE_BUCKETS.map(([label]) => ({ label, count: 0 }));
-  let unknown = 0;
-  for (const t of open) {
-    if (!t.createdDay) { unknown++; continue; }
-    const age = Math.max(0, dayNumber(today) - dayNumber(t.createdDay)), i = AGE_BUCKETS.findIndex(([, a, b]) => age >= a && age <= b);
-    buckets[i].count++;
-  }
-  return { open: open.length, buckets, unknown };
+// Hours by person (largest first) for work dated inside the period. A person is who logged the entry, so shared
+// tickets are not doubled: each entry belongs to one person.
+export function hoursByPerson(entries, people, { from, to }) {
+  if (entries === null) return null;
+  const rows = new Map();
+  for (const [, day, person, minutes] of entries) if (within(day, from, to)) rows.set(person, (rows.get(person) || 0) + minutes);
+  return [...rows].map(([i, m]) => ({ person: people?.[i] || 'Unknown', hours: round2(m / 60) })).sort((a, b) => b.hours - a.hours || a.person.localeCompare(b.person));
 }
