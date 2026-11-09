@@ -387,3 +387,20 @@
   .map-row.map-row-check{grid-template-columns:auto 1fr}
   .map-tools>.btn{flex:1 1 100%}
 }
+/* Billing (billing-v1): setup, allowances, the billable export and the ticket's billing section. */
+.billing-check{display:flex;align-items:center;gap:8px;grid-column:1/-1}
+.billing-check input{width:auto}
+.billing-mail,.billing-map{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 14px}
+.billing-mail p{grid-column:1/-1;margin:0}
+.billing-head,.billing-tabs{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0}
+.billing-head p{flex:1 1 240px;margin:0}
+.billing-editor:not(:empty){margin:12px 0;display:grid;gap:10px}
+.billing-table td{vertical-align:top}
+.billing-table .budget-actions{flex-wrap:wrap}
+.billing-exceptions{margin:0 0 12px;padding-left:18px}
+.billing-exceptions li{margin:4px 0}
+.billing-rollout{margin-top:20px}
+.billing-ticket .budget-facts,.billing-ledger,.billing-ticket .btn,.billing-ticket .msg{grid-column:1/-1}
+.billing-ticket .btn{justify-self:start}
+.budget-billing{margin:0 0 8px}
+@media (max-width:620px){.billing-mail,.billing-map{grid-template-columns:1fr}}

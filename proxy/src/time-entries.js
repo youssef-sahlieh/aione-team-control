@@ -621,7 +621,7 @@ export async function timeRoutes(request,env,url,me,{readTicket}){
 
 // The background sync (every 5 minutes, from a scheduler holding TIME_SYNC_SECRET in the Authorization
 // header): due entries in small batches, stopping well inside the 60-second function limit.
-async function sameSecret(a,b){
+export async function sameSecret(a,b){
   const h=async s=>new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s)));
   const [x,y]=await Promise.all([h(a),h(b)]);let d=0;for(let i=0;i<x.length;i++)d|=x[i]^y[i];return d===0;
 }

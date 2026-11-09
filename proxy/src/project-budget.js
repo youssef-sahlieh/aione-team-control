@@ -10,6 +10,7 @@
 import { odoo, odooConfigured } from './odoo.js';
 import { BusinessError, readCatalog, requireStore, catalogKey, shownName, mainCompanyId, allocationField, allocatedHoursInput, readAllMetadata, readOdooProjects, projectIndex, recordProjectEvent, readProjectLog, syncStatus } from './ticket-metadata.js';
 import { readEpicMap, isProject } from './epic-map.js';
+import { projectBillingRows } from './billing.js';
 import { readConfig, pendingByProject } from './time-entries.js';
 import { ticketsAwaitingReview } from './reviews.js';
 const problem=(message,status=400,code='project_budget')=>{throw new BusinessError(message,status,code);};
@@ -112,11 +113,19 @@ async function projectDetails(env,id){
     workLogs:{total:count,lines:lines.map(l=>({id:l.id,date:l.date,description:String(l.name||''),hours:round(Number(l.unit_amount)||0),person:m2o(l.employee_id)?.name||m2o(l.user_id)?.name||'',task:m2o(l.task_id)?.name||''}))},
     history:await readProjectLog(env,id)};
 }
+// Each row's billing (default, work, consumption, allowance status, last alert) while billing classification is on
+// (billing.js); a billing failure leaves the table as it is, with the reason.
+async function withBilling(env,data){
+  let b;try{b=await projectBillingRows(env);}catch(e){return {...data,billing:{error:String(e.message||e).slice(0,200)}};}
+  if(!b)return {...data,billing:null};
+  const blank={default:null,status:'needs_setup',actualMinutes:0,billableMinutes:0,chargeableMinutes:0,unclassifiedMinutes:0,pendingSyncMinutes:0,allowance:null,email:null,odooDirectMinutes:0};
+  return {...data,projects:data.projects.map(p=>({...p,billing:b.rows[p.odooId]||blank})),billing:{scan:b.scan,error:null}};
+}
 export async function projectBudgetRoutes(request,env,url,me){
   if(me.role!=='admin')problem('Only administrators see project hours.',403,'forbidden');
   if(!odooConfigured(env))problem('Odoo is not connected.',501,'odoo_off');
   const json=d=>Response.json(d,{headers:{'Cache-Control':'no-store'}}),odooFail=e=>{if(e instanceof BusinessError)throw e;problem("Couldn't read projects from Odoo: "+String(e.message||'unknown error').slice(0,200),502,'odoo');};
-  if(url.pathname==='/clients/odoo-projects'&&request.method==='GET'){try{const {_tickets,...data}=await projectBudgets(env);return json(data);}catch(e){odooFail(e);}}
+  if(url.pathname==='/clients/odoo-projects'&&request.method==='GET'){try{const {_tickets,...data}=await projectBudgets(env);return json(await withBilling(env,data));}catch(e){odooFail(e);}}
   if(url.pathname==='/clients/odoo-projects/details'&&request.method==='GET'){
     const id=Number(url.searchParams.get('id'));if(!Number.isInteger(id)||id<1)problem('Choose an Odoo project.');
     try{return json(await projectDetails(env,id));}catch(e){odooFail(e);}

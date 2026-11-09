@@ -1,0 +1,29 @@
+# Billing check: every 15 minutes, reconciles ticket ledgers in turns, reads billable Odoo timesheet lines (bounded),
+# evaluates customer hour allowances and works through the alert email queue. Emails go only when Billing setup has
+# emails On AND the Vercel environment has BILLING_ALERT_MAIL=on; otherwise alerts are recorded as a dry run.
+# Needs the repository secret TIME_SYNC_SECRET (the same value as the Vercel environment variable).
+# Without it, the job does nothing. GitHub may delay scheduled runs by a few minutes.
+name: Billing check
+
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: billing-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check allowances and send queued alerts
+        env:
+          SECRET: ${{ secrets.TIME_SYNC_SECRET }}
+        run: |
+          if [ -z "$SECRET" ]; then echo "TIME_SYNC_SECRET is not set; nothing to do."; exit 0; fi
+          curl -sS --fail-with-body --max-time 70 -X POST -H "Authorization: Bearer $SECRET" https://aione-team-proxy.vercel.app/cron/billing-scan
