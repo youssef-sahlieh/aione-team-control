@@ -19,7 +19,8 @@ People log time on Jira, internal and Odoo Helpdesk tickets with **Log work** (i
 - **Actual hours** = the hours entered before the work log (kept as they are) + the logged entries.
 - **Agreed hours** (set by an administrator on the ticket, see [ticket-business.md](ticket-business.md)): while they
   are set, people's entries are saved but **not sent to Odoo one by one**. Instead the ticket has one Odoo line,
-  with the assigned developer in **Users**, the day the agreed hours were first set as its date, and the agreed
+  with the ticket's developer in **Users** (one of its Developers, never its assignee or the person saving; see
+  [ticket-business.md](ticket-business.md)), the day the agreed hours were first set as its date, and the agreed
   hours as its duration (its uuid is `agreed:<KEY>`). Changing the agreed hours updates that same line and keeps
   its date. Closing the ticket requires the agreed line to be in Odoo. Setting agreed hours on a ticket that
   already has entries in Odoo shows a warning with how many there are; those lines stay as they are.

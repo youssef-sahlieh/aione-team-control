@@ -107,7 +107,8 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     combobox(client);const subBox=combobox(sub);client.addEventListener('change',subBox.refresh);
     return {client,sub,read:()=>({clientId:client.value||null,subClientId:sub.value||null})};
   }
-  function createFields(parent,{values={},creating=false,closed=false}={}){
+  // developers: the ticket's developers ({dev,name}) the agreed hours can go to; undefined from an older backend.
+  function createFields(parent,{values={},creating=false,closed=false,developers}={}){
     const box=el('div','business-form');parent.append(box);
     const clientGroup=el('fieldset','business-section business-client-section');clientGroup.append(el('legend','',odooOn?'Odoo project & billing':'Client & billing'));box.append(clientGroup);
     // Once set, only administrators change it (the backend checks this too).
@@ -120,12 +121,25 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const estimated=field(workGroup,'Estimated hours',input('number',values.estimatedHours)),actual=field(workGroup,logged?'Actual hours before the work log':'Actual hours',input('number',values.actualHours));
     if(logged){const total=el('p','msg business-total','Actual hours with the work log: '+values.totalActualHours+' h ('+(Math.round(values.loggedMinutes/60*100)/100)+' h logged).');workGroup.append(total);}
     // Agreed hours: administrators only. They are the figure Odoo gets for the ticket; empty clears them.
-    let agreed=null;if(admin()&&!creating){agreed=field(workGroup,'Agreed hours (administrators only)',input('number',values.agreedHours));agreed.min='0.01';agreed.max='1000000';agreed.step='0.01';agreed.disabled=closed;agreed.title='Odoo gets one line with these hours for the developer. Empty clears them.';}
+    let agreed=null,agreedTo=null,agreedBlocked='';if(admin()&&!creating){agreed=field(workGroup,'Agreed hours (administrators only)',input('number',values.agreedHours));agreed.min='0.01';agreed.max='1000000';agreed.step='0.01';agreed.disabled=closed;agreed.title='Odoo gets one line with these hours for the developer. Empty clears them.';
+      // Who Odoo gets the agreed hours for: the ticket's developer, never its assignee or the person saving.
+      if(Array.isArray(developers)){
+        const note=el('p','business-guidance agreed-developer');note.id='agreed-developer-'+Math.random().toString(36).slice(2,9);agreed.setAttribute('aria-describedby',note.id);
+        if(!developers.length){agreedBlocked='Add a developer to this ticket before setting agreed hours: Odoo gets them as that developer’s work.';note.textContent=agreedBlocked;}
+        else if(developers.length===1)note.textContent='Odoo gets these hours as '+developers[0].name+'’s work.';
+        else{agreedTo=field(workGroup,'Agreed hours go to',el('select','fsel'));option(agreedTo,'Choose developer…','');for(const d of developers)option(agreedTo,d.name===d.dev?d.name:d.name+' ('+d.dev+')',d.dev);
+          agreedTo.value=developers.some(d=>d.dev===values.agreedDev)?values.agreedDev:'';agreedTo.disabled=closed;agreedTo.setAttribute('aria-describedby',note.id);
+          note.textContent='This ticket has several developers. Choose who Odoo gets the agreed hours for.';}
+        workGroup.append(note);
+      }}
     for(const n of [estimated,actual]){n.min='0.01';n.max='1000000';n.step='0.01';n.disabled=closed;}
     // Once set, the estimate is changed by administrators only.
     if(!admin()&&!creating&&values.estimatedHours!=null){estimated.disabled=true;estimated.title='The estimate is set. Ask an administrator to change it.';}
     const work=field(workGroup,'Work done',el('textarea','inp'));work.value=values.workDone||'';work.maxLength=5000;work.rows=4;work.dir='auto';work.disabled=closed;
-    const read=()=>{if(creating&&admin()&&billingNeeded&&!billing.value)throw new Error('Choose Billable or Not billable before assigning this ticket.');for(const n of [estimated,actual])if(!n.checkValidity())throw new Error('Hours must be greater than zero, with up to two decimal places.');const out={estimatedHours:estimated.value===''?null:Number(estimated.value),actualHours:actual.value===''?null:Number(actual.value),workDone:work.value};if(admin()||creating||!placed(values))Object.assign(out,selects.read());if(billing)out.billing=billing.value||null;if(agreed){if(!agreed.checkValidity())throw new Error('Agreed hours must be greater than zero, with up to two decimal places.');const hours=agreed.value===''?null:Number(agreed.value);if(hours!==(values.agreedHours??null))out.agreedHours=hours;}return out;};
+    const read=()=>{if(creating&&admin()&&billingNeeded&&!billing.value)throw new Error('Choose Billable or Not billable before assigning this ticket.');for(const n of [estimated,actual])if(!n.checkValidity())throw new Error('Hours must be greater than zero, with up to two decimal places.');const out={estimatedHours:estimated.value===''?null:Number(estimated.value),actualHours:actual.value===''?null:Number(actual.value),workDone:work.value};if(admin()||creating||!placed(values))Object.assign(out,selects.read());if(billing)out.billing=billing.value||null;if(agreed){if(!agreed.checkValidity())throw new Error('Agreed hours must be greater than zero, with up to two decimal places.');const hours=agreed.value===''?null:Number(agreed.value);const changed=hours!==(values.agreedHours??null);if(changed)out.agreedHours=hours;
+      // Checked before sending, so the form keeps what was typed: no developer, or several and none chosen.
+      if(hours!==null&&agreedBlocked&&changed)throw new Error(agreedBlocked);
+      if(hours!==null&&agreedTo){if(!agreedTo.value&&changed)throw new Error('Choose who the agreed hours go to.');if(agreedTo.value&&agreedTo.value!==(values.agreedDev??'')){out.agreedHours=hours;out.agreedDev=agreedTo.value;}}}return out;};
     return {read,box,selects};
   }
   async function load(keys){
@@ -176,7 +190,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       target.append(el('p','business-guidance',r.closed?'Completed work is read-only. Reopen the ticket to make corrections.':odooOn?'Complete the hours and work summary before closing. The client comes from the Odoo project; new work logs go to that project.':'Complete the hours and work summary before closing. The client is optional.'));
       if(r.metadata.epicKey&&!odooOn)target.append(el('p','business-guidance','The client comes from epic '+r.metadata.epicKey+' and follows it. Choosing another client here stops that.'));
       if(r.metadata.overage==='overage')target.append(checkupNote(r.metadata));
-      const controls=createFields(target,{values:r.metadata,closed:r.closed}),msg=el('p','msg');let initial=JSON.stringify(controls.read()),editorRevision=r.metadata.revision;
+      const controls=createFields(target,{values:r.metadata,closed:r.closed,developers:r.agreedDevelopers}),msg=el('p','msg');let initial=JSON.stringify(controls.read()),editorRevision=r.metadata.revision;
       const readiness=el('div','work-readiness');target.insertBefore(readiness,controls.box);
       const updateReadiness=()=>{let value;try{value={...r.metadata,...controls.read()};}catch{value={...r.metadata};}readiness.replaceChildren();for(const [label,ready]of [['Estimate',value.estimatedHours>0],['Actual hours',value.actualHours>0||r.metadata.loggedMinutes>0],['Work done',!!value.workDone?.trim()]]){const chip=el('span','readiness-chip'+(ready?' ready':''),(ready?'✓ ':'○ ')+label);readiness.append(chip);}};controls.box.addEventListener('input',updateReadiness);controls.box.addEventListener('change',updateReadiness);updateReadiness();
       editor={key,dirty:()=>{try{return JSON.stringify(controls.read())!==initial;}catch{return true;}}};

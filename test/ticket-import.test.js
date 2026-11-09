@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import worker,{makeToken} from '../proxy/src/handler.js';
 import {memoryStore,saveUser} from '../proxy/src/users.js';
-import {bulkImportPreview,bulkImportApply,agreedImportPreview,readMetadata,catalogKey,metadataKey,saveMetadata,INTERNAL_ASSIGNEE} from '../proxy/src/ticket-metadata.js';
+import {bulkImportPreview,bulkImportApply,agreedImportPreview,agreedImportApply,readMetadata,catalogKey,metadataKey,saveMetadata,INTERNAL_ASSIGNEE} from '../proxy/src/ticket-metadata.js';
 const admin={email:'admin@example.invalid',name:'Manager',role:'admin',dev:'builder',v:1};
 const user={email:'user@example.invalid',name:'Developer',role:'user',dev:'builder',v:1};
 const baseEnv=()=>({SESSION_SECRET:'synthetic-secret',JIRA_PROJECT:'AION',JIRA_SITE:'https://jira.invalid',JIRA_EMAIL:'bot',JIRA_API_TOKEN:'secret',STORE:memoryStore(),TEAM_CONFIG:JSON.stringify({people:{lead:{id:'lead',name:'Lead'}}})});
@@ -14,7 +14,7 @@ async function fixture(){
   entry('p_acme_web','Website','c_acme'),entry('p_acme_shop','Shop','c_acme',{aiName:'Webshop'}),entry('p_acme_app','App','c_acme'),
   entry('p_acme_retired','Retired','c_acme',{archived:true}),entry('p_beta_web','Website','c_beta'),entry('p_old_app','App','c_old')
  ]}));
- const tickets={'INT-1':{title:'One',closed:false,assignee:'lead'},'INT-2':{title:'Two',closed:true,assignee:'lead'},'INT-3':{title:'Three',closed:false,assignee:INTERNAL_ASSIGNEE},'INT-4':{title:'Four',closed:false,assignee:'lead'},'INT-5':{title:'Five',closed:false,assignee:'lead'}};
+ const dev=['builder'],tickets={'INT-1':{title:'One',closed:false,assignee:'lead',devs:dev},'INT-2':{title:'Two',closed:true,assignee:'lead',devs:dev},'INT-3':{title:'Three',closed:false,assignee:INTERNAL_ASSIGNEE,devs:[]},'INT-4':{title:'Four',closed:false,assignee:'lead',devs:dev},'INT-5':{title:'Five',closed:false,assignee:'lead',devs:dev},'INT-6':{title:'Six',closed:false,assignee:'lead',devs:['builder','other']},'INT-7':{title:'Seven',closed:false,assignee:'lead',devs:[]}};
  const readTicket=async key=>tickets[key]?{key,...tickets[key]}:null;
  await saveMetadata(env,'INT-1',{revision:0,clientId:'c_acme',subClientId:'p_acme_web',billing:'billable',agreedHours:10},admin,{ticket:tickets['INT-1']});
  return {env,readTicket};
@@ -71,7 +71,7 @@ test('bulk import fields: agreed hours, billing, developer rule; blank cells nev
  assert.equal((await one({key:'INT-1',agreedHours:'',billing:' ',client:'',project:''})).status,'unchanged');
  assert.equal((await one({key:'INT-1',agreedHours:'10'})).status,'unchanged');
  assert.equal((await one({key:'INT-1',agreedHours:10})).message,'No change. Blank cells are left unchanged.');
- assert.equal((await one({key:'INT-3',agreedHours:4})).message,'Assign a developer first.');
+ assert.match((await one({key:'INT-3',agreedHours:4})).message,/^Add a developer to this ticket first/);
  for(const agreedHours of ['abc',0,-1,1.234,true])assert.match((await one({key:'INT-4',agreedHours})).message,/positive number/);
  assert.match((await one({key:'INT-4',billing:'yes'})).message,/Billing must be Billable or Not billable/);
  assert.match((await one({key:'INT-4',billing:'Free'})).message,/Billing must be Billable or Not billable/);
@@ -156,4 +156,24 @@ test('bulk import apply: a busy Odoo agreed line is reported as failed with the 
  const result=await bulkImportApply(f.env,admin,[{key:'INT-1',agreedHours:12.5},{key:'INT-4',agreedHours:3}],f.readTicket);
  assert.deepEqual(result,{applied:1,unchanged:0,failed:[{key:'INT-4',message:'Saved, but the Odoo line was busy. Ask an administrator to re-send the agreed hours for this ticket.'}]});
  assert.equal((await readMetadata(f.env,'INT-4')).agreedHours,3);
+});
+test('agreed hours from either import: the same developer rule as the ticket drawer; unchanged hours need no developer',async()=>{
+ const f=await fixture(),bulk=async row=>(await bulkImportPreview(f.env,[row],f.readTicket)).rows[0],agreed=async row=>(await agreedImportPreview(f.env,[row],f.readTicket)).rows[0];
+ // Several developers and no choice yet: refused in both imports, never given to one of them by chance.
+ for(const row of [await bulk({key:'INT-6',agreedHours:3}),await agreed({key:'INT-6',agreedHours:3})]){assert.equal(row.status,'error');assert.equal(row.message,'This ticket has several developers. Choose who the agreed hours go to on the ticket.');}
+ // No developer: refused in both, whoever the assignee is.
+ for(const row of [await bulk({key:'INT-7',agreedHours:3}),await agreed({key:'INT-7',agreedHours:3})])assert.match(row.message,/^Add a developer to this ticket first/);
+ // A choice made on the ticket is kept when the hours change from a file.
+ await saveMetadata(f.env,'INT-6',{revision:0,agreedHours:2,agreedDev:'other'},admin,{ticket:{title:'Six',devs:['builder','other']}});
+ assert.equal((await bulk({key:'INT-6',agreedHours:3})).status,'ok');assert.equal((await agreed({key:'INT-6',agreedHours:3})).status,'ok');
+ assert.deepEqual(await bulkImportApply(f.env,admin,[{key:'INT-6',agreedHours:3}],f.readTicket),{applied:1,unchanged:0,failed:[]});
+ const six=await readMetadata(f.env,'INT-6');assert.equal(six.agreedHours,3);assert.equal(six.agreedDev,'other');
+ // Unchanged hours on a ticket whose developers were removed since: no change, no developer needed.
+ await saveMetadata(f.env,'INT-7',{revision:0,agreedHours:4},admin,{ticket:{title:'Seven',devs:['builder']}});
+ assert.equal((await bulk({key:'INT-7',agreedHours:4,billing:'Billable'})).status,'ok');
+ assert.deepEqual((await bulk({key:'INT-7',agreedHours:4,billing:'Billable'})).changes.map(c=>c.field),['billing']);
+ assert.equal((await agreed({key:'INT-7',agreedHours:4})).status,'ok');
+ assert.deepEqual(await bulkImportApply(f.env,admin,[{key:'INT-7',agreedHours:4,billing:'Billable'}],f.readTicket),{applied:1,unchanged:0,failed:[]});
+ assert.deepEqual(await agreedImportApply(f.env,admin,[{key:'INT-7',agreedHours:4}],f.readTicket),{applied:1,failed:[]});
+ const seven=await readMetadata(f.env,'INT-7');assert.equal(seven.agreedHours,4);assert.equal(seven.billing,'billable');assert.equal(seven.agreedDev,'builder');
 });

@@ -366,9 +366,77 @@ test('agreed hours: no flag while none are set',async()=>{
   const view=await s.call('/time-entries?ticket='+key);assert.equal(view.data.overage,null);
 });
 
-test('agreed hours: the developer is required, and clearing is refused once the line is in Odoo',async()=>{
+// The ticket's developers and assignee, as an administrator would change them on the ticket.
+const setPeople=async(s,key,devs,assignee)=>{const k='it:'+key,t=JSON.parse(await s.env.STORE.get(k));await s.env.STORE.set(k,JSON.stringify({...t,devs,...(assignee===undefined?{}:{assignee})}));};
+const fieldsOf=async(s,key)=>(await s.call('/ticket-metadata?key='+key,'GET',undefined,admin)).data;
+const put=(s,key,revision,fields,me=admin)=>s.call('/ticket-metadata','PUT',{key,fields:{revision,...fields}},me);
+
+test('agreed hours: a developer and no assignee — the line goes to that developer',async()=>{
   const s=await setup(),key=await s.ticket();
+  const before=await fieldsOf(s,key);assert.deepEqual(before.agreedDevelopers,[{dev:'builder',name:'Dana Developer'}]);
+  const saved=await agree(s,key,2);assert.equal(saved.status,200,JSON.stringify(saved.data));
+  assert.equal(saved.data.metadata.agreedDev,'builder');assert.equal(saved.data.metadata.agreedDeveloper,'Dana Developer');
+  const [line]=agreedLines(s);assert.equal(line.x_studio_users,'Dana Developer');assert.equal(line.x_aione_user_uuid,'dev:Dana Developer');
+  // Users see neither the developer the hours went to nor the choice.
+  const asUser=(await s.call('/ticket-metadata?key='+key,'GET',undefined,user)).data;
+  for(const k of ['agreedDev','agreedDeveloper'])assert.equal(k in asUser.metadata,false);assert.equal('agreedDevelopers' in asUser,false);
+  assert.equal(JSON.stringify(asUser.history).includes('agreedDeveloper'),false);
+});
+
+test('agreed hours: a manager as assignee and another developer — the developer gets the line, not the manager or the administrator saving',async()=>{
+  const s=await setup(),key=await s.ticket();await setPeople(s,key,['someone'],'Pat Manager');
+  const saved=await agree(s,key,4);assert.equal(saved.status,200,JSON.stringify(saved.data));
+  const [line]=agreedLines(s);assert.equal(line.x_studio_users,'Other Dev');
+  assert.notEqual(line.x_studio_users,'Pat Manager');assert.notEqual(line.x_studio_users,admin.name);
+  const h=(await fieldsOf(s,key)).history.at(-1);assert.deepEqual(h.changes.agreedDeveloper,{from:null,to:'Other Dev'});assert.equal('agreedDev' in h.changes,false);
+});
+
+test('agreed hours: several developers need an explicit choice; the choice is kept and can be changed on the same line',async()=>{
+  const s=await setup(),key=await s.ticket();await setPeople(s,key,['builder','someone']);
+  let m=await fieldsOf(s,key);
+  const ask=await agree(s,key,3);assert.equal(ask.status,409);assert.equal(ask.data.code,'agreed_choose_developer');
+  assert.deepEqual(ask.data.developers,[{dev:'builder',name:'Dana Developer'},{dev:'someone',name:'Other Dev'}]);
+  assert.equal(agreedLines(s).length,0);assert.equal((await fieldsOf(s,key)).metadata.agreedHours,null);
+  assert.equal((await put(s,key,m.metadata.revision,{agreedHours:3,agreedDev:'nobody'})).data.code,'agreed_developer_unknown');
+  assert.equal((await put(s,key,m.metadata.revision,{agreedHours:3,agreedDev:'Not valid!'})).status,400);
+  assert.equal((await put(s,key,m.metadata.revision,{agreedHours:3,agreedDev:'someone'},user)).status,403);
+  const chosen=await put(s,key,m.metadata.revision,{agreedHours:3,agreedDev:'someone'});assert.equal(chosen.status,200,JSON.stringify(chosen.data));
+  const [first]=agreedLines(s);assert.equal(first.x_studio_users,'Other Dev');
+  // New hours without a new choice keep the developer chosen before.
+  m=await fieldsOf(s,key);assert.equal((await put(s,key,m.metadata.revision,{agreedHours:5})).status,200);
+  let lines=agreedLines(s);assert.equal(lines.length,1);assert.equal(lines[0].id,first.id);assert.equal(lines[0].unit_amount,5);assert.equal(lines[0].x_studio_users,'Other Dev');
+  // Another developer, same hours: the same line, its date as first set, and the history names both developers.
+  m=await fieldsOf(s,key);assert.equal((await put(s,key,m.metadata.revision,{agreedHours:5,agreedDev:'builder'})).status,200);
+  lines=agreedLines(s);assert.equal(lines.length,1);assert.equal(lines[0].id,first.id);assert.equal(lines[0].x_studio_users,'Dana Developer');assert.equal(lines[0].date,first.date);
+  const h=(await fieldsOf(s,key)).history.at(-1);assert.deepEqual(h.changes,{agreedDeveloper:{from:'Other Dev',to:'Dana Developer'}});
+});
+
+test('agreed hours: no developer — refused with an explanation, even with an assignee, and nothing is saved',async()=>{
+  const s=await setup(),key=await s.ticket();await setPeople(s,key,[],'Dana Developer');
+  assert.deepEqual((await fieldsOf(s,key)).agreedDevelopers,[]);
   const noDev=await agree(s,key,2);assert.equal(noDev.status,409);assert.equal(noDev.data.code,'agreed_needs_developer');
+  assert.match(noDev.data.error,/Add a developer to this ticket first/);
+  assert.equal(agreedLines(s).length,0);assert.equal((await fieldsOf(s,key)).metadata.agreedHours,null);
+});
+
+test('agreed hours: unchanged agreed hours never block saving other fields',async()=>{
+  const s=await setup(),key=await s.ticket();
+  assert.equal((await agree(s,key,3)).status,200);const [line]=agreedLines(s),writes=()=>s.odoo.calls.filter(c=>c.model==='account.analytic.line'&&c.method==='write').length,before=writes();
+  // The developers changed since: none, then several with no choice made.
+  for(const devs of [[],['builder','someone']]){
+    await setPeople(s,key,devs);const m=await fieldsOf(s,key);
+    const saved=await put(s,key,m.metadata.revision,{agreedHours:3,workDone:'Done with '+devs.length});assert.equal(saved.status,200,JSON.stringify(saved.data));
+    assert.equal(saved.data.metadata.workDone,'Done with '+devs.length);
+    const other=await put(s,key,saved.data.metadata.revision,{estimatedHours:2+devs.length});assert.equal(other.status,200,JSON.stringify(other.data));
+  }
+  const lines=agreedLines(s);assert.equal(lines.length,1);assert.equal(lines[0].id,line.id);assert.equal(lines[0].x_studio_users,'Dana Developer');assert.equal(writes(),before);
+  // Changing them checks the developer again: the one the line went to while still on the ticket, else a choice.
+  let m=await fieldsOf(s,key);assert.equal((await put(s,key,m.metadata.revision,{agreedHours:4})).status,200);assert.equal(agreedLines(s)[0].x_studio_users,'Dana Developer');
+  await setPeople(s,key,['someone','third']);m=await fieldsOf(s,key);assert.equal((await put(s,key,m.metadata.revision,{agreedHours:5})).data.code,'agreed_choose_developer');
+  await setPeople(s,key,[]);m=await fieldsOf(s,key);assert.equal((await put(s,key,m.metadata.revision,{agreedHours:5})).data.code,'agreed_needs_developer');
+});
+
+test('agreed hours: clearing is refused once the line is in Odoo',async()=>{
   const d=await agreedSetup();
   assert.equal((await agree(d,d.key,2)).status,200);
   const cleared=await agree(d,d.key,null);assert.equal(cleared.status,409);assert.equal(cleared.data.code,'agreed_sent');

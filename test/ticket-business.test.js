@@ -130,7 +130,7 @@ test('reports reconcile ticket-total hours, partial coverage, missing dates and 
 });
 test('when work-log summaries cannot be read, logged hours and checkup flags are unknown; a recorded zero stays zero',async()=>{
  const env={SESSION_SECRET:'synthetic-secret',JIRA_PROJECT:'AION',JIRA_SITE:'https://jira.invalid',STORE:memoryStore(),TEAM_CONFIG:JSON.stringify({people:{lead:{id:'lead',name:'Lead'}}})};
- const tickets={'INT-1':{title:'One',closed:false,assignee:'lead'}},readTicket=async key=>tickets[key]?{key,...tickets[key]}:null;
+ const tickets={'INT-1':{title:'One',closed:false,assignee:'lead',devs:['builder']}},readTicket=async key=>tickets[key]?{key,...tickets[key]}:null;
  await agreedImportApply(env,admin,[{key:'INT-1',agreedHours:4}],readTicket);
  const deps={readSearch:async()=>({issues:[],isLast:true}),readInternal:async()=>[{key:'INT-1',title:'One',status:'Open',cat:'new',closed:false,devs:[],created:'2026-10-14T10:00:00Z',updated:'2026-10-14T10:00:00Z',completedAt:null,internal:true}]};
  const broken={...env,STORE:{...env.STORE,async mget(){throw new Error('store unavailable');}}};
@@ -537,7 +537,7 @@ test('contacts archived in Odoo are archived in the dashboard by the sync, and c
 
 test('agreed hours CSV import: bad keys, hours, duplicates and closed tickets are refused in the preview; valid rows are saved',async()=>{
   const env={SESSION_SECRET:'synthetic-secret',JIRA_PROJECT:'AION',JIRA_SITE:'https://jira.invalid',STORE:memoryStore(),TEAM_CONFIG:JSON.stringify({people:{lead:{id:'lead',name:'Lead'}}})};
-  const tickets={'INT-1':{title:'One',closed:false,assignee:'lead'},'INT-2':{title:'Two',closed:true,assignee:'lead'}};
+  const tickets={'INT-1':{title:'One',closed:false,assignee:'lead',devs:['builder']},'INT-2':{title:'Two',closed:true,assignee:'lead',devs:['builder']}};
   const readTicket=async key=>tickets[key]?{key,...tickets[key]}:null;
   const preview=await agreedImportPreview(env,[
     {key:' int-1 ',agreedHours:'12.5'},

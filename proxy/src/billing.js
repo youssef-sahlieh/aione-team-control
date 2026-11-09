@@ -323,7 +323,7 @@ async function saveTicket(env,me,b,readTicket){
     const t=await readTicket(key);if(!t)problem('Ticket unavailable.',404,'not_found');
     const value=choice===undefined?undefined:choice==='inherit'?null:choice;
     // A Jira or internal ticket's override is its billing business field, saved with that field's rules and history.
-    if(value!==undefined&&!odooTicket){const m=await readMetadata(env,key);if(m.billing!==value)await saveMetadata(env,key,{revision:b.revision,billing:value},me,{closed:t.closed,ticket:{title:t.title,assignee:t.assignee}});}
+    if(value!==undefined&&!odooTicket){const m=await readMetadata(env,key);if(m.billing!==value)await saveMetadata(env,key,{revision:b.revision,billing:value},me,{closed:t.closed,ticket:{title:t.title,devs:t.devs}});}
     await update(env,K.ticket(env,key),blankTicket,cur=>{
       const next={...cur},changes={};
       if(value!==undefined&&odooTicket&&cur.billing!==value){if(b.revision!==cur.revision)problem('Ticket billing changed. Refresh and retry.',409,'conflict');changes.billing={from:cur.billing,to:value};next.billing=value;}

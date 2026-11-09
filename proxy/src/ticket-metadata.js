@@ -1,5 +1,6 @@
 // Private dashboard business data. Never include these fields in Jira mutations.
 import { odoo, odooConfigured } from './odoo.js';
+import { developerNames, validDev } from './users.js';
 import { timeClosureErrors, ticketEntries, summarize, readSummaries, syncAgreedLine, agreedLineSent, syncedEntryCount, todayIn, readConfig, ticketTask } from './time-entries.js';
 export const INTERNAL_ASSIGNEE = '__internal_tickets';
 export class BusinessError extends Error {
@@ -12,7 +13,7 @@ export function requireStore(env) {
   return env.STORE;
 }
 const prefix=env=>'business:'+env.JIRA_PROJECT+':';
-const empty=()=>({revision:0,odooProjectId:null,clientId:null,subClientId:null,billing:null,agreedHours:null,agreedDate:null,agreedDeveloper:null,estimatedHours:null,actualHours:null,workDone:'',dashPriority:null,dashOrder:null,completedAt:null,epicKey:null,history:[]});
+const empty=()=>({revision:0,odooProjectId:null,clientId:null,subClientId:null,billing:null,agreedHours:null,agreedDate:null,agreedDev:null,agreedDeveloper:null,estimatedHours:null,actualHours:null,workDone:'',dashPriority:null,dashOrder:null,completedAt:null,epicKey:null,history:[]});
 // The dashboard's own priority. It is stored only here, never sent to Jira (Jira's priority is a separate field).
 export const DASH_PRIORITIES=['High','Medium','Low'];
 // Priorities saved before the three levels existed, read as the nearest new value. Stored records are not rewritten
@@ -24,7 +25,7 @@ export function migrateDash(m){
   return {...m,dashPriority:level,dashOrder:m.dashOrder??order};
 }
 // Fields only administrators see: billing, and the agreed hours with the date and developer they went to Odoo with.
-const ADMIN_ONLY=['billing','agreedHours','agreedDate','agreedDeveloper'];
+const ADMIN_ONLY=['billing','agreedHours','agreedDate','agreedDev','agreedDeveloper'];
 export const catalogKey=env=>prefix(env)+'catalog';
 export const metadataKey=(env,key)=>prefix(env)+'ticket:'+key;
 export async function readCatalog(env) { return JSON.parse(await requireStore(env).get(catalogKey(env)) || '{"revision":0,"entries":[]}'); }
@@ -86,16 +87,32 @@ async function persist(env,key,m,previous) {
   const saved=previous===null?await store.setIfAbsent(k,next,315360000):await store.compareAndSet(k,previous,next);
   if(!saved)problem('Ticket fields changed. Refresh and retry.',409,'conflict');
 }
-// ticket: {title, assignee} from the ticket read, for the agreed hours' Odoo line.
+// ---- The developer the agreed hours go to ----
+// Odoo gets the agreed hours as a developer's work, so they go to one of the ticket's developers (its ai1_ labels, or
+// an internal ticket's developers): never to its assignee, who may be a manager, and never to whoever saves them.
+// One developer: that one. Several: the one an administrator chose; an earlier choice still on the ticket is kept.
+export const ticketDevelopers=ticket=>[...new Set((Array.isArray(ticket?.devs)?ticket.devs:[]).map(d=>String(d||'').trim().toLowerCase()).filter(validDev))];
+export function agreedDeveloperOf(ticket,chosen,previous){
+  const developers=ticketDevelopers(ticket);
+  if(chosen!=null)return developers.includes(chosen)?{dev:chosen}:{code:'agreed_developer_unknown',error:"Choose one of this ticket's developers for the agreed hours.",developers};
+  if(!developers.length)return {code:'agreed_needs_developer',error:"Add a developer to this ticket first: the agreed hours go to Odoo as that developer's work.",developers};
+  if(developers.length===1)return {dev:developers[0]};
+  if(previous&&developers.includes(previous))return {dev:previous};
+  return {code:'agreed_choose_developer',error:'This ticket has several developers. Choose who the agreed hours go to.',developers};
+}
+// The same rule for a CSV row, where the choice is made on the ticket.
+const importDeveloperError=r=>r.code==='agreed_choose_developer'?'This ticket has several developers. Choose who the agreed hours go to on the ticket.':r.error;
+export async function developerList(env,devs){const names=await developerNames(env.STORE,devs);return devs.map(dev=>({dev,name:names[dev]}));}
+// ticket: {title, devs} from the ticket read, for the agreed hours' Odoo line.
 export async function saveMetadata(env,key,patch,me,{closed=false,creating=false,ticket={}}={}) {
   const store=requireStore(env),raw=await store.get(metadataKey(env,key)),old=migrateDash({...empty(),...JSON.parse(raw||'{}')}),m=structuredClone(old),catalog=await readCatalog(env);
   if(closed)problem('Reopen this ticket before editing its business fields.',409,'ticket_closed');
   if(!patch || typeof patch!=='object'||Array.isArray(patch))problem('Invalid ticket fields.');
-  const allowed=['revision','odooProjectId','clientId','subClientId','billing','agreedHours','estimatedHours','actualHours','workDone','dashPriority','dashOrder'];
+  const allowed=['revision','odooProjectId','clientId','subClientId','billing','agreedHours','agreedDev','estimatedHours','actualHours','workDone','dashPriority','dashOrder'];
   if(Object.keys(patch).some(k=>!allowed.includes(k)))problem('Unknown ticket business field.');
   if(!Number.isInteger(patch.revision)||patch.revision!==old.revision)problem('Ticket fields changed. Refresh and retry.',409,'conflict');
   if(me.role!=='admin'&&'billing' in patch)problem('Only administrators can access billing.',403,'forbidden');
-  if(me.role!=='admin'&&'agreedHours' in patch)problem('Only administrators can set agreed hours.',403,'forbidden');
+  if(me.role!=='admin'&&('agreedHours' in patch||'agreedDev' in patch))problem('Only administrators can set agreed hours.',403,'forbidden');
   if(me.role!=='admin'&&!creating&&('dashPriority' in patch||'dashOrder' in patch))problem('Only administrators can set the priority.',403,'forbidden');
   // Anyone may choose a client or project while it is empty; after that only administrators can change it.
   const placed=old.odooProjectId!=null||!!old.clientId||!!old.subClientId;
@@ -124,17 +141,21 @@ export async function saveMetadata(env,key,patch,me,{closed=false,creating=false
   if(('clientId' in patch||'subClientId' in patch)&&!noClient){const errors=selectionErrors(catalog,m,{active:m.clientId!==old.clientId||m.subClientId!==old.subClientId});if(errors.length)problem(errors.join('. '));}
   if('billing' in patch){if(![null,'billable','not_billable'].includes(patch.billing))problem('Choose Billable or Not billable.');m.billing=patch.billing;}
   for(const k of ['estimatedHours','actualHours'])if(k in patch){if(patch[k]!==null&&!validHours(patch[k]))problem(k+': enter a positive number with up to two decimal places (maximum 1,000,000).');m[k]=patch[k];}
-  // Agreed hours (null clears them). Odoo gets one line for them, dated the day they were first set and given to
-  // the ticket's developer, so setting them needs an assignee. Once that line is in Odoo they can't be cleared.
-  if('agreedHours' in patch){
-    if(patch.agreedHours!==null&&!validHours(patch.agreedHours))problem('Agreed hours: enter a positive number with up to two decimal places (maximum 1,000,000).');
-    if(patch.agreedHours===null&&old.agreedHours!=null&&await agreedLineSent(env,key))problem('The agreed hours are already in Odoo. Change them instead of clearing them.',409,'agreed_sent');
-    if(patch.agreedHours!==null){
-      const developer=ticket.assignee&&ticket.assignee!==INTERNAL_ASSIGNEE?String(ticket.assignee):'';
-      if(!developer)problem('Assign a developer first.',409,'agreed_needs_developer');
-      m.agreedDeveloper=developer;if(!m.agreedDate)m.agreedDate=todayIn();
+  // Agreed hours (null clears them). Odoo gets one line for them, dated the day they were first set and given to one
+  // of the ticket's developers (agreedDeveloperOf). Once that line is in Odoo they can't be cleared. The developer is
+  // checked only when the hours or the chosen developer change, so unchanged hours never block other fields.
+  if('agreedDev' in patch&&patch.agreedDev!==null&&(typeof patch.agreedDev!=='string'||!validDev(patch.agreedDev)))problem("Choose one of this ticket's developers for the agreed hours.");
+  const hours='agreedHours' in patch?patch.agreedHours:old.agreedHours;
+  const agreedChanged=('agreedHours' in patch&&hours!==old.agreedHours)||(hours!==null&&patch.agreedDev!=null&&patch.agreedDev!==old.agreedDev);
+  if(agreedChanged){
+    if(hours!==null&&!validHours(hours))problem('Agreed hours: enter a positive number with up to two decimal places (maximum 1,000,000).');
+    if(hours===null&&old.agreedHours!=null&&await agreedLineSent(env,key))problem('The agreed hours are already in Odoo. Change them instead of clearing them.',409,'agreed_sent');
+    if(hours!==null){
+      const r=agreedDeveloperOf(ticket,patch.agreedDev??null,old.agreedDev);
+      if(!r.dev)problem(r.error,409,r.code,{developers:await developerList(env,r.developers)});
+      m.agreedDev=r.dev;m.agreedDeveloper=(await developerNames(env.STORE,[r.dev]))[r.dev];if(!m.agreedDate)m.agreedDate=todayIn();
     }
-    m.agreedHours=patch.agreedHours;
+    m.agreedHours=hours;
   }
   if('workDone' in patch){if(typeof patch.workDone!=='string'||patch.workDone.length>5000)problem('Work done must be text up to 5,000 characters.');m.workDone=patch.workDone.trim();}
   if('dashPriority' in patch){if(patch.dashPriority!==null&&!DASH_PRIORITIES.includes(patch.dashPriority))problem('Choose a priority from the list.');m.dashPriority=patch.dashPriority;}
@@ -143,6 +164,8 @@ export async function saveMetadata(env,key,patch,me,{closed=false,creating=false
   if(m.dashPriority===null)m.dashOrder=null;
   if(creating&&!noClient){const errors=selectionErrors(catalog,m,{active:true});if(errors.length)problem(errors.join('. '));}
   const changes={};for(const k of allowed.filter(k=>k!=='revision'))if(m[k]!==old[k])changes[k]={from:old[k],to:m[k]};
+  // The history names the developer the agreed hours go to, not the developer id.
+  delete changes.agreedDev;if(m.agreedDeveloper!==old.agreedDeveloper)changes.agreedDeveloper={from:old.agreedDeveloper,to:m.agreedDeveloper};
   m.revision++;m.updatedAt=new Date().toISOString();
   const entry={type:'edit',at:m.updatedAt,by:{email:me.email,name:me.name},changes};
   // A project change: the names as they were (Odoo ids alone don't say much later), and whether logged work stays behind.
@@ -153,7 +176,7 @@ export async function saveMetadata(env,key,patch,me,{closed=false,creating=false
   }
   m.history.push(entry);
   await persist(env,key,m,raw);
-  if('agreedHours' in patch)await syncAgreedLine(env,key,m,{title:ticket.title||'',me});
+  if('agreedHours' in patch||agreedChanged)await syncAgreedLine(env,key,m,{title:ticket.title||'',me});
   return publicMetadata(m,me,catalog,projectIndex(await readOdooProjects(env)));
 }
 // Caller holds the same ticket lock used by metadata writes, and supplies an authoritative status read.
@@ -703,9 +726,9 @@ export async function metadataRoutes(request,env,url,me,readTicket,readTickets) 
   if(!validKey(key))problem('Choose a valid ticket.');
   return withTicketLock(env,key,async()=>{
     const t=await readTicket(key);if(!t)problem('Ticket unavailable.',404,'not_found');
-    if(request.method==='GET'){const m=await readMetadata(env,key),summary=summarize(await ticketEntries(env,key));return Response.json({metadata:logged(publicMetadata(m,me,await readCatalog(env),projectIndex(await readOdooProjects(env))),summary,m.agreedHours,me),workEntries:summary.entries,history:publicHistory(m,me),closed:t.closed},{headers:{'Cache-Control':'no-store'}});}
+    if(request.method==='GET'){const m=await readMetadata(env,key),summary=summarize(await ticketEntries(env,key));return Response.json({metadata:logged(publicMetadata(m,me,await readCatalog(env),projectIndex(await readOdooProjects(env))),summary,m.agreedHours,me),workEntries:summary.entries,history:publicHistory(m,me),closed:t.closed,...(me.role==='admin'?{agreedDevelopers:await developerList(env,ticketDevelopers(t))}:{})},{headers:{'Cache-Control':'no-store'}});}
     if(request.method==='PUT'){
-      const metadata=await saveMetadata(env,key,b.fields,me,{closed:t.closed,ticket:{title:t.title,assignee:t.assignee}});
+      const metadata=await saveMetadata(env,key,b.fields,me,{closed:t.closed,ticket:{title:t.title,devs:t.devs}});
       // Work already in Odoo as its own lines stays there: the administrator is told how many.
       const synced=b.fields&&b.fields.agreedHours!=null&&'agreedHours' in b.fields?await syncedEntryCount(env,key):0;
       return Response.json({metadata,...(synced?{warning:synced+' work '+(synced===1?'entry is':'entries are')+' already in Odoo as '+(synced===1?'its own line':'their own lines')+'. They stay there, so the agreed hours and these lines both count in Odoo. Remove the extra lines in Odoo by hand.'}:{})});
@@ -733,6 +756,8 @@ export async function agreedImportPreview(env,rows,readTicket){
     const t=await readTicket(row.key);
     if(!t){out.push(fail('Ticket not found or not visible.'));continue;}
     if(t.closed){out.push(fail('This ticket is closed. Reopen it before setting agreed hours.'));continue;}
+    const current=await readMetadata(env,row.key);
+    if(hours!==current.agreedHours){const r=agreedDeveloperOf(t,null,current.agreedDev);if(!r.dev){out.push(fail(importDeveloperError(r)));continue;}}
     row.title=t.title||'';row.status='ok';row.message='Will set '+hours+' h.';out.push(row);
   }
   return {rows:out,ok:out.filter(r=>r.status==='ok').length,errors:out.filter(r=>r.status==='error').length};
@@ -743,7 +768,7 @@ export async function agreedImportApply(env,me,rows,readTicket){
   let applied=0;const failed=[];
   for(const r of preview.rows){
     const t=await readTicket(r.key),current=await readMetadata(env,r.key);
-    try{await saveMetadata(env,r.key,{revision:current.revision,agreedHours:r.agreedHours},me,{closed:t.closed,ticket:{title:t.title,assignee:t.assignee}});applied++;}
+    try{await saveMetadata(env,r.key,{revision:current.revision,agreedHours:r.agreedHours},me,{closed:t.closed,ticket:{title:t.title,devs:t.devs}});applied++;}
     catch(err){if(err instanceof BusinessError)failed.push({key:r.key,message:err.message});else throw err;}
   }
   return {applied,failed};
@@ -834,7 +859,7 @@ async function bulkPlan(env,rows,readTicket){
     }
     if(billing&&billing!==current.billing)patch.billing=billing;
     if(hours!==null&&hours!==current.agreedHours){
-      if(!(t.assignee&&t.assignee!==INTERNAL_ASSIGNEE)){fail('Assign a developer first.');continue;}
+      const r=agreedDeveloperOf(t,null,current.agreedDev);if(!r.dev){fail(importDeveloperError(r));continue;}
       patch.agreedHours=hours;
     }
     const nameOf=id=>{const e=catalog.entries.find(x=>x.id===id);return e?shownName(e):null;};
@@ -863,7 +888,7 @@ export async function bulkImportApply(env,me,rows,readTicket){
     try{
       await withTicketLock(env,r.key,async()=>{
         const t=await readTicket(r.key);if(!t)problem('Ticket not found or not visible.',404,'not_found');
-        await saveMetadata(env,r.key,{revision,...patch},me,{closed:t.closed,ticket:{title:t.title,assignee:t.assignee}});
+        await saveMetadata(env,r.key,{revision,...patch},me,{closed:t.closed,ticket:{title:t.title,devs:t.devs}});
       });
       applied++;
     }catch(err){
