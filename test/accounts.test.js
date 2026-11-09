@@ -90,6 +90,7 @@ const tests = [
     assert.ok(cfg.devs.every((d) => typeof d === "string" && d), "accounts without a developer name (administrators) add nothing");
     assert.ok(Object.keys(cfg.devEmails).every((d) => d && d !== "undefined"));
     assert.equal(cfg.devEmails.alaa, "alaa@aione.biz");
+    assert.equal(cfg.devNames.alaa, "Alaa"); assert.equal(cfg.devNames.bashar, "Bashar");
     assert.equal(cfg.devEmails.bashar, "bashar.b@aione.biz");
     // The team setting's address stays first.
     const saved = env.TEAM_CONFIG; env.TEAM_CONFIG = JSON.stringify({ devEmails: { alaa: "alaa.z@aione.biz" } });

@@ -38,7 +38,7 @@ async function mockDashboard(page, { inbox = [], role = "admin", ticketLog = [],
     const path = url.pathname, method = req.method(), body = req.postDataJSON();
     calls.push({ path, method, body, ...(url.search?{query:url.search}:{}) });
     const json = value => route.fulfill({ json: value });
-    if (path === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people:assigneeTeam?{...people,...Object.fromEntries(["karim","youssef","rami","razan"].map(key=>[key,{id:`test-${key}`,name:key[0].toUpperCase()+key.slice(1),ini:key[0].toUpperCase()}]))}:people, devs: ["builder", "reviewer"], role, dev: "builder", email: "test@example.invalid", accounts: true, odoo, github, billingRequired, mail: false, capabilities:["ticket-business-v1","reports-all-v1","reports-saved-v1"], ai:{enabled:!aiDisabled,readOnly:true} });
+    if (path === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people:assigneeTeam?{...people,...Object.fromEntries(["karim","youssef","rami","razan"].map(key=>[key,{id:`test-${key}`,name:key[0].toUpperCase()+key.slice(1),ini:key[0].toUpperCase()}]))}:people, devs: ["builder", "reviewer"], devNames: { builder: "Builder Example", newbie: "New Person" }, role, dev: "builder", email: "test@example.invalid", accounts: true, odoo, github, billingRequired, mail: false, capabilities:["ticket-business-v1","reports-all-v1","reports-saved-v1"], ai:{enabled:!aiDisabled,readOnly:true} });
     if(path==='/clients'&&method==='GET')return json(catalog);
     if(path==='/clients/odoo-sync'&&method==='POST'){if(url.searchParams.get('force')!=='1')return json({odoo:true,changed:false,syncedAt:1});catalog.entries.push({id:'odoo-client',name:'Odoo Customer',parentId:null,archived:false});catalog.revision++;return json({odoo:true,changed:true,added:1,projects:3,syncedAt:2});}
     if(path==='/clients/import/preview')return json({revision:1,rows:body.rows.length,added:1,clients:2,subClients:0,entries:[{id:'new-client',name:body.rows[0].displayName,parentId:null}]});
@@ -316,5 +316,24 @@ test("Improve writing rewrites the comment with AI, keeps the mention, and can b
   await expect(box).toHaveValue(/^Dear @Karim Example,/);
   await page.locator("#d-send").click();
   await expect.poll(() => mock.calls.find((c) => c.path === "/jira/issue/AION-101/comment")?.body?.text).toBe("Dear [~accountid:synthetic-karim], there was an internet disconnection at the shop.");
+  expect(mock.errors).toEqual([]);
+});
+
+// Developers are picked from the users (Users & access), never typed: the list offers the users not shown yet.
+test("a developer is added from the users list, not typed", async ({ page }) => {
+  const mock = await mockDashboard(page);
+  let saved = null;
+  await page.route("**/jira/issue/AION-101", (r) => { if (r.request().method() !== "PUT") return r.fallback(); saved = r.request().postDataJSON(); return r.fulfill({ status: 204, body: "" }); });
+  await page.goto("/dashboard.html#AION-101");
+  const pick = page.locator("#d-newdev");
+  await expect(pick).toHaveJSProperty("tagName", "SELECT");
+  await expect(pick.locator("option")).toHaveText(["Add a user…", "New Person · ai1_newbie"]);
+  await pick.selectOption("newbie");
+  await expect(page.locator("#d-devs")).toContainText("ai1_newbie");
+  await expect(page.locator("#d-devmsg")).toContainText("Added New Person (ai1_newbie)");
+  await expect(pick.locator("option")).toHaveText(["Every user is listed"]);
+  await expect(page.locator("#d-adddev")).toBeDisabled();
+  await page.locator("#d-savedevs").click();
+  await expect.poll(() => saved && JSON.stringify(saved)).toContain("ai1_newbie");
   expect(mock.errors).toEqual([]);
 });

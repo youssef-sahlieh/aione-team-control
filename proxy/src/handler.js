@@ -661,7 +661,11 @@ async function route(request, env, url) {
     const accounts = env.STORE ? (await listUsers(env.STORE).catch(() => [])).filter((u) => typeof u.dev === "string" && u.dev && validDev(u.dev)) : [];
     const rank = (u) => (normEmail(u.email).split("@")[0] === u.dev ? 0 : 1) + (/@aione\.biz$/i.test(u.email) ? 0 : 2);
     team.devEmails = { ...(team.devEmails && typeof team.devEmails === "object" ? team.devEmails : {}) };
-    for (const u of [...accounts].sort((a, b) => rank(a) - rank(b))) if (!team.devEmails[u.dev]) team.devEmails[u.dev] = normEmail(u.email);
+    team.devNames = {};
+    for (const u of [...accounts].sort((a, b) => rank(a) - rank(b))) {
+      if (!team.devEmails[u.dev]) team.devEmails[u.dev] = normEmail(u.email);
+      if (!team.devNames[u.dev]) team.devNames[u.dev] = String(u.name || "").trim() || normEmail(u.email);
+    }
     team.devs = [...new Set([...(Array.isArray(team.devs) ? team.devs : []), ...fromJira, ...accounts.map((u) => u.dev)])];
     return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE,knowledgeLock:odooConfigured(env)&&!!env.STORE, capabilities:["ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1","db-report-pos-version-v1","epic-map-v1","ticket-bulk-import-v1","project-admin-v1","project-budget-v1"] });
   }

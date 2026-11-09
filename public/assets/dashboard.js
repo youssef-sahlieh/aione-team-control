@@ -29,7 +29,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   // move you while you scroll, so it is off (redraws keep your place, see render).
   try{ history.scrollRestoration="manual"; }catch(_){}
   // Filled in from the proxy's /config after sign-in (see applyConfig).
-  let SITE="", PROJECT="", PEOPLE={}, DEVS=[], DEV_EMAIL={}, DEV_COLOR={}, BYID={}, JQL="", ME="", MAIL=false;
+  let SITE="", PROJECT="", PEOPLE={}, DEVS=[], DEV_EMAIL={}, DEV_NAME={}, DEV_COLOR={}, BYID={}, JQL="", ME="", MAIL=false;
   // Administrators see and change everything. Users see only the tickets labelled ai1_<MY_DEV> (the proxy
   // enforces this) and can move status, set due dates and comment.
   let IS_ADMIN=true, MY_DEV="", MY_EMAIL="";
@@ -41,7 +41,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const FIELDS=["summary","status","assignee","labels","duedate","created","updated","priority","issuetype","comment","parent","reporter"];
   function applyConfig(cfg){
     LAST_CFG=cfg; GITHUB=!!cfg.github;
-    SITE=cfg.site; PROJECT=cfg.project; MAIL=!!cfg.mail; PEOPLE=cfg.people||{}; DEVS=cfg.devs||[]; DEV_EMAIL=cfg.devEmails||{}; DEV_COLOR=cfg.devColors||{};
+    SITE=cfg.site; PROJECT=cfg.project; MAIL=!!cfg.mail; PEOPLE=cfg.people||{}; DEVS=cfg.devs||[]; DEV_EMAIL=cfg.devEmails||{}; DEV_NAME=cfg.devNames||{}; DEV_COLOR=cfg.devColors||{};
     PEOPLE={...PEOPLE,[INTERNAL_ASSIGNEE]:{name:"Internal Tickets",ini:"IT",id:INTERNAL_ASSIGNEE}};
     BYID={}; for(const k in PEOPLE) BYID[PEOPLE[k].id]=k;
     IS_ADMIN=cfg.role!=="user"; MY_DEV=cfg.dev||""; MY_EMAIL=cfg.email||""; INTERNAL=!!cfg.accounts; ODOO=!!cfg.odoo; { const dl=$("dbreport-link"); if(dl) dl.hidden=!cfg.dbReport; } { const kl=$("knowledge-link"); if(kl) kl.hidden=!cfg.knowledge; } $("new-int").hidden=!INTERNAL;
@@ -278,6 +278,15 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   const isNew=i=>NEW_STATUSES.includes(i.status.toLowerCase());
   const stK=i=>{ const s=(i.status||"").toLowerCase(); if(i.cat==="done"||s==="resolved"||s==="closed") return "k7"; if(s==="open") return "k1"; if(s==="pending approval") return "k4"; if(s==="dev approved") return "k5"; if(s==="in development") return "k3"; if(s==="on hold") return "k8"; if(s.includes("qa")) return "k6"; if(s==="reopened") return "k2"; return "k8"; };
   const issueByKey=k=>(state.issues||[]).find(i=>i.key===k);
+  // Developers are picked from the dashboard's users (Users & access), never typed: the users with a developer name
+  // that aren't offered yet. Fills a <select>; returns how many there are.
+  function fillUserPicker(select,shown){
+    const left=Object.entries(DEV_NAME).filter(([d])=>!shown.has(d)).sort((a,b)=>a[1].localeCompare(b[1]));
+    select.replaceChildren(el("option",null,left.length?"Add a user…":"Every user is listed")); select.firstChild.value="";
+    left.forEach(([d,name])=>{ const o=el("option",null,name+" · ai1_"+d); o.value=d; select.appendChild(o); });
+    select.disabled=!left.length; return left.length;
+  }
+  const devTitle=d=>DEV_NAME[d]?DEV_NAME[d]+" (ai1_"+d+")":"ai1_"+d;
   const allDevs=()=>{ const s=new Set(DEVS); (state.issues||[]).forEach(i=>i.devs.forEach(d=>s.add(d))); return [...s].sort(); };
   const needsReply=i=>i.last&&!i.last.fromTeam&&Date.parse(i.updated)>=Date.now()-(typeof state!=="undefined"?state.updDays:3)*dayMs;
 
@@ -780,14 +789,14 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     const counts={}; keys.forEach(k=>{ const i=issueByKey(k); (i?i.devs:[]).forEach(d=>counts[d]=(counts[d]||0)+1); });
     const names=new Set(allDevs()); chosen.forEach(d=>names.add(d));
     function addOpt(d){ const o=el("label","opt"); const c=el("input","ck"); c.type="checkbox"; c.checked=chosen.has(d); c.dataset.dev=d;
-      c.addEventListener("change",()=>c.checked?chosen.add(d):chosen.delete(d)); o.appendChild(c); o.appendChild(el("span","dev "+devK(d),"ai1_"+d)); if(!one&&counts[d]) o.appendChild(el("span","cnt",counts[d]+" of "+keys.length)); body.appendChild(o); }
+      c.addEventListener("change",()=>c.checked?chosen.add(d):chosen.delete(d)); o.appendChild(c); const tag=el("span","dev "+devK(d),"ai1_"+d); tag.title=devTitle(d); o.appendChild(tag); if(!one&&counts[d]) o.appendChild(el("span","cnt",counts[d]+" of "+keys.length)); body.appendChild(o); }
     [...names].sort().forEach(addOpt);
     const foot=el("div","foot");
     if(mode!=="remove"){
-      const inp=el("input","inp"); inp.placeholder="Other name"; inp.style.width="110px"; inp.setAttribute("aria-label","Other developer name");
-      const add=el("button","btn","Add"); add.type="button";
-      const doAdd=()=>{ const v=inp.value.trim().replace(/^ai1_/i,"").replace(/\s+/g,"").toLowerCase(); if(!v) return; chosen.add(v); if(!names.has(v)){ names.add(v); addOpt(v); } else { const c=[...body.querySelectorAll("input")].find(x=>x.dataset.dev===v); if(c) c.checked=true; } inp.value=""; };
-      add.addEventListener("click",doAdd); inp.addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); doAdd(); } });
+      const inp=el("select","inp"); inp.style.maxWidth="150px"; inp.setAttribute("aria-label","Add a developer from the users");
+      const add=el("button","btn","Add"); add.type="button"; add.disabled=!fillUserPicker(inp,names);
+      const doAdd=()=>{ const v=inp.value; if(!v) return; chosen.add(v); names.add(v); addOpt(v); add.disabled=!fillUserPicker(inp,names); };
+      add.addEventListener("click",doAdd); inp.addEventListener("change",doAdd);
       foot.appendChild(inp); foot.appendChild(add);
     }
     const save=el("button","btn primary sp",mode==="remove"?"Remove":"Save"); save.type="button";
@@ -1077,8 +1086,9 @@ import { createCommentMentions } from "./components/comment-mentions.js";
   $("d-close").addEventListener("click",closeDrawer); $("scrim").addEventListener("click",closeDrawer);
   function setMsg(id,text,ok){ const m=$(id); m.textContent=text||""; m.className="msg"+(text?(ok?" ok":" err"):""); }
   function renderDevChips(){ const box=$("d-devs"); box.replaceChildren(); const names=new Set(allDevs()); dz.devs.forEach(d=>names.add(d));
-    [...names].sort().forEach(d=>{ const c=el("button","fc "+devK(d)); c.type="button"; c.appendChild(el("span","sw")); c.appendChild(el("span",null,"ai1_"+d)); c.setAttribute("aria-pressed",String(dz.devs.has(d)));
-      c.addEventListener("click",()=>{ dz.devs.has(d)?dz.devs.delete(d):dz.devs.add(d); c.setAttribute("aria-pressed",String(dz.devs.has(d))); setMsg("d-devmsg",""); }); box.appendChild(c); }); }
+    [...names].sort().forEach(d=>{ const c=el("button","fc "+devK(d)); c.type="button"; c.appendChild(el("span","sw")); c.appendChild(el("span",null,"ai1_"+d)); c.title=devTitle(d); c.setAttribute("aria-pressed",String(dz.devs.has(d)));
+      c.addEventListener("click",()=>{ dz.devs.has(d)?dz.devs.delete(d):dz.devs.add(d); c.setAttribute("aria-pressed",String(dz.devs.has(d))); setMsg("d-devmsg",""); }); box.appendChild(c); });
+    $("d-adddev").disabled=!fillUserPicker($("d-newdev"),names); }
   const fact=(dt,dd)=>{ const w=el("div"); w.appendChild(el("dt",null,dt)); w.appendChild(el("dd",null,dd||"—")); return w; };
   const drawerFull=()=>{ try{ return localStorage.getItem("aion.drawer.full")!=="0"; }catch(_){ return true; } };
   // On computers an open ticket stays inside the app: a full page in the content area, or side by side with the
@@ -1114,7 +1124,7 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     if(dz.key&&dz.key!==key&&!closeDrawer(false,true))return;
     if(location.hash!=="#"+key){ const url=location.pathname+location.search+"#"+key; if(drawerPushed) history.replaceState(history.state,"",url); else { history.pushState(history.state,"",url); drawerPushed=true; } }
     const opening=!dz.key;dz.key=key;applyDrawerSize();
-    if(opening){drawerUI.open();$("d-reply").value="";commentMentions.reset();$("d-newdev").value="";}
+    if(opening){drawerUI.open();$("d-reply").value="";commentMentions.reset();}
     ticketHistory.reset();drawerUI.select("overview");renderNoteFiles(key);$("d-send").textContent=sendLabel(key);$("d-aidesc-out").hidden=true;$("d-aidesc-out").replaceChildren();dateRequests.renderDrawer(key);
     closePop(); dz.key=key; const i=issueByKey(key);
     $("drawer").hidden=false; $("scrim").hidden=false; $("drawer").classList.toggle("is-int",isInt(key)); $("drawer").classList.toggle("is-odoo",isOdoo(key));
@@ -1415,8 +1425,8 @@ import { createCommentMentions } from "./components/comment-mentions.js";
     catch(err){ setMsg("d-asgmsg",errorText(err),false); }
     finally{ fillAssigneePick(issueByKey(key)); }
   });
-  $("d-adddev").addEventListener("click",()=>{ const v=$("d-newdev").value.trim().replace(/^ai1_/i,"").replace(/\s+/g,"").toLowerCase(); if(!v){ setMsg("d-devmsg","Type a name first.",false); return; } dz.devs.add(v); $("d-newdev").value=""; renderDevChips(); setMsg("d-devmsg","Added ai1_"+v+". Press Save developers.",true); });
-  $("d-newdev").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("d-adddev").click(); } });
+  $("d-adddev").addEventListener("click",()=>{ const v=$("d-newdev").value; if(!v){ setMsg("d-devmsg","Choose a user first.",false); return; } dz.devs.add(v); renderDevChips(); setMsg("d-devmsg","Added "+devTitle(v)+". Press Save developers.",true); });
+  $("d-newdev").addEventListener("change",()=>{ if($("d-newdev").value) $("d-adddev").click(); });
   $("d-savedevs").addEventListener("click",async()=>{ const key=dz.key; if(!key) return; const labels=labelsWith(dz.labels,new Set(dz.devs)); const prev=new Set(dz.labels.filter(isDevLabel).map(devOf)); const want=new Set(dz.devs); const r=await runBatch([{key,added:[...dz.devs].filter(d=>!prev.has(d)),run:()=>(isOdoo(key)?odooApi.update(key,{devs:[...want]}):isInt(key)?internalApi.update(key,{devs:[...want]}):jira.edit(key,{labels})),patch:devsPatch(want)}],"Developers saved"); setMsg("d-devmsg",r.fail?"Not saved.":"Saved.",!r.fail); });
   // Everyone mentions Jira accounts on Jira tickets (Jira notifies them). Internal tickets mention dashboard people:
   // they get a dashboard notification and an email.
