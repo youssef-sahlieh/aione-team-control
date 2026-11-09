@@ -133,13 +133,13 @@ test('a new Odoo project takes its allocated hours: decimal, zero, or none when 
   // The create call and the lookups around it; everything else is empty, as the catalog sync reads only what it finds.
   globalThis.fetch=async(u,init)=>{const p=JSON.parse(init.body).params;if(p.service!=='object')return prev(u,init);
     const [model,method,args]=[p.args[3],p.args[4],p.args[5]];
-    if(model==='project.project'&&method==='create'){created.push(args[0]);return Response.json({result:100+created.length});}
-    if(model==='project.project'&&method==='fields_get')return Response.json({result:args.length?{allocated_hours:{type:'float',readonly:false}}:{type_ids:{type:'one2many'},allow_timesheets:{type:'boolean'},privacy_visibility:{type:'selection'},allow_billable:{type:'boolean'}}});
+    if(model==='project.project'&&method==='copy'){created.push(p.args[6].default);return Response.json({result:100+created.length});}
+    if(model==='project.project'&&method==='fields_get')return Response.json({result:args.length?{allocated_hours:{type:'float',readonly:false}}:{active:{type:'boolean'}}});
     if(model==='res.users')return Response.json({result:[{id:6,company_ids:[1,9]}]});
     if(model==='res.company')return Response.json({result:[{id:1,name:'All in One'},{id:9,name:'Holding'}]});
     if(model==='res.partner'&&method==='search_read')return Response.json({result:[{id:1,name:'Acme'}]});
-    if(model==='project.project'&&method==='search_read'&&JSON.stringify(args[0]).includes('type_ids'))return Response.json({result:[{id:10}]});
-    if(model==='project.project'&&method==='read'&&args[0]?.[0]===10)return Response.json({result:[{id:10,type_ids:[1]}]});
+    if(model==='project.project'&&method==='search_read'&&JSON.stringify(args[0]).includes('=ilike'))return Response.json({result:[{id:10}]});
+    if(model==='project.project'&&method==='read'&&args[0]?.[0]===10)return Response.json({result:[{id:10,active:true}]});
     return Response.json({result:[]});};
   try{
     const catalog=await readCatalog(s.env),acme=catalog.entries.find(e=>e.name==='Acme'&&!e.parentId);
@@ -149,6 +149,36 @@ test('a new Odoo project takes its allocated hours: decimal, zero, or none when 
     const decimal=await make('12.5');assert.equal(decimal.status,201);assert.equal(created.at(-1).allocated_hours,12.5);
     const none=await make('');assert.equal(none.status,201);assert.equal('allocated_hours' in created.at(-1),false);
     const zero=await make('0');assert.equal(zero.status,201);assert.equal(created.at(-1).allocated_hours,0);
+  }finally{globalThis.fetch=prev;s.restore();}
+});
+test('a new Odoo project is a renamed copy of the "odoo sh template" project, tagged Active; no template or two of them: nothing is made',async()=>{
+  const s=await setup();
+  const copies=[],created=[],tags=[],prev=globalThis.fetch;let templates=[{id:40}],hasTags=true;
+  globalThis.fetch=async(u,init)=>{const p=JSON.parse(init.body).params;if(p.service!=='object')return prev(u,init);
+    const [model,method,args,kw]=[p.args[3],p.args[4],p.args[5],p.args[6]];
+    if(model==='project.project'&&method==='copy'){copies.push({id:args[0],default:kw.default});return Response.json({result:100+copies.length});}
+    if(model==='project.project'&&method==='create'){created.push(args[0]);return Response.json({result:900});}
+    if(model==='project.project'&&method==='search_read'&&JSON.stringify(args[0]).includes('=ilike')){assert.deepEqual(args[0],[['name','=ilike','odoo sh template']]);return Response.json({result:templates});}
+    if(model==='project.project'&&method==='fields_get')return Response.json({result:args.length?{allocated_hours:{type:'float',readonly:false}}:{active:{type:'boolean'},...(hasTags?{tag_ids:{type:'many2many'}}:{})}});
+    if(model==='project.project'&&method==='read'&&args[0]?.[0]===40)return Response.json({result:[{id:40,active:false,...(hasTags?{tag_ids:[5]}:{})}]});
+    if(model==='project.tags'&&method==='search_read'){assert.deepEqual(args[0],[['name','=ilike','Active']]);return Response.json({result:tags.filter(t=>t.name.toLowerCase()==='active')});}
+    if(model==='project.tags'&&method==='create'){tags.push({id:70+tags.length,...args[0]});return Response.json({result:tags.at(-1).id});}
+    if(model==='res.users')return Response.json({result:[{id:6,company_ids:[1,9]}]});
+    if(model==='res.company')return Response.json({result:[{id:1,name:'All in One'},{id:9,name:'Holding'}]});
+    if(model==='res.partner'&&method==='search_read')return Response.json({result:[{id:1,name:'Acme'}]});
+    return Response.json({result:[]});};
+  try{
+    const acme=(await readCatalog(s.env)).entries.find(e=>e.name==='Acme'&&!e.parentId);
+    const make=(name)=>s.call('/clients/odoo/project','POST',{name,clientId:acme.id,allocatedHours:'8'});
+    // The template is copied under the new name and contact, made active, keeps its tags and gets Active (made once).
+    assert.equal((await make('Shop POS')).status,201);
+    assert.deepEqual(copies.at(-1),{id:40,default:{active:true,tag_ids:[[6,0,[5,70]]],name:'Shop POS',partner_id:1,allocated_hours:8}});
+    assert.deepEqual(tags,[{id:70,name:'Active'}]);
+    tags[0].name='ACTIVE';assert.equal((await make('Shop Web')).status,201);assert.equal(tags.length,1);assert.deepEqual(copies.at(-1).default.tag_ids,[[6,0,[5,70]]]);
+    hasTags=false;assert.equal((await make('Shop App')).status,201);assert.equal('tag_ids' in copies.at(-1).default,false);
+    // No template, or two: refused, and nothing is created or copied.
+    for(const t of [[],[{id:40},{id:41}]]){templates=t;const r=await make('Shop Other');assert.equal(r.status,409);assert.equal((await r.json()).code,'no_template');}
+    assert.equal(copies.length,3);assert.deepEqual(created,[]);
   }finally{globalThis.fetch=prev;s.restore();}
 });
 
