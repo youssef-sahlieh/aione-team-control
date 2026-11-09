@@ -254,13 +254,16 @@ test('administrators create a customer or a project in Odoo from the Clients pag
   const [model,method,args]=[p.args[3],p.args[4],p.args[5]];
   if(model==='res.users')return Response.json({result:[{id:6,company_ids:[1,9]}]});
   if(model==='res.company')return Response.json({result:[{id:1,name:'All in One'},{id:9,name:'Holding'}]});
-  if(method==='create'){created.push({model,values:args[0]});const id=100+created.length;if(model==='res.partner')customers.push({id,display_name:args[0].name});else projects.push({id,display_name:args[0].name,partner_id:[args[0].partner_id,'x']});return Response.json({result:id});}
+  if(method==='create'){created.push({model,values:args[0]});const id=100+created.length;customers.push({id,display_name:args[0].name});return Response.json({result:id});}
+  // Projects are copies of the template (Odoo 18 answers with a list of ids).
+  if(method==='copy'){const values=p.args[6].default;created.push({model,copy:args[0],values});const id=100+created.length;projects.push({id,display_name:values.name,partner_id:[values.partner_id,'x']});return Response.json({result:[id]});}
   if(model==='res.partner'&&method==='search_read'){const named=(args[0]||[]).find(t=>t[0]==='name');return Response.json({result:named?customers.filter(c=>c.display_name===named[2]):customers});}
   if(model==='res.partner'&&method==='read')return Response.json({result:args[0].map(id=>({id,active:true,is_company:true,company_id:[1,'Main'],commercial_partner_id:[id,(customers.find(c=>c.id===id)||{}).display_name]}))});
-  // The project new ones copy: the latest of the main company with task stages.
-  if(model==='project.project'&&method==='fields_get')return Response.json({result:{type_ids:{type:'many2many'},allow_timesheets:{type:'boolean'},privacy_visibility:{type:'selection'}}});
-  if(model==='project.project'&&method==='search_read'&&JSON.stringify(args[0]).includes('type_ids')){assert.deepEqual(args[0],['|',['company_id','=',1],['company_id','=',false],['type_ids','!=',false]]);return Response.json({result:[{id:50}]});}
-  if(model==='project.project'&&method==='read'){assert.deepEqual(args[0],[50]);return Response.json({result:[{id:50,type_ids:[3,4],allow_timesheets:true,privacy_visibility:'employees'}]});}
+  // The template new projects copy, archived and tagged; the Active tag is already in Odoo.
+  if(model==='project.project'&&method==='fields_get')return Response.json({result:{tag_ids:{type:'many2many'},active:{type:'boolean'},is_template:{type:'boolean'}}});
+  if(model==='project.project'&&method==='search_read'&&JSON.stringify(args[0]).includes('=ilike')){assert.deepEqual(args[0],[['name','=ilike','odoo sh template']]);assert.equal(p.args[6].context.active_test,false);return Response.json({result:[{id:50}]});}
+  if(model==='project.project'&&method==='read'){assert.deepEqual(args[0],[50]);return Response.json({result:[{id:50,tag_ids:[2],active:false,is_template:true}]});}
+  if(model==='project.tags'&&method==='search_read')return Response.json({result:[{id:9}]});
   return Response.json({result:projects});};
  try{
   assert.equal((await api('/clients/odoo/customer','POST',{name:'New Shop'},user)).status,403);
@@ -271,7 +274,7 @@ test('administrators create a customer or a project in Odoo from the Clients pag
   assert.deepEqual(created[0],{model:'res.partner',values:{name:'New Shop',is_company:true,customer_rank:1,email:'shop@example.invalid',phone:'050'}});
   const shop=(await c.json()).catalog.entries.find(e=>e.name==='New Shop'&&!e.parentId);assert.ok(shop);
   const pr=await api('/clients/odoo/project','POST',{name:'Shop POS',clientId:shop.id},admin);assert.equal(pr.status,201);
-  assert.deepEqual(created[1],{model:'project.project',values:{name:'Shop POS',partner_id:customers.find(x=>x.display_name==='New Shop').id,company_id:1,type_ids:[[6,0,[3,4]]],allow_timesheets:true,privacy_visibility:'employees'}});
+  assert.deepEqual(created[1],{model:'project.project',copy:50,values:{name:'Shop POS',partner_id:customers.find(x=>x.display_name==='New Shop').id,active:true,is_template:false,tag_ids:[[6,0,[2,9]]]}});
   assert.deepEqual((await pr.json()).catalog.entries.filter(e=>e.parentId===shop.id).map(e=>e.name),['Shop POS']);
   // Pushed again while its Odoo project exists: refused. Deleted in Odoo and pushed again: it keeps only the new Odoo project.
   assert.equal((await api('/clients/odoo/project','POST',{name:'shop pos',clientId:shop.id},admin)).status,409);assert.equal(created.length,2);
