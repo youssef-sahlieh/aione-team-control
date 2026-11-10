@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import worker,{makeToken} from '../proxy/src/handler.js';
 import {agreedImportPreview,agreedImportApply} from '../proxy/src/ticket-metadata.js';
 import {memoryStore,saveUser} from '../proxy/src/users.js';
-import {readMetadata,readCatalog,prepareImport,catalogKey,metadataKey,odooProjectsKey,publicHistory,publicMetadata,saveMetadata,withTicketLock,guardedTransition,closureErrors,INTERNAL_ASSIGNEE} from '../proxy/src/ticket-metadata.js';
+import {requireBilling,readMetadata,readCatalog,prepareImport,catalogKey,metadataKey,odooProjectsKey,publicHistory,publicMetadata,saveMetadata,withTicketLock,guardedTransition,closureErrors,INTERNAL_ASSIGNEE} from '../proxy/src/ticket-metadata.js';
 import {buildReport,reportPeriod} from '../proxy/src/reports.js';
 import {createReadTools} from '../proxy/src/ai.js';
 import {readTicketLog} from '../proxy/src/ticket-log.js';
@@ -155,6 +155,12 @@ test('administrator AI reports retain computed totals, bounds, warnings and veri
  const report=await tools.execute('run_dashboard_report',{workflow:'hours',days:7});assert.equal(report.totals.open,3);assert.equal(report.tickets[0].billing,'billable');assert.deepEqual(report.warnings,['Partial Jira coverage']);assert.equal(tools.references()[0].key,'INT-1');
 });
 
+test('a ticket inherits its project billing default unless it has its own; with BILLING_REQUIRED an inheriting ticket needs a classified project',()=>{
+  const env={JIRA_PROJECT:'AION',BILLING_REQUIRED:'true'};const refused=(...a)=>{try{requireBilling(...a);return false;}catch(e){assert.equal(e.code,'billing_required');return true;}};
+  assert.equal(refused({billing:null},env,null),true);assert.equal(refused({billing:null},env,'not_billable'),false);
+  assert.equal(refused({billing:'billable'},env,null),false);assert.equal(refused({billing:'billable'},env,'not_billable'),false);
+  assert.equal(refused({billing:null},{JIRA_PROJECT:'AION'},null),false);
+});
 test('with BILLING_REQUIRED on, administrator assignment requires explicit billing for Jira assignees, developer labels and internal tickets',async()=>{
  const s=await setup();s.env.BILLING_REQUIRED='true';const t=await s.create();
  for(const patch of [{assignee:'lead'},{devs:['builder','other']}]){const r=await s.call('/internal/'+t.key,'PUT',patch,admin);assert.equal(r.status,400);assert.equal((await r.json()).code,'billing_required');}

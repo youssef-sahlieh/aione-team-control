@@ -48,9 +48,11 @@ export function publicHistory(m,me) {
 }
 // Billing before assignment is only enforced when BILLING_REQUIRED is on (settings.js).
 export const billingRequired = env => String(env?.BILLING_REQUIRED ?? '').toLowerCase() === 'true';
-export function requireBilling(record, env) {
+// A ticket that inherits (no billing of its own) counts as classified when its project's default is set.
+export function requireBilling(record, env, projectBilling=null) {
   if(!billingRequired(env))return;
-  if(!['billable','not_billable'].includes(record?.billing))problem('Choose Billable or Not billable before assigning this ticket.',400,'billing_required');
+  const billing=['billable','not_billable'].includes(record?.billing)?record.billing:projectBilling;
+  if(!['billable','not_billable'].includes(billing))problem('Choose Billable or Not billable before assigning this ticket.',400,'billing_required');
 }
 export function validHours(n) { return typeof n==='number' && Number.isFinite(n) && n>0 && n<=1000000 && Math.round(n*100)/100===n; }
 // The client is optional for now: no client is fine anywhere (saving, moving status, closing); a client or
@@ -400,10 +402,12 @@ export async function projectTemplate(env){
   const found=await odoo(env,'project.project','search_read',[[['name','=ilike',TEMPLATE]]],{fields:['id'],order:'id',limit:2,context:{active_test:false}});
   if(!found.length)problem('Odoo has no project named “'+TEMPLATE+'” to copy. Create it, or restore its name, first.',409,'no_template');
   if(found.length>1)problem('Odoo has more than one project named “'+TEMPLATE+'”. Rename the extra ones first.',409,'no_template');
-  const [r]=await readFields(env,'project.project',[found[0].id],['tag_ids','is_template','active']);
+  const [r]=await readFields(env,'project.project',[found[0].id],['tag_ids','is_template','active','allow_billable']);
   const values={};
   if(r&&'active' in r)values.active=true;
   if(r&&'is_template' in r)values.is_template=false;
+  // Odoo's own Billable box: without it the project does not show in the billable lists. Not the dashboard's billing default.
+  if(r&&'allow_billable' in r)values.allow_billable=true;
   if(r&&'tag_ids' in r)values.tag_ids=[[6,0,[...new Set([...r.tag_ids,await activeTag(env)])]]];
   return {template:found[0].id,values};
 }

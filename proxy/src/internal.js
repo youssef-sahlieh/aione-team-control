@@ -37,6 +37,7 @@ async function dropFile(store, a) {
 import { normDev, validDev } from "./users.js";
 import { recordTicketEvent } from "./ticket-log.js";
 import { odooConfigured } from "./odoo.js";
+import { projectDefaultOf } from "./billing.js";
 import { notifyMentions } from "./inbox.js";
 
 export const STATUSES = [
@@ -141,7 +142,7 @@ export async function internalRoutes(request, env, url, me, deps = {}) {
     if("due" in b)return fail(me.role==="admin"?"date_request":"forbidden","Use the date request process to set an approved date.",me.role==="admin"?400:403);
     const t = { summary: "", description: "", priority: "Medium", due: null, status: "Open", assignee: null, devs: [], comments: [], dueHistory: [] };
     const people = teamPeople(env);
-    if(me.role==="admin")requireBilling(b.metadata,env);
+    if(me.role==="admin")requireBilling(b.metadata,env,await projectDefaultOf(env,b.metadata?.odooProjectId));
     if(b.assignee===undefined)b.assignee=INTERNAL_ASSIGNEE;
     // With Odoo, the ticket needs its Odoo project (checked here, before a ticket number is taken). Without Odoo, a ticket
     // with no client goes under the "Internal" client and project; one that is chosen must be valid.
@@ -248,7 +249,7 @@ export async function internalRoutes(request, env, url, me, deps = {}) {
     const before = [...(t.devs || [])], prev = { status: t.status, assignee: t.assignee, summary: t.summary, priority: t.priority, description: t.description };
     if(me.role==='admin'){
       const proposed=Array.isArray(b.devs)?cleanDevs(b.devs):null;
-      if(('assignee' in b&&b.assignee!==t.assignee)||(proposed&&JSON.stringify([...proposed].sort())!==JSON.stringify([...before].sort())))requireBilling(await readMetadata(env,t.key),env);
+      if(('assignee' in b&&b.assignee!==t.assignee)||(proposed&&JSON.stringify([...proposed].sort())!==JSON.stringify([...before].sort()))){const meta=await readMetadata(env,t.key);requireBilling(meta,env,await projectDefaultOf(env,meta.odooProjectId));}
     }
     const err = applyFields(t, b, me, false, teamPeople(env));
     if (err) return fail("bad_request", err, 400);

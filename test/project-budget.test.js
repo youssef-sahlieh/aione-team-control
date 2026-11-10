@@ -4,6 +4,7 @@ import worker,{makeToken} from '../proxy/src/handler.js';
 import {memoryStore,saveUser} from '../proxy/src/users.js';
 import {prepareImport,catalogKey,readCatalog,allocatedHoursInput,metadataKey} from '../proxy/src/ticket-metadata.js';
 import {budgetStatus} from '../proxy/src/project-budget.js';
+import {projectDefaultOf} from '../proxy/src/billing.js';
 const admin={email:'admin@example.invalid',name:'Manager',role:'admin',dev:'builder',v:1};
 const user={email:'user@example.invalid',name:'Developer',role:'user',dev:'builder',v:1};
 // Odoo: company 1 is the main one ("All in One"), 9 another. Project 10 is linked to the dashboard, 11 is Odoo only,
@@ -159,8 +160,8 @@ test('a new Odoo project is a renamed copy of the "Template (Enterprise Customer
     if(model==='project.project'&&method==='copy'){copies.push({id:args[0],default:kw.default});return Response.json({result:100+copies.length});}
     if(model==='project.project'&&method==='create'){created.push(args[0]);return Response.json({result:900});}
     if(model==='project.project'&&method==='search_read'&&JSON.stringify(args[0]).includes('=ilike')){assert.deepEqual(args[0],[['name','=ilike','Template (Enterprise Customers or Odoo.sh)']]);return Response.json({result:templates});}
-    if(model==='project.project'&&method==='fields_get')return Response.json({result:args.length?{allocated_hours:{type:'float',readonly:false}}:{active:{type:'boolean'},...(hasTags?{tag_ids:{type:'many2many'}}:{})}});
-    if(model==='project.project'&&method==='read'&&args[0]?.[0]===40)return Response.json({result:[{id:40,active:false,...(hasTags?{tag_ids:[5]}:{})}]});
+    if(model==='project.project'&&method==='fields_get')return Response.json({result:args.length?{allocated_hours:{type:'float',readonly:false}}:{active:{type:'boolean'},allow_billable:{type:'boolean'},...(hasTags?{tag_ids:{type:'many2many'}}:{})}});
+    if(model==='project.project'&&method==='read'&&args[0]?.[0]===40)return Response.json({result:[{id:40,active:false,allow_billable:false,...(hasTags?{tag_ids:[5]}:{})}]});
     if(model==='project.tags'&&method==='search_read'){assert.deepEqual(args[0],[['name','=ilike','Active']]);return Response.json({result:tags.filter(t=>t.name.toLowerCase()==='active')});}
     if(model==='project.tags'&&method==='create'){tags.push({id:70+tags.length,...args[0]});return Response.json({result:tags.at(-1).id});}
     if(model==='res.users')return Response.json({result:[{id:6,company_ids:[1,9]}]});
@@ -172,8 +173,10 @@ test('a new Odoo project is a renamed copy of the "Template (Enterprise Customer
     const make=(name)=>s.call('/clients/odoo/project','POST',{name,clientId:acme.id,allocatedHours:'8'});
     // The template is copied under the new name and contact, made active, keeps its tags and gets Active (made once).
     assert.equal((await make('Shop POS')).status,201);
-    assert.deepEqual(copies.at(-1),{id:40,default:{active:true,tag_ids:[[6,0,[5,70]]],name:'Shop POS',partner_id:1,allocated_hours:8}});
+    assert.deepEqual(copies.at(-1),{id:40,default:{active:true,allow_billable:true,tag_ids:[[6,0,[5,70]]],name:'Shop POS',partner_id:1,allocated_hours:8}});
     assert.deepEqual(tags,[{id:70,name:'Active'}]);
+    // Odoo's Billable box is ticked; the dashboard billing default is not set (not billable until chosen).
+    assert.equal(await projectDefaultOf(s.env,101),null);
     tags[0].name='ACTIVE';assert.equal((await make('Shop Web')).status,201);assert.equal(tags.length,1);assert.deepEqual(copies.at(-1).default.tag_ids,[[6,0,[5,70]]]);
     hasTags=false;assert.equal((await make('Shop App')).status,201);assert.equal('tag_ids' in copies.at(-1).default,false);
     // No template, or two: refused, and nothing is created or copied.
