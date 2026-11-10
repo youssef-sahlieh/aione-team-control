@@ -92,6 +92,16 @@ Clients page → More → **Billable export**.
   fingerprint differs.
 - **Batches:** earlier batches stay downloadable.
 
+## Project billing workspace
+
+The expanded row of a project on the Clients page lists its tickets with actual and commercial hours, billing overrides
+and sync problems, and exports and imports project defaults, allocations and ticket billing fields (details in
+[ticket-business.md](ticket-business.md#project-billing-workspace-billing-v1)). It keeps no figures of its own: imports
+and inline edits call the same saves as the rest of the dashboard (`saveProjectDefault`, `saveAllocation`,
+`saveTicket`, `saveMetadata`), so revisions, histories, ledgers and Odoo pushes apply unchanged, and work entries,
+consumption and export markers are never written. Its routes (`/clients/odoo-projects/tickets`,
+`/clients/odoo-projects/import/preview`, `/clients/odoo-projects/import`) need an administrator session.
+
 ## Visibility
 
 Every `/billing/*` route needs an administrator session. The billing columns on the Clients page, the ticket

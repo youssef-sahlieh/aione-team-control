@@ -24,7 +24,8 @@ import { dateRequestRoutes } from "./date-requests.js";
 import { ticketNoteRoutes } from "./ticket-notes.js";
 import { internalRoutes } from "./internal.js";
 import { inboxRoutes, notifyMentions, jiraMentionEmails, addToInbox } from "./inbox.js";
-import { odooConfigured, odooRoutes, odooTicketInfo, odooTicketForTime, postOdooNote } from "./odoo.js";
+import { readReplyTarget, replyBody, visibilityText } from "./comment-reply.js";
+import { odooConfigured, odooRoutes, odooTicketInfo, odooTicketForTime, odooTicketsDetails, postOdooNote } from "./odoo.js";
 import { timeRoutes, timeSyncCron } from "./time-entries.js";
 import { monitorRoutes } from "./monitor.js";
 import { dbReportRoutes, dbReportCron, dbExtendCron } from "./db-report.js";
@@ -35,11 +36,12 @@ import { cookieSessionRequest } from "./sessions.js";
 import { SESSION_MS, SESSION_SECONDS } from "./session-policy.js";
 import { aiChat, aiBrief, aiConfigured, aiDescription, aiImproveWriting, AIError } from "./ai.js";
 import { githubConfigured, syncPulls, prsByKey } from "./github.js";
-import { reviewRoutes, requestWaitingReviews } from "./reviews.js";
+import { reviewRoutes, requestWaitingReviews, adfText } from "./reviews.js";
 import { recordTicketEvent, ticketLogRoutes, readTicketLog } from "./ticket-log.js";
 import { integrationRoutes } from "./integrations.js";
 import { epicMapRoutes } from "./epic-map.js";
 import { projectBudgetRoutes } from "./project-budget.js";
+import { workspaceRoutes, WORKSPACE_PATHS } from "./project-workspace.js";
 import { billingRoutes, billingScanCron } from "./billing.js";
 import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
 import { recordLogin } from "./users.js";
@@ -541,15 +543,36 @@ async function route(request, env, url) {
     try{return json({text:await aiImproveWriting(env,me,b.text)});}
     catch(e){if(e instanceof AIError||(e&&typeof e.status==="number"&&typeof e.code==="string"))return json({code:e.code,error:e.message},e.status);return fail("ai_unavailable","Could not improve the text. Please try again.",502);}
   }
-  // All Odoo projects with allocated and logged hours (administrators).
-  if((path==="/clients/odoo-projects"||path.startsWith("/clients/odoo-projects/"))&&path!=="/clients/odoo-projects/options")return projectBudgetRoutes(request,env,url,me);
-  if(path==="/clients"||path.startsWith("/clients/"))return catalogRoutes(request,env,url,me);
-  if(path==="/epic-map"||path==="/epic-map/sync")return epicMapRoutes(request,env,url,me,(p,init)=>jira(env,p,init));
   // Work log (Odoo timesheets) on Jira, internal and Odoo Helpdesk tickets the signed-in person can see.
   const readTimeTicket=async key=>{
     if(/^HD-\d+$/.test(key)){const t=await odooTicketForTime(env,key);return t&&(me.role==="admin"||(me.dev&&t.devs.includes(me.dev)))?t:null;}
     return readBusinessTicket(key);
   };
+  // Title, plain-text description, status and people of many tickets at once (the project workspace, administrators):
+  // internal tickets in one database read, Jira tickets in searches of 100, Helpdesk tickets in one Odoo read.
+  const readTicketDetails=async keys=>{
+    const out={},ints=keys.filter(k=>/^INT-\d+$/.test(k)),ours=keys.filter(k=>new RegExp("^"+env.JIRA_PROJECT+"-\\d+$").test(k)),hds=keys.filter(k=>/^HD-\d+$/.test(k));
+    if(ints.length&&env.STORE){
+      const raws=env.STORE.mget?await env.STORE.mget(ints.map(k=>"it:"+k)):await Promise.all(ints.map(k=>env.STORE.get("it:"+k)));
+      ints.forEach((k,n)=>{try{const t=raws[n]&&JSON.parse(raws[n]);if(t)out[k]={title:t.summary||"",description:String(t.description||""),status:t.status||"",closed:t.status==="Closed",devs:t.devs||[],assignee:t.assignee||""};}catch{}});
+    }
+    const view=(t,closed)=>({title:t.summary??t.title??"",description:(typeof t.description==="string"?t.description:adfText(t.description)).trim(),status:typeof t.status==="string"?t.status:t.status?.name||"",closed,
+      devs:t.devs||(t.labels||[]).filter(l=>/^ai1_/i.test(l)).map(l=>l.slice(4).toLowerCase()),assignee:typeof t.assignee==="string"?t.assignee:t.assignee?.displayName||""});
+    for(let i=0;i<ours.length;i+=100){
+      const part=ours.slice(i,i+100),r=await jira(env,"/rest/api/3/search/jql",{method:"POST",body:{jql:"project = "+env.JIRA_PROJECT+" AND key in ("+part.join(",")+")",fields:["summary","description","status","labels","assignee"],maxResults:100},signal:AbortSignal.timeout(20000)});
+      if(r.ok){for(const issue of r.data.issues||[])if(part.includes(issue.key)){const f=issue.fields||{};out[issue.key]=view(f,f.status?.statusCategory?.key==="done");}continue;}
+      // Jira refuses the whole search when one of the keys no longer exists: those tickets are read one by one.
+      for(const k of part){const t=await readBusinessTicket(k).catch(()=>null);if(t)out[k]=view(t,t.closed);}
+    }
+    if(hds.length)Object.assign(out,await odooTicketsDetails(env,hds));
+    return out;
+  };
+  // The project billing workspace: a project's tickets, and the spreadsheet import (administrators).
+  if(WORKSPACE_PATHS.includes(path))return workspaceRoutes(request,env,url,me,{readTicket:readTimeTicket,readDetails:readTicketDetails});
+  // All Odoo projects with allocated and logged hours (administrators).
+  if((path==="/clients/odoo-projects"||path.startsWith("/clients/odoo-projects/"))&&path!=="/clients/odoo-projects/options")return projectBudgetRoutes(request,env,url,me);
+  if(path==="/clients"||path.startsWith("/clients/"))return catalogRoutes(request,env,url,me);
+  if(path==="/epic-map"||path==="/epic-map/sync")return epicMapRoutes(request,env,url,me,(p,init)=>jira(env,p,init));
   if(path==="/time-entries"||path.startsWith("/time-entries/"))return timeRoutes(request,env,url,me,{readTicket:readTimeTicket});
   // Billable work, customer allowances, alerts and the billable export (administrators).
   if(path.startsWith("/billing/"))return billingRoutes(request,env,url,me,{readTicket:readTimeTicket,sendMail:(from,body)=>sendMail(env,from,body)});
@@ -743,7 +766,7 @@ async function route(request, env, url) {
     }
     try {
       const { index } = await syncPulls(env, { force: isAdmin && url.searchParams.get("refresh") === "1" });
-      return json({ configured: true, syncedAt: index.syncedAt, checks: index.checksAccess !== false, prs: prsByKey(index, keys) });
+      return json({ configured: true, syncedAt: index.syncedAt, syncError: index.listError || "", checks: index.checksAccess !== false, prs: prsByKey(index, keys) });
     } catch (e) { return fail("github", e.message || "Couldn't read pull requests.", 502); }
   }
 
@@ -877,18 +900,44 @@ async function route(request, env, url) {
       if (!text || text.length > 30000) return fail("bad_request", "Write a comment first.", 400);
       // Jira shows the proxy's account as the author, so the comment carries the real author's name.
       const author = me.name || me.email, owner = String(env.JIRA_EMAIL || "").toLowerCase() === String(me.email || "").toLowerCase();
-      const result = await jira(env, "/rest/api/2/issue/" + key + "/comment", { method: "POST", body: { body: owner ? text : text + "\n\n— " + author } });
-      if (result.ok) await recordTicketEvent(env, key, me, { action: "comment", text, commentId: String(result.data?.id || "") });
+      // A reply to one comment (see comment-reply.js): Jira has no threads, so it is a comment that links and quotes it.
+      let target = null;
+      if (b.replyTo !== undefined && b.replyTo !== null && b.replyTo !== "") {
+        const r = await readReplyTarget({ readJira: (p) => jira(env, p, { signal: AbortSignal.timeout(15000) }), key, commentId: String(b.replyTo), log: await readTicketLog(env, key), integrationEmail: env.JIRA_EMAIL });
+        if (!r.target) return r.res || fail(r.code, r.error, r.status);
+        target = r.target;
+      }
+      // The same send arriving twice (a retry after a timeout) posts once: requestId names one send.
+      const sendKey = env.STORE && typeof b.requestId === "string" && /^[\w-]{8,64}$/.test(b.requestId) ? "csend:" + key + ":" + b.requestId : "";
+      if (sendKey) {
+        const sent = await env.STORE.get(sendKey);
+        if (sent && sent.startsWith("done:")) return json({ id: sent.slice(5), duplicate: true });
+        if (sent || !(await env.STORE.setIfAbsent(sendKey, "sending", 120))) return fail("comment_pending", "This comment is still being sent. Check the ticket's comments before sending it again.", 409);
+      }
+      const body = target
+        ? replyBody({ site: env.JIRA_SITE, key, commentId: target.commentId, author: target.author, quote: target.quote, text, signature: owner ? "" : author })
+        : owner ? text : text + "\n\n— " + author;
+      const result = await jira(env, "/rest/api/2/issue/" + key + "/comment", { method: "POST", body: { body, ...(target?.visibility ? { visibility: target.visibility } : {}), ...(target?.internal ? { properties: [{ key: "sd.public.comment", value: { internal: true } }] } : {}) }, signal: AbortSignal.timeout(20000) });
+      if (sendKey) { if (result.ok) await env.STORE.set(sendKey, "done:" + String(result.data?.id || ""), 86400); else await env.STORE.del(sendKey); }
+      if (result.ok) await recordTicketEvent(env, key, me, { action: "comment", text, commentId: String(result.data?.id || ""), ...(target ? { replyTo: target.commentId } : {}) });
+      if (result.ok && target) {
+        result.data = { ...(result.data || {}), reply: { to: target.author.name, commentId: target.commentId, mentioned: !!target.author.accountId, restricted: visibilityText(target.visibility) } };
+        // A comment written from the dashboard has no Jira author to mention; its writer gets the dashboard's notification.
+        if (target.author.viaDashboard && target.author.email) {
+          try { const t = await jira(env, "/rest/api/2/issue/" + key + "?fields=summary", { signal: AbortSignal.timeout(10000) }); result.data.notified = await notifyMentions(env, me, { emails: [target.author.email], key, title: t.ok ? t.data?.fields?.summary : "", text, sendMail: (from, m) => sendMail(env, from, m) }); }
+          catch { console.warn("reply_inbox_failed"); }
+        }
+      }
       // Jira emails the people mentioned itself; the dashboard bell shows it too (no second email).
       // Dashboard people mentioned by name (b.mentions, emails) also get an email from the dashboard.
       const named = Array.isArray(b.mentions) ? b.mentions.filter((e) => typeof e === "string").slice(0, 20) : [];
-      if (result.ok && (named.length || text.includes("[~accountid:"))) {
+      if (result.ok && (named.length || body.includes("[~accountid:"))) {
         try {
           if (named.length) {
             const t = await jira(env, "/rest/api/2/issue/" + key + "?fields=summary", { signal: AbortSignal.timeout(10000) });
-            result.data = { ...(result.data || {}), notified: await notifyMentions(env, me, { emails: named, key, title: t.ok ? t.data?.fields?.summary : "", text, sendMail: (from, body) => sendMail(env, from, body) }) };
+            result.data = { ...(result.data || {}), notified: [...(result.data?.notified || []), ...await notifyMentions(env, me, { emails: named.filter((e) => e.toLowerCase() !== String(target?.author.email || "").toLowerCase()), key, title: t.ok ? t.data?.fields?.summary : "", text, sendMail: (from, body) => sendMail(env, from, body) })] };
           }
-          const emails = await jiraMentionEmails(env, text);
+          const emails = await jiraMentionEmails(env, body);
           if (emails.length) {
             const t = await jira(env, "/rest/api/2/issue/" + key + "?fields=summary", { signal: AbortSignal.timeout(10000) });
             await notifyMentions(env, me, { emails, key, title: t.ok ? t.data?.fields?.summary : "", text: text.replace(/\[~accountid:[\w:-]+\]/g, "@") });

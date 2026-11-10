@@ -202,6 +202,12 @@ export async function reconcileTicket(env,key,{by=null}={}){
   });
 }
 export const readLedger=(env,key)=>readDoc(env,K.ledger(env,key),blankLedger);
+// Many tickets' ledgers in one read (the project workspace's ticket list).
+export async function readLedgers(env,keys){
+  const raws=await mget(requireStore(env),keys.map(k=>K.ledger(env,k))),out={};
+  keys.forEach((k,n)=>{out[k]=raws[n]?{...blankLedger(),...JSON.parse(raws[n])}:blankLedger();});
+  return out;
+}
 
 // ---- Odoo fields (discovered, never assumed) ----
 async function fieldCandidates(env){
@@ -280,7 +286,7 @@ async function saveSetup(env,me,b){
 }
 
 // ---- Project defaults ----
-async function saveProjectDefault(env,me,b){
+export async function saveProjectDefault(env,me,b){
   const id=Number(b?.odooId);if(!Number.isInteger(id)||id<1)problem('Choose an Odoo project.');
   if(![null,...BILLING].includes(b.billing))problem('Choose Billable, Not billable or Not classified.');
   let from=null;
@@ -314,7 +320,7 @@ async function ticketView(env,key){
     odooSync:rec.odoo||{state:cfg.fields.task?'not_sent':'not_configured'},agreedHours:meta?.agreedHours??null,
     ledger:{consumedMinutes:ledger.consumedMinutes,events:ledger.events.slice(-30)},history:rec.history.slice(-30)};
 }
-async function saveTicket(env,me,b,readTicket){
+export async function saveTicket(env,me,b,readTicket){
   const key=b?.key;if(!sourceOf(env,key))problem('Choose a ticket.');
   const choice=b.billing;if(choice!==undefined&&!['inherit',...BILLING].includes(choice))problem('Choose Inherit, Billable or Not billable.');
   if('allowanceId' in b&&b.allowanceId!==null){const a=(await readAllowances(env)).items.find(x=>x.id===b.allowanceId);if(!a||!a.enabled||a.kind==='none')problem('Choose an enabled allowance.');}
@@ -648,7 +654,7 @@ export async function projectBillingRows(env){
 }
 
 // ---- Billable export ----
-async function readMarkers(env){
+export async function readMarkers(env){
   const store=requireStore(env),ids=await store.smembers(K.exportedSet(env))||[],out=new Map();
   for(let i=0;i<ids.length;i+=200){const part=ids.slice(i,i+200),raws=await mget(store,part.map(id=>K.exported(env,id)));part.forEach((id,n)=>{if(raws[n])out.set(id,JSON.parse(raws[n]));});}
   return out;

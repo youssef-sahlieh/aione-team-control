@@ -395,7 +395,7 @@ const many2one=v=>Array.isArray(v)?String(v[1]||''):'';
 // visibility, billing and company), renamed and given the contact. A missing or doubled template is refused, so no
 // project is made without it. The copy is active and not a template itself, and keeps the template's tags plus Active
 // (an Odoo with project tags only; the tag is made the first time it is missing).
-export const TEMPLATE='odoo sh template';
+export const TEMPLATE='Template (Enterprise Customers or Odoo.sh)';
 export async function projectTemplate(env){
   const found=await odoo(env,'project.project','search_read',[[['name','=ilike',TEMPLATE]]],{fields:['id'],order:'id',limit:2,context:{active_test:false}});
   if(!found.length)problem('Odoo has no project named “'+TEMPLATE+'” to copy. Create it, or restore its name, first.',409,'no_template');

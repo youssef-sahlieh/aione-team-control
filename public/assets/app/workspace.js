@@ -199,7 +199,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     const page = pages.find(p => p[0] === route.page);
     document.body.dataset.workspacePage = route.page;
     // The tickets page is named after the view it shows (All open, Closed, Overdue…), so the heading never disagrees with the list.
-    $("page-heading").textContent = route.page === "tickets" ? context().focusLabel() : page[1]; $("page-description").textContent = route.page==="tickets"&&!context().admin?"The tickets you’re authorized to work on.":route.page==="reviews"&&context().admin?"Open pull requests that name a ticket and are waiting for a review, longest wait first. Tickets are read-only here.":page[2]; $("breadcrumbs").textContent = adminPages.has(route.page) ? "Admin" : "Workspace";
+    $("page-heading").textContent = route.page === "tickets" ? context().focusLabel() : page[1]; $("page-description").textContent = route.page==="tickets"&&!context().admin?"The tickets you’re authorized to work on.":route.page==="reviews"&&context().admin?"Open pull requests linked to tickets that still need a review. Tickets open read-only.":page[2]; $("breadcrumbs").textContent = adminPages.has(route.page) ? "Admin" : "Workspace";
     for (const link of nav.querySelectorAll("a[data-page]")) { if (link.dataset.page === route.page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); }
     // Pending date requests (null until they have loaded once: the last known count stays until then).
     setNavCount("requests", context().pendingDates);
@@ -209,9 +209,9 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     $("tickets-area").hidden = custom; $("workspace-content").hidden = !custom;
     if (!custom) return false;
     const target = $("workspace-content");
-    // Clients, Checks & Reports and Analytics load their own data and refresh only when asked: once open, a dashboard
+    // Clients, Checks & Reports, Analytics and the administrators' Needs review load their own data and refresh only when asked: once open, a dashboard
     // render leaves them in place, so their filters, scroll, open sections and dialogs stay as they are.
-    if (["clients", "reports", "analytics"].includes(route.page) && target.querySelector(`:scope > [data-keep="${route.page}"]`)) return true;
+    if (["clients", "reports", "analytics", "reviews"].includes(route.page) && target.querySelector(`:scope > [data-keep="${route.page}"]`)) return true;
     target.replaceChildren();
     if(context().filterCount&&!["requests","reports","analytics","clients","worklog","errors","calendar","reviews"].includes(route.page)){const info=node("div","summary-filter-info");info.append(node("span","","Using your current ticket filters"),button("Adjust filters →","linkbtn",()=>navigate("tickets")));target.appendChild(info);}
     // Respect all active filters but include closed tickets for summary metrics.

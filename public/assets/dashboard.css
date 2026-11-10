@@ -204,6 +204,13 @@ textarea.inp{width:100%;min-height:92px;resize:vertical;box-sizing:border-box}
 .cmeta{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:12px;color:var(--muted)}
 .cmeta b{color:var(--fg);font-weight:600}
 .cmeta .sp{margin-left:auto}
+.cmeta .via{font-size:12px;color:var(--muted)}
+.replyto{display:flex;flex-wrap:wrap;align-items:flex-start;gap:4px 10px;margin:4px 0 6px;padding:8px 10px;border:1px solid var(--line);border-left:4px solid var(--c6);border-radius:8px;background:var(--sunk);font-size:13px}
+.replyto[hidden]{display:none}
+.replyto .rt-who{font-weight:600}
+.replyto .rt-quote{flex-basis:100%;order:3;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere;max-height:4.5em;overflow:hidden}
+.replyto .rt-note{flex-basis:100%;order:4;font-size:12px;color:var(--muted)}
+.replyto .linkbtn{margin-left:auto}
 .linkbtn{color:var(--accent);font-size:12.5px;font-weight:500}
 
 .hist{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
