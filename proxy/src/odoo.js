@@ -153,6 +153,24 @@ export async function odooTicketForTime(env, key) {
   return { key, title: t.name || "", devs: dev ? [dev] : [], closed: !!(stage && stage.fold), projectId: Array.isArray(t.project_id) ? t.project_id[0] : null };
 }
 
+// Many Helpdesk tickets in one read (the project workspace's ticket list): title, a plain-text description, stage,
+// whether it's closed, and the developer (Odoo's assigned user, who is also the assignee).
+export async function odooTicketsDetails(env, keys) {
+  const refs = [...new Set(keys.map(refOf).filter(Boolean))], out = {};
+  if (!odooConfigured(env) || !refs.length) return out;
+  const [rows, users, allStages] = await Promise.all([
+    odoo(env, "helpdesk.ticket", "search_read", [[["ticket_ref", "in", refs]]], { fields: ["name", "ticket_ref", "user_id", "stage_id", "description"], limit: refs.length }),
+    odooUsers(env), stages(env)]);
+  const maps = devMaps(env, users);
+  for (const t of rows) {
+    const stage = allStages.find((s) => Array.isArray(t.stage_id) && s.id === t.stage_id[0]), dev = Array.isArray(t.user_id) ? maps.toDev.get(t.user_id[0]) : null;
+    const text = String(t.description || "").replace(/<(br|\/p|\/div|\/li)[^>]*>/gi, "\n").replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+    out["HD-" + (t.ticket_ref || t.id)] = { title: t.name || "", description: text.slice(0, 2000), devs: dev ? [dev] : [], closed: !!(stage && stage.fold),
+      status: stage ? stage.name : Array.isArray(t.stage_id) ? t.stage_id[1] : "New", assignee: Array.isArray(t.user_id) ? t.user_id[1] : "" };
+  }
+  return out;
+}
+
 // A dashboard internal note, copied into the Odoo ticket's chatter as an internal note (not emailed).
 export async function postOdooNote(env, key, me, text) {
   if (!odooConfigured(env) || !refOf(key)) throw new Error("Not an Odoo ticket.");

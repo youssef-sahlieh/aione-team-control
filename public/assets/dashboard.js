@@ -24,6 +24,7 @@ import { createInboxBell } from "./components/inbox-bell.js";
 import { createDateRequests } from "./components/date-requests.js";
 import { createReviews } from "./components/reviews.js";
 import { createCommentMentions } from "./components/comment-mentions.js";
+import { replyPreview, commentAuthor, signatureNode, newSendId, keepSendId, replySentText } from "./models/comment-reply.js";
 import { mountHeaderTools } from "./app/header-tools.js";
 import { setNavCount } from "./app/nav.js";
 import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
@@ -100,7 +101,8 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
     edit:(key,fields,extra)=>api("/jira/issue/"+key,{method:"PUT",body:{fields,...extra}}),
     transitions:key=>api("/jira/issue/"+key+"/transitions"),
     transition:(key,id)=>api("/jira/issue/"+key+"/transitions",{method:"POST",body:{id}}),
-    comment:(key,text,mentions)=>api("/jira/issue/"+key+"/comment",{method:"POST",body:{text,...(mentions&&mentions.length?{mentions}:{})}}),
+    // extra: replyTo (the comment answered) and requestId (one send, so a retry never posts twice).
+    comment:(key,text,mentions,extra)=>api("/jira/issue/"+key+"/comment",{method:"POST",body:{text,...(mentions&&mentions.length?{mentions}:{}),...extra}}),
     editComment:(key,id,text)=>api("/jira/issue/"+key+"/comment/"+id,{method:"PUT",body:{text}}),
     changelog:key=>api("/jira/issue/"+key+"/changelog"),
     users:q=>api("/jira/users?q="+encodeURIComponent(q))
@@ -117,6 +119,9 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
     remove:key=>api("/internal/"+key,{method:"DELETE"})
   };
   const isInt=key=>/^INT-\d+$/.test(key);
+  // One comment per click: the button stays off until the comment is sent (a second click sent it twice).
+  // replyTarget: the Jira comment being answered (see showReply); commentSend: the send waiting for Jira's answer.
+  let sendingComment=false, replyTarget=null, commentSend=null;
   // Links in emails open the ticket using the saved sign-in; Jira tickets also get their Jira link.
   const dashUrl=key=>location.origin+location.pathname+"#"+key;
   const ticketUrl=key=>isInt(key)?dashUrl(key):isOdoo(key)?((issueByKey(key)||{}).odooUrl||dashUrl(key)):SITE+"/browse/"+key;
@@ -129,7 +134,7 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
     const move=reason=>isInt(key)?internalApi.update(key,{status:id,...(reason?{overrideReason:reason}:{})}):api("/jira/issue/"+key+"/transitions",{method:"POST",body:{id,...(reason?{overrideReason:reason}:{})}});
     try{return await move();}catch(err){const reason=await business.overrideReason(err,key);if(reason)return move(reason);throw err;}
   };
-  const doComment=(key,text,mentions,toCustomer=false)=>isOdoo(key)?odooApi.note(key,text,(NOTE_FILES[key]||[]).map(f=>f.id),toCustomer).then(r=>{delete ODOO_DETAIL[key];return r;}):isInt(key)?internalApi.comment(key,text,mentions):jira.comment(key,text,mentions);
+  const doComment=(key,text,mentions,toCustomer=false,extra={})=>isOdoo(key)?odooApi.note(key,text,(NOTE_FILES[key]||[]).map(f=>f.id),toCustomer).then(r=>{delete ODOO_DETAIL[key];return r;}):isInt(key)?internalApi.comment(key,text,mentions):jira.comment(key,text,mentions,extra);
   // Everyone in the dashboard you can @mention or send a note to on a ticket (not you), kept per ticket.
   const MENTION_PEOPLE={};
   const mentionPeople=key=>(MENTION_PEOPLE[key]=MENTION_PEOPLE[key]||api("/ticket-notes?key="+encodeURIComponent(key)).then(r=>(r.people||[]).map(p=>({name:p.name,email:String(p.email).toLowerCase(),role:p.role}))).catch(err=>{delete MENTION_PEOPLE[key];throw err;}));
@@ -1047,6 +1052,8 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
       ]);
       mergeIssues(); saveCache(); renderIfIdle(); loadPrs(keys);
     }catch(_){ await reload(); }
+    // Clients & projects: an open project workspace listing these tickets reads them again.
+    business.ticketsChanged(keys);
   }
   // Changes shown on the page before the loaded data has them. Jira's search can lag a few seconds behind an
   // edit, so a change stays on top of the loaded ticket until the data matches it (at most 2 minutes), or
@@ -1137,7 +1144,8 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
     if(location.hash!=="#"+key){ const url=location.pathname+location.search+"#"+key; if(drawerPushed) history.replaceState(history.state,"",url); else { history.pushState(history.state,"",url); drawerPushed=true; } }
     const opening=!dz.key;dz.key=key;applyDrawerSize();
     if(opening){drawerUI.open();$("d-reply").value="";commentMentions.reset();}
-    ticketHistory.reset();drawerUI.select("overview");renderNoteFiles(key);$("d-send").textContent=sendLabel(key);$("d-aidesc-out").hidden=true;$("d-aidesc-out").replaceChildren();dateRequests.renderDrawer(key);
+    if(opening||(replyTarget&&replyTarget.key!==key)){ replyTarget=null; commentSend=null; }
+    ticketHistory.reset();drawerUI.select("overview");renderNoteFiles(key);showReply();$("d-aidesc-out").hidden=true;$("d-aidesc-out").replaceChildren();dateRequests.renderDrawer(key);
     closePop(); dz.key=key; const i=issueByKey(key);
     $("drawer").hidden=false; $("scrim").hidden=false; $("drawer").classList.toggle("is-int",isInt(key)); $("drawer").classList.toggle("is-odoo",isOdoo(key));
     $("d-key").textContent=key+(isInt(key)?"":" ↗"); $("d-key").href=$("d-open").href=ticketUrl(key); if(isInt(key)) $("d-key").removeAttribute("href");
@@ -1183,14 +1191,16 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
       const cm=(f.comment&&f.comment.comments)||[]; $("d-ccount").textContent="("+((f.comment&&f.comment.total)||cm.length)+")";
       const box=$("d-comments"); box.replaceChildren(); if(!cm.length) box.appendChild(el("div","msg","No comments yet."));
       const events=((await logged).events||[]).filter(e=>e.commentId), writers=Object.fromEntries(events.map(e=>[String(e.commentId),e.by&&e.by.name])), writerMail=Object.fromEntries(events.map(e=>[String(e.commentId),String((e.by&&e.by.email)||"").toLowerCase()])); if(dz.key!==key) return;
-      cm.forEach(c=>{ const aid=c.author&&c.author.accountId, name=writers[String(c.id)]||(c.author&&c.author.displayName)||"Someone";
-        const cd=el("div","cmt"+(BYID[aid]?" mine":" ext")); const meta=el("div","cmeta"); meta.appendChild(el("b",null,name)); meta.appendChild(el("span",null,ago(c.created)+(c.created&&c.updated&&c.updated.slice(0,19)!==c.created.slice(0,19)?" · edited":"")));
-        const rb=el("button","linkbtn sp","Reply"); rb.type="button"; rb.addEventListener("click",()=>{ const t=$("d-reply"); if(!t.value.trim()) t.value=name.split(" ")[0]+", "; t.focus(); t.scrollIntoView({block:"center",behavior:"smooth"}); });
-        meta.appendChild(rb); cd.appendChild(meta); let b=richNode(c.body,pictures); b.classList.add("rich"); b.dir="auto"; cd.appendChild(b); box.appendChild(cd);
+      // The Jira author is shown as Jira has it; a comment sent from here also says who sent it (its "— Name" line is then left out).
+      cm.forEach(c=>{ const aid=c.author&&c.author.accountId, who=commentAuthor(c,writers[String(c.id)]);
+        const cd=el("div","cmt"+(BYID[aid]?" mine":" ext")); cd.dataset.commentId=String(c.id); const meta=el("div","cmeta"); meta.appendChild(el("b",null,who.jiraName)); if(who.submitter) meta.appendChild(el("span","via","Submitted from dashboard by "+who.submitter)); meta.appendChild(el("span",null,ago(c.created)+(c.created&&c.updated&&c.updated.slice(0,19)!==c.created.slice(0,19)?" · edited":"")));
+        const vis=c.visibility&&(c.visibility.value||c.visibility.identifier);
+        const rb=el("button","linkbtn sp","Reply"); rb.type="button"; rb.setAttribute("aria-label","Reply to "+who.replyName+"'s comment"); rb.addEventListener("click",()=>setReply({key,commentId:String(c.id),name:who.replyName,preview:replyPreview(b.innerText||b.textContent),visibleTo:vis?vis+(c.visibility.type==="role"?" (role)":" (group)"):""}));
+        meta.appendChild(rb); cd.appendChild(meta); let b=richNode(c.body,pictures); b.classList.add("rich"); b.dir="auto"; signatureNode(b,who.submitter)?.remove(); cd.appendChild(b); box.appendChild(cd);
         // Your own comments (any comment for administrators). Comments written here end with "— Name", which the proxy keeps.
         if(IS_ADMIN||(writerMail[String(c.id)]&&writerMail[String(c.id)]===MY_EMAIL.toLowerCase())){
           let text=String(c.body||""); if(writers[String(c.id)]) text=text.replace(/\n\n— [^\n]*$/,"");
-          addCommentEdit(meta,()=>b,()=>text,async next=>{ const r=await jira.editComment(key,c.id,next); text=next; const nb=richNode((r&&r.body)||next,pictures); nb.classList.add("rich"); nb.dir="auto"; b=nb; return nb; }); } });
+          addCommentEdit(meta,()=>b,()=>text,async next=>{ const r=await jira.editComment(key,c.id,next); text=next; const nb=richNode((r&&r.body)||next,pictures); nb.classList.add("rich"); nb.dir="auto"; signatureNode(nb,who.submitter)?.remove(); b=nb; return nb; }); } });
     }catch(err){ if(dz.key===key) $("d-desc").replaceChildren(el("span","msg err",errorText(err))); }
   }
   // Drawer contents for an internal ticket (all data is already loaded).
@@ -1236,7 +1246,7 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
   function addCommentEdit(meta,body,original,save){
     const eb=el("button","linkbtn","Edit"); eb.type="button"; meta.appendChild(eb);
     eb.addEventListener("click",()=>{
-      const old=body(); if(!old.isConnected) return;
+      const old=body(); if(!old.isConnected) return; clearReply();
       const box=el("div","cedit"), ta=el("textarea","inp"); ta.value=original(); ta.dir="auto"; ta.style.width="100%"; ta.rows=Math.min(12,Math.max(3,ta.value.split("\n").length+1)); ta.setAttribute("aria-label","Edit comment");
       const ok=el("button","btn primary","Save"), no=el("button","btn","Cancel"), msg=el("span","msg"), row=el("div","inline"); ok.type=no.type="button"; row.append(ok,no,msg); box.append(ta,row);
       old.replaceWith(box); eb.hidden=true; ta.focus();
@@ -1306,7 +1316,8 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
     if(fails.length) toast((ok?ok+" added. ":"")+"Not added:",fails,true); else toast(ok===1?"Attachment added.":ok+" attachments added.");
   });
   // Form for a new internal ticket, or (with key) for editing one's title, description and priority.
-  function internalPopover(anchor,key){
+  // prefill (a new ticket from a project workspace): {odooProjectId, onCreated(key)}.
+  function internalPopover(anchor,key,prefill){
     const t=key?INT[key]:null;
     const p=$("pop"); p.replaceChildren(); p.classList.add("wide");
     const head=el("div","modal-head"); head.appendChild(el("h4",null,t?"Edit "+key:"New internal ticket · not sent to Jira"));
@@ -1337,7 +1348,7 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
       } else fld("Developer",el("span","dev "+devK(MY_DEV),"ai1_"+MY_DEV+" (you)"));
       body.appendChild(el("p","date-context","Create the ticket first, then request or approve its due date."));
     }
-    const newFields=!t?business.createFields(body,{creating:true}):null;
+    const newFields=!t?business.createFields(body,{creating:true,values:prefill?{odooProjectId:prefill.odooProjectId}:{}}):null;
     const foot=el("div","foot"); const msg=el("span","msg"); const save=el("button","btn primary sp",t?"Save":"Create ticket"); save.type="button";
     save.addEventListener("click",async()=>{
       if(!title.value.trim()){ msg.textContent="Write a title."; msg.className="msg err"; title.focus(); return; }
@@ -1350,7 +1361,7 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
         const r=await internalApi.create({metadata:newFields.read(),summary:title.value,description:desc.value,priority:prio.value,devs:devs?[...devs]:[MY_DEV],...(asg&&asg.value?{assignee:asg.value}:{})});
         closePop(); toast(r.ticket.key+" created.");
         // On the page at once; its client and hours follow from refreshKeys.
-        putInternal(r.ticket); mergeIssues(); saveCache(); render(); openDrawer(r.ticket.key); refreshKeys([r.ticket.key]);
+        putInternal(r.ticket); mergeIssues(); saveCache(); render(); openDrawer(r.ticket.key); prefill?.onCreated?.(r.ticket.key); refreshKeys([r.ticket.key]);
         if(IS_ADMIN&&notifyOn&&r.ticket.devs.length) setTimeout(()=>notifyDevs([{key:r.ticket.key,added:r.ticket.devs}]),1500);
       }catch(err){ save.disabled=false; msg.textContent=errorText(err); msg.className="msg err"; }
     });
@@ -1490,19 +1501,43 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
     while((m=marker.exec(text))){ const a=atts.find(x=>x.filename===m[1]); if(!a||!isImage(a)) continue; box.append(text.slice(at,m.index), inlineImage(a,key)); at=m.index+m[0].length; }
     box.append(text.slice(at)); return box;
   }
-  // One comment per click: the button stays off until the comment is sent (a second click sent it twice).
-  let sendingComment=false;
   // Odoo tickets: the comment button writes an internal note; "Reply to customer" is emailed by Odoo.
   function sendLabel(key){ return isOdoo(key)?"Add internal note":"Add comment"; }
+  // Replying to one Jira comment: Jira has no comment threads, so the proxy posts an ordinary comment that names, links
+  // and quotes the one answered (proxy/src/comment-reply.js). The target is kept apart from the text, so choosing,
+  // changing or cancelling it never touches the draft. It is cleared by Cancel reply, by another ticket, by editing a
+  // comment, and by a confirmed send; a failed send keeps both.
+  function showReply(){ const box=$("d-replyto"), t=replyTarget&&replyTarget.key===dz.key?replyTarget:null; box.replaceChildren(); box.hidden=!t;
+    if(!sendingComment) $("d-send").textContent=t?"Send reply":sendLabel(dz.key||"");
+    $("d-after-row").hidden=!!t; $("d-comment-note").hidden=!!t; $("d-reply").setAttribute("aria-label",t?"Reply to "+t.name:"New comment");
+    if(!t) return;
+    const cancel=el("button","linkbtn","Cancel reply"); cancel.type="button"; cancel.addEventListener("click",()=>{ clearReply(); $("d-reply").focus(); });
+    box.append(el("span",null,"Replying to"),el("span","rt-who",t.name),cancel);
+    if(t.preview){ const q=el("span","rt-quote",t.preview); q.dir="auto"; box.appendChild(q); }
+    if(t.visibleTo) box.appendChild(el("span","rt-note","Your reply will be visible only to "+t.visibleTo+", like the comment it answers."));
+  }
+  function setReply(t){ if(sendingComment||!t||t.key!==dz.key) return; replyTarget=t; setMsg("d-cmsg",""); showReply(); const ta=$("d-reply"); ta.focus(); ta.scrollIntoView({block:"center",behavior:"smooth"}); }
+  function clearReply(){ if(sendingComment) return; replyTarget=null; showReply(); }
   async function sendComment(toCustomer){ if(sendingComment) return; const key=dz.key, text=isOdoo(key)?$("d-reply").value.trim():commentMentions.text(), mentions=isOdoo(key)?[]:commentMentions.mentioned().filter(id=>id.includes("@")); if(!key) return;
+    const reply=!toCustomer&&!isOdoo(key)&&!isInt(key)&&replyTarget&&replyTarget.key===key?replyTarget:null;
     if(toCustomer&&!text){ setMsg("d-cmsg","Write the reply first.",false); return; }
+    if(reply&&!text){ setMsg("d-cmsg","Write your reply first.",false); $("d-reply").focus(); return; }
     if(!text&&!(NOTE_FILES[key]||[]).length){ setMsg("d-cmsg","Write something first.",false); return; }
     if(toCustomer&&!confirm("Send this reply to the customer by email? It also goes in Odoo's chatter, and the ticket then waits for the customer (it leaves the dashboard until they answer).")) return;
     const btn=$(toCustomer?"d-reply-customer":"d-send"), label=btn.textContent; sendingComment=true; btn.disabled=true; btn.textContent="Sending…";
-    try{ const after=$("d-after").value; let notified=[]; const body=withPictures(key,text); const r=await runBatch([{key,run:()=>doComment(key,body,mentions,toCustomer).then(res=>{notified=(res&&res.notified)||[];return res;})}],toCustomer?"Reply sent to the customer":"Comment added"); if(!r.fail){$("d-reply").value="";commentMentions.reset();clearNoteFiles(key);} setMsg("d-cmsg",r.fail?"Not sent.":toCustomer?"Sent to the customer. The ticket now waits for their answer.":notified.length?"Sent. Notified "+notified.join(", ")+".":"Sent.",!r.fail);
+    try{ const after=reply?"":$("d-after").value; let notified=[], sent=null, failed=null; const body=withPictures(key,text);
+      // A Jira comment send keeps its id until Jira confirms it, so a retry of the same text is never posted twice.
+      let extra={};
+      if(!isOdoo(key)&&!isInt(key)){ const sig=key+"|"+(reply?reply.commentId:"")+"|"+body; if(!commentSend||commentSend.sig!==sig) commentSend={sig,id:newSendId()}; extra={requestId:commentSend.id,...(reply?{replyTo:reply.commentId}:{})}; }
+      const r=await runBatch([{key,run:()=>doComment(key,body,mentions,toCustomer,extra).then(res=>{sent=res;notified=(res&&res.notified)||[];return res;},err=>{failed=err;throw err;})}],toCustomer?"Reply sent to the customer":reply?"Reply sent":"Comment added");
+      if(r.fail){ if(!keepSendId(failed)) commentSend=null; }
+      else{ commentSend=null; $("d-reply").value="";commentMentions.reset();clearNoteFiles(key); }
+      const sentText=sent&&sent.duplicate?"This was already sent. The comments are up to date.":reply?replySentText(sent&&sent.reply||{to:reply.name},notified):toCustomer?"Sent to the customer. The ticket now waits for their answer.":notified.length?"Sent. Notified "+notified.join(", ")+".":"Sent.";
+      setMsg("d-cmsg",r.fail?(reply?"Reply not sent: "+errorText(failed)+" Your text and the comment you're replying to are kept.":"Not sent."):sentText,!r.fail);
+      if(!r.fail&&reply){ sendingComment=false; if(replyTarget===reply) clearReply(); if(dz.key===key) loadDetail(key); }
       if(!r.fail&&isOdoo(key)&&dz.key===key) renderOdoo(key);
       if(!r.fail&&after){ const ix=after.indexOf("|"); const aid=after.slice(0,ix), aname=after.slice(ix+1); const r2=await doAssign([key],aid,aname); setMsg("d-cmsg",r2.fail?"Comment sent, but the assignee didn't change.":"Sent and assigned to "+aname+".",!r2.fail); } }
-    finally{ sendingComment=false; btn.disabled=false; btn.textContent=label; } }
+    finally{ sendingComment=false; btn.disabled=false; btn.textContent=label; if(btn.id==="d-send") showReply(); } }
   $("d-send").addEventListener("click",()=>sendComment(false));
   // Improve writing: the AI rewrites the comment formally and fixes spelling and grammar, keeping the people
   // mentioned. Nothing is sent; Undo puts your own text back until you type again.
@@ -1545,7 +1580,7 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
   // Log work → Odoo timesheets: ticket section, form, corrections, and the Work log page.
   const workLog=createWorkLog({api,isAdmin:()=>IS_ADMIN,me:()=>({name:(getSession()||{}).name||ME,email:MY_EMAIL}),errorText,toast,openIssue:openDrawer,myTickets:()=>(state.issues||[]).map(i=>({key:i.key,title:i.summary,closed:i.closed})),onLogged:key=>refreshKeys([key])});
   $("d-logwork").addEventListener("click",()=>{ if(dz.key) workLog.openFor(dz.key,$("d-title").textContent); });
-  const business=createTicketBusiness({api,context:()=>({admin:IS_ADMIN,email:MY_EMAIL,key:dz.key,tickets:()=>state.issues||[],navigate:page=>workspace.navigate(page)}),onChange:keys=>{if(keys)return refreshKeys(keys);mergeIssues();saveCache();render();},openIssue:openDrawer});
+  const business=createTicketBusiness({api,context:()=>({admin:IS_ADMIN,email:MY_EMAIL,key:dz.key,tickets:()=>state.issues||[],navigate:page=>workspace.navigate(page),createTicket:(anchor,prefill)=>internalPopover(anchor,null,prefill)}),onChange:keys=>{if(keys)return refreshKeys(keys);mergeIssues();saveCache();render();},openIssue:openDrawer});
   $('b-client').addEventListener('click',()=>business.bulk(selected()).catch(err=>toast('Client assignment failed',[errorText(err)],true)));
   // Changes that didn't go through, kept to retry, and the API keys' state (Sync errors page).
   const syncErrors=createSyncErrors({api,onApiWrite,isAdmin:()=>IS_ADMIN,storageKey:()=>"aion.syncErrors."+encodeURIComponent((getSession()||{}).email||""),formatTime:v=>{const w=fmtWhen(v);return w.d+" "+w.t;},

@@ -151,14 +151,14 @@ test('a new Odoo project takes its allocated hours: decimal, zero, or none when 
     const zero=await make('0');assert.equal(zero.status,201);assert.equal(created.at(-1).allocated_hours,0);
   }finally{globalThis.fetch=prev;s.restore();}
 });
-test('a new Odoo project is a renamed copy of the "odoo sh template" project, tagged Active; no template or two of them: nothing is made',async()=>{
+test('a new Odoo project is a renamed copy of the "Template (Enterprise Customers or Odoo.sh)" project, tagged Active; no template or two of them: nothing is made',async()=>{
   const s=await setup();
   const copies=[],created=[],tags=[],prev=globalThis.fetch;let templates=[{id:40}],hasTags=true;
   globalThis.fetch=async(u,init)=>{const p=JSON.parse(init.body).params;if(p.service!=='object')return prev(u,init);
     const [model,method,args,kw]=[p.args[3],p.args[4],p.args[5],p.args[6]];
     if(model==='project.project'&&method==='copy'){copies.push({id:args[0],default:kw.default});return Response.json({result:100+copies.length});}
     if(model==='project.project'&&method==='create'){created.push(args[0]);return Response.json({result:900});}
-    if(model==='project.project'&&method==='search_read'&&JSON.stringify(args[0]).includes('=ilike')){assert.deepEqual(args[0],[['name','=ilike','odoo sh template']]);return Response.json({result:templates});}
+    if(model==='project.project'&&method==='search_read'&&JSON.stringify(args[0]).includes('=ilike')){assert.deepEqual(args[0],[['name','=ilike','Template (Enterprise Customers or Odoo.sh)']]);return Response.json({result:templates});}
     if(model==='project.project'&&method==='fields_get')return Response.json({result:args.length?{allocated_hours:{type:'float',readonly:false}}:{active:{type:'boolean'},...(hasTags?{tag_ids:{type:'many2many'}}:{})}});
     if(model==='project.project'&&method==='read'&&args[0]?.[0]===40)return Response.json({result:[{id:40,active:false,...(hasTags?{tag_ids:[5]}:{})}]});
     if(model==='project.tags'&&method==='search_read'){assert.deepEqual(args[0],[['name','=ilike','Active']]);return Response.json({result:tags.filter(t=>t.name.toLowerCase()==='active')});}

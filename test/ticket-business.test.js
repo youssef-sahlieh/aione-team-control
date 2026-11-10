@@ -261,7 +261,7 @@ test('administrators create a customer or a project in Odoo from the Clients pag
   if(model==='res.partner'&&method==='read')return Response.json({result:args[0].map(id=>({id,active:true,is_company:true,company_id:[1,'Main'],commercial_partner_id:[id,(customers.find(c=>c.id===id)||{}).display_name]}))});
   // The template new projects copy, archived and tagged; the Active tag is already in Odoo.
   if(model==='project.project'&&method==='fields_get')return Response.json({result:{tag_ids:{type:'many2many'},active:{type:'boolean'},is_template:{type:'boolean'}}});
-  if(model==='project.project'&&method==='search_read'&&JSON.stringify(args[0]).includes('=ilike')){assert.deepEqual(args[0],[['name','=ilike','odoo sh template']]);assert.equal(p.args[6].context.active_test,false);return Response.json({result:[{id:50}]});}
+  if(model==='project.project'&&method==='search_read'&&JSON.stringify(args[0]).includes('=ilike')){assert.deepEqual(args[0],[['name','=ilike','Template (Enterprise Customers or Odoo.sh)']]);assert.equal(p.args[6].context.active_test,false);return Response.json({result:[{id:50}]});}
   if(model==='project.project'&&method==='read'){assert.deepEqual(args[0],[50]);return Response.json({result:[{id:50,tag_ids:[2],active:false,is_template:true}]});}
   if(model==='project.tags'&&method==='search_read')return Response.json({result:[{id:9}]});
   return Response.json({result:projects});};

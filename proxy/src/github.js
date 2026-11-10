@@ -71,34 +71,50 @@ export async function pullIndex(env) { try { return JSON.parse((await env.STORE.
 
 // Brings the index up to date. Each repository is read newest-updated first until PRs older than
 // the last sync appear, so a normal sync is one request per repository.
+// A repository that can't be read keeps what the index already had (its cursor is not moved, so the next sync reads it
+// again) and the others are saved anyway. The index records, per repository, the last failure (repoErrors: { stage
+// "list" | "status", error, at }) and the last sync that read it fully (repoOkAt); syncedAt is the last attempt and
+// okAt the last attempt with no failure. listError is the first failure to read a pull request list ("" when none).
 export async function syncPulls(env, { force = false } = {}) {
   const index = await pullIndex(env);
   if (!force && Date.now() - index.syncedAt < SYNC_MS) return { index, synced: false };
   const owner = crypto.randomUUID();
   if (!(await env.STORE.setIfAbsent(LOCK_KEY, owner, 120))) return { index, synced: false };
   try {
+    const errors = {}, at = Date.now();
+    const failRepo = (repo, stage, e) => {
+      const error = String((e && e.message) || e).slice(0, 200);
+      console.warn("github_" + stage + "_failed", repo, error);
+      if (!errors[repo]) errors[repo] = { stage, error, at };
+    };
     // Repositories are read at the same time (each one's pages in order).
     await Promise.all(repos(env).map(async (repo) => {
-      const cursor = index.cursors[repo] || "";
-      let newest = cursor, done = false;
-      for (let page = 1; !done && page <= (cursor ? 10 : MAX_PAGES_FIRST_SYNC); page++) {
-        const list = await gh(env, "/repos/" + repo + "/pulls?state=all&sort=updated&direction=desc&per_page=100&page=" + page);
-        for (const pr of list) {
-          if (cursor && pr.updated_at <= cursor) { done = true; break; }
-          const r = record(env, repo, pr, index.prs[repo + "#" + pr.number]);
-          if (r.keys.length) index.prs[r.id] = r; else delete index.prs[r.id];
-          if (!newest || pr.updated_at > newest) newest = pr.updated_at;
+      try {
+        const cursor = index.cursors[repo] || "";
+        let newest = cursor, done = false;
+        for (let page = 1; !done && page <= (cursor ? 10 : MAX_PAGES_FIRST_SYNC); page++) {
+          const list = await gh(env, "/repos/" + repo + "/pulls?state=all&sort=updated&direction=desc&per_page=100&page=" + page);
+          for (const pr of list) {
+            if (cursor && pr.updated_at <= cursor) { done = true; break; }
+            const r = record(env, repo, pr, index.prs[repo + "#" + pr.number]);
+            if (r.keys.length) index.prs[r.id] = r; else delete index.prs[r.id];
+            if (!newest || pr.updated_at > newest) newest = pr.updated_at;
+          }
+          if (list.length < 100) done = true;
         }
-        if (list.length < 100) done = true;
-      }
-      index.cursors[repo] = newest;
+        index.cursors[repo] = newest;
+      } catch (e) { failRepo(repo, "list", e); }
     }));
-    index.statusError = "";
-    await Promise.all(repos(env).map((repo) => openStatus(env, repo, index).catch((e) => {
-      console.warn("github_status_failed", repo, String(e.message || e).slice(0, 200));
-      index.statusError = "Review states couldn't be read for " + repo + ": " + String(e.message || e).slice(0, 200);
-    })));
-    index.syncedAt = Date.now();
+    await Promise.all(repos(env).filter((repo) => !errors[repo]).map((repo) => openStatus(env, repo, index).catch((e) => failRepo(repo, "status", e))));
+    index.repoErrors = errors;
+    index.repoOkAt = index.repoOkAt || {};
+    for (const repo of repos(env)) if (!errors[repo]) index.repoOkAt[repo] = at;
+    const failures = Object.entries(errors);
+    const status = failures.find(([, e]) => e.stage === "status"), list = failures.find(([, e]) => e.stage === "list");
+    index.statusError = status ? "Review states couldn't be read for " + status[0] + ": " + status[1].error : "";
+    index.listError = list ? list[1].error : "";
+    index.syncedAt = at;
+    if (!failures.length) index.okAt = at;
     await env.STORE.set(INDEX_KEY, JSON.stringify(index));
     return { index, synced: true };
   } finally { await env.STORE.deleteIfValue(LOCK_KEY, owner); }
@@ -108,10 +124,24 @@ export async function syncPulls(env, { force = false } = {}) {
 // (The PR list doesn't include them, and check results change without the PR changing.)
 // Closed and merged PRs keep the last status seen while they were open.
 const CHECKS = "commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:100){nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}";
+// A ReviewRequest has no time of its own (fields: asCodeOwner, databaseId, id, pullRequest, requestedReviewer), so when
+// each review was asked for comes from the pull request's ReviewRequestedEvent timeline items (createdAt).
+const WHO = "requestedReviewer{__typename ... on User{login} ... on Team{name slug} ... on Bot{login}}";
 const statusQuery = (withChecks) => `query($owner:String!,$name:String!,$after:String){ repository(owner:$owner,name:$name){ pullRequests(first:50,states:[OPEN],orderBy:{field:UPDATED_AT,direction:DESC},after:$after){ pageInfo{hasNextPage endCursor} nodes{ number
   comments{totalCount} reviewThreads(first:100){totalCount nodes{isResolved comments{totalCount}}}
-  reviewDecision reviewRequests(first:20){nodes{createdAt requestedReviewer{__typename ... on User{login} ... on Team{name} ... on Bot{login}}}}
+  reviewDecision reviewRequests(first:20){nodes{${WHO}}}
+  requestEvents: timelineItems(last:100,itemTypes:[REVIEW_REQUESTED_EVENT]){nodes{... on ReviewRequestedEvent{createdAt ${WHO}}}}
   latestOpinionatedReviews(first:20){nodes{author{login} state submittedAt}} head: commits(last:1){nodes{commit{committedDate}}} ${withChecks ? CHECKS : ""} } } } }`;
+// Who a review was asked of: a person (or bot) by login, a team by its slug.
+const reviewerKind = (r) => (r.__typename === "Team" ? "team" : r.__typename === "Bot" ? "bot" : "user");
+const reviewerId = (r) => (r.__typename === "Team" ? "team:" + String(r.slug || r.name || "").toLowerCase() : String(r.login || "").toLowerCase());
+// When each open request was last made (a request made again after a review restarts the wait), or null when the
+// timeline doesn't say (it keeps the latest 100 requests).
+function requestTimes(asked, events) {
+  const last = new Map();
+  for (const e of events) if (e && e.requestedReviewer && e.createdAt) last.set(reviewerId(e.requestedReviewer), e.createdAt);
+  return asked.map((n) => ({ by: n.requestedReviewer.login || n.requestedReviewer.name || "", kind: reviewerKind(n.requestedReviewer), at: last.get(reviewerId(n.requestedReviewer)) || null }));
+}
 const FAILED = new Set(["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
 
 async function graphql(env, query, variables) {
@@ -143,7 +173,7 @@ async function openStatus(env, repo, index) {
         decision: p.reviewDecision || null,
         requested: asked.map((n) => n.requestedReviewer.login || n.requestedReviewer.name).filter(Boolean),
         // Who was asked and when (the wait starts then), and each reviewer's latest review with when it was given.
-        requests: asked.map((n) => ({ by: n.requestedReviewer.login || n.requestedReviewer.name || "", at: n.createdAt || null })),
+        requests: requestTimes(asked, (p.requestEvents && p.requestEvents.nodes) || []),
         reviews: p.latestOpinionatedReviews.nodes.map((n) => ({ by: (n.author && n.author.login) || "someone", state: n.state, at: n.submittedAt || null })),
         lastCommitAt: (p.head && p.head.nodes[0] && p.head.nodes[0].commit.committedDate) || null,
         checks: withChecks ? (roll ? roll.state : "NONE") : null,

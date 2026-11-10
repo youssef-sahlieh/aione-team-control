@@ -131,7 +131,7 @@ test("Clients & Projects lists every active Odoo project with its client, hours,
   await expect(over.locator("td").nth(2)).toHaveText("10 h");
   await expect(over.locator(".budget-status")).toHaveText("Over by 2.5 h");
   await expect(over.locator("td").nth(4)).toHaveText("−2.5 h");
-  await expect(over.locator("td").nth(6)).toHaveText("3");
+  await expect(over.locator("td").nth(6)).toHaveText("3of 4"); // open, then of all its tickets
   // Created, %, reviews, pending hours, the Odoo id and the Jira links are in the expandable row.
   const more = detailOf(page, "Branch A");
   await expect(more).toBeHidden();

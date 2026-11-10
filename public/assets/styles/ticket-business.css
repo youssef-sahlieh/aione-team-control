@@ -403,4 +403,59 @@
 .billing-ticket .budget-facts,.billing-ledger,.billing-ticket .btn,.billing-ticket .msg{grid-column:1/-1}
 .billing-ticket .btn{justify-self:start}
 .budget-billing{margin:0 0 8px}
+.budget-billing>.business-field{display:inline-flex;align-items:center;gap:8px}
+.budget-billing>.business-field select{width:auto}
 @media (max-width:620px){.billing-mail,.billing-map{grid-template-columns:1fr}}
+/* Project billing workspace (inside an expanded Clients & Projects row): description, a tool bar, totals, a compact ticket table. */
+.ws{display:flex;flex-direction:column;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+.ws-desc{font-size:13px;color:var(--muted)}
+.ws-desc-text{margin:0;white-space:pre-wrap;word-break:break-word;unicode-bidi:plaintext;text-align:start}
+.ws-desc .linkbtn{margin-left:4px}
+.ws-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.ws-search{flex:1 1 220px;min-width:0}
+.ws-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.ws-bar .ws-actions{margin-left:auto}
+.ws-filters{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface,#fff)}
+.ws-filters[hidden]{display:none}
+.ws-filters .business-field{flex:0 1 180px;min-width:0}
+.ws-note:empty,.ws-selected:empty{display:none}
+.ws-note{font-size:13px}
+.ws-totals{font-size:13px;color:var(--muted)}
+.ws-scope{color:var(--fg,inherit);font-weight:600;font-variant-numeric:tabular-nums}
+.ws-selected{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px;font-weight:600}
+.ws-wrap{overflow-x:auto;background:var(--surface,#fff);border:1px solid var(--line);border-radius:8px}
+.budget-table.ws-table{font-size:13px}
+.budget-table.ws-table th,.budget-table.ws-table td{padding:5px 8px}
+.budget-table.ws-table tr.budget-detail td,.ws-table td{background:none}
+.ws-key{white-space:nowrap}
+.ws-title{min-width:180px;max-width:340px}
+.ws-preview{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:var(--muted);font-size:12px;margin-top:2px;word-break:break-word}
+.ws-source{display:inline-block;margin-left:6px;padding:0 6px;border-radius:999px;font-size:11px;font-weight:600;background:var(--sunk);color:var(--muted);border:1px solid var(--line)}
+.ws-people{font-size:12px;min-width:130px}
+.ws-billing{min-width:150px}
+.ws-billing select{width:100%;min-width:140px;max-width:170px}
+.ws-effective{white-space:nowrap}
+.ws .budget-pager select{width:auto}
+.ws-bar>select{flex:0 0 auto;width:auto}
+.ws-billing select.ws-unclassified{border-color:var(--warn)}
+.ws-agreed{white-space:nowrap}
+.ws-sync{font-size:12px;color:var(--muted);min-width:90px}
+.ws-sync.err{color:var(--crit)}
+.ws-dialog{width:min(760px,calc(100vw - 24px));box-sizing:border-box}
+.ws-choice{border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin:0 0 10px;display:flex;flex-direction:column;gap:6px}
+.ws-choice legend{font-weight:600;padding:0 4px}
+.ws-choice label{display:flex;gap:8px;align-items:center}
+.ws-choice input{width:auto}
+.ws-period{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;margin:0 0 10px 24px}
+.ws-period[hidden]{display:none}
+.ws-import{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.ws-import-table{font-size:13px}
+.ws-imp-error td,.ws-imp-failed td{background:color-mix(in srgb,var(--crit) 8%,transparent)}
+.ws-imp-applied td{background:color-mix(in srgb,var(--ok) 8%,transparent)}
+.ws-imp-status{font-weight:600;white-space:nowrap}
+@media (max-width:620px){
+  .ws-bar .ws-actions{margin-left:0;width:100%}
+  .ws-actions .btn{flex:1 1 calc(50% - 6px)}
+  .ws-filters .business-field{flex:1 1 100%}
+  .ws-period{margin-left:0}
+}

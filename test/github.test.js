@@ -42,7 +42,7 @@ test("internal tickets can be written as int-, Int-, INT, Internal, internal, or
   assert.deepEqual(keys({ title: "the internal 5 loop, int 6 and Internal 2FA login, internal review, PRINT-7" }), []);
 });
 
-function setup({ noChecks = false } = {}) {
+function setup({ noChecks = false, listDown = "" } = {}) {
   const STORE = memoryStore(), gh = [], jira = [], graphqlCalls = [];
   const pulls = {
     "KAD-org/flutter_pos": [
@@ -57,16 +57,19 @@ function setup({ noChecks = false } = {}) {
   globalThis.fetch = async (url, init = {}) => {
     const u = new URL(String(url));
     if (u.hostname === "api.github.com" && u.pathname === "/graphql") {
-      const { query, variables } = JSON.parse(init.body); graphqlCalls.push({ repo: variables.name, checks: query.includes("statusCheckRollup") });
+      const { query, variables } = JSON.parse(init.body); graphqlCalls.push({ repo: variables.name, checks: query.includes("statusCheckRollup"), query });
       if (noChecks && query.includes("statusCheckRollup")) return Response.json({ data: null, errors: [{ message: "Resource not accessible by personal access token", path: ["repository", "pullRequests", "nodes", 0, "commits"] }] });
       const nodes = variables.name === "flutter_pos_api" ? [{ number: 175, comments: { totalCount: 2 }, reviewThreads: { totalCount: 2, nodes: [{ isResolved: false, comments: { totalCount: 3 } }, { isResolved: true, comments: { totalCount: 1 } }] },
-        reviewDecision: "CHANGES_REQUESTED", reviewRequests: { nodes: [{ requestedReviewer: { __typename: "User", login: "rami-alt" } }] }, latestOpinionatedReviews: { nodes: [{ author: { login: "ellen" }, state: "CHANGES_REQUESTED" }] },
+        reviewDecision: "CHANGES_REQUESTED", reviewRequests: { nodes: [{ requestedReviewer: { __typename: "User", login: "rami-alt" } }, { requestedReviewer: { __typename: "Team", name: "Mobile", slug: "mobile" } }] },
+        requestEvents: { nodes: [{ createdAt: "2026-10-10T08:00:00Z", requestedReviewer: { __typename: "User", login: "Rami-Alt" } }, { createdAt: "2026-10-11T08:00:00Z", requestedReviewer: { __typename: "User", login: "rami-alt" } }, { createdAt: "2026-10-09T08:00:00Z", requestedReviewer: { __typename: "User", login: "someone-else" } }] },
+        latestOpinionatedReviews: { nodes: [{ author: { login: "ellen" }, state: "CHANGES_REQUESTED" }] },
         ...(query.includes("statusCheckRollup") ? { commits: { nodes: [{ commit: { statusCheckRollup: { state: "FAILURE", contexts: { nodes: [{ __typename: "CheckRun", name: "build", status: "COMPLETED", conclusion: "FAILURE" }, { __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "SUCCESS" }, { __typename: "StatusContext", context: "deploy", state: "PENDING" }] } } } }] } } : {}) }] : [];
       return Response.json({ data: { repository: { pullRequests: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } } });
     }
     if (u.hostname === "api.github.com") {
       gh.push(u.pathname + u.search); assert.equal(init.headers.Authorization, "Bearer gh-token");
       const repo = u.pathname.replace(/^\/repos\//, "").replace(/\/pulls$/, "");
+      if (repo === listDown) return Response.json({ message: "Server Error" }, { status: 502 });
       return Response.json(Number(u.searchParams.get("page")) > 1 ? [] : pulls[repo] || []);
     }
     jira.push(JSON.parse(init.body || "{}"));
@@ -143,11 +146,53 @@ test("open PRs carry comments, reviewers and failed checks; a token without chec
     const d = await call("/github/prs?keys=AION-71", token);
     const pr = d.prs["AION-71"].find((p) => p.number === 175);
     assert.equal(pr.status.comments, 6); assert.equal(pr.status.unresolved, 1);
-    assert.equal(pr.status.decision, "CHANGES_REQUESTED"); assert.deepEqual(pr.status.requested, ["rami-alt"]);
+    assert.equal(pr.status.decision, "CHANGES_REQUESTED"); assert.deepEqual(pr.status.requested, ["rami-alt", "Mobile"]);
+    // The request time is the latest ReviewRequestedEvent for that reviewer; a team's request with no event has none.
+    assert.deepEqual(pr.status.requests, [{ by: "rami-alt", kind: "user", at: "2026-10-11T08:00:00Z" }, { by: "Mobile", kind: "team", at: null }]);
     assert.deepEqual(pr.status.reviews, [{ by: "ellen", state: "CHANGES_REQUESTED", at: null }]);
     if (noChecks) { assert.equal(pr.status.checks, null); assert.equal(d.checks, false); }
     else { assert.equal(pr.status.checks, "FAILURE"); assert.deepEqual(pr.status.failed, ["build"]); assert.equal(pr.status.running, 1); assert.equal(d.checks, true); }
     // The merged PR has no live status.
     assert.equal(d.prs["AION-71"].find((p) => p.number === 553).status, undefined);
   }
+});
+
+test("the review query asks only for fields GitHub's schema has: request times come from ReviewRequestedEvent", async () => {
+  const { env, call, graphqlCalls } = setup();
+  const admin = { email: "admin@aione.biz", name: "Admin", role: "admin", dev: "", v: 1 };
+  await saveUser(env.STORE, admin);
+  const { token } = await makeToken(env, admin.email, Date.now(), 1);
+  await call("/github/prs?keys=AION-71", token);
+  const { query } = graphqlCalls[0];
+  // ReviewRequest has asCodeOwner, databaseId, id, pullRequest and requestedReviewer only (no createdAt).
+  const requests = query.match(/reviewRequests\(first:20\)\{nodes\{(.*?)\}\}\}\}/)[1];
+  assert.doesNotMatch(requests, /createdAt/);
+  assert.match(query, /timelineItems\(last:100,itemTypes:\[REVIEW_REQUESTED_EVENT\]\)\{nodes\{\.\.\. on ReviewRequestedEvent\{createdAt requestedReviewer/);
+  assert.match(query, /\.\.\. on Team\{name slug\}/);
+});
+
+test("a repository that can't be read keeps its last pull requests and the others are saved; the failure is recorded", async () => {
+  const { env, call } = setup();
+  const admin = { email: "admin@aione.biz", name: "Admin", role: "admin", dev: "", v: 1 };
+  await saveUser(env.STORE, admin);
+  const { token } = await makeToken(env, admin.email, Date.now(), 1);
+  await call("/github/prs?keys=AION-71", token);
+  const first = JSON.parse(await env.STORE.get("github:prs:v4"));
+  assert.ok(first.okAt, "a full read sets okAt");
+  // Now flutter_pos can't be listed: flutter_pos_api is still read, and flutter_pos keeps what the index had.
+  const down = setup({ listDown: "KAD-org/flutter_pos" });
+  await down.env.STORE.set("github:prs:v4", JSON.stringify({ ...first, syncedAt: 0 }));
+  await saveUser(down.env.STORE, admin);
+  const t2 = (await makeToken(down.env, admin.email, Date.now(), 1)).token;
+  const d = await down.call("/github/prs?keys=AION-71", t2);
+  assert.match(d.syncError, /Couldn't read pull requests: GitHub answered 502/);
+  assert.deepEqual(d.prs["AION-71"].map((p) => p.repo + "#" + p.number), ["flutter_pos#553", "flutter_pos_api#175"]);
+  const after = JSON.parse(await down.env.STORE.get("github:prs:v4"));
+  assert.deepEqual(Object.keys(after.repoErrors), ["KAD-org/flutter_pos"]);
+  assert.equal(after.repoErrors["KAD-org/flutter_pos"].stage, "list");
+  assert.equal(after.okAt, first.okAt, "the last full read stays the last full read");
+  assert.equal(after.cursors["KAD-org/flutter_pos"], first.cursors["KAD-org/flutter_pos"], "its cursor isn't moved, so it is read again next time");
+  assert.equal(after.repoOkAt["KAD-org/flutter_pos"], first.repoOkAt["KAD-org/flutter_pos"]);
+  assert.ok(after.repoOkAt["KAD-org/flutter_pos_api"] > first.repoOkAt["KAD-org/flutter_pos_api"] || after.repoOkAt["KAD-org/flutter_pos_api"] === after.syncedAt);
+  assert.doesNotMatch(JSON.stringify(after), /gh-token/);
 });

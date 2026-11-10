@@ -1,5 +1,6 @@
 import {createReportBrowser} from './report-browser.js';
 import {createBillingAdmin} from './billing-admin.js';
+import {mountProjectWorkspace,workspaceTicketsChanged} from './project-workspace.js';
 import { createdDate, DASH_PRIORITIES } from '../models/ticket-business.js';
 import { BUDGET_LABEL, DEFAULT_VIEW, budgetStatus, hours, signedHours, percent, budgetText, budgetRows, budgetCsvRows, budgetCounts, projectChoices, hiddenFilterCount, BILLING_DEFAULT, BILLING_FILTERS, billingFigures, assignableProjects, MAPPING_KINDS, mappingSuggestion, mappingRows, mappingCounts } from '../models/odoo-projects.js';
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
@@ -621,7 +622,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   // for review, the last work log, time not in Odoo yet, the company and Odoo id, and what links it to Jira.
   function budgetRow(p,ctx){
     const data=ctx.data(),tr=el('tr','budget-main budget-'+p.status),detail=el('tr','budget-detail'),detailId='budget-detail-'+p.odooId;tr.dataset.odooId=p.odooId;detail.id=detailId;detail.hidden=!p._open;
-    const name=el('td','budget-name'),toggle=button(p._open?'▾':'▸',()=>{p._open=!p._open;detail.hidden=!p._open;toggle.textContent=p._open?'▾':'▸';toggle.setAttribute('aria-expanded',String(!!p._open));},'budget-toggle');
+    const name=el('td','budget-name'),toggle=button(p._open?'▾':'▸',()=>{p._open=!p._open;detail.hidden=!p._open;if(p._open)mountWorkspace?.();toggle.textContent=p._open?'▾':'▸';toggle.setAttribute('aria-expanded',String(!!p._open));},'budget-toggle');
     toggle.setAttribute('aria-expanded',String(!!p._open));toggle.setAttribute('aria-controls',detailId);toggle.setAttribute('aria-label','More about '+p.name);
     const open=button(p.name,()=>openProjectDetails(p.odooId,open),'linkbtn');open.dir='auto';name.append(toggle,open);
     const client=el('td');if(p.client)client.textContent=p.client;else client.append(el('span','project-status unmapped','No client'));
@@ -633,13 +634,19 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const map=button('Map tickets',e=>ctx.onMap(p,e.currentTarget),'btn budget-map-btn');map.setAttribute('aria-label','Map tickets to '+p.name);
     if(!p.assignable){map.disabled=true;map.title=(p.blocked||'Not in the last sync from Odoo.')+' Tickets cannot be given this project.';}
     actions.append(map);
-    tr.append(name,client,alloc,el('td','num',hours(p.loggedHours)),remaining,status,el('td','num',String(p.openTickets||0)),...(billingShown(data)?billingCells(p):[]),actions);
+    tr.append(name,client,alloc,el('td','num',hours(p.loggedHours)),remaining,status,openCell(p),...(billingShown(data)?billingCells(p):[]),actions);
     const cell=el('td','budget-links');cell.colSpan=colsFor(data).length;detail.append(cell);
     const facts=el('dl','budget-facts');
-    for(const [k,v] of [['Created',dateText(p.createdAt)],['Budget used',percent(p.usedPercent)],['Needs PR review',String(p.reviewTickets||0)+(p.reviewKeys?.length?' ('+p.reviewKeys.join(', ')+')':'')],['Last work log',dateText(p.lastWorkDate)],
-      ...(p.pendingHours>0?[['Not in Odoo yet',hours(p.pendingHours)]]:[]),...(p.company?[['Company',p.company]]:[]),['Odoo ID','#'+p.odooId],...(p.ticketCount?[['Dashboard tickets',String(p.ticketCount)]]:[])])facts.append(el('dt','',k),el('dd','',v));
+    for(const [k,v] of [['Created',dateText(p.createdAt)],...(p.usedPercent!=null?[['Budget used',percent(p.usedPercent)]]:[]),...(p.reviewTickets?[['Needs PR review',String(p.reviewTickets)+(p.reviewKeys?.length?' ('+p.reviewKeys.join(', ')+')':'')]]:[]),['Last work log',dateText(p.lastWorkDate)],
+      ...(p.pendingHours>0?[['Not in Odoo yet',hours(p.pendingHours)]]:[]),...(p.company?[['Company',p.company]]:[]),['Odoo ID','#'+p.odooId]])facts.append(el('dt','',k),el('dd','',v));
     cell.append(facts);
     if(p.billing)cell.append(billingDetail(p,ctx));
+    // With billing on, the project's tickets and their billing (project-workspace.js), read the first time the row opens.
+    let mountWorkspace=null;
+    if(p.billing&&admin()){const host=el('div','ws-host');cell.append(host);
+      mountWorkspace=()=>{if(host.firstChild)return;mountProjectWorkspace(host,p,{api,dialog:(t,c)=>dialog(t,c),openIssue,say:ctx.say,closed:ctx.closed,projects:()=>ctx.data()?.projects||[],
+        createTicket:(opener,prefill)=>context().createTicket?.(opener,prefill),changed:keys=>onChange(keys),projectsChanged});};
+      if(p._open)mountWorkspace();}
     if(p.blocked)cell.append(el('p','budget-sub',p.blocked+' Tickets cannot be given this project until it is fixed in Odoo and synced.'));
     const links=el('div','budget-link-row');links.append(el('span','budget-sub','Linked to Jira:'));
     if(!p.mapped)links.append(el('span','project-status unmapped','Not linked'));
@@ -650,23 +657,33 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     cell.append(links);
     const t=p.links.tickets;if(t.count){const d=el('details','budget-tickets'),s=el('summary','','Odoo tasks: '+Object.entries(t.byProject).map(([k,n])=>k+': '+n).join(' · ')+(t.count===1?' ticket':' tickets'));d.append(s,el('p','budget-keys',t.keys.join(', ')+(t.count>t.keys.length?' …':'')));cell.append(d);}
     const more=el('div','budget-detail-actions'),odooLink=el('a','btn','Open in Odoo');odooLink.href=p.url;odooLink.target='_blank';odooLink.rel='noopener';odooLink.setAttribute('aria-label','Open '+p.name+' in Odoo');
-    const hist=button('Tickets, work logs & history',()=>openProjectDetails(p.odooId,hist),'btn');more.append(odooLink,hist);cell.append(more);
+    const hist=button(mountWorkspace?'Work logs & history':'Tickets, work logs & history',()=>openProjectDetails(p.odooId,hist),'btn');more.append(odooLink,hist);cell.append(more);
     return [tr,detail];
   }
   const count2=(n,s)=>n+' '+s+(n===1?'':'s');
+  // Open tickets, and of how many the dashboard has on the project.
+  function openCell(p){const td=el('td','num',String(p.openTickets||0));if(p.ticketCount)td.append(el('span','budget-sub','of '+p.ticketCount));return td;}
+  // The Clients table's figures, read again once after a burst of changes (a save here and the dashboard's refresh of it).
+  let projectsWait=null;
+  function projectsChanged(){if(!clientsPage?.root.isConnected)return Promise.resolve();return projectsWait||=new Promise(r=>setTimeout(r,250)).then(()=>{projectsWait=null;return clientsPage.refresh({mapping:false});});}
+  // Tickets changed anywhere on the dashboard: the open project workspaces that list them read again, and the figures.
+  function ticketsChanged(keys){if(workspaceTicketsChanged(keys).length)projectsChanged();}
   // Billing cells: the default, and consumed of the allowance with its status ("6h of 10h", Near limit).
   function billingCells(p){
     const f=billingFigures(p);if(!f)return [el('td','','—'),el('td','','—')];
     const def=el('td');def.append(el('span','project-status'+(p.billing.default?'':' unmapped'),f.defaultLabel));if(f.unclassifiedHours)def.append(el('span','budget-sub',hours(f.unclassifiedHours)+' not classified'));
     const used=el('td','num'+(f.remainingHours<0?' over':''),hours(f.consumedHours)+(f.allocatedHours!=null?' of '+hours(f.allocatedHours):''));
-    used.append(el('span','budget-sub',f.statusLabel+(f.pool?' · shared pool':'')+(f.emailLabel?' · '+f.emailLabel:'')));
+    used.append(el('span','budget-sub',f.statusLabel+(f.remainingHours!=null?' · '+signedHours(f.remainingHours)+' left':'')+(f.pool?' · shared pool':'')+(f.emailLabel?' · '+f.emailLabel:'')));
+    // Billing that isn't set up or didn't reach Odoo, so it shows without opening the row.
+    if(p.billing.odooSync?.state==='failed')used.append(el('span','budget-sub ws-sync err','Billing not saved in Odoo'));
+    else if(p.billing.status==='needs_setup')used.append(el('span','budget-sub ws-sync err','Set the billing default'));
     return [def,used];
   }
   // In the row details: the billing figures, and the project default for administrators (Billable, Not billable or not set).
   function billingDetail(p,ctx){
     const f=billingFigures(p),box=el('div','budget-billing'),facts=el('dl','budget-facts');
-    for(const [k,v] of [['Worked',hours(f.workedHours)],['Billable',hours(f.billableHours)],['Consumed',hours(f.consumedHours)],...(f.allocatedHours!=null?[['Allowance',hours(f.allocatedHours)],['Allowance left',signedHours(f.remainingHours)]]:[]),['Billing status',f.statusLabel],...(f.emailLabel?[['Alert email',f.emailLabel]]:[]),...(p.billing.odooSync?[['Billing in Odoo',p.billing.odooSync.state]]:[])])facts.append(el('dt','',k),el('dd','',v));
-    box.append(facts);
+    for(const [k,v] of [...(f.emailLabel?[['Alert email',f.emailLabel]]:[]),...(p.billing.odooSync?.state==='failed'?[['Billing in Odoo','Not saved'+(p.billing.odooSync.error?': '+p.billing.odooSync.error:'')]]:[])])facts.append(el('dt','',k),el('dd','',v));
+    if(facts.firstChild)box.append(facts);
     if(!admin())return box;
     const sel=el('select','fsel');sel.setAttribute('aria-label','Billing default for '+p.name);option(sel,'Not classified','');for(const [v,l] of Object.entries(BILLING_DEFAULT))option(sel,l,v);sel.value=p.billing.default||'';
     sel.addEventListener('change',async()=>{sel.disabled=true;ctx.say('Saving the billing default…');
@@ -888,5 +905,5 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       row.append(label,select);list.append(row);
     }
   }
-  return {configure:async cfg=>{reportBrowser.configure(cfg);odooOn=!!cfg.odoo;billingNeeded=cfg.billingRequired===true;enabled=cfg.capabilities?.includes('ticket-business-v1')===true;epicMapping=enabled&&cfg.capabilities?.includes('epic-map-v1')===true;projectAdmin=enabled&&cfg.capabilities?.includes('project-admin-v1')===true;projectBudget=enabled&&cfg.capabilities?.includes('project-budget-v1')===true;billingOn=enabled&&cfg.capabilities?.includes('billing-v1')===true;if(enabled){await loadCatalog();if(cfg.odoo)api('/clients/odoo-sync',{method:'POST',body:{}}).then(r=>r.changed?loadCatalog():loadProjects()).catch(()=>{});if(epicMapping)api('/epic-map/sync',{method:'POST',body:{}}).then(async r=>{if(r.changed&&Object.keys(records).length){await load(Object.keys(records));await onChange();}}).catch(()=>{});}},enabled:()=>enabled,load,decorate,canQuickEdit,quickEdit,quickLabel,createFields,renderEditor,dirty:key=>editor?.key===key&&editor.dirty(),reset:()=>{editor=null;},bulk,ensureBilling,overrideReason,filters,matches,renderReports,renderCatalog,loadCatalog};
+  return {configure:async cfg=>{reportBrowser.configure(cfg);odooOn=!!cfg.odoo;billingNeeded=cfg.billingRequired===true;enabled=cfg.capabilities?.includes('ticket-business-v1')===true;epicMapping=enabled&&cfg.capabilities?.includes('epic-map-v1')===true;projectAdmin=enabled&&cfg.capabilities?.includes('project-admin-v1')===true;projectBudget=enabled&&cfg.capabilities?.includes('project-budget-v1')===true;billingOn=enabled&&cfg.capabilities?.includes('billing-v1')===true;if(enabled){await loadCatalog();if(cfg.odoo)api('/clients/odoo-sync',{method:'POST',body:{}}).then(r=>r.changed?loadCatalog():loadProjects()).catch(()=>{});if(epicMapping)api('/epic-map/sync',{method:'POST',body:{}}).then(async r=>{if(r.changed&&Object.keys(records).length){await load(Object.keys(records));await onChange();}}).catch(()=>{});}},enabled:()=>enabled,load,decorate,canQuickEdit,quickEdit,quickLabel,createFields,renderEditor,dirty:key=>editor?.key===key&&editor.dirty(),ticketsChanged,reset:()=>{editor=null;},bulk,ensureBilling,overrideReason,filters,matches,renderReports,renderCatalog,loadCatalog};
 }

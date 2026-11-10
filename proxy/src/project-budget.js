@@ -30,7 +30,7 @@ export function budgetStatus(allocated,logged){
 // Odoo's UTC "YYYY-MM-DD HH:MM:SS" as an ISO time; null when Odoo has none.
 const odooTime=v=>{if(!v)return null;const d=new Date(String(v).replace(' ','T')+'Z');return Number.isNaN(d.getTime())?null:d.toISOString();};
 // Every company of the Odoo user, so projects of all of them are read (Odoo otherwise shows only the default one).
-async function companyContext(env){
+export async function companyContext(env){
   const [u]=await odoo(env,'res.users','search_read',[[['login','=',env.ODOO_LOGIN]]],{fields:['company_ids'],limit:1});
   return Array.isArray(u?.company_ids)&&u.company_ids.length?{allowed_company_ids:u.company_ids}:{};
 }
@@ -45,7 +45,7 @@ async function hoursByProject(env,ids,context){
   return {hours,last};
 }
 // The tickets with work in a project: its tasks named "[KEY] Title", the name the work log gives them.
-async function ticketsByProject(env,ids,context){
+export async function ticketsByProject(env,ids,context){
   const out={};if(!ids.length)return out;
   const tasks=await odoo(env,'project.task','search_read',[[['project_id','in',ids],['name','=like','[%]%']]],{fields:['name','project_id'],context:{...context,active_test:false},limit:20000});
   for(const t of tasks){const key=/^\[([A-Z][A-Z0-9_]*-\d+)\]/.exec(String(t.name||''))?.[1],p=m2o(t.project_id);if(key&&p)(out[p.id]||=new Set()).add(key);}
@@ -121,6 +121,19 @@ async function withBilling(env,data){
   const blank={default:null,status:'needs_setup',actualMinutes:0,billableMinutes:0,chargeableMinutes:0,unclassifiedMinutes:0,pendingSyncMinutes:0,allowance:null,email:null,odooDirectMinutes:0};
   return {...data,projects:data.projects.map(p=>({...p,billing:b.rows[p.odooId]||blank})),billing:{scan:b.scan,error:null}};
 }
+// The one place allocated hours change (this page's editor and the workspace import): Odoo's field on the project,
+// with the value it replaced kept in the project's history. hours: null clears it.
+export async function saveAllocation(env,me,odooId,hours,{context=null,fail=e=>{throw e;}}={}){
+  if(!await allocationField(env))problem("This Odoo has no allocated hours on projects (Timesheets).",501,'no_allocation');
+  context??=await companyContext(env);
+  let before=null;
+  try{
+    const [r]=await odoo(env,'project.project','read',[[odooId]],{fields:['allocated_hours'],context});before=r&&r.allocated_hours!==false&&r.allocated_hours!=null?round(Number(r.allocated_hours)):null;
+    if(before!==hours)await odoo(env,'project.project','write',[[odooId],{allocated_hours:hours}],{context});
+  }catch(e){fail(e);}
+  if(before!==hours)await recordProjectEvent(env,odooId,me,{type:'allocation',from:before,to:hours});
+  return {odooId,allocatedHours:hours,from:before};
+}
 export async function projectBudgetRoutes(request,env,url,me){
   if(me.role!=='admin')problem('Only administrators see project hours.',403,'forbidden');
   if(!odooConfigured(env))problem('Odoo is not connected.',501,'odoo_off');
@@ -139,15 +152,9 @@ export async function projectBudgetRoutes(request,env,url,me){
   // Allocated hours: written to the Odoo project. Empty clears it (Odoo stores nothing, so it reads as not set); 0 is kept.
   // Each change is kept in the project's history with the value it replaced.
   if(url.pathname==='/clients/odoo-projects/allocation'&&request.method==='PUT'){
-    if(!await allocationField(env))problem("This Odoo has no allocated hours on projects (Timesheets).",501,'no_allocation');
-    const input=allocatedHoursInput(b.hours),hours=input===undefined?null:input;
-    let before=null;
-    try{
-      const [r]=await odoo(env,'project.project','read',[[odooId]],{fields:['allocated_hours'],context});before=r&&r.allocated_hours!==false&&r.allocated_hours!=null?round(Number(r.allocated_hours)):null;
-      await odoo(env,'project.project','write',[[odooId],{allocated_hours:hours}],{context});
-    }catch(e){odooFail(e);}
-    if(before!==hours)await recordProjectEvent(env,odooId,me,{type:'allocation',from:before,to:hours});
-    return json({odooId,allocatedHours:hours});
+    const input=allocatedHoursInput(b.hours);
+    const {from,...saved}=await saveAllocation(env,me,odooId,input===undefined?null:input,{context,fail:odooFail});
+    return json(saved);
   }
   // Linking a dashboard project to this Odoo project (or unlinking it). The work of tickets on that project then goes
   // here. An unlink is remembered, so the Odoo sync doesn't link the same names back.

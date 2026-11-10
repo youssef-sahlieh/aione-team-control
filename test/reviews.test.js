@@ -260,16 +260,24 @@ const day = (n) => new Date(Date.UTC(2026, 10, 1) + n * 86400000).toISOString();
 const pulled = (n, over = {}) => pr({ id: "KAD-org/flutter_pos#" + n, number: n, url: "https://github.com/KAD-org/flutter_pos/pull/" + n, keys: ["AION-" + (70 + n)], ...over });
 
 test("a pull request needs a review until someone approves it; a stale approval or a missing approval brings it back", () => {
-  assert.deepEqual(prReviewState(pr({ readyAt: day(0), status: { reviews: [], requests: [], requested: [] } })), { state: "awaiting", reason: "", since: day(0), counts: true });
+  // No request time known: only the pull request's age, labelled as such ("opened"), never as a review wait.
+  assert.deepEqual(prReviewState(pr({ created: day(0), readyAt: day(0), status: { reviews: [], requests: [], requested: [] } })), { state: "awaiting", reason: "", since: day(0), sinceKind: "opened", counts: true });
+  assert.deepEqual(prReviewState(pr({ status: { reviews: [], requests: [{ by: "rev", at: null }], requested: ["rev"] } })), { state: "awaiting", reason: "", since: "", sinceKind: "", counts: true });
   // The wait starts with the oldest open request, or the assignment if that is older.
-  assert.deepEqual(prReviewState(pr({ status: { reviews: [], requests: [{ at: day(3) }, { at: day(1) }] } }), [{ createdAt: day(2) }]), { state: "awaiting", reason: "", since: day(1), counts: true });
+  assert.deepEqual(prReviewState(pr({ status: { reviews: [], requests: [{ at: day(3) }, { at: day(1) }] } }), [{ createdAt: day(2) }]), { state: "awaiting", reason: "", since: day(1), sinceKind: "requested", counts: true });
   const changes = [{ by: "rev", state: "CHANGES_REQUESTED", at: day(2) }];
-  assert.deepEqual(prReviewState(pr({ status: { reviews: changes, lastCommitAt: day(1) } })), { state: "changes_requested", reason: "", since: day(2), counts: false });
-  assert.deepEqual(prReviewState(pr({ status: { reviews: changes, lastCommitAt: day(3) } })), { state: "awaiting", reason: "new_commits", since: day(3), counts: true });
+  assert.deepEqual(prReviewState(pr({ status: { reviews: changes, lastCommitAt: day(1) } })), { state: "changes_requested", reason: "", since: day(2), sinceKind: "changes", counts: false });
+  assert.deepEqual(prReviewState(pr({ status: { reviews: changes, lastCommitAt: day(3) } })), { state: "awaiting", reason: "new_commits", since: day(3), sinceKind: "commit", counts: true });
   const approved = [{ by: "rev", state: "APPROVED", at: day(2) }];
-  assert.deepEqual(prReviewState(pr({ status: { reviews: approved, lastCommitAt: day(1), decision: "APPROVED" } })), { state: "approved", reason: "", since: day(2), counts: false });
-  assert.deepEqual(prReviewState(pr({ status: { reviews: approved, lastCommitAt: day(3), decision: "APPROVED" } })), { state: "approved", reason: "stale", since: day(3), counts: true });
-  assert.deepEqual(prReviewState(pr({ status: { reviews: approved, lastCommitAt: day(1), decision: "REVIEW_REQUIRED" } }), [{ createdAt: day(0) }]), { state: "awaiting", reason: "more_approvals", since: day(0), counts: true });
+  assert.deepEqual(prReviewState(pr({ status: { reviews: approved, lastCommitAt: day(1), decision: "APPROVED" } })), { state: "approved", reason: "", since: day(2), sinceKind: "approved", counts: false });
+  assert.deepEqual(prReviewState(pr({ status: { reviews: approved, lastCommitAt: day(3), decision: "APPROVED" } })), { state: "approved", reason: "stale", since: day(3), sinceKind: "commit", counts: true });
+  assert.deepEqual(prReviewState(pr({ status: { reviews: approved, lastCommitAt: day(1), decision: "REVIEW_REQUIRED" } }), [{ createdAt: day(0) }]), { state: "awaiting", reason: "more_approvals", since: day(0), sinceKind: "requested", counts: true });
+});
+
+test("a pull request whose review data was never read is unknown, never awaiting or approved", () => {
+  assert.deepEqual(prReviewState(pr({ created: day(0), status: undefined })), { state: "unknown", reason: "", since: day(0), sinceKind: "opened", counts: true });
+  // A dashboard assignment is a known request time even without GitHub's data.
+  assert.deepEqual(prReviewState(pr({ created: day(0), status: undefined }), [{ createdAt: day(1) }]), { state: "unknown", reason: "", since: day(1), sinceKind: "requested", counts: true });
 });
 
 test("administrators see the queue of tickets whose pull requests need a review; everyone else gets 403", async () => {
@@ -318,7 +326,8 @@ test("the queue lists the longest wait first, and a ticket with two pull request
   const body = await (await t.call("GET", "/reviews/queue", adminToken)).json();
   assert.deepEqual(body.tickets.map((x) => x.key), ["AION-71", "AION-80"]);
   assert.deepEqual(body.tickets[0].prs.map((p) => p.number), [20, 21]);
-  assert.deepEqual(body.tickets[1].prs.map((p) => [p.number, p.state]), [[22, "changes_requested"], [21, "awaiting"]]);
+  // A real review wait comes first; the time changes were requested is not one, so it follows.
+  assert.deepEqual(body.tickets[1].prs.map((p) => [p.number, p.state, p.sinceKind]), [[21, "awaiting", "requested"], [22, "changes_requested", "changes"]]);
   assert.deepEqual(body.counts, { tickets: 2, prs: 3 });
 });
 
@@ -375,4 +384,40 @@ test("an administrator reads any ticket read-only, whether or not a pull request
   assert.equal(body.ticket.title, "Forecourt opening cash");
   assert.equal(body.pr, null);
   assert.equal((await t.call("POST", "/reviews/ticket?key=AION-71", adminToken, {})).status, 404);
+});
+
+test("the queue says who should review, keeps a closed ticket's open pull request, and marks a failed repository's data stale", async () => {
+  const closedIssue = { key: "AION-90", fields: { summary: "Old till", status: { name: "Done", statusCategory: { key: "done" } }, assignee: { displayName: "Dev One" }, labels: ["ai1_sam"] } };
+  const t = setup({ issues: [...ISSUES, closedIssue], prs: {
+    // A person and a team asked on GitHub: the team's request time is unknown, the person's is known.
+    "KAD-org/flutter_pos#30": pulled(30, { keys: ["AION-71"], status: { reviews: [], requested: ["sam-gh", "Mobile"], requests: [{ by: "sam-gh", kind: "user", at: day(2) }, { by: "Mobile", kind: "team", at: null }], at: Date.parse(day(4)) } }),
+    // Nobody asked and nobody reviewed.
+    "KAD-org/flutter_pos#31": pulled(31, { keys: ["AION-90"], created: day(1), status: { reviews: [], requested: [], requests: [], at: Date.parse(day(4)) } }),
+    // GitHub's review data was never read.
+    "KAD-org/flutter_pos#32": pulled(32, { keys: ["AION-80"], created: day(0), status: undefined }),
+    // Changes requested by someone no longer asked.
+    "KAD-org/flutter_pos#33": pulled(33, { keys: ["AION-81"], status: { reviews: [{ by: "lee-gh", state: "CHANGES_REQUESTED", at: day(3) }], requested: [], requests: [], lastCommitAt: day(2), at: Date.parse(day(4)) } }),
+  } });
+  const adminToken = await t.seed("admin-1", "admin@aione.test", "Ellen", "admin");
+  await t.seed("u-1", "sam@aione.test", "Sam", "user", { githubLogin: "sam-gh" });
+  await t.seed("u-2", "lee@aione.test", "Lee", "user", { githubLogin: "lee-gh" });
+  const index = JSON.parse(await t.STORE.get("github:prs:v4"));
+  await t.STORE.set("github:prs:v4", JSON.stringify({ ...index, okAt: Date.parse(day(4)), repoErrors: { "KAD-org/flutter_pos": { stage: "status", error: "GitHub GraphQL answered 502", at: Date.parse(day(5)) } }, repoOkAt: { "KAD-org/flutter_pos": Date.parse(day(4)) } }));
+  const body = await (await t.call("GET", "/reviews/queue", adminToken)).json();
+  const pr = (n) => body.tickets.flatMap((x) => x.prs).find((p) => p.number === n);
+  assert.deepEqual(pr(30).reviewers, [{ name: "Sam", login: "sam-gh", kind: "user", review: "", pending: true }, { name: "Mobile", login: "", kind: "team", review: "", pending: true }]);
+  assert.equal(pr(30).reviewerState, "pending");
+  assert.deepEqual([pr(30).since, pr(30).sinceKind], [day(2), "requested"]);
+  assert.deepEqual([pr(31).reviewerState, pr(31).sinceKind], ["none", "opened"]);
+  assert.deepEqual([pr(32).state, pr(32).reviewerState, pr(32).reviewers], ["unknown", "unavailable", []]);
+  assert.deepEqual([pr(33).state, pr(33).reviewerState, pr(33).reviewers.map((r) => [r.name, r.review, r.pending])], ["changes_requested", "given", [["Lee", "CHANGES_REQUESTED", false]]]);
+  const closed = body.tickets.find((x) => x.key === "AION-90");
+  assert.deepEqual([closed.status, closed.ticketDone, closed.devs], ["Done", true, ["Sam"]]);
+  assert.equal(body.tickets.find((x) => x.key === "AION-71").ticketDone, false);
+  // The failed repository's pull requests stay, marked stale with when their review data was read.
+  assert.ok(body.tickets.flatMap((x) => x.prs).every((p) => p.stale));
+  assert.equal(pr(30).statusAt, day(4));
+  assert.deepEqual({ ...body.refresh, attemptedAt: undefined }, { attemptedAt: undefined, okAt: day(4), repos: 1, failedRepos: 1, failures: [{ repo: "KAD-org/flutter_pos", stage: "status", error: "GitHub GraphQL answered 502", lastOkAt: day(4) }] });
+  // Real review waits first (#30 asked on day 2), then the rest by their time.
+  assert.equal(body.tickets[0].key, "AION-71");
 });
