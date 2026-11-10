@@ -8,13 +8,15 @@
 //
 // Tickets of a project: those whose business fields name it, those with work on it (entries and agreed hours, Helpdesk
 // tickets included) and its Odoo tasks named "[KEY] …". A key is listed once however many of these find it, and an
-// Odoo task is never a ticket of its own, so nothing counts twice. Figures cover the project's scope: from its active
-// allowance's start, else the last 365 days (the Clients table's own), or a chosen period.
+// Odoo task is never a ticket of its own, so nothing counts twice. Figures cover the work period (project-work.js: this
+// month by default), and the list can keep only the tickets with work in the period and only the billable ones. The
+// tasks of Odoo and the work entered in Odoo directly are project-work.js's.
 import { odoo } from './odoo.js';
 import { BusinessError, requireStore, readMetadata, saveMetadata, withTicketLock, agreedDeveloperOf, developerList, ticketDevelopers, validHours, allocatedHoursInput, allocationField, readOdooProjects, projectIndex, readProjectLog } from './ticket-metadata.js';
 import { billingSnapshot, readBillingConfig, workRows, saveProjectDefault, saveTicket, readMarkers, readLedgers, reconcileTicket, readProjectDefaults } from './billing.js';
 import { companyContext, ticketsByProject, saveAllocation } from './project-budget.js';
 import { todayIn, sourceOf, agreedLineSent } from './time-entries.js';
+import { workPeriod, addDays, projectWork } from './project-work.js';
 
 const problem=(message,status=400,code='workspace',details={})=>{throw new BusinessError(message,status,code,details);};
 const json=d=>Response.json(d,{headers:{'Cache-Control':'no-store'}});
@@ -22,9 +24,6 @@ export const TICKET_LIMIT=500,ALL_LIMIT=5000,IMPORT_LIMIT=300,PREVIEW_CHARS=280;
 const BODY_LIMIT=400000;
 // The import's explicit "empty this" marker: a blank cell always means "leave as it is".
 export const CLEAR='[clear]';
-const addDays=(d,n)=>new Date(Date.parse(d+'T00:00:00Z')+n*86400000).toISOString().slice(0,10);
-const validDate=d=>typeof d==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(d)&&new Date(d+'T00:00:00Z').toISOString().slice(0,10)===d;
-const activeOn=(a,date)=>a.enabled&&date>=a.startDate&&(!a.endDate||date<=a.endDate);
 const byKey=(a,b)=>a.localeCompare(b,undefined,{numeric:true});
 const round=n=>Math.round(n*100)/100;
 const m2o=v=>Array.isArray(v)?{id:v[0],name:String(v[1]||'')}:null;
@@ -35,24 +34,11 @@ const isClear=v=>cell(v).toLowerCase()===CLEAR;
 const pool=async(items,n,fn)=>{const out=new Array(items.length);let i=0;await Promise.all(Array.from({length:Math.min(n,items.length)},async()=>{while(i<items.length){const k=i++;out[k]=await fn(items[k],k);}}));return out;};
 
 // ---- The ticket list ----
-// The period a project's figures cover: from its active allowance's start, else the last 365 days.
-function scopeOf(snap,id,today){
-  const a=snap.d.allowances.items.find(x=>x.enabled&&x.projectIds.includes(id)&&activeOn(x,today));
-  return a?{from:a.startDate,to:today,label:'Since the allocation started ('+a.startDate+')'}:{from:addDays(today,-365),to:today,label:'Last 365 days'};
-}
-function periodOf(q,today){
-  if(!q.from&&!q.to)return null;
-  const from=q.from||addDays(today,-365),to=q.to||today;
-  if(!validDate(from)||!validDate(to))problem('Choose valid dates.');
-  if(from>to)problem('The start date is after the end date.');
-  if(Date.parse(to)-Date.parse(from)>400*86400000)problem('Choose at most about a year.');
-  return {from,to,label:from+' to '+to,custom:true};
-}
-// What each ticket has on this project in the period: work, what it charges, and what isn't in Odoo yet.
-function workByTicket(snap,scope,projectId){
+// What each ticket has on this project in the work period: work, what it charges, and what isn't in Odoo yet.
+function workByTicket(snap,period,projectId){
   const out=new Map();
   for(const r of snap.rows){
-    if(r.date<scope.from||r.date>scope.to||(projectId!=null&&r.projectId!==projectId))continue;
+    if(r.date<period.from||r.date>period.to||(projectId!=null&&r.projectId!==projectId))continue;
     const w=out.get(r.ticket)||{actualMinutes:0,chargeableMinutes:0,entries:0,pendingMinutes:0,review:0,projectId:r.projectId};
     w.actualMinutes+=r.actualMinutes;w.chargeableMinutes+=r.chargeableMinutes;
     if(r.kind==='entry'){w.entries++;if(['syncing','setup'].includes(r.state))w.pendingMinutes+=r.actualMinutes;if(r.state==='review')w.review++;}
@@ -66,50 +52,54 @@ function exportedByTicket(markers){
   return out;
 }
 const preview=s=>{const t=String(s||'').replace(/\s+/g,' ').trim();return t.length>PREVIEW_CHARS?t.slice(0,PREVIEW_CHARS-1)+'…':t;};
-function ticketRow(env,key,{snap,work,ledger,exported,details,projectId}){
+// A ticket's row from the billing snapshot (no titles: withDetails adds them for the rows shown).
+function ticketRow(env,key,{snap,work,exported,projectId}){
   const hd=sourceOf(env,key)==='odoo',m=hd?null:snap.d.metas.get(key)||null,rec=snap.d.tickets[key]||null,w=work.get(key);
-  const pid=hd?(w?.projectId??projectId):m?.odooProjectId??null,override=hd?rec?.billing??null:m?.billing??null;
+  const pid=hd?(w?.projectId??projectId):(m?.odooProjectId??projectId??null),override=hd?rec?.billing??null:m?.billing??null;
   const def=snap.projectDefault(pid),effective=override==='billable'||override==='not_billable'?{value:override,source:'ticket'}:def?{value:def,source:'project'}:{value:'unclassified',source:'none'};
-  const t=details?.[key];
   return {key,source:sourceOf(env,key),projectId:pid,onProject:projectId==null||pid===projectId,revision:hd?rec?.revision||0:m?.revision||0,
     override,effective,estimatedHours:m?.estimatedHours??null,agreedHours:m?.agreedHours??null,agreedDeveloper:m?.agreedDeveloper||null,agreedDev:m?.agreedDev||null,agreedDate:m?.agreedDate||null,
-    actualMinutes:w?.actualMinutes||0,chargeableMinutes:w?.chargeableMinutes||0,entries:w?.entries||0,consumedMinutes:ledger?.consumedMinutes||0,
+    actualMinutes:w?.actualMinutes||0,chargeableMinutes:w?.chargeableMinutes||0,entries:w?.entries||0,consumedMinutes:0,
     sync:{pendingMinutes:w?.pendingMinutes||0,review:w?.review||0,billingField:rec?.odoo?{state:rec.odoo.state,error:rec.odoo.error||null,at:rec.odoo.at||null}:null},
-    exported:exported.get(key)||{charges:0,minutes:0},completedAt:m?.completedAt||null,
-    ...(t?{title:t.title||'',description:preview(t.description),descriptionLength:String(t.description||'').length,status:t.status||'',closed:!!t.closed,devs:t.devs||[],assignee:t.assignee||''}:{})};
+    exported:exported.get(key)||{charges:0,minutes:0},completedAt:m?.completedAt||null};
 }
+// The title, status and people of a ticket, read for the rows shown.
+const withDetails=(row,t)=>t?{...row,title:t.title||'',description:preview(t.description),descriptionLength:String(t.description||'').length,status:t.status||'',closed:!!t.closed,devs:t.devs||[],assignee:t.assignee||''}:row;
+// The tickets of one project. The filters (work in the period, billable only) run before the page limit, so the list and
+// its total are the filtered tickets. The project's default is sent with them, so an inheriting ticket follows a change of
+// the default without a reload of the page.
 export async function projectTickets(env,id,q,{readDetails}){
-  const today=todayIn(),custom=periodOf(q,today),context=await companyContext(env);
-  const [snap,markers,cfg,tasks,[project]]=await Promise.all([billingSnapshot(env,custom?{from:custom.from,to:custom.to}:{from:addDays(today,-365)}),readMarkers(env),readBillingConfig(env),
+  const today=todayIn(),period=workPeriod(q,today),mode=q.mode==='all'?'all':'work',billable=q.billable==='1',context=await companyContext(env);
+  const [snap,markers,cfg,tasks,[project]]=await Promise.all([billingSnapshot(env,{from:period.from,to:period.to}),readMarkers(env),readBillingConfig(env),
     ticketsByProject(env,[id],context),odoo(env,'project.project','search_read',[[['id','=',id]]],{fields:['name','description'],limit:1,context:{...context,active_test:false}})]);
   if(!project)problem('That Odoo project was not found.',404,'not_found');
-  const scope=custom||scopeOf(snap,id,today),work=workByTicket(snap,scope,id),keys=new Set(work.keys());
+  const work=workByTicket(snap,period,id),keys=new Set(work.keys()),exported=exportedByTicket(markers);
   for(const [k,m] of snap.d.metas)if(m.odooProjectId===id)keys.add(k);
   for(const k of tasks[id]||[])keys.add(k);
-  const all=[...keys].filter(k=>sourceOf(env,k)).sort(byKey),shown=all.slice(0,TICKET_LIMIT);
+  const matching=[...keys].filter(k=>sourceOf(env,k)).sort(byKey)
+    .map(key=>ticketRow(env,key,{snap,work,exported,projectId:id}))
+    .filter(t=>(mode==='all'||work.has(t.key))&&(!billable||t.effective.value==='billable')),shown=matching.slice(0,TICKET_LIMIT);
   let details={},detailsError=null;
-  try{details=await readDetails(shown);}catch(e){detailsError='Ticket titles and statuses could not be read: '+String(e.message||e).slice(0,160);}
-  const ledgers=await readLedgers(env,shown),exported=exportedByTicket(markers);
-  // The project's default is sent with the tickets, so an inheriting ticket follows it after a change without a reload of the page.
-  return {project:{odooId:id,name:String(project.name||''),description:htmlText(project.description).slice(0,4000),default:snap.projectDefault(id)},scope,classification:!!cfg.classification,
-    total:all.length,truncated:all.length>shown.length,limit:TICKET_LIMIT,detailsError,
-    tickets:shown.map(key=>ticketRow(env,key,{snap,work,ledger:ledgers[key],exported,details,projectId:id}))};
+  try{details=await readDetails(shown.map(t=>t.key));}catch(e){detailsError='Ticket titles and statuses could not be read: '+String(e.message||e).slice(0,160);}
+  const ledgers=await readLedgers(env,shown.map(t=>t.key));
+  return {project:{odooId:id,name:String(project.name||''),description:htmlText(project.description).slice(0,4000),default:snap.projectDefault(id)},
+    scope:period,mode,billable,classification:!!cfg.classification,total:matching.length,truncated:matching.length>shown.length,limit:TICKET_LIMIT,detailsError,
+    tickets:shown.map(t=>withDetails({...t,consumedMinutes:ledgers[t.key]?.consumedMinutes||0},details[t.key]))};
 }
 // Every project's tickets at once, without titles (the page has them), for an export of all projects.
 export async function allProjectTickets(env,q){
-  const today=todayIn(),custom=periodOf(q,today);
-  const [snap,markers]=await Promise.all([billingSnapshot(env,custom?{from:custom.from,to:custom.to}:{from:addDays(today,-365)}),readMarkers(env)]);
+  const today=todayIn(),period=workPeriod(q,today);
+  const [snap,markers]=await Promise.all([billingSnapshot(env,{from:period.from,to:period.to}),readMarkers(env)]);
   const keys=new Set();for(const r of snap.rows)if(r.projectId!=null)keys.add(r.ticket);for(const [k,m] of snap.d.metas)if(m.odooProjectId!=null)keys.add(k);
   const all=[...keys].filter(k=>sourceOf(env,k)).sort(byKey),shown=all.slice(0,ALL_LIMIT),exported=exportedByTicket(markers),ledgers=await readLedgers(env,shown);
-  // Each ticket's work in its own project's scope; a ticket with work on two projects is listed once per project.
-  const out=[],scopes=new Map(),scopeFor=id=>{if(!scopes.has(id))scopes.set(id,custom||scopeOf(snap,id,today));return scopes.get(id);};
+  // Each ticket's work in its own project's period; a ticket with work on two projects is listed once per project.
+  const out=[],perProject=new Map(),workFor=id=>{if(!perProject.has(id))perProject.set(id,workByTicket(snap,period,id));return perProject.get(id);};
   const projectsOf=new Map();for(const r of snap.rows)if(r.projectId!=null&&keys.has(r.ticket))(projectsOf.get(r.ticket)||projectsOf.set(r.ticket,new Set()).get(r.ticket)).add(r.projectId);
-  const perProject=new Map(),workFor=id=>{if(!perProject.has(id))perProject.set(id,workByTicket(snap,scopeFor(id),id));return perProject.get(id);};
   for(const key of shown){
     const m=snap.d.metas.get(key),ids=new Set([...(projectsOf.get(key)||[]),...(m?.odooProjectId!=null?[m.odooProjectId]:[])]);
-    for(const id of ids)if(id!=null){const row=ticketRow(env,key,{snap,work:workFor(id),ledger:ledgers[key],exported,details:null,projectId:id});out.push({...row,projectId:id,scope:scopeFor(id)});}
+    for(const id of ids)if(id!=null){const row=ticketRow(env,key,{snap,work:workFor(id),exported,projectId:id});out.push({...row,consumedMinutes:ledgers[key]?.consumedMinutes||0,projectId:id,scope:period});}
   }
-  return {classification:!!(await readBillingConfig(env)).classification,total:all.length,truncated:all.length>shown.length,limit:ALL_LIMIT,tickets:out};
+  return {scope:period,classification:!!(await readBillingConfig(env)).classification,total:all.length,truncated:all.length>shown.length,limit:ALL_LIMIT,tickets:out};
 }
 
 // ---- Import ----
@@ -310,7 +300,7 @@ async function applyImport(env,me,b,deps){
 }
 const strip=p=>({...p,rows:p.rows.map(({apply,...r})=>r)});
 
-export const WORKSPACE_PATHS=['/clients/odoo-projects/tickets','/clients/odoo-projects/import/preview','/clients/odoo-projects/import'];
+export const WORKSPACE_PATHS=['/clients/odoo-projects/tickets','/clients/odoo-projects/work','/clients/odoo-projects/import/preview','/clients/odoo-projects/import'];
 // deps: readTicket (a ticket any source, for checks), readDetails (titles, statuses, people of many tickets).
 export async function workspaceRoutes(request,env,url,me,deps){
   if(me.role!=='admin')problem('Only administrators see project billing.',403,'forbidden');
@@ -320,6 +310,10 @@ export async function workspaceRoutes(request,env,url,me,deps){
     if(q.all==='1')return json(await allProjectTickets(env,q));
     const id=Number(q.id);if(!Number.isInteger(id)||id<1)problem('Choose an Odoo project.');
     return json(await projectTickets(env,id,q,deps));
+  }
+  if(path==='/clients/odoo-projects/work'&&request.method==='GET'){
+    const id=Number(q.id);if(!Number.isInteger(id)||id<1)problem('Choose an Odoo project.');
+    return json(await projectWork(env,id,q));
   }
   if((path==='/clients/odoo-projects/import/preview'||path==='/clients/odoo-projects/import')&&request.method==='POST'){
     const raw=await request.text();if(raw.length>BODY_LIMIT)problem('Import request too large.',413);
