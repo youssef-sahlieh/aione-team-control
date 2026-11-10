@@ -15,7 +15,7 @@ const ticket = (o) => ({ source: "internal", projectId: 10, onProject: true, rev
   actualMinutes: 0, chargeableMinutes: 0, entries: 0, consumedMinutes: 0, sync: { pendingMinutes: 0, review: 0, billingField: null }, exported: { charges: 0, minutes: 0 }, completedAt: null,
   title: "", description: "", descriptionLength: 0, status: "Open", closed: false, devs: [], assignee: "", ...o });
 const LONG = "תיאור הפרויקט: support for the Acme branches. ".repeat(8);
-const TICKETS = () => ({ project: { odooId: 10, name: "Support pack", description: LONG }, scope: { from: "2026-10-01", to: "2026-11-09", label: "Since the allocation started (2026-10-01)" }, classification: true, total: 3, truncated: false, limit: 500, detailsError: null,
+const TICKETS = () => ({ project: { odooId: 10, name: "Support pack", description: LONG, default: "billable" }, scope: { from: "2026-10-01", to: "2026-11-09", label: "Since the allocation started (2026-10-01)" }, classification: true, total: 3, truncated: false, limit: 500, detailsError: null,
   tickets: [
     ticket({ key: "AION-101", source: "jira", revision: 3, title: "Synthetic Jira task", description: "=cmd() in a description", status: "Pending QA", devs: ["builder"], assignee: "Test Lead", actualMinutes: 90, chargeableMinutes: 90, entries: 1 }),
     ticket({ key: "INT-7", revision: 5, title: "שלום: internal work", devs: ["dana", "eli"], assignee: "Manager Mo", estimatedHours: 3, actualMinutes: 120, chargeableMinutes: 90, sync: { pendingMinutes: 30, review: 0, billingField: null } }),
@@ -86,7 +86,7 @@ test("Project workspace: opening a row reads its tickets once; Jira, internal an
   await expect(ws.locator("tr[data-key='INT-7'] .ws-people")).toContainText("Assignee: Manager Mo");
   await expect(ws.locator("tr[data-key='INT-7'] .ws-sync")).toHaveText("0.5 h not in Odoo yet");
   await expect(ws.getByLabel("Billing of HD-3")).toHaveValue("not_billable");
-  await expect(ws.getByLabel("Billing of INT-7").locator("option:checked")).toHaveText("Project: Billable");
+  await expect(ws.getByLabel("Billing of INT-7").locator("option:checked")).toHaveText("Inherits project: Billable");
   await expect(ws.locator("tr[data-key='AION-101'] .ws-sync")).toHaveText("—");
   // Actual work and commercial hours stay apart; the totals say what they cover.
   await expect(ws.locator(".ws-scope")).toHaveText("3 tickets · 2 open · Actual 4 h · Commercial 3 h · Agreed 0 h · Estimated 3 h");
