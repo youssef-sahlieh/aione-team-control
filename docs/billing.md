@@ -8,7 +8,7 @@ and **Allocation-exhausted emails** (Off / Dry run / On, in Billing setup, plus 
 
 - **Project default** (Clients page, in a project's details): Billable, Not billable, or not set (Unclassified).
 - **Ticket override** (in the ticket, section "Billing (administrators only)"): Inherit, Billable or Not billable.
-  An explicit override wins; Inherit takes the project default. The ticket shows the effective value and where it
+  An explicit override wins; Inherit takes the project default. New tickets start on Inherit, so they follow the project unless someone changes them. The ticket shows the effective value and where it
   comes from (ticket, project, or not classified). This works the same for Jira, internal and Odoo Helpdesk tickets.
   For Jira and internal tickets the override is the existing `billing` business field. For Helpdesk tickets it is
   kept in the billing store.

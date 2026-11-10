@@ -42,7 +42,7 @@ import { integrationRoutes } from "./integrations.js";
 import { epicMapRoutes } from "./epic-map.js";
 import { projectBudgetRoutes } from "./project-budget.js";
 import { workspaceRoutes, WORKSPACE_PATHS } from "./project-workspace.js";
-import { billingRoutes, billingScanCron } from "./billing.js";
+import { billingRoutes, billingScanCron, projectDefaultOf } from "./billing.js";
 import { newTicketNotification, notifyTicketsFromSearch } from "./notifications.js";
 import { recordLogin } from "./users.js";
 import { ROLES, checkPassword, createLinkToken, deleteUser, developerAccounts, ensureAccountId, getUser, hashPassword, listUsers, newAccountId, normDev, normEmail, normGithub, passwordProblem, peekLinkToken, publicUser, saveUser, updateUser, useLinkToken, validDev, validEmail, validGithub } from "./users.js";
@@ -846,7 +846,7 @@ async function route(request, env, url) {
       return withTicketLock(env,key,async()=>{
         const ticket=await readBusinessTicket(key);if(!ticket)return fail('not_found','Ticket unavailable.',404);
         const wantedDevs=Array.isArray(b.fields.labels)?[...new Set(b.fields.labels.filter(l=>/^ai1_/i.test(l)).map(l=>l.slice(4).toLowerCase()))].sort():null;
-        if('assignee' in b.fields || wantedDevs&&JSON.stringify(wantedDevs)!==JSON.stringify([...ticket.devs].sort()))requireBilling(await readMetadata(env,key),env);
+        if('assignee' in b.fields || wantedDevs&&JSON.stringify(wantedDevs)!==JSON.stringify([...ticket.devs].sort())){const meta=await readMetadata(env,key);requireBilling(meta,env,await projectDefaultOf(env,meta.odooProjectId));}
         const res=pass(await jira(env, '/rest/api/3/issue/'+key,{method:'PUT',body:{fields:b.fields},signal:AbortSignal.timeout(20000)}));
         // Jira records this under the proxy's account; the local history keeps who really did it.
         if(res.ok){

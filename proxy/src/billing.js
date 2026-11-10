@@ -286,6 +286,11 @@ async function saveSetup(env,me,b){
 }
 
 // ---- Project defaults ----
+// The project's billing default (null when not classified). Tickets that inherit it use this value.
+export async function projectDefaultOf(env,odooProjectId){
+  const id=Number(odooProjectId);if(!Number.isInteger(id)||id<1)return null;
+  return (await readProjectDefaults(env)).items[id]?.billing??null;
+}
 export async function saveProjectDefault(env,me,b){
   const id=Number(b?.odooId);if(!Number.isInteger(id)||id<1)problem('Choose an Odoo project.');
   if(![null,...BILLING].includes(b.billing))problem('Choose Billable, Not billable or Not classified.');
