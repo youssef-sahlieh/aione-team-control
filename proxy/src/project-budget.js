@@ -4,7 +4,7 @@
 // Odoo line, a ticket with agreed hours sends one line instead of its entries, time entered in Odoo directly counts
 // the same way, and a project linked from two places is still one Odoo project. Work not in Odoo yet (still sending, or
 // needing setup) is shown apart (pendingHours) and never added. Allocated hours are Odoo's own field on the project:
-// Odoo keeps nothing when it is empty (not set), and an explicit 0 is an allocation.
+// Empty and zero allocations are neutral: there is no budget to compare logged work against.
 // Tickets are linked by their Odoo project (odooProjectId in the ticket's business fields); open means not completed in
 // the dashboard. Tickets needing review have an open pull request in the review queue (reviews.js).
 import { odoo, odooConfigured } from './odoo.js';
@@ -19,9 +19,9 @@ const m2o=v=>Array.isArray(v)?{id:v[0],name:String(v[1]||'')}:null;
 const odooLink=(env,id)=>String(env.ODOO_URL||'').replace(/\/+$/,'')+'/web#id='+id+'&model=project.project&view_type=form';
 // At this share of the allocation a project is "near limit" (80%: logged hours at or above 0.8 × allocated).
 export const NEAR_LIMIT=0.8;
-// An explicit zero is an allocation: any logged time is over it. "Near limit" needs an allocation above zero.
+// Zero and empty allocations have no budget to compare against.
 export function budgetStatus(allocated,logged){
-  if(allocated==null)return {status:'not_set',remainingHours:null,overHours:0,usedPercent:null};
+  if(allocated==null||allocated<=0)return {status:'not_set',remainingHours:null,overHours:0,usedPercent:null};
   const remaining=round(allocated-logged);
   // Used share of the allocation; none for a zero allocation (nothing to divide by).
   const usedPercent=allocated>0?Math.round(logged/allocated*1000)/10:null;

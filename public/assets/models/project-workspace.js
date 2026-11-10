@@ -26,7 +26,6 @@ export function ticketProblems(t) {
   if (t.sync?.pendingMinutes > 0) out.push({ kind: 'pending', label: minutesHours(t.sync.pendingMinutes) + ' h not in Odoo yet' });
   if (t.sync?.review > 0) out.push({ kind: 'review', label: t.sync.review + (t.sync.review === 1 ? ' entry needs' : ' entries need') + ' review' });
   if (t.sync?.billingField?.state === 'failed') out.push({ kind: 'failed', label: 'Billing not saved in Odoo' + (t.sync.billingField.error ? ': ' + t.sync.billingField.error : '') });
-  if (t.effective?.value === 'unclassified') out.push({ kind: 'unclassified', label: 'Not classified: set the project default or the ticket' });
   return out;
 }
 export const syncLabel = t => { const p = ticketProblems(t); if (p.length) return p.map(x => x.label).join(' · '); return t.sync?.billingField?.state === 'synced' ? 'Saved in Odoo' : 'OK'; };
@@ -44,7 +43,9 @@ export function ticketMatches(t, v = DEFAULT_VIEW) {
   if (v.billing) {
     if (v.billing === 'inherit' ? t.override : v.billing.startsWith('override:') ? t.override !== v.billing.slice(9) : t.effective?.value !== v.billing) return false;
   }
-  if (v.problems) { const p = ticketProblems(t); if (v.problems === 'any' ? !p.length : !p.some(x => x.kind === v.problems)) return false; }
+  // Not classified is shown once above the table, not on each ticket, so it is filtered by the effective billing.
+  if (v.problems === 'unclassified') { if (t.effective?.value !== 'unclassified') return false; }
+  else if (v.problems) { const p = ticketProblems(t); if (v.problems === 'any' ? !p.length : !p.some(x => x.kind === v.problems)) return false; }
   return true;
 }
 const SORT_VALUE = { key: null, title: t => text(t.title), status: t => text(t.status), actual: t => t.actualMinutes || 0, commercial: t => t.chargeableMinutes || 0, agreed: t => t.agreedHours ?? -1, estimated: t => t.estimatedHours ?? -1 };

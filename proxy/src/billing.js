@@ -226,7 +226,8 @@ async function pushField(env,cfg,role,model,id,value){
   try{
     await odoo(env,model,'write',[[id],{[field]:v}]);
     const [r]=await odoo(env,model,'read',[[id]],{fields:[field]});
-    return r&&r[field]===v?{state:'synced',at:new Date().toISOString(),id}:{state:'failed',at:new Date().toISOString(),error:'Odoo did not keep the value.'};
+    // The value kept in Odoo is the baseline the next import compares against.
+    return r&&r[field]===v?{state:'synced',at:new Date().toISOString(),id,value}:{state:'failed',at:new Date().toISOString(),error:'Odoo did not keep the value.'};
   }catch(e){return {state:'failed',at:new Date().toISOString(),error:clean(e.message)};}
 }
 
@@ -298,13 +299,26 @@ export async function saveProjectDefault(env,me,b){
   const doc=await update(env,K.projects(env),blankProjects,cur=>{
     if(b.revision!==cur.revision)problem('Project billing changed. Refresh and retry.',409,'conflict');
     from=cur.items[id]?.billing??null;if(from===b.billing)return undefined;
-    const items={...cur.items};if(b.billing===null)delete items[id];else items[id]={billing:b.billing,updatedAt:new Date().toISOString(),by:{email:me.email,name:me.name}};
+    const items={...cur.items},at=new Date().toISOString(),by={email:me.email,name:me.name},old=cur.items[id];
+    // "Not classified" exists only here (Odoo's field has no such value). The record keeps the last value Odoo
+    // confirmed, so the next import still knows what Odoo holds, and an unsent failure is dropped with the clear.
+    if(b.billing===null){
+      if(old){const base=old.odoo?.value!==undefined?{odoo:{state:'synced',at:old.odoo.at,id:old.odoo.id,value:old.odoo.value}}:{};items[id]={billing:null,updatedAt:at,by,...base};}
+    }else items[id]={billing:b.billing,updatedAt:at,by,...(old?.odoo?{odoo:old.odoo}:{})};
     return {revision:cur.revision+1,items};
   });
   if(from!==b.billing){
     await recordProjectEvent(env,id,me,{type:'billing',from,to:b.billing});
     const cfg=await readBillingConfig(env);
-    if(b.billing&&cfg.fields.project){const sync=await pushField(env,cfg,'project','project.project',id,b.billing);await update(env,K.projects(env),blankProjects,cur=>cur.items[id]?{...cur,items:{...cur.items,[id]:{...cur.items[id],odoo:sync}}}:undefined);}
+    if(b.billing&&cfg.fields.project){
+      const sync=await pushField(env,cfg,'project','project.project',id,b.billing);
+      // A failed write keeps the last value Odoo confirmed as the baseline.
+      await update(env,K.projects(env),blankProjects,cur=>{
+        if(!cur.items[id])return undefined;
+        const kept=sync.state!=='synced'&&cur.items[id].odoo?.value!==undefined?{value:cur.items[id].odoo.value}:{};
+        return {...cur,items:{...cur.items,[id]:{...cur.items[id],odoo:{...sync,...kept}}}};
+      });
+    }
     // The tickets on this project consume differently now.
     const all=await readAllMetadata(env);let n=0;
     for(const [key,m] of all)if(m.odooProjectId===id&&n++<200)await reconcileTicket(env,key,{by:{email:me.email,name:me.name}});
@@ -541,9 +555,98 @@ async function resolveAlert(env,me,b){
   return next;
 }
 
+// Import Odoo's billing into the dashboard, initially and on every sync. It never writes to Odoo.
+// Each record keeps the value Odoo last confirmed (odoo.value), its baseline. An Odoo change is applied only where the
+// dashboard still holds that baseline. A dashboard value that differs (an unsent, failed or concurrent edit) is kept
+// and reported as a conflict, and a failed or waiting outgoing change is left alone.
+const valueOfProject=(cfg,r)=>{
+  const raw=r[cfg.fields.project];
+  if(cfg.fieldTypes?.project==='boolean')return raw===true?'billable':raw===false?'not_billable':undefined;
+  if(raw===false||raw==null||raw==='')return undefined;
+  const v=cfg.values.project[String(raw)];
+  return BILLING.includes(v)?v:undefined;
+};
+// A task's selection: "inherit" means no override (null). An empty or unmapped value is undefined, never inherit.
+const valueOfTask=(cfg,task)=>{
+  const raw=task[cfg.fields.task];
+  if(raw===false||raw==null||raw==='')return undefined;
+  const v=cfg.values.task[String(raw)];
+  if(v==='inherit')return null;
+  return BILLING.includes(v)?v:undefined;
+};
+// local: the dashboard's value (null: none). base: the value Odoo last confirmed (undefined: never). v: Odoo's value.
+function decide({local,base,state,v}){
+  if(v===undefined)return 'skip';
+  if(['failed','waiting'].includes(state))return 'pending';
+  if(base===v)return 'same';
+  if(base===undefined)return local===null||local===v?'apply':'conflict';
+  return local===base?'apply':'conflict';
+}
+export async function syncBillingFromOdoo(env){
+  const cfg=await readBillingConfig(env);
+  if(!cfg.classification||!odooConfigured(env)||!cfg.fields.project)return {changed:0,conflicts:[]};
+  const [snapshot,before,metas]=await Promise.all([readOdooProjects(env),readProjectDefaults(env),readAllMetadata(env)]);
+  const ids=(snapshot.projects||[]).filter(p=>p.active).map(p=>p.id);
+  if(!ids.length)return {changed:0,conflicts:[]};
+  const actor={email:'odoo-sync',name:'Odoo sync',role:'admin'},at=new Date().toISOString(),tally={changed:0,conflicts:[]},recorded=[];
+  const [user]=await odoo(env,'res.users','search_read',[[['login','=',env.ODOO_LOGIN]]],{fields:['company_ids'],limit:1});
+  const context={active_test:false,...(user?.company_ids?.length?{allowed_company_ids:user.company_ids}:{})};
+  // Read all projects, including ones without an allowance or dashboard default.
+  const rows=await odoo(env,'project.project','read',[ids],{fields:['name',cfg.fields.project],context});
+  await update(env,K.projects(env),blankProjects,cur=>{
+    if(cur.revision!==before.revision)return undefined;
+    const items={...cur.items},n={changed:0,conflicts:[],recorded:[]};let dirty=false;
+    for(const r of rows){if(!Object.hasOwn(r,cfg.fields.project))continue;
+      const v=valueOfProject(cfg,r),old=cur.items[r.id],local=old?.billing??null;
+      const action=decide({local,base:old?.odoo?.value,state:old?.odoo?.state,v});
+      if(action==='conflict'){n.conflicts.push({kind:'project',id:r.id,label:String(r.name||''),local,odoo:v});continue;}
+      if(action!=='apply')continue;
+      if(local===v&&old?.odoo?.value===v&&old?.odoo?.state==='synced')continue;
+      items[r.id]={...old,billing:v,updatedAt:at,by:actor,odoo:{state:'synced',at,id:r.id,value:v}};dirty=true;
+      if(local!==v){n.changed++;n.recorded.push({id:r.id,from:local,to:v});}
+    }
+    Object.assign(tally,{changed:n.changed,conflicts:n.conflicts});recorded.splice(0,recorded.length,...n.recorded);
+    return dirty?{revision:cur.revision+1,items}:undefined;
+  });
+  // One history line per project whose billing actually changed.
+  for(const {id,from,to} of recorded)await recordProjectEvent(env,id,actor,{type:'billing',from,to});
+  if(cfg.fields.task){
+    const tasks=await odoo(env,'project.task','search_read',[[['project_id','in',ids],['name','=like','[%]%']]],{fields:['name','project_id',cfg.fields.task],context,limit:20000});
+    const candidates=new Map();
+    for(const task of tasks){const key=/^\[([A-Z][A-Z0-9_]*-\d+)\]/.exec(String(task.name||''))?.[1];if(!key||!Object.hasOwn(task,cfg.fields.task))continue;
+      const list=candidates.get(key)||[];list.push(task);candidates.set(key,list);}
+    for(const [key,list] of candidates){
+      const m=metas.get(key),isHd=sourceOf(env,key)==='odoo';
+      if(!isHd&&!m)continue;
+      const matching=m?list.filter(t=>(Array.isArray(t.project_id)?t.project_id[0]:t.project_id)===m.odooProjectId):list;
+      if(matching.length!==1)continue; // Duplicate or old-project tasks cannot change a ticket.
+      const task=matching[0],v=valueOfTask(cfg,task);
+      if(v===undefined)continue;
+      try{
+        await withTicketLock(env,key,async()=>{
+          // Read again under the lock: the dashboard may have changed since the snapshot above.
+          const now=await readTicketRecord(env,key),nowMeta=isHd?null:await readMetadata(env,key);
+          const local=isHd?(now.billing??null):(nowMeta.billing??null);
+          const action=decide({local,base:now.odoo?.value,state:now.odoo?.state,v});
+          if(action==='conflict'){tally.conflicts.push({kind:'ticket',id:key,label:key,local,odoo:v});return;}
+          if(action!=='apply')return;
+          if(local===v&&now.odoo?.value===v&&now.odoo?.state==='synced')return;
+          if(local!==v){tally.changed++;if(!isHd)await saveMetadata(env,key,{revision:nowMeta.revision,billing:v},actor);}
+          await update(env,K.ticket(env,key),blankTicket,cur=>{
+            const moved=isHd&&(cur.billing??null)!==v;
+            return {...cur,...(moved?{billing:v,revision:cur.revision+1,history:[...cur.history,{at,by:actor,changes:{billing:{from:cur.billing,to:v}}}].slice(-100)}:{}),odoo:{state:'synced',at,id:task.id,value:v}};
+          });
+        });
+      }catch(e){if(e.code!=='conflict')throw e;}
+    }
+  }
+  return {changed:tally.changed,conflicts:tally.conflicts};
+}
+
 // ---- Odoo check: lines entered or changed in Odoo directly ----
 const PAGE=500,MAX_PAGES=20;
 export async function scanOdoo(env,{pageSize=PAGE,maxPages=MAX_PAGES}={}){
+  await syncBillingFromOdoo(env);
   const [cfg,allow,projects,timeCfg]=await Promise.all([readBillingConfig(env),readAllowances(env),readProjectDefaults(env),readTimeConfig(env)]);
   const enabled=allow.items.filter(a=>a.enabled),ids=[...new Set([...enabled.flatMap(a=>a.projectIds),...Object.keys(projects.items).map(Number)])].slice(0,200);
   const today=todayIn(),since=[addDays(today,-400),[addDays(today,-62),...enabled.map(a=>a.startDate)].sort()[0]].sort().at(-1);
@@ -574,7 +677,7 @@ export async function scanOdoo(env,{pageSize=PAGE,maxPages=MAX_PAGES}={}){
     else if(metas.get(e.ticket)?.agreedHours!=null)out.duplicates.push({lineId:l.id,date:l.date,ticket:e.ticket,chargeId:e.id,projectId:pid,message:e.ticket+' has agreed hours, and Odoo line #'+l.id+' also has its own work. Remove the extra line in Odoo.'});
   }
   for(const [uuid,list] of seen)if(list.length>1)out.duplicates.push({lineIds:list,chargeId:uuid,message:'Odoo has '+list.length+' lines for the same dashboard entry (lines '+list.map(i=>'#'+i).join(', ')+').'});
-  // Classification changed in Odoo directly: reported, never copied over the dashboard's value.
+  // Verify the imported classification against Odoo.
   if(cfg.fields.project){
     const rows=await odoo(env,'project.project','read',[ids],{fields:[cfg.fields.project]});
     for(const r of rows){const odooValue=fromOdoo(cfg,'project',r[cfg.fields.project]),mine=projects.items[r.id]?.billing??null;if(odooValue!==mine&&!(mine===null&&odooValue==='not_billable'&&cfg.fieldTypes?.project==='boolean'))out.classification.push({projectId:r.id,dashboard:mine,odoo:odooValue,message:'Odoo project #'+r.id+' is '+(odooValue||'not set')+' in Odoo but '+(mine||'not classified')+' in the dashboard.'});}
