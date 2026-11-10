@@ -1,6 +1,15 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {readRoute,routeUrl} from "../../public/assets/app/router.js";
+import {readRoute,routeUrl,HIDDEN_PAGES,HIDDEN_FALLBACK} from "../../public/assets/app/router.js";
+test("paused pages open Clients & Projects for administrators and All tickets for others",()=>{
+  assert.deepEqual([...HIDDEN_PAGES].sort(),["analytics","reports","workload"]);
+  assert.equal(HIDDEN_FALLBACK,"clients");
+  for(const id of HIDDEN_PAGES){
+    assert.equal(readRoute(new URL(`http://localhost/dashboard.html?page=${id}&mode=dev#AION-101`),true).page,"clients");
+    assert.equal(readRoute(new URL(`http://localhost/dashboard.html?page=${id}`),false).page,"tickets");
+  }
+  assert.equal(readRoute(new URL("http://localhost/dashboard.html?page=analytics&from=2026-10-01&to=2026-10-31&client=Acme"),true).page,"clients");
+});
 test("unknown and removed pages fall back safely",()=>{
   assert.deepEqual(readRoute(new URL("http://localhost/dashboard.html?page=unknown&mode=dev"),false),{page:"tickets",mode:"status"});
   // The Boards tab is gone: its old links open All tickets.
@@ -13,7 +22,8 @@ test("unknown and removed pages fall back safely",()=>{
   assert.equal(readRoute(new URL("http://localhost/dashboard.html?page=tickets"),true).page,"tickets");
   assert.equal(readRoute(new URL("http://localhost/dashboard.html"),false).page,"tickets");
   for(const admin of [true,false])assert.equal(readRoute(new URL("http://localhost/dashboard.html?page=mytasks#AION-101"),admin).page,"tickets");
-  assert.equal(readRoute(new URL("http://localhost/dashboard.html?page=workload"),true).page,"workload");
+  // Workload is paused (HIDDEN_PAGES): its link opens Clients & Projects.
+  assert.equal(readRoute(new URL("http://localhost/dashboard.html?page=workload"),true).page,"clients");
   // The Internal tickets page is gone: its old links open All tickets.
   for(const admin of [true,false])assert.equal(readRoute(new URL("http://localhost/dashboard.html?page=internal#INT-101"),admin).page,"tickets");
 });

@@ -1,4 +1,4 @@
-import { readRoute, routeUrl } from "./router.js";
+import { readRoute, routeUrl, HIDDEN_PAGES } from "./router.js";
 import { calculateWorkload, workloadTotals, isOverdue } from "../models/workload.js";
 import { assigneeOptions } from "../models/assignees.js";
 import { pages, adminPages, buildNav, arrangeNav, wireSidebar, setNavCount } from "./nav.js";
@@ -53,7 +53,12 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     $("page-heading").focus();
   }
   // Back/Forward between dashboard pages; a step that only opens or closes a ticket (#KEY) leaves the page as it is.
-  window.addEventListener("popstate", () => { const next = readRoute(new URL(location.href), context().admin); if (next.page === route.page && next.mode === route.mode) { if (next.page === "analytics") context().syncAnalytics(); return; } route = next; synchronize(); render(); });
+  // An address that names a hidden page is rewritten to the page it opens (Clients & Projects), so the address bar matches the screen.
+  function redirectHidden() {
+    const current = new URL(location.href);
+    if (HIDDEN_PAGES.has(current.searchParams.get("page"))) history.replaceState(null, "", routeUrl(readRoute(current, context().admin).page, null, current));
+  }
+  window.addEventListener("popstate", () => { redirectHidden(); const next = readRoute(new URL(location.href), context().admin); if (next.page === route.page && next.mode === route.mode) { if (next.page === "analytics") context().syncAnalytics(); return; } route = next; synchronize(); render(); });
   const nav = $("main-nav");
   // "All open" starts from the same built-in view as the dashboard's All open tile, so the filters reset too.
   // All tickets resets to the All open view for users; administrators go back to All open with the filters they set.
@@ -65,6 +70,7 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     arrangeNav(nav, { admin: context().admin });
     const current = new URL(location.href);
     if(current.searchParams.get("page") === "mytasks")history.replaceState(null,"",routeUrl("tickets",null,current));
+    redirectHidden();
     // Preserve the old saved ticket modes when there is no explicit page route.
     if (new URL(location.href).searchParams.has("page")) synchronize();
     ready = true;

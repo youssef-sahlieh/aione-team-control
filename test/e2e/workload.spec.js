@@ -1,4 +1,6 @@
 import { test, expect } from "@playwright/test";
+// Paused: Checks & Reports, Workload and Analytics are hidden (HIDDEN_PAGES in public/assets/app/router.js). Remove this skip when a page is restored.
+test.skip(true, "page hidden by HIDDEN_PAGES");
 
 // Workload against a synthetic proxy: team figures count a shared ticket once, a developer row counts it for each developer,
 // every count opens the ticket list showing exactly those tickets, and nothing reads the tickets on a timer.

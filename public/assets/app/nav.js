@@ -1,6 +1,7 @@
 // The sidebar's links, shared by the dashboard and the pages beside it (Users, Databases, Knowledge base, Audit &
 // Deploy), so every page shows the same navigation in the same order.
 import { getSession } from "../session.js";
+import { HIDDEN_PAGES } from "./router.js";
 const node = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const icons = {
   overview: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z",
@@ -75,6 +76,7 @@ export function setNavCount(id, n) {
 export function buildNav(nav, { onPage } = {}) {
   const saved = savedCounts();
   for (const [id, label] of pages) {
+    if (HIDDEN_PAGES.has(id)) continue;
     const a = node("a", "nav-link"); a.href = `dashboard.html?page=${id}`; a.dataset.page = id; a.title = label;
     a.append(icon(id), node("span", "", label));
     // All tickets, Date requests and (administrators) Needs review: the last known counts, see setNavCount.
@@ -102,8 +104,11 @@ export function arrangeNav(nav, { admin }) {
   const item = id => nav.querySelector(id === "databases" ? "#dbreport-link" : id === "monitor" ? "#ai1-monitor-link" : id === "knowledge" ? "#knowledge-link" : `[data-page="${id}"]`);
   const label = nav.querySelector("#nav-admin-label");
   label.hidden = !admin;
-  for (const id of navOrder) { if (id === "workload") nav.appendChild(label); nav.appendChild(item(id)); }
-  for (const id of adminPages) item(id).hidden = !admin;
+  // Hidden pages have no link, so the ADMIN label goes above the first administrator link that is shown.
+  const shown = id => !HIDDEN_PAGES.has(id);
+  const firstAdmin = navOrder.find(id => adminPages.has(id) && shown(id));
+  for (const id of navOrder) { if (!shown(id)) continue; if (id === firstAdmin) nav.appendChild(label); nav.appendChild(item(id)); }
+  for (const id of adminPages) if (shown(id)) item(id).hidden = !admin;
   item("monitor").hidden = false;
 }
 

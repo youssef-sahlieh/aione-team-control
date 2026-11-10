@@ -34,8 +34,8 @@ test("filters round-trip through the address and are removed when leaving the pa
   assert.equal(routeUrl("analytics",null,url).searchParams.get("from"),"2026-10-01");
 });
 
-test("only administrators can open the analytics page",()=>{
+test("the paused analytics page: its address opens Clients for administrators and All tickets for others",()=>{
   const url=new URL("https://app.test/dashboard.html?page=analytics");
-  assert.equal(readRoute(url,true).page,"analytics");
+  assert.equal(readRoute(url,true).page,"clients");
   assert.equal(readRoute(url,false).page,"tickets");
 });
