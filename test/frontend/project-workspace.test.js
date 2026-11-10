@@ -34,7 +34,8 @@ test('filters, search and sort cover the whole list; paging is a slice of it',()
 
 test('totals keep actual work apart from commercial hours; problems are named',()=>{
   assert.deepEqual(ticketTotals(list),{tickets:4,open:3,estimatedHours:3,agreedHours:2,actualHours:8,commercialHours:4});
-  assert.deepEqual(ticketProblems(list[3]).map(p=>p.kind),['pending','review','failed','unclassified']);
+  // Not classified is one note above the table, not a problem on each ticket.
+  assert.deepEqual(ticketProblems(list[3]).map(p=>p.kind),['pending','review','failed']);
   assert.match(syncLabel(list[3]),/0.5 h not in Odoo yet · 1 entry needs review · Billing not saved in Odoo: boom/);
   assert.equal(syncLabel(list[0]),'OK');
 });

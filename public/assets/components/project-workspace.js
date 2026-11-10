@@ -28,6 +28,12 @@ export function workspaceTicketsChanged(keys,{reload=true}={}){
   if(reload)for(const id of hit)if(!states.get(id).loading)load(id).catch(()=>{});
   return hit;
 }
+// After a project's billing default changed or Odoo was synced: the open workspaces re-read their tickets, so the
+// effective billing shown is the saved one (a workspace that has never been opened has nothing to reload).
+export function reloadProjectWorkspaces(ids=null){
+  const hit=[...states].filter(([id,s])=>s.data&&(!ids||ids.includes(id))).map(([id])=>id);
+  return Promise.all(hit.map(id=>load(id).catch(()=>{})));
+}
 let api=null;
 async function load(id){
   const s=stateOf(id),q=new URLSearchParams({id:String(id),...(s.period||{})});
@@ -60,14 +66,14 @@ export function mountProjectWorkspace(cell,p,ctx){
     const t=s.data?.tickets||[];filters.hidden=!s.filtersOpen;filtersBtn.setAttribute('aria-expanded',String(s.filtersOpen));const n=hiddenCount(v);filtersBtn.textContent=n?'Filters ('+n+')':'Filters';
     if(!s.filtersOpen)return;
     const sel=(label,key,options)=>{const x=pick(label,options,v[key]);x.addEventListener('change',()=>{v[key]=x.value;v.page=0;draw();});return labelled(label,x);};
-    const from=el('input','inp'),to=el('input','inp');from.type=to.type='date';from.value=s.period?.from||'';to.value=s.period?.to||'';from.setAttribute('aria-label','Period from');to.setAttribute('aria-label','Period to');
+    const from=el('input','inp'),to=el('input','inp');from.type=to.type='date';from.value=s.period?.from||'';to.value=s.period?.to||'';from.setAttribute('aria-label','Work hours from');to.setAttribute('aria-label','Work hours to');
     filters.replaceChildren(sel('Status','status',[['','Open and closed'],...Object.entries(STATUS_FILTERS)]),sel('Developer','dev',[['','Any developer'],...developers(t).map(d=>[d,d])]),sel('Source','source',[['','Any source'],...Object.entries(SOURCE)]),
       sel('Billing','billing',[['','Any billing'],...Object.entries(EFFECTIVE).map(([k,l])=>[k,'Effective: '+l]),['inherit','Override: inherits the project'],...Object.entries(OVERRIDE).map(([k,l])=>['override:'+k,'Override: '+l])]),
       sel('Sync & setup','problems',[['','Any'],...Object.entries(PROBLEM_FILTERS)]),
       button('Clear filters',()=>{Object.assign(v,{status:'',dev:'',source:'',billing:'',problems:'',page:0});draw();},'linkbtn'),
-      labelled('Period from',from),labelled('to',to),
-      button('Use period',()=>{if(!from.value&&!to.value){s.period=null;}else s.period={...(from.value?{from:from.value}:{}),...(to.value?{to:to.value}:{})};load(p.odooId);},'btn'),
-      ...(s.period?[button('Default period',()=>{s.period=null;load(p.odooId);},'linkbtn')]:[]));
+      labelled('Work hours from',from),labelled('to',to),
+      button('Apply work hours period',()=>{if(!from.value&&!to.value){s.period=null;}else s.period={...(from.value?{from:from.value}:{}),...(to.value?{to:to.value}:{})};load(p.odooId);},'btn'),
+      ...(s.period?[button('Use the project’s period',()=>{s.period=null;load(p.odooId);},'linkbtn')]:[]));
   }
   function drawDesc(){
     const text=s.data?.project.description||'';desc.replaceChildren();if(!text)return;
@@ -90,6 +96,8 @@ export function mountProjectWorkspace(cell,p,ctx){
       document.createTextNode(' · Actual '+hours(all.actualHours)+' · Commercial '+hours(all.commercialHours)+' · Agreed '+hours(all.agreedHours)+' · Estimated '+hours(all.estimatedHours)));
     line.title='Every ticket matching the filters, on all pages. Commercial is what the work charges: agreed hours once, else billable work.';
     totals.append(line,el('p','budget-sub','Hours: '+d.scope.label.toLowerCase()));
+    const unclassified=d.tickets.filter(t=>t.effective?.value==='unclassified').length;
+    if(unclassified)note.append(el('p','business-guidance',unclassified+(unclassified===1?' ticket has':' tickets have')+' no billing: the project is not classified and the ticket has no override. Set the project’s billing default to fix them.'));
     if(sel.length){const b=el('p','ws-selected',sel.length+' selected · Actual '+hours(st.actualHours)+' · Commercial '+hours(st.commercialHours)+' · Agreed '+hours(st.agreedHours)+' ');b.append(button('Clear selection',()=>{s.selected.clear();draw();},'linkbtn'));totals.append(b);}
     if(!view.matching.length){const m=el('p','business-guidance','No tickets match. ');m.append(button('Clear search and filters',()=>{Object.assign(v,{q:'',status:'',dev:'',source:'',billing:'',problems:'',page:0});search.value='';draw();},'linkbtn'));wrap.replaceChildren(m);return;}
     const table=el('table','budget-table ws-table'),head=el('tr'),body=el('tbody');table.append(el('thead'),body);table.tHead.append(head);
@@ -120,7 +128,7 @@ function ticketRow(t,p,s,ctx,draw){
   if(t.description){const dp=el('span','ws-preview',t.description);dp.dir='auto';dp.title=t.descriptionLength>t.description.length?'Open the ticket for the full description.':'';c2.append(dp);}
   const c3=el('td','',t.status||(t.closed?'Closed':'—'));
   const c4=el('td','ws-people');c4.append(el('span','',(t.devs||[]).length?'Developers: '+t.devs.join(', '):'—'));if(t.assignee)c4.append(el('span','budget-sub','Assignee: '+t.assignee));
-  const c5=el('td','ws-billing'),bsel=pick('Billing of '+t.key,[['inherit','Project: '+(EFFECTIVE[p.billing?.default]||'not classified')],...Object.entries(OVERRIDE)],t.override||'inherit');
+  const c5=el('td','ws-billing'),bsel=pick('Billing of '+t.key,[['inherit','Inherits project: '+(EFFECTIVE[s.data?.project?.default]||'not classified')],...Object.entries(OVERRIDE)],t.override||'inherit');
   if(t.effective?.value==='unclassified')bsel.classList.add('ws-unclassified');
   bsel.addEventListener('change',async()=>{bsel.disabled=true;ctx.say('Saving the billing of '+t.key+'…');
     try{await ctx.api('/billing/ticket',{method:'PUT',body:{key:t.key,revision:t.revision,billing:bsel.value}});ctx.say('Billing saved for '+t.key+'. Its hours are recounted.');await refreshAfter([t.key],p,ctx);}

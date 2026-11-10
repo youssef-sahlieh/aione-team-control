@@ -1,6 +1,6 @@
 import {createReportBrowser} from './report-browser.js';
 import {createBillingAdmin} from './billing-admin.js';
-import {mountProjectWorkspace,workspaceTicketsChanged} from './project-workspace.js';
+import {mountProjectWorkspace,workspaceTicketsChanged,reloadProjectWorkspaces} from './project-workspace.js';
 import { createdDate, DASH_PRIORITIES } from '../models/ticket-business.js';
 import { BUDGET_LABEL, DEFAULT_VIEW, budgetStatus, hours, signedHours, percent, budgetText, budgetRows, budgetCsvRows, budgetCounts, projectChoices, hiddenFilterCount, BILLING_DEFAULT, BILLING_FILTERS, billingFigures, assignableProjects, MAPPING_KINDS, mappingSuggestion, mappingRows, mappingCounts } from '../models/odoo-projects.js';
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
@@ -322,8 +322,11 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
         if(r.busy){say('A sync from Odoo is already running. Try again in a minute.');return;}
         if(r.changed)await loadCatalog();else await loadProjects().catch(()=>{});
         await refresh();
+        await reloadProjectWorkspaces();
         const counts=(r.customers!=null?r.customers+' contacts, ':'')+r.projects+' projects';
-        say(r.changed?r.added+' new from Odoo ('+counts+').':'Up to date ('+counts+').');
+        // Billing is part of the sync: say what it kept back for review, or why it could not be read.
+        const kept=r.billing?.conflicts?' Billing: '+r.billing.conflicts+' '+(r.billing.conflicts===1?'difference':'differences')+' kept for review.':'';
+        say((r.changed?r.added+' new from Odoo ('+counts+').':'Synced with Odoo ('+counts+').')+kept+(r.billingError?' '+r.billingError:''),!!r.billingError);
         if(r.changed)await onChange();
       }catch(err){await loadProjects().catch(()=>{});syncLine();message(msg,err);}
       finally{syncing=false;syncBtn.disabled=false;syncBtn.textContent='Sync from Odoo now';}
@@ -572,16 +575,27 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     search.addEventListener('input',()=>{budgetView.q=search.value;budgetView.page=0;draw();});
     const labelled=(text,node)=>{const l=el('label','business-field');l.append(el('span','',text),node);return l;};
     const billingLabel=labelled('Billing',billingSel);
+    const dates=el('div','budget-date-bar');
+    const dateField=pick('Project date',[['created','Project created'],['lastWork','Last work logged']]);
+    const dateFrom=input('date',budgetView.dateFrom),dateTo=input('date',budgetView.dateTo);
+    dateFrom.setAttribute('aria-label','Project date from');dateTo.setAttribute('aria-label','Project date to');
+    const applyDates=()=>{dateFrom.max=dateTo.value;dateTo.min=dateFrom.value;
+      if(dateFrom.value&&dateTo.value&&dateFrom.value>dateTo.value){dateTo.setCustomValidity('End date must be on or after start date.');dateTo.reportValidity();return;}
+      dateTo.setCustomValidity('');Object.assign(budgetView,{dateField:dateField.value,dateFrom:dateFrom.value,dateTo:dateTo.value,page:0});draw();};
+    for(const node of [dateField,dateFrom,dateTo])node.addEventListener('change',applyDates);
+    const recent=days=>{const end=new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Jerusalem'}),start=new Date(end+'T12:00:00Z');start.setUTCDate(start.getUTCDate()-days+1);dateFrom.value=start.toISOString().slice(0,10);dateTo.value=end;applyDates();};
+    dates.append(labelled('Project date',dateField),labelled('From',dateFrom),labelled('To',dateTo),button('Last 30 days',()=>recent(30),'btn'),button('Last 90 days',()=>recent(90),'btn'),button('All dates',()=>{dateFrom.value=dateTo.value='';applyDates();},'linkbtn'));
+    const dateNote=el('p','budget-sub budget-date-note','These dates filter projects by date (both ends included). They do not recalculate lifetime hours.');dates.append(dateNote);
     filters.append(labelled('Budget status',statusSel),labelled('Client in Odoo',missingSel),labelled('Tickets',ticketSel),billingLabel,labelled('Sort',sortSel),
-      button('Clear filters',()=>{Object.assign(budgetView,{status:'',missingClient:'',tickets:'',billing:'',sort:DEFAULT_VIEW.sort,dir:DEFAULT_VIEW.dir,page:0});draw();},'linkbtn'));
+      button('Clear filters',()=>{Object.assign(budgetView,{status:'',missingClient:'',tickets:'',billing:'',dateField:'created',dateFrom:'',dateTo:'',sort:DEFAULT_VIEW.sort,dir:DEFAULT_VIEW.dir,page:0});draw();},'linkbtn'));
     bar.append(search,clientSel,filtersBtn,info);
     const wrap=el('div','table-wrap'),table=el('table','budget-table'),head=el('thead'),body=el('tbody'),foot=el('tfoot'),pager=el('div','budget-pager');table.append(head,body,foot);wrap.append(table);
-    box.append(bar,filters,warn,msg,wrap,pager);root.append(box);
+    box.append(bar,dates,filters,warn,msg,wrap,pager);root.append(box);
     let data=null,pending=false;
     const rows=()=>data?data.projects:[],shown=()=>budgetRows(rows(),budgetView),count=(s,n)=>n+' '+s+(n===1?'':'s');
     const ctx={data:()=>data,say,onMap,closed:()=>{if(pending){pending=false;draw();}}};
     // The controls follow the view (after Clear filters, or a header click changing the sort).
-    function controls(){statusSel.value=budgetView.status;missingSel.value=budgetView.missingClient;ticketSel.value=budgetView.tickets;billingSel.value=budgetView.billing||'';billingLabel.hidden=!billingShown(data);sortSel.value=budgetView.sort+':'+budgetView.dir;clientSel.value=budgetView.client||'';
+    function controls(){dateField.value=budgetView.dateField;dateFrom.value=budgetView.dateFrom;dateTo.value=budgetView.dateTo;dateFrom.max=budgetView.dateTo;dateTo.min=budgetView.dateFrom;statusSel.value=budgetView.status;missingSel.value=budgetView.missingClient;ticketSel.value=budgetView.tickets;billingSel.value=budgetView.billing||'';billingLabel.hidden=!billingShown(data);sortSel.value=budgetView.sort+':'+budgetView.dir;clientSel.value=budgetView.client||'';
       const n=hiddenFilterCount(budgetView);filtersBtn.textContent=n?'Filters ('+n+')':'Filters';}
     function clientOptions(){const v=budgetView.client,names=[...new Set(rows().map(p=>p.client).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
       clientSel.replaceChildren(new Option('All clients',''),...names.map(c=>new Option(c,c)),new Option('No client','__none'));if(v&&v!=='__none'&&!names.includes(v))clientSel.append(new Option(v,v));}
@@ -671,7 +685,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
   // Billing cells: the default, and consumed of the allowance with its status ("6h of 10h", Near limit).
   function billingCells(p){
     const f=billingFigures(p);if(!f)return [el('td','','—'),el('td','','—')];
-    const def=el('td');def.append(el('span','project-status'+(p.billing.default?'':' unmapped'),f.defaultLabel));if(f.unclassifiedHours)def.append(el('span','budget-sub',hours(f.unclassifiedHours)+' not classified'));
+    const def=el('td');def.append(el('span','project-status'+(p.billing.default?'':' unmapped'),f.defaultLabel));if(p.billing.odooSync?.state==='synced')def.append(el('span','budget-sub','Synced with Odoo'));if(f.unclassifiedHours)def.append(el('span','budget-sub',hours(f.unclassifiedHours)+' not classified'));
     const used=el('td','num'+(f.remainingHours<0?' over':''),hours(f.consumedHours)+(f.allocatedHours!=null?' of '+hours(f.allocatedHours):''));
     used.append(el('span','budget-sub',f.statusLabel+(f.remainingHours!=null?' · '+signedHours(f.remainingHours)+' left':'')+(f.pool?' · shared pool':'')+(f.emailLabel?' · '+f.emailLabel:'')));
     // Billing that isn't set up or didn't reach Odoo, so it shows without opening the row.
@@ -687,7 +701,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     if(!admin())return box;
     const sel=el('select','fsel');sel.setAttribute('aria-label','Billing default for '+p.name);option(sel,'Not classified','');for(const [v,l] of Object.entries(BILLING_DEFAULT))option(sel,l,v);sel.value=p.billing.default||'';
     sel.addEventListener('change',async()=>{sel.disabled=true;ctx.say('Saving the billing default…');
-      try{await billing.setProjectDefault(p.odooId,sel.value||null);ctx.say('Billing default saved for “'+p.name+'”. Its tickets are recounted.');await clientsPage?.refresh({mapping:false});}
+      try{await billing.setProjectDefault(p.odooId,sel.value||null);ctx.say('Billing default saved for “'+p.name+'”. Its tickets are recounted.');await reloadProjectWorkspaces([p.odooId]);await clientsPage?.refresh({mapping:false});}
       catch(err){ctx.say(err.message||String(err),true);sel.value=p.billing.default||'';}finally{sel.disabled=false;}});
     const l=el('label','business-field');l.append(el('span','','Billing default'),sel);box.append(l);
     return box;
@@ -720,7 +734,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     if(p.archived)head.append(el('span','project-status archived','Archived in Odoo'));if(p.missingClient)head.append(el('span','project-status unmapped','No client'));
     const link=el('a','btn','Open in Odoo');link.href=p.url;link.target='_blank';link.rel='noopener';head.append(link);body.append(head);
     const facts=el('dl','project-budget-summary');
-    for(const [k,v] of [['Allocated',p.allocatedHours==null?'Allocation not set':hours(p.allocatedHours)],['Logged in Odoo',hours(p.loggedHours)],['Remaining',p.remainingHours==null?'—':signedHours(p.remainingHours)],['Budget used',percent(p.usedPercent)],['Status',budgetText(p)],['Last work log',dateText(p.lastWorkDate)],...(p.pendingHours>0?[['Not in Odoo yet',hours(p.pendingHours)]]:[])])facts.append(el('dt','',k),el('dd','',v));
+    for(const [k,v] of [['Allocated',p.allocatedHours==null?'No allocation':hours(p.allocatedHours)],['Logged in Odoo',hours(p.loggedHours)],['Remaining',p.remainingHours==null?'—':signedHours(p.remainingHours)],['Budget used',percent(p.usedPercent)],['Status',budgetText(p)],['Last work log',dateText(p.lastWorkDate)],...(p.pendingHours>0?[['Not in Odoo yet',hours(p.pendingHours)]]:[])])facts.append(el('dt','',k),el('dd','',v));
     body.append(el('h3','','Budget'),facts,el('p','business-guidance','Near limit from '+Math.round(r.nearLimit*100)+'% of the allocated hours. Time not in Odoo yet is shown apart and not counted.'));
     body.append(el('h3','','Tickets ('+r.tickets.length+')'));
     if(!r.tickets.length)body.append(el('p','business-guidance','No dashboard ticket has this Odoo project.'));

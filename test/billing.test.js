@@ -6,7 +6,7 @@ import worker,{makeToken} from '../proxy/src/handler.js';
 import {memoryStore,saveUser} from '../proxy/src/users.js';
 import {metadataKey,odooProjectsKey} from '../proxy/src/ticket-metadata.js';
 import {todayIn} from '../proxy/src/time-entries.js';
-import {effectiveBilling,allowanceStatus,billingSnapshot,reconcileTicket,readLedger,evaluateAlerts,deliverAlert,readBillingConfig,mailMode,recipients,alertMail,scanOdoo,runScan,quotationLink} from '../proxy/src/billing.js';
+import {effectiveBilling,allowanceStatus,billingSnapshot,reconcileTicket,readLedger,evaluateAlerts,deliverAlert,readBillingConfig,mailMode,recipients,alertMail,scanOdoo,runScan,quotationLink,syncBillingFromOdoo,readProjectDefaults} from '../proxy/src/billing.js';
 
 const admin={email:'admin@example.invalid',name:'Manager',role:'admin',dev:'builder',v:1};
 const user={email:'user@example.invalid',name:'Dana Developer',role:'user',dev:'builder',v:1};
@@ -293,3 +293,73 @@ test('preview of the rollout counts existing ticket billing as overrides',async(
   assert.deepEqual(m.data.ticketOverrides,{billable:1,not_billable:0,inherit:1});assert.equal(m.data.projects.unclassified.length,3);
 });
 
+
+
+test('mapped Odoo billing imports all projects, updates changed values and ticket inheritance without writing back',async()=>{
+ const s=await setup({ODOO_URL:'https://odoo.invalid',ODOO_DB:'db',ODOO_LOGIN:'billing-import',ODOO_API_KEY:'key'});
+ await s.config({fields:{project:'x_billing',task:'x_billing_mode'},fieldTypes:{project:'boolean',task:'selection'},values:{project:{},task:{yes:'billable',no:'not_billable',project:'inherit'}}});
+ await s.ticket('INT-501');await s.ticket('INT-502',{billing:'billable'});
+ let checked=true,mode='project',writes=0;const original=globalThis.fetch;
+ globalThis.fetch=async(url,init)=>{const rpc=JSON.parse(init.body).params;if(rpc.service==='common')return Response.json({result:7});
+  const [model,method,args,kw]=rpc.args.slice(3);
+  if(method==='write'){writes++;throw Error('Pull must not write to Odoo');}
+  if(model==='res.users')return Response.json({result:[{company_ids:[1,2]}]});
+  assert.deepEqual(kw.context.allowed_company_ids,[1,2]);
+  if(model==='project.project'){assert.deepEqual(args[0],[10,12,20]);return Response.json({result:[{id:10,x_billing:checked},{id:12,x_billing:false},{id:20,x_billing:true}]});}
+  if(model==='project.task')return Response.json({result:[{id:501,name:'[INT-501] Test',project_id:[10,'Branch A'],x_billing_mode:mode},{id:502,name:'[INT-502] Test',project_id:[10,'Branch A'],x_billing_mode:'project'}]});
+  throw Error(model+'/'+method);
+ };
+ try{
+  const first=await syncBillingFromOdoo(s.env);assert.ok(first.changed>0);
+  // INT-502 already has a dashboard override that Odoo's task does not share, and there is no baseline yet: kept and reported.
+  assert.deepEqual(first.conflicts.map(c=>c.id),['INT-502']);
+  let doc=await readProjectDefaults(s.env);assert.equal(doc.items[10].billing,'billable');assert.equal(doc.items[12].billing,'not_billable');assert.equal(doc.items[20].billing,'billable');
+  let view=(await s.call('/billing/ticket?key=INT-502')).data;assert.equal(view.override,'billable');assert.equal(view.effective.source,'ticket');
+  const revision=doc.revision;assert.equal((await syncBillingFromOdoo(s.env)).changed,0);assert.equal((await readProjectDefaults(s.env)).revision,revision);
+  checked=false;mode='yes';await syncBillingFromOdoo(s.env);
+  assert.equal((await readProjectDefaults(s.env)).items[10].billing,'not_billable');
+  view=(await s.call('/billing/ticket?key=INT-502')).data;assert.equal(view.override,'billable');assert.equal(view.effective.value,'billable');
+  view=(await s.call('/billing/ticket?key=INT-501')).data;assert.equal(view.override,'billable');assert.equal(view.effective.source,'ticket');
+  assert.equal(writes,0);
+ }finally{globalThis.fetch=original;}
+});
+
+
+test('billing import preserves a concurrent dashboard edit and a failed outgoing change',async()=>{
+ const s=await setup({ODOO_URL:'https://odoo.invalid',ODOO_DB:'db',ODOO_LOGIN:'billing-race',ODOO_API_KEY:'key'});
+ await s.config({fields:{project:'x_billing',task:''},fieldTypes:{project:'boolean'},values:{project:{},task:{}}});
+ await s.projects({10:'billable'});const original=globalThis.fetch;let race=true;
+ globalThis.fetch=async(url,init)=>{const rpc=JSON.parse(init.body).params;if(rpc.service==='common')return Response.json({result:7});
+  const [model]=rpc.args.slice(3);if(model==='res.users')return Response.json({result:[{company_ids:[1]}]});
+  if(race){race=false;await s.env.STORE.set('business:AION:billing:projects',JSON.stringify({revision:2,items:{10:{billing:'billable',odoo:{state:'failed',error:'Odoo unavailable'}}}}));}
+  return Response.json({result:[{id:10,x_billing:false}]});
+ };
+ try{
+  assert.equal((await syncBillingFromOdoo(s.env)).changed,0);
+  assert.equal((await readProjectDefaults(s.env)).items[10].billing,'billable');
+  await syncBillingFromOdoo(s.env);
+  assert.equal((await readProjectDefaults(s.env)).items[10].odoo.state,'failed');
+  assert.equal((await readProjectDefaults(s.env)).items[10].billing,'billable');
+ }finally{globalThis.fetch=original;}
+});
+
+test('a cleared project default stays cleared while Odoo is unchanged; an Odoo change against it is kept for review',async()=>{
+  const s=await setup({ODOO_URL:'https://odoo.invalid',ODOO_DB:'db',ODOO_LOGIN:'billing-clear',ODOO_API_KEY:'key'});
+  await s.config({fields:{project:'x_billing',task:''},fieldTypes:{project:'boolean'},values:{project:{},task:{}}});
+  // Odoo last confirmed billable (the baseline); the dashboard was then cleared to Not classified and never pushed.
+  await s.env.STORE.set('business:AION:billing:projects',JSON.stringify({revision:3,items:{10:{billing:null,odoo:{state:'synced',at:'2026-11-01T00:00:00.000Z',id:10,value:'billable'}}}}));
+  let odooValue=true;const original=globalThis.fetch;
+  globalThis.fetch=async(url,init)=>{const rpc=JSON.parse(init.body).params;if(rpc.service==='common')return Response.json({result:7});
+    const [model,method]=rpc.args.slice(3);if(method==='write')throw Error('Pull must not write to Odoo');
+    if(model==='res.users')return Response.json({result:[{company_ids:[1]}]});
+    return Response.json({result:[{id:10,name:'Alpha',x_billing:odooValue}]});
+  };
+  try{
+    assert.equal((await syncBillingFromOdoo(s.env)).changed,0);
+    assert.equal((await readProjectDefaults(s.env)).items[10].billing,null);
+    odooValue=false;
+    const r=await syncBillingFromOdoo(s.env);
+    assert.equal(r.changed,0);assert.equal(r.conflicts.length,1);assert.equal(r.conflicts[0].local,null);assert.equal(r.conflicts[0].odoo,'not_billable');
+    assert.equal((await readProjectDefaults(s.env)).items[10].billing,null);
+  }finally{globalThis.fetch=original;}
+});

@@ -90,7 +90,8 @@ export async function projectTickets(env,id,q,{readDetails}){
   let details={},detailsError=null;
   try{details=await readDetails(shown);}catch(e){detailsError='Ticket titles and statuses could not be read: '+String(e.message||e).slice(0,160);}
   const ledgers=await readLedgers(env,shown),exported=exportedByTicket(markers);
-  return {project:{odooId:id,name:String(project.name||''),description:htmlText(project.description).slice(0,4000)},scope,classification:!!cfg.classification,
+  // The project's default is sent with the tickets, so an inheriting ticket follows it after a change without a reload of the page.
+  return {project:{odooId:id,name:String(project.name||''),description:htmlText(project.description).slice(0,4000),default:snap.projectDefault(id)},scope,classification:!!cfg.classification,
     total:all.length,truncated:all.length>shown.length,limit:TICKET_LIMIT,detailsError,
     tickets:shown.map(key=>ticketRow(env,key,{snap,work,ledger:ledgers[key],exported,details,projectId:id}))};
 }
