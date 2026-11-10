@@ -1,5 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { buildWorkbook } from "../../public/assets/models/xlsx-write.js";
+// Paused: Checks & Reports, Workload and Analytics are hidden (HIDDEN_PAGES in public/assets/app/router.js). Remove this skip when a page is restored.
+test.skip(true, "page hidden by HIDDEN_PAGES");
 
 // Checks & Reports export and import against a synthetic proxy. Every request is intercepted; nothing here is real data.
 const REPORT = {

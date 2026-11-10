@@ -1,4 +1,6 @@
 import { test, expect } from "@playwright/test";
+// Paused: Checks & Reports, Workload and Analytics are hidden (HIDDEN_PAGES in public/assets/app/router.js). Remove this skip when a page is restored.
+test.skip(true, "page hidden by HIDDEN_PAGES");
 
 // Analytics page against a synthetic proxy. Every request is intercepted; nothing here is real data.
 const jerusalem = (offset = 0) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jerusalem", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Date.now() + offset * 86400000));

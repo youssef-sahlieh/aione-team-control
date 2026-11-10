@@ -1,4 +1,6 @@
 import { test, expect } from "@playwright/test";
+// Paused: Checks & Reports, Workload and Analytics are hidden (HIDDEN_PAGES in public/assets/app/router.js). Remove this skip when a page is restored.
+test.skip(true, "page hidden by HIDDEN_PAGES");
 
 // Checks & Reports exceptions, export across pages and refresh failure, against a synthetic proxy. Nothing here is real data.
 const ticket = (i, extra = {}) => ({ key: "AION-" + i, source: "jira", title: "Ticket " + i, status: "Open", clientId: "c1", clientName: "Acme", subClientId: null, subClientName: null, billing: "billable", devs: ["dana"], employees: [], estimatedHours: null, agreedHours: 4, loggedHours: 2, actualHours: 2, overage: "ok", created: "2026-10-01", ...extra });
