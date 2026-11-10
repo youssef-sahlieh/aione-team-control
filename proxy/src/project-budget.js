@@ -8,7 +8,7 @@
 // Tickets are linked by their Odoo project (odooProjectId in the ticket's business fields); open means not completed in
 // the dashboard. Tickets needing review have an open pull request in the review queue (reviews.js).
 import { odoo, odooConfigured } from './odoo.js';
-import { BusinessError, readCatalog, requireStore, catalogKey, shownName, mainCompanyId, allocationField, allocatedHoursInput, readAllMetadata, readOdooProjects, projectIndex, recordProjectEvent, readProjectLog, syncStatus } from './ticket-metadata.js';
+import { BusinessError, readCatalog, requireStore, catalogKey, shownName, mainCompanyId, allocationField, allocatedHoursInput, readAllMetadata, readOdooProjects, projectIndex, recordProjectEvent, readProjectLog, syncStatus, companyContext } from './ticket-metadata.js';
 import { readEpicMap, isProject } from './epic-map.js';
 import { projectBillingRows } from './billing.js';
 import { readConfig, pendingByProject } from './time-entries.js';
@@ -29,11 +29,7 @@ export function budgetStatus(allocated,logged){
 }
 // Odoo's UTC "YYYY-MM-DD HH:MM:SS" as an ISO time; null when Odoo has none.
 const odooTime=v=>{if(!v)return null;const d=new Date(String(v).replace(' ','T')+'Z');return Number.isNaN(d.getTime())?null:d.toISOString();};
-// Every company of the Odoo user, so projects of all of them are read (Odoo otherwise shows only the default one).
-export async function companyContext(env){
-  const [u]=await odoo(env,'res.users','search_read',[[['login','=',env.ODOO_LOGIN]]],{fields:['company_ids'],limit:1});
-  return Array.isArray(u?.company_ids)&&u.company_ids.length?{allowed_company_ids:u.company_ids}:{};
-}
+export { companyContext };
 // Timesheet hours and the latest timesheet date per project in one grouped read (Odoo 19 renamed read_group to formatted_read_group).
 async function hoursByProject(env,ids,context){
   if(!ids.length)return {hours:{},last:{}};

@@ -385,22 +385,29 @@ export async function prepareImport(catalog,rows,source='project-workbook') {
   return {next,preview:{rows:rows.length,added:added.length,existing:next.entries.length-added.length,clients:next.entries.filter(e=>!e.parentId).length,subClients:next.entries.filter(e=>e.parentId).length,entries:next.entries.filter(e=>added.includes(e.id))}};
 }
 // Reads only the fields this Odoo has (versions differ, e.g. "mobile"), so a missing one can't fail the read.
-async function readFields(env,model,ids,wanted){
+async function readFields(env,model,ids,wanted,context){
   const known=await odoo(env,model,'fields_get',[],{attributes:['type']}).catch(()=>({}));
   const fields=wanted.filter(f=>known[f]);
-  return fields.length&&ids.length?odoo(env,model,'read',[ids],{fields}):[];
+  return fields.length&&ids.length?odoo(env,model,'read',[ids],{fields,...(context?{context}:{})}):[];
+}
+// Every company of the Odoo user, so projects of all of them are read (Odoo otherwise shows only the default one).
+export async function companyContext(env){
+  const [u]=await odoo(env,'res.users','search_read',[[['login','=',env.ODOO_LOGIN]]],{fields:['company_ids'],limit:1});
+  return Array.isArray(u?.company_ids)&&u.company_ids.length?{allowed_company_ids:u.company_ids}:{};
 }
 const many2one=v=>Array.isArray(v)?String(v[1]||''):'';
 // Projects made from the dashboard are copies of the Odoo project named TEMPLATE (its stages, tasks, timesheets,
 // visibility, billing and company), renamed and given the contact. A missing or doubled template is refused, so no
 // project is made without it. The copy is active and not a template itself, and keeps the template's tags plus Active
 // (an Odoo with project tags only; the tag is made the first time it is missing).
+// The template can belong to any company of the Odoo user, so it is looked for, read and copied in all of them
+// (Odoo otherwise sees only the user's default company).
 export const TEMPLATE='Template (Enterprise Customers or Odoo.sh)';
-export async function projectTemplate(env){
-  const found=await odoo(env,'project.project','search_read',[[['name','=ilike',TEMPLATE]]],{fields:['id'],order:'id',limit:2,context:{active_test:false}});
+export async function projectTemplate(env,context={}){
+  const found=await odoo(env,'project.project','search_read',[[['name','=ilike',TEMPLATE]]],{fields:['id'],order:'id',limit:2,context:{...context,active_test:false}});
   if(!found.length)problem('Odoo has no project named “'+TEMPLATE+'” to copy. Create it, or restore its name, first.',409,'no_template');
   if(found.length>1)problem('Odoo has more than one project named “'+TEMPLATE+'”. Rename the extra ones first.',409,'no_template');
-  const [r]=await readFields(env,'project.project',[found[0].id],['tag_ids','is_template','active']);
+  const [r]=await readFields(env,'project.project',[found[0].id],['tag_ids','is_template','active'],context);
   const values={};
   if(r&&'active' in r)values.active=true;
   if(r&&'is_template' in r)values.is_template=false;
@@ -491,9 +498,9 @@ async function createInOdoo(env,url,me,b){
       // The allocation is the same Odoo field the Allocated Hours column edits; left out when it is not known yet.
       const hours=allocatedHoursInput(b.allocatedHours);
       if(hours!==undefined&&!await allocationField(env))problem("This Odoo has no allocated hours on projects (Timesheets).",501,'no_allocation');
-      const {template,values}=await projectTemplate(env);
+      const context=await companyContext(env),{template,values}=await projectTemplate(env,context);
       // Odoo answers a copy with the new id, or (newer versions) a list of ids.
-      created=[await odoo(env,'project.project','copy',[template],{default:{...values,name,partner_id:partner,...(hours!==undefined?{allocated_hours:hours}:{})}})].flat()[0];
+      created=[await odoo(env,'project.project','copy',[template],{default:{...values,name,partner_id:partner,...(hours!==undefined?{allocated_hours:hours}:{})},context})].flat()[0];
       await recordProjectEvent(env,Number(created),me,{type:'created',allocatedHours:hours===undefined?null:hours}).catch(()=>{});
     }
   }catch(e){if(e instanceof BusinessError)throw e;problem("Odoo didn't create it: "+String(e.message||'unknown error').slice(0,200),502,'odoo');}
