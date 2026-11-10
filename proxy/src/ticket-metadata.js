@@ -547,6 +547,24 @@ export async function readAllMetadata(env){
   for(let i=0;i<keys.length;i+=200){const part=keys.slice(i,i+200),raws=store.mget?await store.mget(part.map(k=>metadataKey(env,k))):await Promise.all(part.map(k=>store.get(metadataKey(env,k))));part.forEach((k,n)=>{if(raws[n])out.set(k,migrateDash({...empty(),...JSON.parse(raws[n])}));});}
   return out;
 }
+// A dashboard project remapped to another Odoo project: every ticket on the old Odoo project moves to the new one, with
+// the Jira project it belongs to. Each ticket changes under its lock and bumps its revision. Work already posted to the
+// old project stays where it went (Needs mapping shows it as a conflict).
+export async function moveTicketsToOdooProject(env,fromId,toId,entry){
+  const store=requireStore(env),moved=[];
+  for(const [key,m] of await readAllMetadata(env)){
+    if(m.odooProjectId!==fromId)continue;
+    await withTicketLock(env,key,async()=>{
+      const k=metadataKey(env,key),raw=await store.get(k);if(raw==null)return;
+      const cur={...empty(),...JSON.parse(raw)};if(cur.odooProjectId!==fromId)return;
+      const next={...cur,odooProjectId:toId,clientId:entry.parentId,subClientId:entry.id,revision:cur.revision+1,updatedAt:new Date().toISOString()};
+      if(cur.subClientId!==entry.id)next.epicKey=null;
+      if(!await store.compareAndSet(k,raw,JSON.stringify(next)))problem('Ticket fields changed. Refresh and retry.',409,'conflict');
+      moved.push(key);
+    });
+  }
+  return moved;
+}
 export async function mappingPlan(env){
   const [all,catalog,snapshot,cfg]=await Promise.all([readAllMetadata(env),readCatalog(env),readOdooProjects(env),readConfig(env).catch(()=>({mapping:{}}))]);
   const projects=projectIndex(snapshot),find=id=>catalog.entries.find(e=>e.id===id),labelOf=id=>projects.get(id)?.label||'Odoo project #'+id,out=[];

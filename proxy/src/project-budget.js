@@ -8,7 +8,7 @@
 // Tickets are linked by their Odoo project (odooProjectId in the ticket's business fields); open means not completed in
 // the dashboard. Tickets needing review have an open pull request in the review queue (reviews.js).
 import { odoo, odooConfigured } from './odoo.js';
-import { BusinessError, readCatalog, requireStore, catalogKey, shownName, mainCompanyId, allocationField, allocatedHoursInput, readAllMetadata, readOdooProjects, projectIndex, recordProjectEvent, readProjectLog, syncStatus } from './ticket-metadata.js';
+import { BusinessError, readCatalog, requireStore, catalogKey, shownName, mainCompanyId, allocationField, allocatedHoursInput, readAllMetadata, readOdooProjects, projectIndex, recordProjectEvent, readProjectLog, syncStatus, moveTicketsToOdooProject } from './ticket-metadata.js';
 import { readEpicMap, isProject } from './epic-map.js';
 import { projectBillingRows } from './billing.js';
 import { readConfig, pendingByProject } from './time-entries.js';
@@ -166,16 +166,30 @@ export async function projectBudgetRoutes(request,env,url,me){
     const next=structuredClone(catalog),entry=next.entries.find(e=>e.id===b.entryId);
     if(!entry||!isProject(catalog,entry))problem('Choose a dashboard project.',404,'not_found');
     const odooOf=e=>(e.sources||[]).filter(s=>s.source==='odoo').map(s=>s.row);
+    // Remapping: the dashboard project is linked to another Odoo project. That one is replaced when it was deleted or moved
+    // out of the main company (it can't be unlinked on the page then); a project still in Odoo must be unlinked first.
+    let remapFrom=null;
+    if(b.unlink!==true&&!entry.archived){
+      const other=odooOf(entry).find(id=>id!==odooId);
+      if(other!=null){
+        const [old]=await odoo(env,'project.project','search_read',[[['id','=',other]]],{fields:['company_id'],limit:1,context:{...context,active_test:false}}).catch(odooFail);
+        const oldCompany=m2o(old?.company_id);
+        if(old&&(!oldCompany||oldCompany.id===main))problem('This project is already linked to Odoo #'+other+'. Unlink it there first.',409,'exists');
+        remapFrom=other;
+      }
+    }
     if(b.unlink===true){
       if(!odooOf(entry).includes(odooId))problem('This project is not linked to that Odoo project.',409,'not_linked');
       entry.sources=entry.sources.filter(s=>!(s.source==='odoo'&&s.row===odooId));entry.odooUnlinked=[...new Set([...(entry.odooUnlinked||[]),odooId])];
     }else{
       if(entry.archived)problem('Choose an active dashboard project.');
-      const other=odooOf(entry).find(id=>id!==odooId);if(other)problem('This project is already linked to Odoo #'+other+'. Unlink it there first.',409,'exists');
       if(odooOf(entry).includes(odooId))problem('Already linked.',409,'exists');
+      if(remapFrom!=null)entry.sources=entry.sources.filter(s=>!(s.source==='odoo'&&s.row===remapFrom));
       (entry.sources||=[]).push({source:'odoo',row:odooId});entry.odooUnlinked=(entry.odooUnlinked||[]).filter(id=>id!==odooId);if(!entry.odooUnlinked.length)delete entry.odooUnlinked;
     }
     next.revision=catalog.revision+1;
+    // The tickets move first: if the catalog then changed under us, the retry finds the same link and moves what is left.
+    if(remapFrom!=null)await moveTicketsToOdooProject(env,remapFrom,odooId,entry);
     if(!await store.compareAndSet(key,raw,JSON.stringify(next)))problem('Catalog changed. Refresh.',409,'conflict');
     return json(next);
   }

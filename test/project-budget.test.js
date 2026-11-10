@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import worker,{makeToken} from '../proxy/src/handler.js';
 import {memoryStore,saveUser} from '../proxy/src/users.js';
-import {prepareImport,catalogKey,readCatalog,allocatedHoursInput,metadataKey} from '../proxy/src/ticket-metadata.js';
+import {prepareImport,catalogKey,readCatalog,readMetadata,allocatedHoursInput,metadataKey} from '../proxy/src/ticket-metadata.js';
 import {budgetStatus} from '../proxy/src/project-budget.js';
 import {projectDefaultOf} from '../proxy/src/billing.js';
 const admin={email:'admin@example.invalid',name:'Manager',role:'admin',dev:'builder',v:1};
@@ -126,6 +126,27 @@ test('linking a dashboard project to an Odoo project, unlinking it, and the sync
     const after=(await readCatalog(s.env)).entries.find(e=>e.id===s.sub.id);assert.deepEqual(after.sources.filter(x=>x.source==='odoo'),[]);assert.deepEqual(after.odooUnlinked,[10]);
     const again=await prepareImport(await readCatalog(s.env),[{customer:'Acme',displayName:'Branch A',sourceRow:10}],'odoo');
     assert.deepEqual(again.next.entries.find(e=>e.id===s.sub.id).sources.filter(x=>x.source==='odoo'),[]);
+  }finally{s.restore();}
+});
+test('remapping a dashboard project to a new Odoo project moves its tickets, once the old Odoo project is gone',async()=>{
+  const s=await setup();
+  try{
+    const link=(body,me)=>s.call('/clients/odoo-projects/link','POST',body,me);
+    // AION-1 and AION-7 are on Branch A's Odoo project 10; AION-9 is on Holding's project 12 and must not move.
+    await s.env.STORE.set(metadataKey(s.env,'AION-1'),JSON.stringify({revision:3,odooProjectId:10,clientId:s.sub.parentId,subClientId:s.sub.id,epicKey:'AION-100'}));
+    await s.env.STORE.set(metadataKey(s.env,'AION-7'),JSON.stringify({revision:1,odooProjectId:10,clientId:s.sub.parentId,subClientId:s.sub.id}));
+    await s.env.STORE.set(metadataKey(s.env,'AION-9'),JSON.stringify({revision:1,odooProjectId:12}));
+    // Project 10 is still in Odoo: it must be unlinked first, and nothing moves.
+    assert.equal((await link({revision:1,odooId:11,entryId:s.sub.id})).status,409);
+    assert.equal((await readMetadata(s.env,'AION-1')).odooProjectId,10);
+    // Odoo deleted project 10. Linking the new project 11 remaps the dashboard project and its tickets follow.
+    s.projects.splice(s.projects.findIndex(p=>p.id===10),1);
+    const ok=await link({revision:1,odooId:11,entryId:s.sub.id});assert.equal(ok.status,200);
+    assert.deepEqual((await readCatalog(s.env)).entries.find(e=>e.id===s.sub.id).sources.filter(x=>x.source==='odoo').map(x=>x.row),[11]);
+    const one=await readMetadata(s.env,'AION-1');
+    assert.equal(one.odooProjectId,11);assert.equal(one.subClientId,s.sub.id);assert.equal(one.clientId,s.sub.parentId);assert.equal(one.revision,4);assert.equal(one.epicKey,'AION-100');
+    assert.equal((await readMetadata(s.env,'AION-7')).odooProjectId,11);
+    assert.equal((await readMetadata(s.env,'AION-9')).odooProjectId,12);
   }finally{s.restore();}
 });
 test('a new Odoo project takes its allocated hours: decimal, zero, or none when not known yet',async()=>{
