@@ -22,6 +22,25 @@ const TICKETS = () => ({ project: { odooId: 10, name: "Support pack", descriptio
     ticket({ key: "HD-3", source: "odoo", title: "Printer", status: "Solved", closed: true, override: "not_billable", effective: { value: "not_billable", source: "ticket" }, actualMinutes: 30 })
   ] });
 
+// Work logged in Odoo (made-up): four entries in two pages of two, on two tasks and on no task.
+const ODOO = "https://odoo.example.invalid/web#model=";
+const WORK_ENTRIES = [
+  { id: 91, date: "2026-11-03", hours: 1.5, description: "Login form", person: "Dana Developer", url: ODOO + "account.analytic.line&id=91", task: { id: 2, name: "Fix login page", key: null, url: ODOO + "project.task&id=2" } },
+  { id: 92, date: "2026-11-04", hours: 3, description: "Login tests", person: "Dana Developer", url: ODOO + "account.analytic.line&id=92", task: { id: 2, name: "Fix login page", key: null, url: ODOO + "project.task&id=2" } },
+  { id: 93, date: "2026-11-05", hours: 1, description: "Checkout", person: "Eli Developer", url: ODOO + "account.analytic.line&id=93", task: { id: 1, name: "Checkout fails", key: "AION-7", url: ODOO + "project.task&id=1" } },
+  { id: 94, date: "2026-11-06", hours: 0.5, description: "Call", person: "Eli Developer", url: ODOO + "account.analytic.line&id=94", task: null },
+];
+const workPage = (offset = "0") => {
+  const from = Number(offset), next = from + 2 < WORK_ENTRIES.length ? from + 2 : null;
+  return { project: { odooId: 10, name: "Support pack" }, period: { key: "month", from: "2026-11-01", to: "2026-11-30", label: "This month (2026-11-01 to 2026-11-30)" }, billable: false,
+    totals: { hours: 6, count: 4 }, unassigned: { hours: 0.5, count: 1 },
+    tasks: [
+      { id: 2, name: "Fix login page", key: null, url: ODOO + "project.task&id=2", hours: 4.5, count: 2, billing: { value: "billable", source: "project" } },
+      { id: 1, name: "Checkout fails", key: "AION-7", url: ODOO + "project.task&id=1", hours: 1, count: 1, billing: { value: "not_billable", source: "ticket" } },
+    ],
+    entries: WORK_ENTRIES.slice(from, from + 2), offset: from, limit: 25, nextOffset: next, warnings: [] };
+};
+
 async function open(page) {
   const errors = [], sent = [], calls = {};
   page.on("pageerror", (e) => errors.push(e.message));
@@ -50,6 +69,7 @@ async function open(page) {
     if (path === "/clients/needs-mapping") return json({ rows: [] });
     if (path === "/clients/odoo-projects") return json({ allocation: true, nearLimit: 0.8, unplacedPendingHours: 0, projects, billing: { scan: null } });
     if (path === "/clients/odoo-projects/tickets") return url.searchParams.get("id") === "10" ? json(data) : json({ code: "not_found", error: "That Odoo project was not found." }, 404);
+    if (path === "/clients/odoo-projects/work") return url.searchParams.get("id") === "10" ? json(workPage(url.searchParams.get("offset") || "0")) : json({ code: "not_found", error: "That Odoo project was not found." }, 404);
     if (path === "/clients/odoo-projects/import/preview") return json({ scope: { label: "Chargeable hours from 2025-11-09 to 2026-11-09" }, counts: { ok: 1, unchanged: 0, error: 1, warning: 1 },
       impact: { beforeMinutes: 90, afterMinutes: 120, deltaMinutes: 30, tickets: 1, allocation: [] },
       rows: [{ sheet: "tickets", row: 2, id: "INT-7", title: "", customer: "Acme", status: "ok", errors: [], warnings: ["Already exported (1 charge, 1.5 h): the next billable export carries the difference as an adjustment."], changes: [{ field: "billing", label: "Billing override", from: "Inherit project", to: "Billable" }], impact: { beforeMinutes: 90, afterMinutes: 120, deltaMinutes: 30 } },
@@ -72,13 +92,45 @@ const rowOf = (page, name) => page.locator(".budget-table tbody tr.budget-main",
 async function expand(page, name = "Support pack") { await rowOf(page, name).getByRole("button", { name: "More about " + name }).click(); return page.locator("#budget-detail-10 .ws"); }
 const wsRows = (ws) => ws.locator("tbody tr.ws-row");
 
+test("Project workspace: the work period, billable and ticket controls read again; Odoo work pages with Load more and links to Odoo", async ({ page }) => {
+  const seen = await open(page);
+  const ws = await expand(page);
+  await expect(ws.getByLabel("Work period", { exact: true })).toHaveValue("month");
+  await expect(ws.locator(".ws-custom")).toBeHidden();
+  await expect(ws.locator(".ws-work-wrap").first().locator("tbody tr")).toHaveCount(3); // two tasks and the work on no task
+  await expect(ws.locator(".ws-work-wrap").first().locator("tbody tr").nth(1)).toContainText("AION-7"); // the tasks are sorted by hours
+  await expect(ws.locator(".ws-totals")).toContainText("Lifetime, not limited to the period");
+  await expect(ws.getByText("Showing 2 of 4 entries")).toBeVisible();
+  await expect(ws.getByRole("link", { name: "Open task Fix login page in Odoo (new tab)" })).toHaveAttribute("target", "_blank");
+  await ws.getByRole("button", { name: "Load more entries" }).click();
+  await expect(ws.getByText("Showing 4 of 4 entries")).toBeVisible();
+  await expect(ws.getByRole("button", { name: "Load more entries" })).toHaveCount(0);
+  // A custom period: both dates are needed, and a reversed one is said in words and not read.
+  const tickets = seen.calls["GET /clients/odoo-projects/tickets"], work = seen.calls["GET /clients/odoo-projects/work"];
+  await ws.getByLabel("Work period", { exact: true }).selectOption("custom");
+  await expect(ws.locator(".ws-custom")).toBeVisible();
+  await ws.getByLabel("Work period from").fill("2026-11-10");
+  await ws.getByLabel("Work period to").fill("2026-11-01");
+  await expect(ws.locator(".ws-period-err")).toHaveText("The start date is after the end date.");
+  expect(seen.calls["GET /clients/odoo-projects/tickets"]).toBe(tickets);
+  await ws.getByLabel("Work period to").fill("2026-11-20");
+  await expect.poll(() => seen.calls["GET /clients/odoo-projects/work"]).toBe(work + 1);
+  await expect(ws.locator(".ws-period-err")).toBeHidden();
+  // The billable filter and the ticket mode read again as well.
+  await ws.getByLabel("Only billable tickets").check();
+  await expect.poll(() => seen.calls["GET /clients/odoo-projects/work"]).toBe(work + 2);
+  await ws.getByLabel("Tickets to show", { exact: true }).selectOption("all");
+  await expect.poll(() => seen.calls["GET /clients/odoo-projects/tickets"]).toBe(tickets + 3); // custom, billable, mode: one read each
+  expect(seen.errors).toEqual([]);
+});
+
 test("Project workspace: opening a row reads its tickets once; Jira, internal and Helpdesk each show with their billing and hours", async ({ page }) => {
   const seen = await open(page);
   await expect(rowOf(page, "Support pack").locator("td").nth(6)).toContainText("2of 3");
   expect(seen.calls["GET /clients/odoo-projects/tickets"]).toBeUndefined();
   const ws = await expand(page);
   await expect(wsRows(ws)).toHaveCount(3);
-  await expect(ws.locator("thead th")).toHaveText(["", "Ticket", "Title", "Status", "People", "Billing", "Est.", "Agreed", "Actual", "Commercial", "Odoo sync"]);
+  await expect(ws.locator(".ws-wrap thead th")).toHaveText(["", "Ticket", "Title", "Status", "People", "Billing", "Est.", "Agreed", "Actual", "Commercial", "Odoo sync"]);
   await expect(ws.locator("tr[data-key='AION-101'] .ws-source")).toHaveText("Jira");
   await expect(ws.locator("tr[data-key='INT-7'] .ws-source")).toHaveText("Internal");
   await expect(ws.locator("tr[data-key='HD-3'] .ws-source")).toHaveText("Helpdesk");
@@ -89,8 +141,8 @@ test("Project workspace: opening a row reads its tickets once; Jira, internal an
   await expect(ws.getByLabel("Billing of INT-7").locator("option:checked")).toHaveText("Inherits project: Billable");
   await expect(ws.locator("tr[data-key='AION-101'] .ws-sync")).toHaveText("—");
   // Actual work and commercial hours stay apart; the totals say what they cover.
-  await expect(ws.locator(".ws-scope")).toHaveText("3 tickets · 2 open · Actual 4 h · Commercial 3 h · Agreed 0 h · Estimated 3 h");
-  await expect(ws.locator(".ws-totals")).toContainText("Hours: since the allocation started (2026-10-01)");
+  await expect(ws.locator(".ws-totals .ws-scope")).toHaveText("3 tickets · 2 open · Actual 4 h · Commercial 3 h · Agreed 0 h · Estimated 3 h");
+  await expect(ws.locator(".ws-totals")).toContainText("Hours for since the allocation started (2026-10-01). Lifetime, not limited to the period");
   // The description is short until Show more.
   await expect(ws.locator(".ws-desc-text")).toContainText("…");
   await ws.getByRole("button", { name: "Show more" }).click();
@@ -102,7 +154,7 @@ test("Project workspace: opening a row reads its tickets once; Jira, internal an
   await ws.getByRole("button", { name: /^Filters/ }).click();
   await ws.getByLabel("Source", { exact: true }).selectOption("jira");
   await expect(wsRows(ws)).toHaveCount(1);
-  await expect(ws.locator(".ws-scope")).toContainText("1 of 3 tickets");
+  await expect(ws.locator(".ws-totals .ws-scope")).toContainText("1 of 3 tickets");
   await ws.getByRole("button", { name: "Clear filters" }).click();
   await ws.getByLabel("Select INT-7").check();
   await expect(ws.locator(".ws-selected")).toContainText("1 selected · Actual 2 h · Commercial 1.5 h");

@@ -75,10 +75,10 @@ test('a project\'s tickets: Jira, internal and Helpdesk, each once, with work ke
   await s.ticket('AION-7');await s.entry('AION-7',30,daysAgo(1),{source:'jira'});
   await s.entry('HD-302',45,daysAgo(1),{hdProjectId:10});
   await s.ticket('INT-9',{odooProjectId:20});await s.entry('INT-9',600,daysAgo(1),{projectId:20});
-  const r=await s.call('/clients/odoo-projects/tickets?id=10');assert.equal(r.status,200,JSON.stringify(r.data));
+  const r=await s.call('/clients/odoo-projects/tickets?id=10&period=all&mode=all');assert.equal(r.status,200,JSON.stringify(r.data));
   assert.deepEqual(r.data.tickets.map(t=>t.key),['AION-7','HD-302','INT-1','INT-2'],'each key once; the Odoo task AION-7 is the same ticket');
   assert.equal(r.data.project.description,'Support for Acme\nSecond line');
-  assert.equal(r.data.scope.from,daysAgo(30),'the scope starts with the allocation');
+  assert.equal(r.data.scope.key,'all');
   const by=Object.fromEntries(r.data.tickets.map(t=>[t.key,t]));
   assert.deepEqual([by['INT-1'].actualMinutes,by['INT-1'].chargeableMinutes],[240,120],'agreed hours charge once, the work itself is kept as actual');
   assert.deepEqual(by['INT-1'].effective,{value:'billable',source:'project'});assert.equal(by['INT-1'].agreedDeveloper,'Builder');

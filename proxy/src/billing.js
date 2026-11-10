@@ -567,7 +567,7 @@ const valueOfProject=(cfg,r)=>{
   return BILLING.includes(v)?v:undefined;
 };
 // A task's selection: "inherit" means no override (null). An empty or unmapped value is undefined, never inherit.
-const valueOfTask=(cfg,task)=>{
+export const valueOfTask=(cfg,task)=>{
   const raw=task[cfg.fields.task];
   if(raw===false||raw==null||raw==='')return undefined;
   const v=cfg.values.task[String(raw)];

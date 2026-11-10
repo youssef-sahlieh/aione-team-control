@@ -65,6 +65,29 @@ export function ticketTotals(list) {
 export const developers = list => [...new Set(list.flatMap(t => t.devs || []))].sort((a, b) => a.localeCompare(b));
 export const hiddenCount = v => ['status', 'dev', 'source', 'billing', 'problems'].filter(k => v[k]).length;
 
+// ---- Work period ----
+// The period the tickets and the Odoo work are read for (the server checks it again: proxy/src/project-work.js).
+export const WORK_PERIODS = { month: 'This month', last_month: 'Last month', last_30: 'Last 30 days', all: 'All dates', custom: 'Custom dates' };
+export const WORK_MODES = { work: 'With work in period', all: 'All tickets' };
+export const DEFAULT_WORK = { period: 'month', from: '', to: '', mode: 'work', billable: false };
+const MAX_CUSTOM_MS = 400 * 86400000;
+const isDate = d => /^\d{4}-\d{2}-\d{2}$/.test(d) && new Date(Date.parse(d + 'T00:00:00Z')).toISOString().slice(0, 10) === d;
+// Why a custom period cannot be read yet, in words ('' when it can). Both dates count; the start is not after the end.
+export function customPeriodError(from, to) {
+  if (!from || !to) return 'Choose both dates.';
+  if (!isDate(from) || !isDate(to)) return 'Choose valid dates.';
+  if (from > to) return 'The start date is after the end date.';
+  if (Date.parse(to + 'T00:00:00Z') - Date.parse(from + 'T00:00:00Z') > MAX_CUSTOM_MS) return 'Choose at most about a year.';
+  return '';
+}
+// The query both reads take (without the project): a custom period is sent with its dates.
+export function workQuery(w = DEFAULT_WORK) {
+  const q = new URLSearchParams({ period: w.period, mode: w.mode });
+  if (w.billable) q.set('billable', '1');
+  if (w.period === 'custom') { q.set('from', w.from); q.set('to', w.to); }
+  return q;
+}
+
 // ---- Files ----
 // One header list for each sheet, used by both the export and the import (the import finds the columns by these names).
 export const PROJECT_COLUMNS = ['Odoo Project ID', 'Project', 'Customer', 'Billing Default', 'Allocated Hours', 'Logged Hours (Odoo)', 'Worked Hours (period)', 'Billable Hours (period)', 'Consumed Hours', 'Allowance Remaining Hours', 'Billing Status', 'Open Tickets', 'Tickets', 'Exported At'];

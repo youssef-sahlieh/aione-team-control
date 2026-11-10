@@ -448,6 +448,23 @@
 .ws-choice input{width:auto}
 .ws-period{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;margin:0 0 10px 24px}
 .ws-period[hidden]{display:none}
+.ws-scope-bar{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end}
+.ws-scope-bar .business-field{min-width:0}
+.ws-scope-bar .fsel{min-height:36px}
+.ws-custom{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end}
+.ws-custom[hidden],.ws-period-err[hidden]{display:none}
+.ws-period-err{flex:1 1 100%;margin:0}
+.ws-check{display:flex;gap:6px;align-items:center;font-size:13px;min-height:36px}
+.ws-check input{width:auto;margin:0}
+.ws-work{display:flex;flex-direction:column;gap:8px;margin-top:6px;padding-top:10px;border-top:1px solid var(--line)}
+.ws-work-title{margin:0;font-size:15px}
+.ws-work-sub{margin:6px 0 0;font-size:13px}
+.ws-work-wrap{overflow-x:auto;background:var(--surface,#fff);border:1px solid var(--line);border-radius:8px}
+.budget-table.ws-work-table{font-size:13px}
+.budget-table.ws-work-table th,.budget-table.ws-work-table td{padding:5px 8px}
+.ws-unassigned td{color:var(--muted)}
+.ws-odoo-link{white-space:nowrap}
+.ws-desc-cell{min-width:160px;max-width:360px;word-break:break-word}
 .ws-import{display:flex;flex-direction:column;gap:8px;margin-top:10px}
 .ws-import-table{font-size:13px}
 .ws-imp-error td,.ws-imp-failed td{background:color-mix(in srgb,var(--crit) 8%,transparent)}
@@ -458,6 +475,7 @@
   .ws-actions .btn{flex:1 1 calc(50% - 6px)}
   .ws-filters .business-field{flex:1 1 100%}
   .ws-period{margin-left:0}
+  .ws-scope-bar>*,.ws-custom>*{flex:1 1 100%}
 }
 
 /* Visible project date controls and calmer, more readable project details. */
