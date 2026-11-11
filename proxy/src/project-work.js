@@ -42,7 +42,7 @@ export function workPeriod(q,today){
   return named(from,to);
 }
 
-const recordLink=(env,model,id)=>String(env.ODOO_URL||'').replace(/\/+$/,'')+'/web#id='+id+'&model='+model+'&view_type=form';
+export const recordLink=(env,model,id)=>String(env.ODOO_URL||'').replace(/\/+$/,'')+'/web#id='+id+'&model='+model+'&view_type=form';
 const intParam=(v,d)=>v==null||v===''?d:/^\d+$/.test(String(v))?Number(v):problem('Invalid paging.');
 
 // Every task of the project (archived ones too, their lines still count): its ticket key if it has one, and the value of
@@ -54,7 +54,7 @@ async function projectTasks(env,id,context,billing){
 }
 // A task's billing: a ticket's is the dashboard's (its override, else the project's default); an Odoo task's is its own
 // billing field, else the project's default.
-function billingOf(env,snap,projectId,task){
+export function billingOf(env,snap,projectId,task){
   let override=task.override;
   if(task.key&&sourceOf(env,task.key)){
     const rec=sourceOf(env,task.key)==='odoo'?snap.d.tickets[task.key]:snap.d.metas.get(task.key);
