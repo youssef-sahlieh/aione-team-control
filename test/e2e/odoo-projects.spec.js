@@ -79,11 +79,23 @@ async function open(page, { extra = [], skip = [], syncChanged = false, clock = 
       sent.push(JSON.parse(req.postData()));
       return json({ catalog }, 201);
     }
+    if (url.pathname === "/clients/odoo/options") {
+      return json({
+        supported: { type: true, name: true, parentId: true, email: true, phone: true, mobile: true, website: true, street: true, street2: true, city: true, zip: true, countryId: true, stateId: true, vat: true, companyRegistry: true, reference: true, language: true, tagIds: true, notes: true },
+        required: { name: true },
+        countries: [{ id: 10, name: "Netherlands", code: "NL" }, { id: 11, name: "Belgium", code: "BE" }],
+        languages: [{ code: "en_US", name: "English (US)" }, { code: "nl_NL", name: "Dutch / Nederlands" }],
+        tags: [{ id: 30, name: "VIP" }, { id: 31, name: "Partner" }],
+        states: []
+      });
+    }
+    if (url.pathname === "/clients/odoo/companies") return json({ companies: [{ id: 1, name: "Acme" }] });
     if (url.pathname === "/clients/odoo/customer") {
       const b = JSON.parse(req.postData()); sent.push(b);
       if (b.name === "Duplicate") return json({ code: "duplicate", error: "A contact named Duplicate already exists in Odoo." }, 409);
-      catalog.entries.push({ id: "c" + (catalog.entries.length + 1), name: b.name, parentId: null, sources: [{ source: "odoo-customer", row: 9 }] }); catalog.revision++;
-      return json({ catalog }, 201);
+      const id = "c" + (catalog.entries.length + 1);
+      catalog.entries.push({ id, name: b.name, parentId: null, sources: [{ source: "odoo-customer", row: 9 }] }); catalog.revision++;
+      return json({ id: 900 + catalog.entries.length, reconciled: false, url: "https://odoo.example.invalid/web#id=900&model=res.partner&view_type=form", saved: [{ label: "Type", value: "Company" }, { label: "Name", value: b.name }], mismatches: [], client: { id, name: b.name }, catalog, syncFailed: false }, 201);
     }
     if (url.pathname === "/clients/odoo-projects/link") {
       const b = JSON.parse(req.postData()); sent.push(b);
@@ -111,7 +123,7 @@ const showFilters = (page) => page.getByRole("button", { name: /^Filters/ }).cli
 test("Clients & Projects: a heading, four actions, a one-line sync status and the projects table", async ({ page }) => {
   const seen = await open(page);
   await expect(table(page)).toBeVisible();
-  await expect(page.locator(".clients-actions > .btn")).toHaveText(["Sync from Odoo now", "+ Create project", "Map tickets (4)"]);
+  await expect(page.locator(".clients-actions > .btn")).toHaveText(["Sync from Odoo now", "+ Add client", "+ Create project", "Map tickets (4)"]);
   await expect(page.locator(".clients-more > summary")).toHaveText("More");
   await expect(page.locator(".clients-sync")).toHaveText(/^Synced from Odoo /);
   await expect(page.locator(".clients-sync-error")).toHaveCount(0);
@@ -339,15 +351,18 @@ test("Map tickets: closing with a project chosen and not applied asks first", as
   await expect(createButton(page, "Map tickets (4)")).toBeFocused();
 });
 
-test("Clients & Projects: Create project opens a dialog beside Sync; Create contact is under More", async ({ page }) => {
+test("Clients & Projects: + Add client sits beside + Create project, and neither is under More", async ({ page }) => {
   await open(page);
   await expect(page.getByLabel("New project name")).toHaveCount(0);
   await createButton(page, "+ Create project").click();
   await expect(dialogNamed(page, "Create project")).toBeVisible();
   await expect(dialogNamed(page, "Create project").getByLabel("Project name")).toBeFocused();
   await page.keyboard.press("Escape");
-  await fromMore(page, "Create contact");
-  await expect(dialogNamed(page, "Create contact")).toBeVisible();
+  await expect(dialogNamed(page, "Create project")).toBeHidden();
+  await expect(page.locator(".clients-more-item", { hasText: "Create contact" })).toHaveCount(0);
+  await createButton(page, "+ Add client").click();
+  await expect(dialogNamed(page, "Add client")).toBeVisible();
+  await expect(dialogNamed(page, "Add client").getByLabel("Company name")).toBeFocused();
 });
 
 test("Clients & Projects: a new Odoo project takes a decimal allocation, or none when left empty", async ({ page }) => {
@@ -397,35 +412,34 @@ test("Clients & Projects: the project dialog checks its fields and rejects negat
   expect(seen.errors).toEqual([]);
 });
 
-test("Clients & Projects: the contact dialog validates, keeps values after a failed save, and adds the contact to the project selector", async ({ page }) => {
+test("Clients & Projects: Add client validates, keeps values after a failed save, and offers a project for the new client", async ({ page }) => {
   const seen = await open(page);
-  await fromMore(page, "Create contact");
-  const form = dialogNamed(page, "Create contact");
-  await form.getByRole("button", { name: "Create contact", exact: true }).click();
-  await expect(form.getByText("Enter the contact name.")).toBeVisible();
+  await createButton(page, "+ Add client").click();
+  const form = dialogNamed(page, "Add client");
+  await expect(form.getByText("Loading options from Odoo…")).toHaveCount(0);
+  await form.getByRole("button", { name: "Add client", exact: true }).click();
+  await expect(form.getByText("Enter the company name.")).toBeVisible();
   await expect(seen.sent).toEqual([]);
-  await form.getByLabel("Contact name").fill("Duplicate");
-  await form.getByLabel("Email (optional)").fill("not-an-email");
-  await form.getByRole("button", { name: "Create contact", exact: true }).click();
+  await form.getByLabel("Company name").fill("Duplicate");
+  await form.getByLabel("Email").fill("not-an-email");
+  await form.getByRole("button", { name: "Add client", exact: true }).click();
   await expect(form.getByText("Enter an email address like name@example.com")).toBeVisible();
-  await form.getByLabel("Email (optional)").fill("info@duplicate.example.invalid");
-  await form.getByLabel("Phone (optional)").fill("+972 50 000 0000");
-  await form.getByRole("button", { name: "Create contact", exact: true }).click();
+  await form.getByLabel("Email").fill("info@duplicate.example.invalid");
+  await form.getByLabel("Phone").fill("+972 50 000 0000");
+  await form.getByRole("button", { name: "Add client", exact: true }).click();
   // Odoo refuses the name: the message shows and everything typed stays.
   await expect(form.locator(".msg.err")).toContainText("A contact named Duplicate already exists in Odoo.");
-  await expect(form.getByLabel("Contact name")).toHaveValue("Duplicate");
-  await expect(form.getByLabel("Phone (optional)")).toHaveValue("+972 50 000 0000");
-  // A new name works: the dialog closes, the page reports it, and the contact is in the project's contact list.
-  await form.getByLabel("Contact name").fill("Globex");
-  await form.getByRole("button", { name: "Create contact", exact: true }).click();
-  await expect(form).toBeHidden();
-  await expect(page.getByText("Contact “Globex” created in Odoo.")).toBeVisible();
-  await expect(page.locator(".clients-more > summary")).toBeFocused();
-  expect(seen.sent.at(-1)).toEqual({ name: "Globex", email: "info@duplicate.example.invalid", phone: "+972 50 000 0000" });
-  await createButton(page, "+ Create project").click();
+  await expect(form.getByLabel("Company name")).toHaveValue("Duplicate");
+  await expect(form.getByLabel("Phone")).toHaveValue("+972 50 000 0000");
+  // A new name works: the dialog shows what Odoo holds, with a link, and offers a project for the new client.
+  await form.getByLabel("Company name").fill("Globex");
+  await form.getByRole("button", { name: "Add client", exact: true }).click();
+  await expect(form.getByRole("heading", { name: "Client saved in Odoo" })).toBeVisible();
+  await expect(form.getByRole("link", { name: "Open in Odoo" })).toHaveAttribute("href", /model=res\.partner/);
+  expect(seen.sent.at(-1)).toEqual({ type: "company", name: "Globex", email: "info@duplicate.example.invalid", phone: "+972 50 000 0000" });
+  await form.getByRole("button", { name: "Create project for this client" }).click();
   const project = dialogNamed(page, "Create project");
-  await project.getByLabel("Contact").fill("Globex");
-  await expect(project.getByRole("option", { name: "Globex", exact: true })).toBeVisible();
+  await expect(project.getByLabel("Contact")).toHaveValue("Globex");
   expect(seen.errors).toEqual([]);
 });
 

@@ -1,5 +1,6 @@
 // Private dashboard business data. Never include these fields in Jira mutations.
 import { odoo, odooConfigured } from './odoo.js';
+import { createClientContact, clientFormOptions, parentCompanyChoices } from './client-contact.js';
 import { developerNames, validDev } from './users.js';
 import { timeClosureErrors, ticketEntries, summarize, readSummaries, syncAgreedLine, agreedLineSent, syncedEntryCount, todayIn, readConfig, ticketTask } from './time-entries.js';
 export const INTERNAL_ASSIGNEE = '__internal_tickets';
@@ -476,17 +477,17 @@ export async function clientDetails(env,clientId){
 async function createInOdoo(env,url,me,b){
   if(me.role!=='admin')problem('Only administrators manage the client catalog.',403,'forbidden');
   if(!odooConfigured(env))problem('Odoo is not connected.',501,'odoo_off');
+  if(url.pathname==='/clients/odoo/customer'){
+    // A contact is checked, created and read back by client-contact.js; the catalog is then read again so the new client is in it.
+    const made=await createClientContact(env,b);
+    const syncFailed=!await syncCatalogFromOdoo(env,{force:true}).then(()=>true,()=>false);
+    const catalog=await readCatalog(env),client=made.company?catalog.entries.find(e=>!e.parentId&&nameKey(e.name)===nameKey(made.company)):null;
+    const {company,...result}=made;
+    return Response.json({...result,client:client?{id:client.id,name:client.name}:null,catalog,syncFailed},{status:201,headers:{'Cache-Control':'no-store'}});
+  }
   const name=cleanName(b&&b.name),text=(v,n)=>typeof v==='string'&&v.trim()?v.trim().slice(0,n):undefined;
   let created;
   try{
-    if(url.pathname==='/clients/odoo/customer'){
-      const email=text(b.email,200),phone=text(b.phone,50);
-      if(email&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))problem('Enter a valid email or leave it empty.');
-      // A contact with this name already in Odoo is not created again (the next sync links it to the client).
-      const [same]=await odoo(env,'res.partner','search_read',[[['name','=',name],['is_company','=',true]]],{fields:['id'],limit:1});
-      if(same)problem('A contact named “'+name+'” is already in Odoo.',409,'exists');
-      created=await odoo(env,'res.partner','create',[{name,is_company:true,customer_rank:1,...(email?{email}:{}),...(phone?{phone}:{})}]);
-    }else{
       const catalog=await readCatalog(env),client=catalog.entries.find(e=>e.id===b.clientId&&!e.parentId);
       if(!client||client.name===NO_CUSTOMER)problem('Choose the contact this project belongs to.');
       // The customer's Odoo contact: kept from the sync, else found by its exact name.
@@ -504,7 +505,6 @@ async function createInOdoo(env,url,me,b){
       // Odoo answers a copy with the new id, or (newer versions) a list of ids.
       created=[await odoo(env,'project.project','copy',[template],{default:{...values,name,partner_id:partner,...(hours!==undefined?{allocated_hours:hours}:{})}})].flat()[0];
       await recordProjectEvent(env,Number(created),me,{type:'created',allocatedHours:hours===undefined?null:hours}).catch(()=>{});
-    }
   }catch(e){if(e instanceof BusinessError)throw e;problem("Odoo didn't create it: "+String(e.message||'unknown error').slice(0,200),502,'odoo');}
   await syncCatalogFromOdoo(env,{force:true});
   return Response.json({created,catalog:await readCatalog(env)},{status:201,headers:{'Cache-Control':'no-store'}});
@@ -653,6 +653,15 @@ export async function catalogRoutes(request,env,url,me) {
     if(me.role!=='admin')problem('Only administrators manage the client catalog.',403,'forbidden');
     let details;try{details=await clientDetails(env,url.searchParams.get('id')||'');}catch(e){if(e instanceof BusinessError)throw e;problem("Couldn't read the client from Odoo: "+String(e.message||'unknown error').slice(0,200),502,'odoo');}
     return Response.json(details,{headers:{'Cache-Control':'no-store'}});
+  }
+  // The choices for the Add client form, read from Odoo (administrators only).
+  if((url.pathname==='/clients/odoo/options'||url.pathname==='/clients/odoo/companies')&&request.method==='GET'){
+    if(me.role!=='admin')problem('Only administrators manage the client catalog.',403,'forbidden');
+    if(!odooConfigured(env))problem('Odoo is not connected.',501,'odoo_off');
+    let data;
+    try{data=url.pathname.endsWith('/options')?await clientFormOptions(env,{country:url.searchParams.get('country')}):{companies:await parentCompanyChoices(env,url.searchParams.get('q'))};}
+    catch(e){if(e instanceof BusinessError)throw e;problem("Couldn't read from Odoo: "+String(e.message||'unknown error').slice(0,200),502,'odoo');}
+    return Response.json(data,{headers:{'Cache-Control':'no-store'}});
   }
   if((url.pathname==='/clients/odoo/customer'||url.pathname==='/clients/odoo/project')&&request.method==='POST'){
     let b=null;try{b=JSON.parse(await request.text());}catch{problem('Invalid request.');}
