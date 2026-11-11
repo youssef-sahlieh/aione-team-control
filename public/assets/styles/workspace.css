@@ -68,9 +68,9 @@ body.sidebar-collapsed .app-sidebar{width:76px;padding-inline:10px}body.sidebar-
 .jira-side>.blk:has(#d-trans){order:-3}
 .jira-side>.jira-details{order:-2}
 .jira-main{order:0}
-/* Narrow: the main column's blocks join the one column, so the Work log comes after every other section. */
+/* Narrow: the main column's blocks join the one column. The Work log (timer first) goes above everything else. */
 .jira-main{display:contents}
-.jira-main>.work-log{order:2}
+.jira-main>.work-log{order:-4}
 .jira-side .business-section{grid-template-columns:1fr}
 .jira-details .facts{grid-template-columns:minmax(96px,auto) 1fr;gap:8px 14px;align-items:baseline}
 .jira-details .facts>div{display:contents}
