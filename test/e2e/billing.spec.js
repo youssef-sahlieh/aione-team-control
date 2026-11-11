@@ -73,6 +73,11 @@ async function open(page, { exceptions = [], hash = "", capabilities = ["ticket-
     return json({ code: "forbidden", error: "Unconfigured test request" }, 403);
   });
   await page.goto("http://127.0.0.1:4173/dashboard.html" + (hash ? hash : "?page=clients"));
+  // The Work entries view is the default; the billing columns live in the projects table.
+  if (!hash) {
+    await page.getByRole("button", { name: "Projects", exact: true }).click();
+    await expect(page.locator(".budget-table").first()).toBeVisible();
+  }
   return { errors, sent };
 }
 const table = (page) => page.locator(".budget-table").first();
