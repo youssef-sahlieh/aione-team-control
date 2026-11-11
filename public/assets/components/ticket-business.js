@@ -1,6 +1,7 @@
 import {createReportBrowser} from './report-browser.js';
 import {createBillingAdmin} from './billing-admin.js';
 import {mountProjectWorkspace,workspaceTicketsChanged,reloadProjectWorkspaces} from './project-workspace.js';
+import {mountWorkEntries} from './work-entries.js';
 import { createdDate, DASH_PRIORITIES } from '../models/ticket-business.js';
 import { clientErrors, clientBody } from '../models/client-form.js';
 import { BUDGET_LABEL, DEFAULT_VIEW, budgetStatus, hours, signedHours, percent, budgetText, budgetRows, budgetCsvRows, budgetCounts, projectChoices, hiddenFilterCount, BILLING_DEFAULT, BILLING_FILTERS, billingFigures, assignableProjects, MAPPING_KINDS, mappingSuggestion, mappingRows, mappingCounts } from '../models/odoo-projects.js';
@@ -296,13 +297,21 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const addBtn=button('+ Add client',e=>openClientDialog(e.currentTarget,target),'btn');addBtn.dataset.create='client';
     const createBtn=button('+ Create project',e=>openProjectDialog(e.currentTarget,target),'btn');createBtn.dataset.create='project';
     const mapBtn=button('Map tickets',e=>openMapTickets({opener:e.currentTarget}),'btn');mapBtn.dataset.map='all';
-    const more=moreMenu('More',[['Export CSV',()=>exportBudget(table.shown())],
+    const more=moreMenu('More',[['Export projects CSV',()=>exportBudget(table.shown())],
       ...(projectAdmin?[['Dashboard clients & projects',opener=>hostDialog('Dashboard clients & projects',opener,renderProjects)]]:[]),
       ...(epicMapping?[['Jira epics → Odoo projects',opener=>hostDialog('Jira epics → Odoo projects',opener,renderEpicMap)]]:[]),
       ...(billingOn&&admin()?[['Billing setup',opener=>billing.setupDialog(opener)],['Allowances & alerts',opener=>billing.allowancesDialog(opener,billingProjects)],['Billable export',opener=>billing.exportDialog(opener,billingProjects)]]:[]),
       ['How figures are counted',opener=>figuresDialog(opener)]]);
-    head.append(el('h2','','Clients & Projects'),actions);actions.append(syncBtn,addBtn,createBtn,mapBtn,more);root.append(head,sync,msg);
-    const table=projectsTable(root,{say,onMap:(p,opener)=>openMapTickets({opener,project:p})});
+    head.append(el('h2','','Clients & Projects'),actions);actions.append(syncBtn,addBtn,createBtn,mapBtn,more);
+    // Two views of the same page: the work entries (the default) and the projects with their budgets.
+    const views=el('div','clients-views'),workPane=el('div','clients-pane'),projectsPane=el('div','clients-pane');
+    const tabWork=button('Work entries',()=>showView('work'),'btn view-tab'),tabProjects=button('Projects',()=>showView('projects'),'btn view-tab');
+    tabWork.dataset.view='work';tabProjects.dataset.view='projects';views.append(tabWork,tabProjects);
+    function showView(k){tabWork.setAttribute('aria-pressed',String(k==='work'));tabProjects.setAttribute('aria-pressed',String(k==='projects'));workPane.hidden=k!=='work';projectsPane.hidden=k!=='projects';}
+    root.append(head,sync,msg,views,workPane,projectsPane);
+    const work=mountWorkEntries(workPane,{api,openIssue});
+    showView('work');
+    const table=projectsTable(projectsPane,{say,onMap:(p,opener)=>openMapTickets({opener,project:p})});
     let plan=null,syncing=false;
     function syncLine(){
       sync.replaceChildren();const s=syncState;if(!s)return;
@@ -325,6 +334,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
         if(r.changed)await loadCatalog();else await loadProjects().catch(()=>{});
         await refresh();
         await reloadProjectWorkspaces();
+        await work.reload();
         const counts=(r.customers!=null?r.customers+' contacts, ':'')+r.projects+' projects';
         // Billing is part of the sync: say what it kept back for review, or why it could not be read.
         const kept=r.billing?.conflicts?' Billing: '+r.billing.conflicts+' '+(r.billing.conflicts===1?'difference':'differences')+' kept for review.':'';
