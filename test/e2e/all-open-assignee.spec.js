@@ -124,15 +124,15 @@ test("on a phone the Assignee picker fits the ticket details and the page does n
 });
 
 for (const [name, viewport] of [["desktop", { width: 1280, height: 900 }], ["mobile", { width: 390, height: 844 }]]) {
-  test(`Work log (timer first) is the first section of the ticket main column on ${name}`, async ({ page }) => {
+  test(`Work log is the last section of the ticket main column, after Activity, on ${name}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await mockDashboard(page);
     await openTicket(page);
     const top = (sel) => page.locator(sel).first().evaluate(n => n.getBoundingClientRect().top);
-    expect(await page.locator("#drawer .jira-main > *").first().getAttribute("id")).toBe("work-log");
+    expect(await page.locator("#drawer .jira-main > *").last().getAttribute("id")).toBe("work-log");
     const workLog = await top("#drawer #work-log");
     const activity = await top("#drawer .jira-activity");
-    expect(workLog).toBeLessThan(activity);
+    expect(activity).toBeLessThan(workLog);
     await expect(page.locator("#drawer .jira-activity")).toBeVisible();
     await expect(page.getByRole("button", { name: /Log work/ }).first()).toBeVisible();
   });

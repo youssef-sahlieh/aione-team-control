@@ -89,6 +89,65 @@
 .wl-chip[aria-pressed="true"],.wl-chip.is-selected{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
 .wl-total-line{margin:0;font-size:13px;font-weight:600;color:var(--ok);min-height:1em}
 .wl-dialog textarea.inp{resize:vertical}
+/* Work log overview: toolbar, cards, the flat table of entries, groups and paging. */
+.wl-ov-head{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:12px}
+.wl-ov-titles{min-width:0}
+.wl-ov-title{margin:0;font-size:20px}
+.wl-ov-head .msg{margin:4px 0 0}
+.wl-ov-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.wl-ov-toolbar{display:flex;flex-wrap:wrap;gap:10px 12px;align-items:flex-end;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.wl-ov-field{flex:0 1 150px;min-width:0}
+.wl-ov-field .inp,.wl-ov-field .fsel{width:100%;box-sizing:border-box}
+.wl-ov-search-field{flex:1 1 260px}
+.wl-ov-search{width:100%;box-sizing:border-box;height:36px}
+.wl-ov-bill small{display:block}
+.wl-ov-table td:first-child{white-space:nowrap}
+.wl-ov-dates{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.wl-ov-dates[hidden]{display:none}
+.wl-ov-lbl{font-size:12px;font-weight:600;color:var(--muted)}
+.wl-ov-check{display:inline-flex;align-items:center;gap:6px;font-size:13px;min-height:36px}
+.wl-ov-range{margin:0;font-size:13px;color:var(--muted)}
+.wl-ov-cards{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+.wl-card.acct{border-style:dashed}
+.wl-ov-subtable{font-size:13px}
+.wl-ov-scroll{max-height:70vh;overflow:auto}
+.wl-ov-table thead th{position:sticky;top:0;background:var(--surface);z-index:1}
+.wl-ov-table td{min-width:0}
+.wl-ov-group td{background:var(--accent-soft);font-weight:600;font-size:13px;padding:6px 8px}
+.wl-ov-muted{color:var(--muted);font-size:12px}
+.wl-ov-ticket .linkbtn{padding:0}
+.wl-ov-clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.wl-ov-desc{min-width:200px;max-width:420px}
+.wl-ov-desc .linkbtn{padding:0;margin-top:2px}
+.wl-ov-bill{font-size:13px}
+.wl-ov-acts{display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+.wl-ov-empty{display:flex;flex-direction:column;gap:10px;align-items:flex-start;padding:24px;border:1px dashed var(--line);border-radius:12px;color:var(--muted)}
+.wl-ov-pager{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:flex-end}
+.wl-ov-pagetext{font-size:13px;color:var(--muted)}
+.wl-ov-body[aria-busy="true"]{opacity:.6;transition:opacity .15s}
+.wl-ov-toolbar button:focus-visible,.wl-ov-pager button:focus-visible,.wl-ov-table a:focus-visible,.wl-ov-table button:focus-visible,.wl-ov-head button:focus-visible,.wl-ov-toolbar select:focus-visible,.wl-ov-toolbar input:focus-visible,.wl-ov-toolbar label:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+@media (max-width: 900px){
+  .wl-ov-table,.wl-ov-table tbody,.wl-ov-table tr,.wl-ov-table td{display:block;width:100%}
+  .wl-ov-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+  .wl-ov-table,.wl-ov-table tr,.wl-ov-table td{box-sizing:border-box}
+  .wl-ov-table tr.wl-ov-row{border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:10px;background:var(--surface)}
+  .wl-ov-table td{border:0;padding:3px 0;display:grid;grid-template-columns:110px minmax(0,1fr);gap:8px}
+  .wl-ov-table td::before{content:attr(data-label);font-size:12px;color:var(--muted);font-weight:600}
+  .wl-ov-table td.num{text-align:left}
+  .wl-ov-table td.wl-ov-group-cell{display:block}
+  .wl-ov-table tr.wl-ov-group td{display:block}
+  .wl-ov-table tr.wl-ov-group td::before{content:none}
+  .wl-ov-desc{min-width:0;max-width:none}
+  .wl-ov-acts{flex-direction:row;flex-wrap:wrap}
+  .wl-ov-field{flex:1 1 100%}
+  .wl-ov-cards{grid-template-columns:1fr 1fr}
+  .wl-ov-scroll{max-height:none;overflow:visible}
+}
+@media (max-width: 520px){
+  .wl-ov-cards{grid-template-columns:1fr}
+  .wl-ov-title{font-size:18px}
+}
+@media (prefers-reduced-motion: reduce){.wl-ov-body[aria-busy="true"]{transition:none}}
 .wl-dialog .wl-form>.wl-actions{position:sticky;bottom:0;z-index:1;background:var(--surface);margin:0;padding:10px 0 2px;border-top:1px solid var(--line)}
 @media (max-width:640px){
   .wl-chip{flex:1 1 0;padding:4px 6px;text-align:center}
@@ -106,10 +165,12 @@
 .wl-pick-opt.current{font-weight:600}
 .wl-pick-empty{padding:6px 8px;color:var(--muted);font-size:13px}
 
-/* Timer on a ticket: the state, the clock and the actions in one row. */
-.wl-timer{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:8px;background:var(--surface);display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
-.wl-timer .wl-note,.wl-timer .msg{flex:1 1 100%;margin:0}
-.wl-timer-state{font-size:12px;font-weight:600;color:var(--muted)}
+/* Timer in the ticket header, beside Log work: the state word, the clock and its buttons. Compact; wraps on phones. */
+.wl-hdr-timer{display:inline-flex;align-items:center;flex-wrap:wrap;gap:6px 10px;min-width:0}
+.wl-hdr-timer[hidden]{display:none}
+.wl-hdr-state{font-size:12px;font-weight:600;color:var(--muted)}
+.wl-hdr-timer .wl-clock{font-size:15px;min-width:4.6em}
+.wl-hdr-timer .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .wl-clock{font-family:var(--mono);font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
 
 /* Improve writing and Suggest work description: the buttons sit under the field; the proposal waits for Apply. */

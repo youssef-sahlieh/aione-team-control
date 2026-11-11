@@ -1,10 +1,11 @@
 // Log work → Odoo timesheets: the "Log work" form, the ticket's timer, the completion form for a stopped timer,
-// the ticket's Work log, administrator corrections and reconciliation, the Work log page (report for everyone;
-// administrators get setup, reports are in Checks & Reports).
+// the ticket's Work log, administrator corrections and reconciliation, the Work log page (the overview of all
+// logged work, in work-log-overview.js; administrators also get the settings view here).
 // Durations are whole minutes shown as H:MM; dates are work dates in Asia/Jerusalem. The server checks everything again.
 // The timer is the server's: this page only shows it and sends its actions. Nothing here is sent to Odoo by the AI.
 import {parseDurationInput,formatDuration,normalizeDuration,durationFieldError,SHORTCUT_MINUTES} from '../models/work-duration.js';
 import {TIMER_STATES,clockText,liveElapsedMs,timerActions,isOpenSession} from '../models/work-timer.js';
+import {createWorkLogOverview} from './work-log-overview.js';
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
 const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.addEventListener('click',fn);return b;};
 const field=(parent,label,node,hint)=>{const l=el('label','wl-field');l.append(el('span','',label),node);if(hint)l.append(el('small','msg',hint));parent.append(l);return node;};
@@ -29,7 +30,7 @@ const niceDate=d=>{try{return new Date(d+'T12:00:00Z').toLocaleDateString('en-GB
 const whenText=iso=>{if(!iso)return '—';try{return new Date(iso).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Jerusalem'});}catch{return iso;}};
 const todayIsrael=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Jerusalem'}).format(new Date());
 const STATUS_CLASS={synced:'ok',syncing:'busy',setup:'warn',review:'crit'};
-const TIMER_LABELS={pause:'Pause',resume:'Resume',stop:'Stop',finish:'Log time…',discard:'Discard'};
+const TIMER_LABELS={pause:'Pause',resume:'Resume',stop:'Stop timer',finish:'Log time…',discard:'Discard'};
 function badge(e){const b=el('span','wl-status wl-'+(STATUS_CLASS[e.status]||'busy'),e.statusLabel);if(e.reason)b.title=e.reason;return b;}
 
 // The tickets matching a search: every word must appear in the key or the title. At most 50 are shown.
@@ -66,7 +67,7 @@ function durationControl(parent,{hint='Hours and minutes, like 1:30. From 0:01 t
   return {box,minutes,check,update,set,reset(){box.value='';checked=false;f.setError('');update();}};
 }
 
-export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTickets=()=>[],onLogged=()=>{}}){
+export function createWorkLog({api,apiFile=null,isAdmin,me,errorText,toast,openIssue,myTickets=()=>[],onLogged=()=>{}}){
   const views={};
   // The timer last read from the server, and when it was read (the clock is shown from that moment on).
   let lastTimer=null,tickHandle=null,pendingStart=null;
@@ -117,7 +118,7 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
   }
 
   // ---- Log work ----
-  // afterSave (optional) runs after each saved entry; the Work log page uses it to reload its report.
+  // afterSave (optional) runs after each saved entry; the Work log page uses it to reload its overview.
   // opener is the element to focus again when the form closes (the button that opened it).
   function openForm(key,title,view,afterSave,opener=document.activeElement){
     const {d,body,msg}=dialog('Log work · '+key,()=>requestClose());
@@ -185,50 +186,75 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
   }
 
   // ---- Timer (on a ticket) ----
-  // The server keeps the timer; the clock shown here only adds the seconds since the answer arrived. Starting sends the
-  // same id again if the first answer was lost, so one press never opens two timers.
+  // The timer's controls sit in the ticket header, beside Log work: a status word, the clock and the buttons. The server
+  // keeps the timer; the clock shown here only adds the seconds since the answer arrived. Starting sends the same id
+  // again if the first answer was lost, so one press never opens two timers. While an action is in flight every timer
+  // button is disabled, so a repeated click does nothing.
+  let timerBusy=false,headerTimer=null,focusAfter=null;
+  function setTimerBusy(on){timerBusy=on;paintHeaderTimer();}
   async function timerAct(action,key,session){
+    if(timerBusy)return null;
+    setTimerBusy(true);
     const body={action,...(session?{revision:session.revision}:{})};
     if(action==='start'){
       if(!pendingStart||pendingStart.key!==key)pendingStart={key,id:crypto.randomUUID()};
       body.id=pendingStart.id;body.ticket=key;
     }
+    let timer=null;
     try{
       const r=await api('/time-entries/timer',{method:'POST',body});
       if(action==='start')pendingStart=null;
-      lastTimer={at:Date.now(),timer:r.timer};
+      lastTimer={at:Date.now(),timer:r.timer};timer=r.timer;
     }catch(err){
       // A lost answer keeps the same start id for the next press; any other refusal ends it.
       if(action==='start'&&err.code!=='network')pendingStart=null;
       if(toast)toast(errorText?errorText(err):err.message,[],true);
     }
+    timerBusy=false;
     // Whatever the server now holds is what is shown (a refused action shows the current timer).
     await render(key);
+    return timer;
   }
   function timerButton(action,key,session){
     if(action==='finish')return openCompletion(key,session);
     if(action==='discard'){if(!window.confirm('Discard this timer? The time on it is not logged.'))return;return timerAct('discard',key,session);}
     return timerAct(action,key,session);
   }
-  function timerBar(key,view){
-    const open=lastTimer&&isOpenSession(lastTimer.timer)?lastTimer.timer:null;
-    const box=el('section','wl-timer');box.setAttribute('aria-label','Timer');
+  // Stop stops the clock at once, then opens the completion form on the stopped timer (its elapsed time as H:MM).
+  // Saving that form logs the same session, so the work is logged once.
+  async function headerAction(action,key,session){
+    if(action==='stop'){
+      const timer=await timerAct('stop',key,session);
+      if(timer&&timer.state==='stopped')openCompletion(key,timer);
+      return;
+    }
+    return timerButton(action,key,session);
+  }
+  // The header control for the open ticket: no panel, only the state, the clock and the buttons it needs now.
+  function paintHeaderTimer(){
+    const box=document.getElementById('d-timer');if(!box)return;
+    stopTick();
+    const h=headerTimer,want=timerBusy?null:focusAfter;
+    if(!timerBusy)focusAfter=null;
+    box.replaceChildren();
+    if(!h){box.hidden=true;return;}
+    const {key,view,t}=h,open=t&&isOpenSession(t.timer)?t.timer:null;
+    const act=(name,label,fn,cls)=>{const b=button(label,()=>{focusAfter=name;return fn();},cls);b.dataset.timerAction=name;b.disabled=timerBusy;return b;};
     if(open&&open.ticket!==key){
-      box.append(el('p','msg','A timer is '+(open.state==='stopped'?'waiting to be logged':open.state)+' on '+open.ticket+'. Finish or discard it before starting another.'),button('Go to '+open.ticket,()=>openIssue&&openIssue(open.ticket),'btn'));
-      return box;
+      box.append(el('span','wl-hdr-state','Timer on '+open.ticket),act('go','Go to '+open.ticket,()=>openIssue&&openIssue(open.ticket),'btn'));
+    }else if(!open){
+      if(!view.canLog){box.hidden=true;return;}
+      box.append(act('start','Start timer',()=>timerAct('start',key,null),'btn'));
+    }else{
+      const clock=el('span','wl-clock',clockText(liveElapsedMs(open,t.at,Date.now())));
+      clock.setAttribute('role','timer');clock.setAttribute('aria-label','Elapsed time');
+      box.append(el('span','wl-hdr-state',TIMER_STATES[open.state]||open.state),clock);
+      for(const a of timerActions(open.state))box.append(act(a,TIMER_LABELS[a],()=>headerAction(a,key,open),a==='stop'||a==='finish'?'btn primary':'btn'));
+      // Only the text of the clock changes while it runs; nothing is re-fetched until the next action.
+      if(open.state==='running')tickHandle=setInterval(()=>{clock.textContent=clockText(liveElapsedMs(open,t.at,Date.now()));},1000);
     }
-    if(!open){
-      if(!view.canLog)return null;
-      box.append(el('p','wl-note','Start a timer, and it keeps running on the server if you close this page. Only one timer at a time.'),button('Start timer',()=>timerAct('start',key,null),'btn'));
-      return box;
-    }
-    const clock=el('span','wl-clock',clockText(liveElapsedMs(open,lastTimer.at,Date.now())));
-    box.append(el('span','wl-timer-state',TIMER_STATES[open.state]||open.state),clock);
-    if(open.state==='stopped')box.append(el('p','wl-note','Log it or discard it. A stopped timer blocks a new one until then.'));
-    for(const a of timerActions(open.state))box.append(button(TIMER_LABELS[a],()=>timerButton(a,key,open),a==='stop'||a==='finish'?'btn primary':'btn'));
-    // Only the text of the clock changes while it runs; nothing is re-fetched until the next action.
-    if(open.state==='running'){const at=lastTimer.at;tickHandle=setInterval(()=>{clock.textContent=clockText(liveElapsedMs(open,at,Date.now()));},1000);}
-    return box;
+    box.hidden=false;
+    if(want){const again=[...box.querySelectorAll('button')].find(b=>b.dataset.timerAction===want&&!b.disabled)||[...box.querySelectorAll('button')].find(b=>!b.disabled);again?.focus();}
   }
 
   // The completion form for a stopped timer: the server's elapsed time becomes the suggested duration. The timer stays
@@ -353,18 +379,18 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
     const target=document.getElementById('work-log');if(!target)return;
     stopTick();
     const headerButton=document.getElementById('d-logwork');
-    if(target.dataset.key!==key){target.dataset.key=key;target.replaceChildren(el('h3','','Work log'),el('p','msg','Loading…'));if(headerButton)headerButton.hidden=true;}
+    if(target.dataset.key!==key){target.dataset.key=key;target.replaceChildren(el('h3','','Work log'),el('p','msg','Loading…'));if(headerButton)headerButton.hidden=true;headerTimer=null;paintHeaderTimer();}
     let view,timer=null;
     try{[view,timer]=await Promise.all([api('/time-entries?ticket='+encodeURIComponent(key)),api('/time-entries/timer').catch(()=>null)]);}
     catch(err){if(target.dataset.key!==key)return;if(err.code==='not_found'||err.status===404&&err.code==='server'){target.hidden=true;return;}target.hidden=false;target.replaceChildren(el('h3','','Work log'),el('p','msg err',errorText?errorText(err):err.message));return;}
     if(target.dataset.key!==key)return;views[key]=view;if(timer)lastTimer={at:Date.now(),timer:timer.timer};else lastTimer=null;if(headerButton)headerButton.hidden=!view.canLog;
+    // The timer is in the ticket header (not in this section); a closed ticket shows none.
+    headerTimer=timer&&!view.closed?{key,view,t:lastTimer}:null;paintHeaderTimer();
     // Nothing to show while work logging is off and the ticket has no entries.
     target.hidden=!view.logging&&!view.entries.length&&!(lastTimer&&isOpenSession(lastTimer.timer)&&lastTimer.timer.ticket===key);
     const head=el('div','wl-head');head.append(el('h3','','Work log'));
     if(view.canLog)head.append(button('+ Log work',()=>openForm(key,(document.getElementById('d-title')||{}).textContent||'',view),'btn primary'));
     target.replaceChildren(head);
-    // The timer sits at the top, under the heading: it is the thing to act on first.
-    if(timer&&!view.closed){const tb=timerBar(key,view);if(tb)target.append(tb);}
     const s=view.summary,total=el('p','wl-total');
     if(view.baselineHours!=null&&s.loggedMinutes)total.append('Actual hours: ',el('b','',String(view.totalHours)),' = '+view.baselineHours+' h before the work log + '+formatMinutes(s.loggedMinutes)+' logged');
     else if(s.loggedMinutes)total.append('Logged: ',el('b','',formatMinutes(s.loggedMinutes)),' ('+hours(s.loggedMinutes)+' h)');
@@ -380,62 +406,28 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
   function openFor(key,title){const view=views[key];if(view&&view.canLog)openForm(key,title,view);}
 
   // ---- Work log page ----
-  let report=null,filters={user:'',client:'',project:'',ticket:'',source:'',status:''},groupBy='user';
-  const SOURCES={jira:'Jira',internal:'Internal',odoo:'Odoo Helpdesk'};
   // The dashboard redraws its pages whenever data refreshes: the page shown is kept as it is (no reload, no
   // flashing). It is rebuilt only for a tab change or after saving (fresh).
-  let pageNode=null,pageTarget=null;
+  // The page opens on the overview of all logged work. Administrators can open the setup view from there; it
+  // shows the saved setup and mappings and changes nothing until they save it.
+  let pageNode=null,pageTarget=null,settingsOpen=false;
+  const overview=createWorkLogOverview({
+    api,apiFile,isAdmin,openIssue,toast,
+    onLogWork:()=>openTicketPicker(()=>{if(pageTarget)renderPage(pageTarget,true);}),
+    onSettings:()=>{settingsOpen=true;if(pageTarget)renderPage(pageTarget,true);}
+  });
   function renderPage(target,fresh=false){
     if(pageNode&&!fresh){if(pageNode.parentNode!==target)target.replaceChildren(pageNode);return;}
     const wrap=el('div','wl-page');pageNode=wrap;pageTarget=target;target.replaceChildren(wrap);
-    // Reports moved to Checks & Reports (the unified business report); administrators get setup only here.
-    if(isAdmin())return renderSetup(wrap);
-    renderReport(wrap);
+    if(isAdmin()&&settingsOpen){
+      const head=el('div','wl-ov-head'),titles=el('div','wl-ov-titles');
+      titles.append(el('h2','wl-ov-title','Work log settings'),el('p','msg','Setup, mappings and permissions. Viewing this page changes nothing.'));
+      head.append(titles,button('Back to logged work',()=>{settingsOpen=false;renderPage(pageTarget,true);},'btn'));
+      wrap.append(head);
+      return renderSetup(wrap);
+    }
+    overview.render(wrap);
   }
-  function renderReport(wrap){
-    const today=todayIsrael();
-    const bar=el('div','wl-report-bar'),from=input('date',report?.from||today.slice(0,8)+'01'),to=input('date',report?.to||today),msg=el('span','msg');
-    from.setAttribute('aria-label','From');to.setAttribute('aria-label','To');
-    const out=el('div','wl-report');
-    // Shown once the report says this person may log work. Saving reloads the report (the new entry is in it).
-    const logButton=button('+ Log work',()=>openTicketPicker(()=>{report=null;if(pageTarget)renderPage(pageTarget,true);}),'btn primary wl-log-btn');logButton.hidden=true;
-    const load=async()=>{msg.className='msg';msg.textContent='Loading…';try{report=await api('/time-entries/report?from='+from.value+'&to='+to.value);msg.textContent='';draw();}catch(err){fail(msg,err);}};
-    bar.append(el('span','','From'),from,el('span','','to'),to,button('Show',load,'btn primary'),msg,logButton);
-    wrap.append(el('p','msg',isAdmin()?'Everyone\'s logged work by work date (Israel time). Filters apply on this page.':'Your logged work by work date (Israel time).'),bar,out);
-    const draw=()=>{
-      logButton.hidden=!report?.canLog;
-      out.replaceChildren();if(!report)return;
-      const rows=report.rows;
-      const options=(key,label,name=r=>r[key])=>{const s=el('select','fsel');s.setAttribute('aria-label',label);s.append(new Option('All '+label.toLowerCase(),''));for(const v of key==='status'?Object.keys(report.statuses):key==='source'?Object.keys(SOURCES):[...new Set(rows.map(name).filter(Boolean))].sort())s.append(new Option(key==='source'?SOURCES[v]||v:key==='status'?report.statuses[v]||v:v,v));s.value=filters[key]&&[...s.options].some(o=>o.value===filters[key])?filters[key]:'';s.addEventListener('change',()=>{filters[key]=s.value;draw();});return s;};
-      const fbar=el('div','wl-filters');
-      fbar.append(options('user','Users'),options('client','Clients',r=>r.clientName),options('project','Projects',r=>r.subClientName),options('ticket','Tickets'),options('source','Sources'),options('status','Statuses'));
-      const by=el('select','fsel');by.setAttribute('aria-label','Group by');for(const [v,l] of [['user','By user'],['client','By client'],['project','By project'],['ticket','By ticket'],['source','By source'],['status','By status'],['date','By date']])by.append(new Option(l,v));by.value=groupBy;by.addEventListener('change',()=>{groupBy=by.value;draw();});
-      fbar.append(by);out.append(fbar);
-      const pick={user:r=>r.user,client:r=>r.clientName,project:r=>r.subClientName,ticket:r=>r.ticket,source:r=>r.source,status:r=>r.status,date:r=>r.date};
-      const shown=rows.filter(r=>Object.entries(filters).every(([k,v])=>!v||pick[k](r)===v));
-      const sum=list=>({logged:list.reduce((n,r)=>n+r.minutes,0),confirmed:list.filter(r=>r.synced).reduce((n,r)=>n+r.minutes,0)});
-      const t=sum(shown),cards=el('div','wl-cards');
-      for(const [label,m,cls] of [['Logged',t.logged,''],['Confirmed in Odoo',t.confirmed,'ok'],['Not in Odoo yet',t.logged-t.confirmed,t.logged-t.confirmed?'warn':'']]){const c=el('div','wl-card '+cls);c.append(el('span','',label),el('b','',formatMinutes(m)),el('small','',hours(m)+' h'));cards.append(c);}
-      out.append(cards);
-      if(!shown.length){out.append(el('p','msg','No work logged in this period'+(Object.values(filters).some(Boolean)?' with these filters.':'.')));}
-      else{
-        const groups=new Map();for(const r of shown){const k=pick[groupBy](r)||'(none)';if(!groups.has(k))groups.set(k,[]);groups.get(k).push(r);}
-        const g=el('table','wl-table');const gh=g.createTHead().insertRow();for(const h of [by.selectedOptions[0].text.replace('By ',''),'Entries','Logged (h)','Confirmed (h)','Pending (h)'])gh.append(el('th','',h[0].toUpperCase()+h.slice(1)));
-        const gb=g.createTBody();for(const [k,list] of [...groups].sort((a,b)=>sum(b[1]).logged-sum(a[1]).logged)){const s=sum(list),tr=gb.insertRow();tr.append(el('td','',groupBy==='source'?SOURCES[k]||k:groupBy==='status'?report.statuses[k]||k:k),el('td','num',String(list.length)),el('td','num',hours(s.logged)),el('td','num',hours(s.confirmed)),el('td','num',hours(s.logged-s.confirmed)));}
-        const scroll=el('div','wl-scroll');scroll.append(g);out.append(scroll);
-        const d=el('details','wl-detail');d.append(el('summary','','All '+shown.length+' entries'));
-        const tbl=el('table','wl-table');const th=tbl.createTHead().insertRow();for(const h of ['Date','User','Ticket','Client','Project','Source','Duration','Description','Status'])th.append(el('th','',h));
-        const tb=tbl.createTBody();for(const r of shown){const tr=tb.insertRow();const k=el('td');k.append(button(r.ticket,()=>openIssue&&openIssue(r.ticket),'linkbtn'));tr.append(el('td','',r.date),el('td','',r.user),k,el('td','',r.clientName||''),el('td','',r.subClientName||''),el('td','',SOURCES[r.source]||r.source),el('td','num',formatMinutes(r.minutes)),el('td','wl-desc-cell',r.description),el('td'));tr.lastChild.append(badge(r));}
-        const sc=el('div','wl-scroll');sc.append(tbl);d.append(sc);out.append(d);
-      }
-      // Hours entered before the work log are not part of the totals above.
-      const tickets=new Set(shown.map(r=>r.ticket)),base=(report.baselines||[]).filter(b=>tickets.has(b.ticket));
-      if(base.length){const d=el('details','wl-baseline');d.append(el('summary','','Hours entered before the work log: '+(Math.round(base.reduce((n,b)=>n+b.hours,0)*100)/100)+' h on '+base.length+' tickets (not included above)'));
-        const ul=el('ul');for(const b of base)ul.append(el('li','',b.ticket+': '+b.hours+' h'));d.append(ul);out.append(d);}
-    };
-    if(report)draw();else load();
-  }
-
   async function renderSetup(wrap){
     const box=el('div','wl-setup');wrap.append(box);box.append(el('p','msg','Loading the setup from Odoo…'));
     let s;try{s=await api('/time-entries/setup');}catch(err){box.replaceChildren();const m=el('p','msg');fail(m,err);box.append(m);return;}
@@ -560,5 +552,5 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
     draw();search.focus();
   }
 
-  return {render,openFor,renderPage,reset:()=>{stopTick();lastTimer=null;const t=document.getElementById('work-log'),b=document.getElementById('d-logwork');if(b)b.hidden=true;if(t){t.dataset.key='';t.replaceChildren();t.hidden=true;}}};
+  return {render,openFor,renderPage,reset:()=>{stopTick();lastTimer=null;headerTimer=null;paintHeaderTimer();const t=document.getElementById('work-log'),b=document.getElementById('d-logwork');if(b)b.hidden=true;if(t){t.dataset.key='';t.replaceChildren();t.hidden=true;}}};
 }

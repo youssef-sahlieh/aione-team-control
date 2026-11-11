@@ -21,6 +21,7 @@ import { odoo, odooConfigured, odooUid } from './odoo.js';
 import { requireStore, readMetadata, readCatalog, metadataKey, shownName, withTicketLock, overageOf, BusinessError, selectionOf, readOdooProjects, projectIndex } from './ticket-metadata.js';
 import { recordTicketEvent, readTicketLog } from './ticket-log.js';
 import { getUser, normEmail } from './users.js';
+import { overviewView, exportView } from './work-overview.js';
 
 const problem=(message,status=400,code='time_entry',details={})=>{throw new BusinessError(message,status,code,details);};
 const P=env=>'tw:'+env.JIRA_PROJECT+':';
@@ -718,6 +719,11 @@ export async function timeRoutes(request,env,url,me,{readTicket,aiSuggest=async(
     problem('Use GET or POST.',405,'method');
   }
   if(path==='/time-entries/suggest'&&method==='POST')return json(await suggestWorkDescription(env,me,await body(request),readTicket,aiSuggest));
+  if(path==='/time-entries/overview'&&method==='GET')return json(await overviewView(env,me,url));
+  if(path==='/time-entries/overview/export'&&method==='GET'){
+    const out=await exportView(env,me,url);
+    return new Response(out.csv,{headers:{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="'+out.name+'"','Cache-Control':'no-store'}});
+  }
   if(path==='/time-entries/report'&&method==='GET')return json(await report(env,me,url));
   if(path==='/time-entries'){
     if(method==='GET'){

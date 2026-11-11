@@ -26,8 +26,8 @@ export function createIssueDrawer({ isDirty, canViewHistory, canViewFullHistory 
   const facts = pick("#d-facts"); if (facts) details.append(facts);
   for (const part of [pick("#d-trans"), details, pick("#d-asgname"), pick("#d-devs"), pick("#d-due"), pick("#d-prs-blk"), pick("#business-fields")]) if (part) side.append(part);
 
-  // Main column: the work log (timer and entries) first, then description, attachments and Activity.
-  const workLog = pick("#work-log"); if (workLog) main.append(workLog);
+  // Main column: description, attachments, Activity, and the work log last (its timer is in the ticket header).
+  const workLog = pick("#work-log");
   for (const part of [pick("#d-desc"), pick("#d-att"), pick("#i-att")]) if (part) main.append(part);
   const activity = el("section", "jira-activity"); activity.append(el("h3", "jira-activity-title", "Activity"));
   tabs.setAttribute("aria-label", "Activity"); activity.append(tabs);
@@ -42,6 +42,7 @@ export function createIssueDrawer({ isDirty, canViewHistory, canViewFullHistory 
   panels.activity.prepend(el("p", "msg", "Recorded due date changes. This timeline is not a complete ticket audit."));
   Object.values(panels).forEach(panel => activity.append(panel));
   main.append(activity);
+  if (workLog) main.append(workLog);
   // Anything not placed above stays in the main column, so nothing is lost.
   for (const child of blocks) if (!layout.contains(child)) main.insertBefore(child, activity);
   body.replaceChildren(layout);

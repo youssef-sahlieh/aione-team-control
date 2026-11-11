@@ -48,10 +48,22 @@ People log time on Jira, internal and Odoo Helpdesk tickets with **Log work** (i
 - **Closed tickets** take no new work and no corrections: reopen first.
 - **Closing** (Jira, internal and Odoo Helpdesk) is blocked until every entry and correction is in Odoo,
   confirmed by one Odoo read. The administrator override can't skip this.
-- **Work log page:** users get a dated report of their own work by client, project, ticket, source and status,
-  with logged, confirmed and pending hours. The hours entered before the work log are shown separately.
-  Administrators get **Setup** on this page. Their report of everyone's work moved to **Checks & Reports**
-  (the unified business report in [ticket-business.md](ticket-business.md)).
+- **Work log page:** the overview of logged work, one row per entry: work date, person, client, project,
+  ticket or task (linked), description, H:MM duration, sync status
+  and **Open in Odoo**. Dashboard entries, direct Odoo entries, native Odoo tasks and "No task." entries are all
+  listed once; a synced entry is matched by its entry id and Odoo line id, never by description or duration.
+  The worker is the mapped Users field, not the integration employee.
+  - Filters default to **This month** (Israel time). Other periods: Last month, Last 30 days, Custom (both dates
+    inclusive) and All dates. Search, person, client, project, sync status and grouping by
+    day, person, client or project. The period filters by work date; filtering happens before paging, and the
+    totals and CSV export cover every matching entry, not only the page shown.
+  - Users see only their own logged hours and sync status. Billing (the billing column, billable totals, the billable
+    filter and the billing CSV columns) is administrators-only, enforced by the server rather than only hidden in the page.
+    Administrators see everyone's work and the billing fields. Corrections keep their existing permissions and audit.  - Agreed-hours accounting lines are shown in their own card (administrators only), never as work sessions.
+  - Filters are remembered in the browser. If Odoo cannot be read, the page shows an error rather than partial totals.
+  - Administrators also get **Work log settings** (setup, mappings and permissions). Opening it changes nothing;
+    the saved setup stays as it is until it is saved.
+  - Routes: `GET /time-entries/overview` and `GET /time-entries/overview/export` (CSV).
 
 ## Safety of sending
 
