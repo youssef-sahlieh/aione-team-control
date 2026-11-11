@@ -1,14 +1,14 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {NEAR_LIMIT,budgetStatus,budgetText,budgetRows,budgetCsvRows,budgetCounts,projectChoices,percent,signedHours,DEFAULT_VIEW,hiddenFilterCount,assignableProjects,mappingSuggestion,mappingRows,mappingCounts} from '../../public/assets/models/odoo-projects.js';
+import {dateMatches,NEAR_LIMIT,budgetStatus,budgetText,budgetRows,budgetCsvRows,budgetCounts,projectChoices,percent,signedHours,DEFAULT_VIEW,hiddenFilterCount,assignableProjects,mappingSuggestion,mappingRows,mappingCounts} from '../../public/assets/models/odoo-projects.js';
 
 const p=o=>({odooId:1,name:'P',client:'Acme',createdAt:'2026-01-01T00:00:00Z',allocatedHours:null,loggedHours:0,remainingHours:null,overHours:0,usedPercent:null,status:'not_set',mapped:true,missingClient:false,ticketCount:0,openTickets:0,reviewTickets:0,lastWorkDate:null,pendingHours:0,company:'All in One',links:{projects:[],epics:[],helpdesk:false,tickets:{count:0,byProject:{},keys:[]}},...o});
 
-test('budget status: not set is not zero, near limit from 80%, over goes negative',()=>{
+test('budget status: zero and empty are neutral, near limit from 80%, over goes negative',()=>{
  assert.equal(NEAR_LIMIT,0.8);
  assert.deepEqual(budgetStatus(null,5),{status:'not_set',remainingHours:null,overHours:0,usedPercent:null});
- assert.deepEqual(budgetStatus(0,0),{status:'on_track',remainingHours:0,overHours:0,usedPercent:null});
- assert.equal(budgetStatus(0,0.5).status,'over');
+ assert.deepEqual(budgetStatus(0,0),{status:'not_set',remainingHours:null,overHours:0,usedPercent:null});
+ assert.equal(budgetStatus(0,0.5).status,'not_set');
  assert.equal(budgetStatus(10,7.9).status,'on_track');
  assert.equal(budgetStatus(10,8).status,'near');
  assert.equal(budgetStatus(10,10).status,'near');
@@ -38,7 +38,7 @@ test('CSV: one line per row, allocation not set spelled out and negative remaini
  const [head,...lines]=budgetCsvRows([p({name:'A',allocatedHours:10,loggedHours:12.5,remainingHours:-2.5,overHours:2.5,usedPercent:125,status:'over'}),p({name:'B',client:'',missingClient:true})]);
  assert.equal(head[0],'Odoo Project');assert.equal(lines.length,2);
  assert.deepEqual(lines[0].slice(0,9),['A','Acme','2026-01-01',10,12.5,-2.5,125,'Over by 2.5 h',2.5]);
- assert.deepEqual(lines[1].slice(0,8),['B','No client','2026-01-01','Allocation not set',0,'','','Allocation not set']);
+ assert.deepEqual(lines[1].slice(0,8),['B','No client','2026-01-01','No allocation',0,'','','No allocation']);
 });
 
 test('project picker: only active projects with a client; the ticket keeps its archived, clientless or unknown project, disabled',()=>{
@@ -68,4 +68,25 @@ test('Map tickets: rows filter by kind and search; one project’s own tickets f
  assert.deepEqual(mappingRows(rows,{q:'login',titles:{'A-1':'Login page'}}).map(r=>r.key),['A-1']);
  assert.deepEqual(mappingRows(rows,{project:5}).map(r=>r.key),['A-2','A-3','A-1','A-4']);
  assert.deepEqual(mappingCounts(rows,new Set(['A-2'])),{all:3,ready:0,missing:1,ambiguous:1,conflict:1});
+});
+
+
+test('project dates: inclusive creation and last-work ranges, missing dates excluded only with a range',()=>{
+ const rows=[p({odooId:1,name:'First',createdAt:'2026-11-01T09:00:00Z',lastWorkDate:'2026-11-09'}),p({odooId:2,name:'Last',createdAt:'2026-11-10T12:00:00Z',lastWorkDate:'2026-10-01'}),p({odooId:3,name:'Missing',createdAt:null})];
+ const view={...DEFAULT_VIEW,dateFrom:'2026-11-01',dateTo:'2026-11-10'};
+ assert.deepEqual(budgetRows(rows,view).map(p=>p.odooId),[2,1]);
+ assert.deepEqual(budgetRows(rows,{...view,dateField:'lastWork'}).map(p=>p.odooId),[1]);
+ assert.equal(budgetRows(rows,{...DEFAULT_VIEW,dateTo:'2026-11-01'}).length,1);
+ assert.equal(budgetRows(rows,DEFAULT_VIEW).length,3);
+ assert.equal(budgetCsvRows(budgetRows(rows,view)).length,3);
+});
+
+test('the date filter compares the Asia/Jerusalem calendar day, with both boundaries inclusive',()=>{
+  // 22:30 UTC on 1 May is 01:30 on 2 May in Jerusalem (summer time), so it belongs to 2 May.
+  const p={createdAt:'2026-05-01T22:30:00Z',lastWorkDate:'2026-05-02'};
+  assert.equal(dateMatches(p,{dateField:'created',dateFrom:'2026-05-02',dateTo:'2026-05-02'}),true);
+  assert.equal(dateMatches(p,{dateField:'created',dateFrom:'2026-05-01',dateTo:'2026-05-01'}),false);
+  assert.equal(dateMatches(p,{dateField:'lastWork',dateFrom:'2026-05-02',dateTo:'2026-05-02'}),true);
+  assert.equal(dateMatches({createdAt:null},{dateField:'created',dateFrom:'2026-05-02'}),false);
+  assert.equal(dateMatches({createdAt:null},{dateField:'created'}),true);
 });

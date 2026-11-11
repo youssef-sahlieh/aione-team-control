@@ -52,10 +52,10 @@ test('budget status: not set, on track, near the limit and over by the hours ove
   assert.deepEqual(budgetStatus(10,8),{status:'near',remainingHours:2,overHours:0,usedPercent:80});
   assert.deepEqual(budgetStatus(10,10),{status:'near',remainingHours:0,overHours:0,usedPercent:100});
   assert.deepEqual(budgetStatus(10,12.5),{status:'over',remainingHours:-2.5,overHours:2.5,usedPercent:125});
-  // An explicit zero is an allocation: nothing logged is on track, any logged time is over. It is never "near limit",
+  // Zero allocations stay neutral even when hours have been logged.
   // and has no used share (nothing to divide by).
-  assert.deepEqual(budgetStatus(0,0),{status:'on_track',remainingHours:0,overHours:0,usedPercent:null});
-  assert.deepEqual(budgetStatus(0,0.5),{status:'over',remainingHours:-0.5,overHours:0.5,usedPercent:null});
+  assert.deepEqual(budgetStatus(0,0),{status:'not_set',remainingHours:null,overHours:0,usedPercent:null});
+  assert.deepEqual(budgetStatus(0,0.5),{status:'not_set',remainingHours:null,overHours:0,usedPercent:null});
 });
 test('allocated hours: empty is not known, zero and decimals are kept',()=>{
   assert.equal(allocatedHoursInput(undefined),undefined);assert.equal(allocatedHoursInput(null),undefined);assert.equal(allocatedHoursInput(''),undefined);
@@ -107,7 +107,7 @@ test('administrators set and clear the allocated hours on the Odoo project',asyn
     // An explicit zero is saved as zero and shown as zero, not as not set.
     const zero=await s.call('/clients/odoo-projects/allocation','PUT',{odooId:11,hours:0});assert.equal(zero.status,200);assert.deepEqual(await zero.json(),{odooId:11,allocatedHours:0});
     assert.deepEqual(s.writes.at(-1),[[11],{allocated_hours:0}]);
-    const zeroRow=(await (await s.call('/clients/odoo-projects')).json()).projects.find(p=>p.odooId===11);assert.equal(zeroRow.allocatedHours,0);assert.equal(zeroRow.status,'on_track');
+    const zeroRow=(await (await s.call('/clients/odoo-projects')).json()).projects.find(p=>p.odooId===11);assert.equal(zeroRow.allocatedHours,0);assert.equal(zeroRow.status,'not_set');
   }finally{s.restore();}
 });
 test('linking a dashboard project to an Odoo project, unlinking it, and the sync not linking it back',async()=>{

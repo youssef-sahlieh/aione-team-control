@@ -364,8 +364,13 @@ async function syncCatalog(env,{force=false}={}){
       if(previous===null?await store.setIfAbsent(key,JSON.stringify(next),315360000):await store.compareAndSet(key,previous,JSON.stringify(next))){changed=true;added=count;break;}
       if(attempt>=2)problem('Catalog changed during the Odoo sync. Try again.',409,'conflict');
     }
-    const at=Date.now();await store.set(odooSyncKey(env),String(at));await store.del(syncErrorKey(env));
-    return {odoo:true,changed,added,customers:customers.length,projects:projects.length,syncedAt:at};
+    // Billing is refreshed by the same sync. A billing read that fails is reported as such, and the catalog still counts.
+    let billing={changed:0,conflicts:0},billingError=null;
+    try{const b=await (await import('./billing.js')).syncBillingFromOdoo(env);billing={changed:b.changed,conflicts:b.conflicts.length};if(b.changed)changed=true;}
+    catch(e){billingError="Billing couldn't be read from Odoo: "+String(e.message||'unknown error').slice(0,240);}
+    const at=Date.now();await store.set(odooSyncKey(env),String(at));
+    if(billingError)await store.set(syncErrorKey(env),JSON.stringify({at,message:billingError})).catch(()=>{});else await store.del(syncErrorKey(env));
+    return {odoo:true,changed,added,customers:customers.length,projects:projects.length,syncedAt:at,billing,billingError};
   }finally{await store.deleteIfValue(lock,owner);}
 }
 export async function prepareImport(catalog,rows,source='project-workbook') {

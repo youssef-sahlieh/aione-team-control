@@ -16,7 +16,17 @@ and **Allocation-exhausted emails** (Off / Dry run / On, in Billing setup, plus 
   boolean or selection fields that look like billing fields are offered: custom `x_` fields, or "bill" in the name
   or label. For a selection field, each Odoo value is mapped to Inherit / Billable / Not billable. Nothing is
   created in Odoo. When no field is chosen, classification lives only in the dashboard ("Not saved in Odoo").
-  A value changed directly in Odoo is reported by the billing check and never copied over.
+  Mapped billing is imported initially and refreshed by catalog sync, Clients billing reads and the billing check.
+  The project Billing checkbox maps checked to Billable and unchecked to Not billable. Tickets with Inherit
+  follow the project; explicit mapped task overrides are imported too. Pulls do not write back to Odoo.
+  Import rules, per project and per ticket: the record keeps the value Odoo last confirmed (its baseline, written by
+  the dashboard's own successful push or by an import). An Odoo change is applied only where the dashboard still holds
+  that baseline. A dashboard value that differs (an unsent or failed write, a concurrent edit, a value set before the
+  first import, or Not classified) is kept and counted as a difference for review; the sync message says how many.
+  An unchecked or empty Odoo value is read as Not billable only for a checkbox; an empty or unmapped selection is skipped.
+  Not classified is dashboard-only (Odoo has no such value), so clearing a default is never pushed and never reverted by
+  an import while Odoo is unchanged. An import never writes to Odoo and records one history line per changed project.
+  Sync from Odoo now runs this import too; a billing read that fails is reported in the sync message and the catalog still syncs.
 
 ## Consumption
 
@@ -121,3 +131,9 @@ ticket's billing field goes to it for administrators only. Allowance, consumptio
    correct, and set emails to **On** in Billing setup. Turning emails on asks for confirmation and names the
    recipients.
 6. Add the repository secret `TIME_SYNC_SECRET`, if it is not there yet, for the scheduled check.
+
+
+On Clients & Projects, zero and empty hour allocations have a neutral **No allocation** status, no negative
+remaining value, and do not contribute to over-budget counts. Positive allocations retain the 80% warning.
+The visible date toolbar filters projects by creation date or their last logged work date, inclusively, with
+custom From/To dates, Last 30 days, Last 90 days and All dates. CSV exports use the same filtered projects.

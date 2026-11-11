@@ -3,13 +3,13 @@
 
 // Near limit: logged hours at or above this share of the allocated hours (the backend's NEAR_LIMIT, sent with the list).
 export const NEAR_LIMIT = 0.8;
-export const BUDGET_LABEL = { over: 'Over budget', near: 'Near limit', on_track: 'Within budget', not_set: 'Allocation not set' };
+export const BUDGET_LABEL = { over: 'Over budget', near: 'Near limit', on_track: 'Within budget', not_set: 'No allocation' };
 const round = n => Math.round(n * 100) / 100;
 
 // The same rule as the backend's budgetStatus, for a row updated in place after an allocation change. An empty allocation
-// is not set (no remaining hours, no share); an explicit zero is an allocation that any logged time is over.
+// or zero allocation has no remaining hours or budget status to compare against.
 export function budgetStatus(allocated, logged, near = NEAR_LIMIT) {
-  if (allocated == null) return { status: 'not_set', remainingHours: null, overHours: 0, usedPercent: null };
+  if (allocated == null || allocated <= 0) return { status: 'not_set', remainingHours: null, overHours: 0, usedPercent: null };
   const remaining = round(allocated - logged);
   return { status: remaining < 0 ? 'over' : allocated > 0 && logged >= allocated * near ? 'near' : 'on_track', remainingHours: remaining, overHours: remaining < 0 ? -remaining : 0, usedPercent: allocated > 0 ? Math.round(logged / allocated * 1000) / 10 : null };
 }
@@ -39,7 +39,7 @@ export function billingMatches(p, f) {
   if (f === 'exhausted') return b.status === 'exhausted' || b.status === 'overage';
   return b.status === f;
 }
-export const DEFAULT_VIEW = { q: '', status: '', client: '', missingClient: '', tickets: '', billing: '', sort: 'created', dir: -1, page: 0 };
+export const DEFAULT_VIEW = { q: '', status: '', client: '', missingClient: '', tickets: '', billing: '', dateField: 'created', dateFrom: '', dateTo: '', sort: 'created', dir: -1, page: 0 };
 export const SORTS = {
   name: p => p.name.toLowerCase(), client: p => (p.client || '').toLowerCase() || null, created: p => p.createdAt ? Date.parse(p.createdAt) : null,
   allocated: p => p.allocatedHours, logged: p => p.loggedHours, remaining: p => p.remainingHours, used: p => p.usedPercent,
@@ -55,7 +55,16 @@ export function budgetMatches(p, v = DEFAULT_VIEW) {
     && (!v.missingClient || (v.missingClient === 'missing' ? !!p.missingClient : !p.missingClient))
     && (!v.tickets || (v.tickets === 'with' ? hasTickets(p) : !hasTickets(p)))
     && billingMatches(p, v.billing)
+    && dateMatches(p, v)
     && (!q || [p.name, p.client, String(p.odooId), ...(p.links?.tickets?.keys || [])].join(' ').toLowerCase().includes(q));
+}
+// The calendar day (Asia/Jerusalem) of an instant as YYYY-MM-DD; '' when there is none.
+export const jerusalemDay = iso => iso ? new Date(iso).toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' }) : '';
+// Date ranges include both boundary days. Undated projects stay visible only without a range.
+export function dateMatches(p, v) {
+  if (!v.dateFrom && !v.dateTo) return true;
+    const day = v.dateField==='lastWork'?String(p.lastWorkDate||'').slice(0,10):jerusalemDay(p.createdAt);
+  return !!day && (!v.dateFrom || day >= v.dateFrom) && (!v.dateTo || day <= v.dateTo);
 }
 // Filtered and sorted. Rows with no value sort last whichever way; ties go by name, then Odoo id, so the order is stable.
 export function budgetRows(rows, v = DEFAULT_VIEW) {
@@ -73,7 +82,7 @@ export const BILLING_CSV_HEADER = ['Billing Default', 'Worked Hours', 'Billable 
 export function budgetCsvRows(list) {
   const billing = list.some(p => p.billing);
   const extra = p => { const f = billingFigures(p); return f ? [f.defaultLabel, f.workedHours, f.billableHours, f.consumedHours, f.allocatedHours ?? '', f.remainingHours ?? '', f.statusLabel, f.unclassifiedHours || '', f.emailLabel] : BILLING_CSV_HEADER.map(() => ''); };
-  return [billing ? [...CSV_HEADER, ...BILLING_CSV_HEADER] : CSV_HEADER, ...list.map(p => [p.name, p.client || (p.missingClient ? 'No client' : ''), p.createdAt ? p.createdAt.slice(0, 10) : '', p.allocatedHours ?? 'Allocation not set', p.loggedHours, p.remainingHours ?? '', p.usedPercent ?? '', budgetText(p), p.overHours || '', p.openTickets ?? '', p.reviewTickets ?? '', p.lastWorkDate || '', p.pendingHours || '', linkText(p), p.company || '', p.odooId, ...(billing ? extra(p) : [])])];
+  return [billing ? [...CSV_HEADER, ...BILLING_CSV_HEADER] : CSV_HEADER, ...list.map(p => [p.name, p.client || (p.missingClient ? 'No client' : ''), p.createdAt ? p.createdAt.slice(0, 10) : '', p.allocatedHours ?? 'No allocation', p.loggedHours, p.remainingHours ?? '', p.usedPercent ?? '', budgetText(p), p.overHours || '', p.openTickets ?? '', p.reviewTickets ?? '', p.lastWorkDate || '', p.pendingHours || '', linkText(p), p.company || '', p.odooId, ...(billing ? extra(p) : [])])];
 }
 // Counts for the summary chips, for the rows given (all projects, or the filtered ones), so each label can say which.
 export function budgetCounts(list) {

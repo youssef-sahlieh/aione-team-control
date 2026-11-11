@@ -1,4 +1,4 @@
-import { DEFAULT_VIEW, PAGE_SIZES, SOURCE, OVERRIDE, EFFECTIVE, STATUS_FILTERS, PROBLEM_FILTERS, SORTS, ticketView, ticketTotals, ticketProblems, syncLabel, commercialHours, actualHours, developers, hiddenCount, minutesHours,
+import { DEFAULT_VIEW, DEFAULT_WORK, WORK_PERIODS, WORK_MODES, customPeriodError, workQuery, ORIGIN, PAGE_SIZES, SOURCE, OVERRIDE, EFFECTIVE, STATUS_FILTERS, PROBLEM_FILTERS, SORTS, ticketView, ticketTotals, ticketProblems, syncLabel, commercialHours, actualHours, developers, hiddenCount, minutesHours,
   PROJECT_COLUMNS, TICKET_COLUMNS, projectSheetRows, ticketSheetRows, sheetColumns, csvFile, fileSlug, importBody, reportRows, retryBody, changeLine, templateSheets, RESULT } from '../models/project-workspace.js';
 import { hours, signedHours } from '../models/odoo-projects.js';
 import { entryCsvRows } from '../models/billing.js';
@@ -19,8 +19,10 @@ const today=()=>new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Jerusalem'
 // scroll, the tickets read) is kept per project here, so redrawing the table or opening a ticket's drawer keeps it.
 // ctx: api, dialog, openIssue, createTicket(anchor,{odooProjectId,onCreated}), say, changed(keys) (the dashboard's ticket
 // refresh), projectsChanged() (the Clients table's figures), projects() (the table's rows), editAllocation().
+// The work period, the billable filter and the ticket mode are read by the server (work) with the page; a change reads again.
+const ENTRY_PAGE=25;
 const states=new Map();
-const stateOf=id=>{if(!states.has(id))states.set(id,{view:{...DEFAULT_VIEW},data:null,loading:null,error:null,selected:new Set(),scroll:0,period:null,filtersOpen:false,more:false,draw:null});return states.get(id);};
+const stateOf=id=>{if(!states.has(id))states.set(id,{view:{...DEFAULT_VIEW},data:null,loading:null,error:null,selected:new Set(),scroll:0,work:{...DEFAULT_WORK},odoo:{data:null,error:null,loading:null},filtersOpen:false,more:false,draw:null});return states.get(id);};
 // After tickets changed elsewhere (the drawer, the work log, a new ticket): reload the workspaces that list them.
 export function workspaceTicketsChanged(keys,{reload=true}={}){
   const hit=[];for(const [id,s] of states)if(s.data&&(s.expect?.size||keys.some(k=>s.data.tickets.some(t=>t.key===k))))hit.push(id);
@@ -28,20 +30,39 @@ export function workspaceTicketsChanged(keys,{reload=true}={}){
   if(reload)for(const id of hit)if(!states.get(id).loading)load(id).catch(()=>{});
   return hit;
 }
+// After a project's billing default changed or Odoo was synced: the open workspaces re-read their tickets, so the
+// effective billing shown is the saved one (a workspace that has never been opened has nothing to reload).
+export function reloadProjectWorkspaces(ids=null){
+  const hit=[...states].filter(([id,s])=>s.data&&(!ids||ids.includes(id))).map(([id])=>id);
+  return Promise.all(hit.map(id=>load(id).catch(()=>{})));
+}
 let api=null;
 async function load(id){
-  const s=stateOf(id),q=new URLSearchParams({id:String(id),...(s.period||{})});
+  const s=stateOf(id);if(s.work.period==='custom'&&customPeriodError(s.work.from,s.work.to))return;
+  const q=workQuery(s.work);q.set('id',String(id));
   const p=s.loading=api('/clients/odoo-projects/tickets?'+q);s.error=null;s.draw?.();
+  loadWork(id).catch(()=>{});
   try{const d=await p;if(s.loading!==p)return;s.data=d;s.expect?.clear();const keys=new Set(d.tickets.map(t=>t.key));for(const k of [...s.selected])if(!keys.has(k))s.selected.delete(k);}
   catch(err){if(s.loading===p)s.error=err;}
   finally{if(s.loading===p){s.loading=null;s.draw?.();}}
+}
+// The work logged in Odoo in the same period: one page of entries (more: the next page, added to the list).
+async function loadWork(id,more=false){
+  const s=stateOf(id),o=s.odoo;if(s.work.period==='custom'&&customPeriodError(s.work.from,s.work.to))return;
+  const q=workQuery(s.work);q.set('id',String(id));q.set('limit',String(ENTRY_PAGE));
+  if(more&&o.data?.nextOffset!=null)q.set('offset',String(o.data.nextOffset));
+  const p=o.loading=api('/clients/odoo-projects/work?'+q);o.error=null;s.draw?.();
+  try{const d=await p;if(o.loading!==p)return;o.data=more&&o.data?{...d,entries:[...o.data.entries,...d.entries]}:d;}
+  catch(err){if(o.loading===p)o.error=err;}
+  finally{if(o.loading===p){o.loading=null;s.draw?.();}}
 }
 export function mountProjectWorkspace(cell,p,ctx){
   api=ctx.api;
   const s=stateOf(p.odooId),box=el('section','ws');box.setAttribute('aria-label','Tickets and billing of '+p.name);cell.append(box);
   const desc=el('div','ws-desc'),bar=el('div','ws-bar'),filters=el('div','ws-filters'),note=el('div','ws-note'),totals=el('div','ws-totals'),wrap=el('div','table-wrap ws-wrap'),pager=el('div','budget-pager');
   filters.id='ws-filters-'+p.odooId;
-  box.append(desc,bar,filters,note,totals,wrap,pager);
+  const scope=el('div','ws-scope-bar'),work=el('section','ws-work');work.setAttribute('aria-label','Work logged in Odoo on '+p.name);
+  box.append(desc,bar,scope,filters,note,totals,wrap,pager,work);
   wrap.addEventListener('scroll',()=>{s.scroll=wrap.scrollLeft;},{passive:true});
   const v=s.view;
   // Search, Filters and the sort stay in view; a new search or filter starts again from the first page.
@@ -56,26 +77,73 @@ export function mountProjectWorkspace(cell,p,ctx){
   actions.append(create,button('Export…',e=>exportDialog(e.currentTarget,p,s,ctx),'btn'),button('Import…',e=>importDialog(e.currentTarget,p,ctx),'btn'),Object.assign(button('↻',()=>load(p.odooId),'btn'),{title:'Read the tickets again'}));
   actions.lastChild.setAttribute('aria-label','Refresh the tickets of '+p.name);
   bar.append(search,filtersBtn,sortSel,actions);
+  // The work period (this month by default), the billable filter and which tickets to show. Dates are checked here first:
+  // an incomplete or reversed custom period is said in words and not read.
+  const w=s.work,per=pick('Work period',Object.entries(WORK_PERIODS),w.period),mode=pick('Tickets to show',Object.entries(WORK_MODES),w.mode);
+  const fromIn=el('input','inp'),toIn=el('input','inp'),custom=el('span','ws-custom'),periodErr=el('p','msg err ws-period-err'),billable=el('input'),billLabel=el('label','ws-check');
+  fromIn.type=toIn.type='date';fromIn.value=w.from;toIn.value=w.to;fromIn.setAttribute('aria-label','Work period from');toIn.setAttribute('aria-label','Work period to');
+  billable.type='checkbox';billable.checked=w.billable;billLabel.append(billable,' Only billable tickets');
+  custom.append(labelled('From',fromIn),labelled('To',toIn));
+  const readWork=()=>{drawScope();if(w.period==='custom'&&customPeriodError(w.from,w.to))return;v.page=0;load(p.odooId);};
+  per.addEventListener('change',()=>{w.period=per.value;readWork();});
+  fromIn.addEventListener('change',()=>{w.from=fromIn.value;readWork();});
+  toIn.addEventListener('change',()=>{w.to=toIn.value;readWork();});
+  billable.addEventListener('change',()=>{w.billable=billable.checked;readWork();});
+  mode.addEventListener('change',()=>{w.mode=mode.value;readWork();});
+  scope.append(labelled('Work period',per),custom,billLabel,labelled('Tickets to show',mode),periodErr);
   function drawFilters(){
     const t=s.data?.tickets||[];filters.hidden=!s.filtersOpen;filtersBtn.setAttribute('aria-expanded',String(s.filtersOpen));const n=hiddenCount(v);filtersBtn.textContent=n?'Filters ('+n+')':'Filters';
     if(!s.filtersOpen)return;
     const sel=(label,key,options)=>{const x=pick(label,options,v[key]);x.addEventListener('change',()=>{v[key]=x.value;v.page=0;draw();});return labelled(label,x);};
-    const from=el('input','inp'),to=el('input','inp');from.type=to.type='date';from.value=s.period?.from||'';to.value=s.period?.to||'';from.setAttribute('aria-label','Period from');to.setAttribute('aria-label','Period to');
     filters.replaceChildren(sel('Status','status',[['','Open and closed'],...Object.entries(STATUS_FILTERS)]),sel('Developer','dev',[['','Any developer'],...developers(t).map(d=>[d,d])]),sel('Source','source',[['','Any source'],...Object.entries(SOURCE)]),
       sel('Billing','billing',[['','Any billing'],...Object.entries(EFFECTIVE).map(([k,l])=>[k,'Effective: '+l]),['inherit','Override: inherits the project'],...Object.entries(OVERRIDE).map(([k,l])=>['override:'+k,'Override: '+l])]),
       sel('Sync & setup','problems',[['','Any'],...Object.entries(PROBLEM_FILTERS)]),
       button('Clear filters',()=>{Object.assign(v,{status:'',dev:'',source:'',billing:'',problems:'',page:0});draw();},'linkbtn'),
-      labelled('Period from',from),labelled('to',to),
-      button('Use period',()=>{if(!from.value&&!to.value){s.period=null;}else s.period={...(from.value?{from:from.value}:{}),...(to.value?{to:to.value}:{})};load(p.odooId);},'btn'),
-      ...(s.period?[button('Default period',()=>{s.period=null;load(p.odooId);},'linkbtn')]:[]));
+);
   }
   function drawDesc(){
     const text=s.data?.project.description||'';desc.replaceChildren();if(!text)return;
     const body=el('p','ws-desc-text'+(s.more?' open':''),s.more||text.length<=240?text:text.slice(0,240)+'…');body.dir='auto';desc.append(body);
     if(text.length>240){const b=button(s.more?'Show less':'Show more',()=>{s.more=!s.more;drawDesc();},'linkbtn');b.setAttribute('aria-expanded',String(s.more));desc.append(b);}
   }
+  // The period's dates: a custom period says what is wrong with it, and the other choices say nothing.
+  function drawScope(){custom.hidden=w.period!=='custom';const bad=w.period==='custom'?customPeriodError(w.from,w.to):'';periodErr.hidden=!bad;periodErr.textContent=bad;}
+  const billingText=b=>(EFFECTIVE[b?.value]||'Not classified')+(b?.source?' · '+(ORIGIN[b.source]||''):'');
+  const odooLink=(url,label)=>{const td=el('td'),a=el('a','linkbtn ws-odoo-link','Open in Odoo');a.href=url;a.target='_blank';a.rel='noopener noreferrer';a.setAttribute('aria-label','Open '+label+' in Odoo (new tab)');td.append(a);return td;};
+  // The work logged in Odoo: its totals, its tasks with their billing (read here: Odoo's billing field sets it), the work on no
+  // task, and the entries page by page. Its hours are not added to the tickets above: the dashboard's work is there.
+  function drawWork(){
+    const o=s.odoo,d=o.data;work.replaceChildren(el('h3','ws-work-title','Work logged in Odoo'));
+    if(!d){if(o.error){const m=el('p','msg err','Couldn’t read the Odoo work: '+(o.error.message||o.error)+' ');m.append(button('Retry',()=>loadWork(p.odooId),'btn'));work.append(m);}else work.append(el('p','msg','Loading the Odoo work…'));return;}
+    const head=el('p','ws-scope');head.append(el('strong','',hours(d.totals.hours)+' in '+d.totals.count+(d.totals.count===1?' entry':' entries')),document.createTextNode(' · '+d.period.label+(d.billable?' · billable tasks only':'')));
+    work.append(head,el('p','budget-sub','Entries logged directly in Odoo. Work the dashboard sent is in the ticket rows above, so no hours are counted twice.'));
+    if(o.loading)work.append(el('p','msg','Refreshing…'));
+    if(o.error)work.append(el('p','msg err','Couldn’t refresh the Odoo work: '+(o.error.message||o.error)));
+    for(const x of d.warnings)work.append(el('p','business-guidance',x));
+    if(!d.totals.count){work.append(el('p','business-guidance','No work logged in Odoo in this period'+(d.billable?' on billable tasks':'')+'.'));return;}
+    const tw=el('div','table-wrap ws-work-wrap'),table=el('table','budget-table ws-table ws-work-table'),tb=el('tbody'),hr=el('tr');
+    table.append(el('thead'),tb);table.tHead.append(hr);
+    for(const c of ['Task','Hours','Entries','Billing','Odoo'])hr.append(Object.assign(el('th','',c),{scope:'col'}));
+    for(const t of d.tasks){
+      const name=el('td'),nm=el('span','',(t.key?t.key+' · ':'')+t.name);nm.dir='auto';name.append(nm);
+      const tr=el('tr');tr.append(name,el('td','num',h(t.hours)),el('td','num',String(t.count)),el('td','',billingText(t.billing)),odooLink(t.url,'task '+t.name));tb.append(tr);
+    }
+    if(d.unassigned.count){const tr=el('tr','ws-unassigned');tr.append(el('td','','Unassigned work (no task)'),el('td','num',h(d.unassigned.hours)),el('td','num',String(d.unassigned.count)),el('td','','Not billable'),el('td','','—'));tb.append(tr);}
+    tw.append(table);work.append(tw);
+    work.append(el('h4','ws-work-sub','Entries'));
+    const ew=el('div','table-wrap ws-work-wrap'),et=el('table','budget-table ws-table ws-work-table'),eb=el('tbody'),eh=el('tr');
+    et.append(el('thead'),eb);et.tHead.append(eh);
+    for(const c of ['Date','Hours','Task','Person','Description','Odoo'])eh.append(Object.assign(el('th','',c),{scope:'col'}));
+    for(const e of d.entries){
+      const desc=el('td','ws-desc-cell',e.description);desc.dir='auto';
+      const task=e.task?(e.task.key?e.task.key+' · ':'')+e.task.name:'Unassigned';
+      const tr=el('tr');tr.append(el('td','',e.date),el('td','num',h(e.hours)),el('td','',task),el('td','',e.person||'—'),desc,odooLink(e.url,'entry of '+e.date));eb.append(tr);
+    }
+    ew.append(et);work.append(ew,el('p','budget-sub','Showing '+d.entries.length+' of '+d.totals.count+' entries'));
+    if(d.nextOffset!=null){const b=button(o.loading?'Loading…':'Load more entries',()=>loadWork(p.odooId,true),'btn');b.disabled=!!o.loading;work.append(b);}
+  }
   function draw(){
-    drawFilters();drawDesc();note.replaceChildren();totals.replaceChildren();pager.replaceChildren();
+    drawFilters();drawDesc();drawScope();drawWork();note.replaceChildren();totals.replaceChildren();pager.replaceChildren();
     if(!s.data){wrap.replaceChildren();
       if(s.error){const m=el('p','msg err','Couldn’t read the tickets: '+(s.error.message||s.error)+' ');m.append(button('Retry',()=>load(p.odooId),'btn'));note.append(m);}
       else note.append(el('p','msg','Loading tickets…'));return;}
@@ -89,7 +157,11 @@ export function mountProjectWorkspace(cell,p,ctx){
     const line=el('p','ws-scope');line.append(el('strong','',(view.matching.length===d.tickets.length?d.tickets.length+' tickets':view.matching.length+' of '+d.tickets.length+' tickets')+' · '+all.open+' open'),
       document.createTextNode(' · Actual '+hours(all.actualHours)+' · Commercial '+hours(all.commercialHours)+' · Agreed '+hours(all.agreedHours)+' · Estimated '+hours(all.estimatedHours)));
     line.title='Every ticket matching the filters, on all pages. Commercial is what the work charges: agreed hours once, else billable work.';
-    totals.append(line,el('p','budget-sub','Hours: '+d.scope.label.toLowerCase()));
+    // Actual and commercial hours are for the period; consumed is lifetime, so it is named apart and not limited to the period.
+    const lifetime=d.tickets.reduce((n,t)=>n+(t.consumedMinutes||0),0);
+    totals.append(line,el('p','budget-sub','Hours for '+d.scope.label.toLowerCase()+'. Lifetime, not limited to the period: consumed '+hours(minutesHours(lifetime))+' h on these tickets.'));
+    const unclassified=d.tickets.filter(t=>t.effective?.value==='unclassified').length;
+    if(unclassified)note.append(el('p','business-guidance',unclassified+(unclassified===1?' ticket has':' tickets have')+' no billing: the project is not classified and the ticket has no override. Set the project’s billing default to fix them.'));
     if(sel.length){const b=el('p','ws-selected',sel.length+' selected · Actual '+hours(st.actualHours)+' · Commercial '+hours(st.commercialHours)+' · Agreed '+hours(st.agreedHours)+' ');b.append(button('Clear selection',()=>{s.selected.clear();draw();},'linkbtn'));totals.append(b);}
     if(!view.matching.length){const m=el('p','business-guidance','No tickets match. ');m.append(button('Clear search and filters',()=>{Object.assign(v,{q:'',status:'',dev:'',source:'',billing:'',problems:'',page:0});search.value='';draw();},'linkbtn'));wrap.replaceChildren(m);return;}
     const table=el('table','budget-table ws-table'),head=el('tr'),body=el('tbody');table.append(el('thead'),body);table.tHead.append(head);
@@ -120,7 +192,7 @@ function ticketRow(t,p,s,ctx,draw){
   if(t.description){const dp=el('span','ws-preview',t.description);dp.dir='auto';dp.title=t.descriptionLength>t.description.length?'Open the ticket for the full description.':'';c2.append(dp);}
   const c3=el('td','',t.status||(t.closed?'Closed':'—'));
   const c4=el('td','ws-people');c4.append(el('span','',(t.devs||[]).length?'Developers: '+t.devs.join(', '):'—'));if(t.assignee)c4.append(el('span','budget-sub','Assignee: '+t.assignee));
-  const c5=el('td','ws-billing'),bsel=pick('Billing of '+t.key,[['inherit','Project: '+(EFFECTIVE[p.billing?.default]||'not classified')],...Object.entries(OVERRIDE)],t.override||'inherit');
+  const c5=el('td','ws-billing'),bsel=pick('Billing of '+t.key,[['inherit','Inherits project: '+(EFFECTIVE[s.data?.project?.default]||'not classified')],...Object.entries(OVERRIDE)],t.override||'inherit');
   if(t.effective?.value==='unclassified')bsel.classList.add('ws-unclassified');
   bsel.addEventListener('change',async()=>{bsel.disabled=true;ctx.say('Saving the billing of '+t.key+'…');
     try{await ctx.api('/billing/ticket',{method:'PUT',body:{key:t.key,revision:t.revision,billing:bsel.value}});ctx.say('Billing saved for '+t.key+'. Its hours are recounted.');await refreshAfter([t.key],p,ctx);}

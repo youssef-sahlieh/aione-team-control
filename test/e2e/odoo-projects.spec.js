@@ -49,7 +49,7 @@ async function open(page, { extra = [], skip = [], syncChanged = false, clock = 
     const json = (v, status = 200) => route.fulfill({ status, json: v });
     if (url.pathname === "/config") return json({ site: "https://jira.example.invalid", project: "AION", people: {}, devs: [], role: "admin", email: "boss@example.invalid", accounts: true, odoo: true, mail: false, ai: { enabled: false }, capabilities: ["ticket-business-v1", "project-budget-v1"] });
     if (url.pathname === "/jira/search") return json({ issues: [] });
-    if (url.pathname === "/internal") return json({ tickets: [] });
+    if (url.pathname === "/internal" || url.pathname === "/odoo/tickets") return json({ tickets: [] });
     if (url.pathname === "/date-requests") return json({ requests: [] });
     if (url.pathname === "/clients") return json(catalog);
     if (url.pathname === "/clients/odoo-sync") return json(req.method() === "GET" ? { odoo: true, syncedAt: Date.parse("2026-06-03T08:00:00Z"), projectsSyncedAt: Date.parse("2026-06-03T08:00:00Z"), error: null }
@@ -155,7 +155,7 @@ test("Clients & Projects lists every active Odoo project with its client, hours,
   const unset = rowOf(page, "Odoo only");
   await expect(unset.locator("td").nth(1)).toHaveText("No client");
   await expect(unset.locator("td").nth(2)).toHaveText("Not set");
-  await expect(unset.locator(".budget-status")).toHaveText("Allocation not set");
+  await expect(unset.locator(".budget-status")).toHaveText("No allocation");
   await expect(page.locator(".budget-scope")).toHaveText("3 projects · 1 over budget · 1 near limit");
   await expect(table(page).locator("tfoot")).toContainText("Total");
   await expect(table(page).locator("tfoot")).toContainText("17 h");
@@ -499,4 +499,21 @@ test("Clients & Projects: an administrator sets allocated hours and links a proj
   await expect(detailOf(page, "Odoo only")).toContainText("Acme / Branch B");
   expect(seen.sent[1]).toEqual({ revision: 3, odooId: 11, entryId: "p2", unlink: false });
   expect(seen.errors).toEqual([]);
+});
+
+
+test('project date toolbar filters creation and last work, resets, and keeps zero budgets neutral',async({page})=>{
+ const seen=await open(page,{extra:[row({odooId:99,name:'No budget',client:'Acme',createdAt:'2026-05-01T12:00:00Z',allocatedHours:0,loggedHours:80,remainingHours:null,status:'not_set'})]});
+ await expect(page.locator('.budget-date-bar')).toBeVisible();
+ await page.getByLabel('Project date from',{exact:true}).fill('2026-04-01');
+ await page.getByLabel('Project date to',{exact:true}).fill('2026-05-01');
+ await expect(names(page)).toHaveText(['No budget','Odoo only','Holding job']);
+ await page.getByLabel('Project date',{exact:true}).selectOption('lastWork');
+ await expect(page.locator('.budget-main')).toHaveCount(0);
+ await page.getByRole('button',{name:'All dates',exact:true}).click();
+ await expect(page.locator('.budget-main')).toHaveCount(4);
+ const neutral=rowOf(page,'No budget');await expect(neutral.locator('.budget-status')).toHaveText('No allocation');
+ await expect(neutral).not.toHaveClass(/budget-over/);
+ expect(seen.errors).toEqual([]);
+ await page.screenshot({path:'test-results/client-date-toolbar.png',fullPage:true});
 });
