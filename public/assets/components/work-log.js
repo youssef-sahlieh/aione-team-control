@@ -363,6 +363,8 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
     const head=el('div','wl-head');head.append(el('h3','','Work log'));
     if(view.canLog)head.append(button('+ Log work',()=>openForm(key,(document.getElementById('d-title')||{}).textContent||'',view),'btn primary'));
     target.replaceChildren(head);
+    // The timer sits at the top, under the heading: it is the thing to act on first.
+    if(timer&&!view.closed){const tb=timerBar(key,view);if(tb)target.append(tb);}
     const s=view.summary,total=el('p','wl-total');
     if(view.baselineHours!=null&&s.loggedMinutes)total.append('Actual hours: ',el('b','',String(view.totalHours)),' = '+view.baselineHours+' h before the work log + '+formatMinutes(s.loggedMinutes)+' logged');
     else if(s.loggedMinutes)total.append('Logged: ',el('b','',formatMinutes(s.loggedMinutes)),' ('+hours(s.loggedMinutes)+' h)');
@@ -373,7 +375,6 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
     else if(view.logging&&!view.canLog&&!view.closed)target.append(el('p','msg','Work logging isn\'t switched on for you yet.'));
     if(view.canLog&&view.destination&&(view.destination.setup||view.destination.error))target.append(el('p','msg err',view.destination.setup||view.destination.error));
     else if(view.canLog&&view.destination?.projectId)target.append(el('p','wl-note','New work goes to '+(view.destination.label||view.destination.projectName)+'.'+(view.destination.earlierProjects?.length?' Earlier entries stay on '+view.destination.earlierProjects.join(', ')+'.':'')));
-    if(timer&&!view.closed){const tb=timerBar(key,view);if(tb)target.append(tb);}
     if(view.entries.length){const list=el('ol','wl-list');for(const e of view.entries)list.append(entryRow(e,view));target.append(list);}
   }
   function openFor(key,title){const view=views[key];if(view&&view.canLog)openForm(key,title,view);}
