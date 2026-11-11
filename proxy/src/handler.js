@@ -960,7 +960,8 @@ export default {
       res = env.COOKIE_SESSIONS?await cookieSessionRequest(request,env,req=>route(req,env,new URL(req.url)),{readToken,makeToken}):await route(request, env, new URL(request.url));
     } catch (err) {
       if(err instanceof BusinessError)res=businessResponse(err);
-      else console.warn("proxy_failed");
+      // The kind of failure only (e.g. "database error: …"), cut short, so the cause shows in the logs.
+      else console.warn("proxy_failed", String((err && err.name) || "Error") + ": " + String((err && err.message) || "").slice(0, 160));
       if(!res)res = fail("server", "The proxy hit an error.", 500);
     }
     for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
