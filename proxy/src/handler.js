@@ -34,7 +34,7 @@ import { odooAppRoutes, odooTranslations } from "./odoo-app.js";
 import { monitorCallbackUrl, monitorPublicKeys, monitorToken } from "./monitor-sso.js";
 import { cookieSessionRequest } from "./sessions.js";
 import { SESSION_MS, SESSION_SECONDS } from "./session-policy.js";
-import { aiChat, aiBrief, aiConfigured, aiDescription, aiImproveWriting, AIError } from "./ai.js";
+import { aiChat, aiBrief, aiConfigured, aiDescription, aiImproveWriting, aiWorkDescription, AIError } from "./ai.js";
 import { githubConfigured, syncPulls, prsByKey } from "./github.js";
 import { reviewRoutes, requestWaitingReviews, adfText } from "./reviews.js";
 import { recordTicketEvent, ticketLogRoutes, readTicketLog } from "./ticket-log.js";
@@ -540,7 +540,8 @@ async function route(request, env, url) {
   // A comment being written, improved by the AI (formal, spelling and grammar fixed). Nothing is saved here.
   if(path==="/ai-improve"&&method==="POST"){
     const b=await readJson(request);if(!b||typeof b!=="object"||typeof b.text!=="string")return fail("bad_request","Write a comment first.",400);
-    try{return json({text:await aiImproveWriting(env,me,b.text)});}
+    const purpose=b.purpose==="work"?"work":"comment";
+    try{return json({text:await aiImproveWriting(env,me,b.text,{purpose})});}
     catch(e){if(e instanceof AIError||(e&&typeof e.status==="number"&&typeof e.code==="string"))return json({code:e.code,error:e.message},e.status);return fail("ai_unavailable","Could not improve the text. Please try again.",502);}
   }
   // Work log (Odoo timesheets) on Jira, internal and Odoo Helpdesk tickets the signed-in person can see.
@@ -573,7 +574,7 @@ async function route(request, env, url) {
   if((path==="/clients/odoo-projects"||path.startsWith("/clients/odoo-projects/"))&&path!=="/clients/odoo-projects/options")return projectBudgetRoutes(request,env,url,me);
   if(path==="/clients"||path.startsWith("/clients/"))return catalogRoutes(request,env,url,me);
   if(path==="/epic-map"||path==="/epic-map/sync")return epicMapRoutes(request,env,url,me,(p,init)=>jira(env,p,init));
-  if(path==="/time-entries"||path.startsWith("/time-entries/"))return timeRoutes(request,env,url,me,{readTicket:readTimeTicket});
+  if(path==="/time-entries"||path.startsWith("/time-entries/"))return timeRoutes(request,env,url,me,{readTicket:readTimeTicket,aiSuggest:evidence=>aiWorkDescription(env,me,evidence)});
   // Billable work, customer allowances, alerts and the billable export (administrators).
   if(path.startsWith("/billing/"))return billingRoutes(request,env,url,me,{readTicket:readTimeTicket,sendMail:(from,body)=>sendMail(env,from,body)});
   // Many tickets at once (the dashboard's list): one database read for internal tickets and, for users, one
@@ -960,8 +961,7 @@ export default {
       res = env.COOKIE_SESSIONS?await cookieSessionRequest(request,env,req=>route(req,env,new URL(req.url)),{readToken,makeToken}):await route(request, env, new URL(request.url));
     } catch (err) {
       if(err instanceof BusinessError)res=businessResponse(err);
-      // The kind of failure only (e.g. "database error: …"), cut short, so the cause shows in the logs.
-      else console.warn("proxy_failed", String((err && err.name) || "Error") + ": " + String((err && err.message) || "").slice(0, 160));
+      else console.error("proxy_failed", {name:err?.name,code:err?.code,message:String(err?.message||'').slice(0,200)});
       if(!res)res = fail("server", "The proxy hit an error.", 500);
     }
     for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);

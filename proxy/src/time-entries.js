@@ -19,7 +19,7 @@
 // match is linked, no match or a conflicting one goes to "Needs review" for an administrator.
 import { odoo, odooConfigured, odooUid } from './odoo.js';
 import { requireStore, readMetadata, readCatalog, metadataKey, shownName, withTicketLock, overageOf, BusinessError, selectionOf, readOdooProjects, projectIndex } from './ticket-metadata.js';
-import { recordTicketEvent } from './ticket-log.js';
+import { recordTicketEvent, readTicketLog } from './ticket-log.js';
 import { getUser, normEmail } from './users.js';
 
 const problem=(message,status=400,code='time_entry',details={})=>{throw new BusinessError(message,status,code,details);};
@@ -37,6 +37,10 @@ export const STATUS={syncing:'Syncing',synced:'Synced',setup:'Needs setup',revie
 export const sourceOf=(env,key)=>typeof key!=='string'?null:/^INT-\d+$/.test(key)?'internal':/^HD-\d+$/.test(key)?'odoo':new RegExp('^'+env.JIRA_PROJECT+'-\\d+$').test(key)?'jira':null;
 export const formatMinutes=m=>[Math.floor(m/60)?Math.floor(m/60)+'h':'',m%60?m%60+'m':''].filter(Boolean).join(' ')||'0m';
 export const totalHours=(baseline,minutes)=>Math.round(((Number(baseline)||0)+minutes/60)*100)/100;
+// Odoo's decimal hours, only at the integration boundary. Minutes are the stored truth: 4 decimals keep every whole
+// minute exactly recoverable (round(h * 60) === minutes for any 0..1440). Odoo rounds to its own precision on save.
+export const odooHours=minutes=>Math.round(minutes*10000/60)/10000;
+export const minutesFromOdooHours=hours=>Math.round(Number(hours)*60);
 const m2o=v=>Array.isArray(v)?v[0]:null;
 const mget=(store,keys)=>!keys.length?[]:store.mget?store.mget(keys):Promise.all(keys.map(k=>store.get(k)));
 const clean=(s,n)=>String(s||'').slice(0,n);
@@ -297,9 +301,9 @@ async function ensureTask(env,cfg,e,projectId){
 }
 function lineValues(cfg,e,{projectId,taskId}){
   const f=cfg.fields;
-  return {name:e.description,date:e.date,unit_amount:e.minutes/60,project_id:projectId,task_id:taskId,[f.users]:e.author.name,[f.entryUuid]:e.id,[f.userUuid]:e.author.uuid,[f.lineRef]:e.source+':'+e.ticket};
+  return {name:e.description,date:e.date,unit_amount:odooHours(e.minutes),project_id:projectId,task_id:taskId,[f.users]:e.author.name,[f.entryUuid]:e.id,[f.userUuid]:e.author.uuid,[f.lineRef]:e.source+':'+e.ticket};
 }
-const lineMatches=(l,e,taskId)=>l.date===e.date&&Math.round(Number(l.unit_amount)*60)===e.minutes&&(!taskId||m2o(l.task_id)===taskId);
+const lineMatches=(l,e,taskId)=>l.date===e.date&&minutesFromOdooHours(l.unit_amount)===e.minutes&&(!taskId||m2o(l.task_id)===taskId);
 const REFUSED=/ValidationError|UserError|AccessError|MissingError|AccessDenied/;
 const backoff=n=>Math.min(60,2**n)*60000;
 
@@ -319,7 +323,7 @@ export async function syncEntry(env,id,{force=false}={}){
     try{
       // A correction of a line Odoo already has: writing the same values again is harmless.
       if(e.lineId){
-        await odoo(env,'account.analytic.line','write',[[e.lineId],{name:e.description,date:e.date,unit_amount:e.minutes/60,...(e.agreed?{[cfg.fields.users]:e.author.name}:{})}]);
+        await odoo(env,'account.analytic.line','write',[[e.lineId],{name:e.description,date:e.date,unit_amount:odooHours(e.minutes),...(e.agreed?{[cfg.fields.users]:e.author.name}:{})}]);
         return save({...e,state:'synced',syncedRevision:e.revision,error:'',setup:'',attempts:0,nextTryAt:0});
       }
       const dest=await destination(env,cfg,e);
@@ -437,6 +441,116 @@ export async function timeClosureErrors(env,key){
   return [bad.length+' work '+(bad.length===1?'entry no longer matches':'entries no longer match')+' Odoo (changed or deleted there). An administrator must review them'];
 }
 
+// ---- Dashboard timer ----
+// One open timer per person (running, paused or a stopped draft). The server keeps the timestamps and computes the
+// elapsed time: running time is the sum of the segments between start/resume and pause/stop, on the server's clock.
+// Browsers only display it. Nothing here is native Odoo timer state: the dashboard owns the timer, and Odoo gets
+// exactly one timesheet line when the stopped session is logged (the entry id is the timer's id, so a repeated save
+// after a lost answer logs the work once). Rounding: the suggested minutes are the elapsed time to the nearest minute,
+// half up; the exact milliseconds stay in the session. A stopped session is kept until it is logged or discarded.
+const timerKey=(env,email)=>P(env)+'timer:'+normEmail(email);
+const OPEN_TIMER=['running','paused','stopped'];
+const TIMER_TTL=315360000;
+export const timerElapsedMs=(s,now=Date.now())=>(s.accumulatedMs||0)+(s.state==='running'?Math.max(0,now-Date.parse(s.segmentStart)):0);
+export const suggestedTimerMinutes=ms=>Math.floor((Math.max(0,Math.floor(ms))+30000)/60000);
+export function publicTimer(s,now=Date.now()){
+  const stopped=s.state==='stopped'||s.state==='logged';
+  return {id:s.id,ticket:s.ticket,source:s.source,ticketTitle:s.ticketTitle,state:s.state,revision:s.revision,workDate:s.workDate,
+    startedAt:s.startedAt,stoppedAt:s.stoppedAt||null,elapsedMs:timerElapsedMs(s,now),
+    elapsedSeconds:Math.floor(timerElapsedMs(s,now)/1000),
+    suggestedMinutes:stopped?suggestedTimerMinutes(s.accumulatedMs||0):null,
+    // The work date is the day the timer started (Israel time). A session stopped on another day is flagged.
+    crossesMidnight:!!s.stoppedAt&&todayIn(new Date(s.stoppedAt))!==s.workDate,
+    description:s.description||'',entryId:s.entryId||null,serverNow:new Date(now).toISOString()};
+}
+async function readTimer(env,email){const raw=await requireStore(env).get(timerKey(env,email));return raw?{raw,session:JSON.parse(raw)}:{raw:null,session:null};}
+async function saveTimer(env,prevRaw,next){
+  const k=timerKey(env,next.ownerEmail),text=JSON.stringify(next);
+  const ok=prevRaw===null?await requireStore(env).setIfAbsent(k,text,TIMER_TTL):await requireStore(env).compareAndSet(k,prevRaw,text);
+  return ok?next:null;
+}
+// A stopped session whose entry exists in Odoo's log (the save answered late or was lost) becomes logged.
+async function settleTimer(env,me,raw,s){
+  if(s.state!=='stopped'||!(await readEntry(env,s.id)))return s;
+  const next={...s,state:'logged',entryId:s.id,revision:s.revision+1,updatedAt:new Date().toISOString()};
+  return (await saveTimer(env,raw,next))||s;
+}
+// Called after an entry is saved: a stopped timer with the same id is now logged (idempotent).
+export async function markTimerLogged(env,me,entryId){
+  const {raw,session}=await readTimer(env,me.email);
+  if(!session||session.id!==entryId||session.state!=='stopped')return null;
+  return settleTimer(env,me,raw,session);
+}
+export async function timerView(env,me){
+  const {raw,session}=await readTimer(env,me.email);
+  const cfg=await readConfig(env);
+  const s=session?await settleTimer(env,me,raw,session):null;
+  return {timer:s?publicTimer(s):null,canLog:canLog(cfg,me)};
+}
+const timerProblem=(message,status,cur,now)=>problem(message,status,'timer',{timer:cur?publicTimer(cur,now):null});
+export async function timerAction(env,me,b,readTicket){
+  if(!b||typeof b!=='object')problem('Send the timer action.');
+  const now=Date.now(),iso=new Date(now).toISOString(),action=b.action;
+  const {raw,session:cur}=await readTimer(env,me.email);
+  if(action==='start'){
+    if(typeof b.id!=='string'||!UUID.test(b.id))problem('Missing timer id. Refresh and retry.');
+    // The same start sent twice (a lost answer) returns the session it created.
+    if(cur&&cur.id===b.id)return {timer:publicTimer(cur,now)};
+    if(cur&&OPEN_TIMER.includes(cur.state))timerProblem(cur.state==='stopped'?'A stopped timer on '+cur.ticket+' is waiting to be logged or discarded. Finish it first.':'A timer is already running on '+cur.ticket+'. Stop it before starting another.',409,cur,now);
+    const key=b.ticket,source=sourceOf(env,key);
+    if(!source)problem('Choose a ticket.');
+    const cfg=await readConfig(env);
+    if(!canLog(cfg,me))problem("Work logging isn't switched on for you yet.",403,'time_off');
+    const t=await readTicket(key);if(!t)problem('Ticket unavailable.',404,'not_found');
+    if(t.closed)problem('This ticket is closed. Reopen it before logging work.',409,'ticket_closed');
+    const next={id:b.id,ownerEmail:normEmail(me.email),revision:0,ticket:key,source,ticketTitle:clean(t.title,250),state:'running',
+      workDate:todayIn(new Date(now)),startedAt:iso,segmentStart:iso,accumulatedMs:0,stoppedAt:null,description:'',entryId:null,createdAt:iso,updatedAt:iso};
+    const saved=await saveTimer(env,raw,next);
+    if(!saved){const again=await readTimer(env,me.email);timerProblem('Your timer changed in another tab. Refresh to see it.',409,again.session,now);}
+    return {timer:publicTimer(saved,now)};
+  }
+  if(!cur)problem('There is no timer to change.',404,'not_found');
+  const allowed={pause:['running'],resume:['paused'],stop:['running','paused'],discard:['running','paused','stopped'],draft:['stopped']}[action];
+  if(!allowed)problem('Unknown timer action.');
+  // A stale revision (another tab, or a repeated request) gets the current session back to show; nothing changes.
+  if(b.revision!==cur.revision)timerProblem('The timer changed in another tab. It now shows its current state.',409,cur,now);
+  if(!allowed.includes(cur.state))timerProblem('The timer is '+cur.state+', so it can\'t '+(action==='draft'?'take a description':action)+' now.',409,cur,now);
+  const next={...cur,revision:cur.revision+1,updatedAt:iso};
+  if(action==='pause'){next.accumulatedMs=timerElapsedMs(cur,now);next.segmentStart=null;next.state='paused';}
+  else if(action==='resume'){next.segmentStart=iso;next.state='running';}
+  else if(action==='stop'){next.accumulatedMs=timerElapsedMs(cur,now);next.segmentStart=null;next.stoppedAt=iso;next.state='stopped';}
+  else if(action==='discard'){next.accumulatedMs=timerElapsedMs(cur,now);next.segmentStart=null;next.state='discarded';}
+  else if(action==='draft'){next.description=clean(typeof b.description==='string'?b.description.trim():'',2000);}
+  const saved=await saveTimer(env,raw,next);
+  if(!saved){const again=await readTimer(env,me.email);timerProblem('The timer changed in another tab. It now shows its current state.',409,again.session,now);}
+  return {timer:publicTimer(saved,now)};
+}
+
+// ---- AI help for the work description (nothing is saved or sent here) ----
+// The evidence is what the dashboard already has for the ticket the person may read: title, description, status,
+// recent comments, and its history. Pull requests and commits are not read here (see docs/work-log.md).
+export async function suggestWorkDescription(env,me,b,readTicket,aiSuggest){
+  if(!b||typeof b!=='object')problem('Choose a ticket.');
+  const key=b.ticket;if(!sourceOf(env,key))problem('Choose a ticket.');
+  if(!canLog(await readConfig(env),me))problem("Work logging isn't switched on for you yet.",403,'time_off');
+  const t=await readTicket(key);if(!t)problem('Ticket unavailable.',404,'not_found');
+  const draft=typeof b.draft==='string'?b.draft.trim().slice(0,2000):'';
+  let timeWindow=null;
+  if(typeof b.timerId==='string'&&UUID.test(b.timerId)){
+    const {session}=await readTimer(env,me.email);
+    if(session&&session.id===b.timerId&&session.ticket===key)timeWindow={startedAt:session.startedAt,stoppedAt:session.stoppedAt||null,minutes:suggestedTimerMinutes(session.accumulatedMs||0),workDate:session.workDate};
+  }
+  const history=(await readTicketLog(env,key)).slice(-40).filter(ev=>['status','comment','edit','due','developers','assignee','created'].includes(ev.action)).slice(-20)
+    .map(ev=>({at:ev.at,action:ev.action,by:clean(ev.by?.name,80),changes:Object.fromEntries(Object.entries(ev.changes||{}).slice(0,4).map(([f,c])=>[f,{from:clean(c?.from,200),to:clean(c?.to,200)}])),text:clean(ev.text,300)}));
+  const evidence={
+    ticket:{key,title:clean(t.title,300),description:clean(t.description,4000),status:clean(t.status,80),closed:!!t.closed,completedAt:t.completedAt||null},
+    comments:(Array.isArray(t.comments)?t.comments:[]).slice(-10).map(c=>({author:clean(typeof c.author==='string'?c.author:c.author?.name,80),at:clean(c.created||c.at,40),text:clean(c.body||c.text,600)})),
+    commentsIncluded:Array.isArray(t.comments),
+    history,draft,timeWindow
+  };
+  return aiSuggest(evidence);
+}
+
 // ---- HTTP ----
 async function body(request){const raw=await request.text();if(raw.length>20000)problem('Request too large.',413);try{return raw?JSON.parse(raw):{};}catch{problem('Invalid request.');}}
 async function ticketView(env,me,key,t){
@@ -549,7 +663,7 @@ async function syncAction(env,me,id,b,readTicket){
         const [l]=await odoo(env,'account.analytic.line','search_read',[[['id','=',lineId]]],{fields:['date','unit_amount','task_id','project_id',cfg.fields.entryUuid].filter(Boolean),limit:1});
         if(!l)problem('Odoo line #'+lineId+' was not found.',404,'not_found');
         if(cfg.fields.entryUuid&&l[cfg.fields.entryUuid]&&l[cfg.fields.entryUuid]!==cur.id)problem('Odoo line #'+lineId+' belongs to another work entry.',409,'conflict');
-        if(!lineMatches(l,cur))problem('Odoo line #'+lineId+' has a different date or duration ('+l.date+', '+formatMinutes(Math.round(Number(l.unit_amount)*60))+').',409,'conflict');
+        if(!lineMatches(l,cur))problem('Odoo line #'+lineId+' has a different date or duration ('+l.date+', '+formatMinutes(minutesFromOdooHours(l.unit_amount))+').',409,'conflict');
         const refs={[cfg.fields.users]:cur.author.name,[cfg.fields.entryUuid]:cur.id,[cfg.fields.userUuid]:cur.author.uuid,[cfg.fields.lineRef]:cur.source+':'+cur.ticket,name:cur.description};
         await odoo(env,'account.analytic.line','write',[[lineId],refs]);
         next={...next,state:'synced',lineId,taskId:m2o(l.task_id),projectId:m2o(l.project_id),syncedRevision:cur.revision,dispatch:null};
@@ -588,7 +702,7 @@ async function report(env,me,url){
     baselines:tickets.map(k=>({ticket:k,hours:meta[k].actualHours??null})).filter(b=>b.hours!=null)};
 }
 
-export async function timeRoutes(request,env,url,me,{readTicket}){
+export async function timeRoutes(request,env,url,me,{readTicket,aiSuggest=async()=>{throw new BusinessError('AI help is unavailable.',503,'ai_not_configured');}}){
   requireStore(env);
   if(!env.STORE.writeIndexed)problem('The work log needs the updated database.',503,'no_store');
   const path=url.pathname,method=request.method;
@@ -598,6 +712,12 @@ export async function timeRoutes(request,env,url,me,{readTicket}){
     if(method==='PUT'){const cfg=await saveSetup(env,me,await body(request));return json(await setupView(env,cfg));}
     problem('Use GET or PUT.',405,'method');
   }
+  if(path==='/time-entries/timer'){
+    if(method==='GET')return json(await timerView(env,me));
+    if(method==='POST')return json(await timerAction(env,me,await body(request),readTicket));
+    problem('Use GET or POST.',405,'method');
+  }
+  if(path==='/time-entries/suggest'&&method==='POST')return json(await suggestWorkDescription(env,me,await body(request),readTicket,aiSuggest));
   if(path==='/time-entries/report'&&method==='GET')return json(await report(env,me,url));
   if(path==='/time-entries'){
     if(method==='GET'){
@@ -607,7 +727,12 @@ export async function timeRoutes(request,env,url,me,{readTicket}){
       const t=await readTicket(key);if(!t)problem('Ticket unavailable.',404,'not_found');
       return json(await ticketView(env,me,key,t));
     }
-    if(method==='POST'){const r=await createEntry(env,me,await body(request),readTicket);return json({entry:publicEntry(r.entry,me),summary:r.summary},r.created?201:200);}
+    if(method==='POST'){
+      const r=await createEntry(env,me,await body(request),readTicket);
+      // Logging a stopped timer: its session is settled to "logged" (a no-op for any other entry).
+      await markTimerLogged(env,me,r.entry.id).catch(()=>null);
+      return json({entry:publicEntry(r.entry,me),summary:r.summary},r.created?201:200);
+    }
     problem('Use GET or POST.',405,'method');
   }
   // A ticket's agreed-hours line ("agreed:<KEY>") can be checked and resent like an entry; only an administrator can, since no user wrote it.
