@@ -7,12 +7,31 @@ People log time on Jira, internal and Odoo Helpdesk tickets with **Log work** (i
 ## What it does
 
 - **Form:** ticket and user (read-only), work date (today in Israel time; earlier dates are allowed, future
-  dates and dates in Odoo's lock are not), duration as **Hours** (0–24) and **Minutes** (0–59) boxes, and a
-  required description. The shortcuts 15m / 30m / 1h / 2h fill both boxes. Zero in total and more than 24 hours
-  are refused. It shows the Odoo project ("Client → Project") and task the work goes to, from the ticket's Odoo
-  project. When the ticket's project changed, earlier entries stay where they were sent; only new entries go to the
-  current project. **Save**, or **Save and add another**.
-  The API still takes total minutes.
+  dates and dates in Odoo's lock are not), **duration** as one H:MM field, and a required description. Type
+  `1:30` (or decimal hours, `1.5`, which is read exactly). Shortcuts 0:15 / 0:30 / 1:00 / 2:00 set the total.
+  The field is checked when you save: from 0:01 to 24:00, minutes 00–59. It shows the Odoo project ("Client →
+  Project") and task the work goes to, from the ticket's Odoo project. When the ticket's project changed, earlier
+  entries stay where they were sent; only new entries go to the current project. **Save work**, or **Save & add
+  another**.
+- **Durations:** whole minutes everywhere (the API takes minutes). Decimal hours are rounded to the nearest minute,
+  half up (`1.0083` h = 60.498 min → 1:00; `1.0084` h → 1:01). More than 4 decimals are refused, not rounded.
+- **Timer (on a ticket):** one timer per person, kept on the server, so closing the page does not stop it.
+  Lifecycle: **Running** → **Paused** (Pause / Resume) → **Stopped · not logged yet** (Stop) → **Logged** (Log time)
+  or **Discarded**. A stopped timer blocks a new one until it is logged or discarded. The clock in the browser
+  only adds the seconds since the server answered; the server computes the elapsed time. The completion form
+  suggests the elapsed time rounded to the nearest minute, half up (29 s → 0 min, 30 s → 1 min); under one minute
+  it asks for the duration instead. Saving the form logs the entry with the timer's id, so a repeated save logs
+  the work once. A timer started on one day and stopped on a later day is flagged, and its work date is the day
+  it started.
+- **Native Odoo timer: not used.** Odoo's own timer control (its "Start" button on a timesheet) is not connected to
+  this page. The timer here is the dashboard's own, stored on the proxy. Its time reaches Odoo only as a timesheet
+  line when you log it. Nothing has been verified against Odoo's own timer.
+- **AI help (optional, never saves or submits):** **Improve writing** rewrites the description you typed (spelling,
+  grammar, same facts and language). **Suggest work description** drafts one from the ticket's title, description,
+  status, recent comments and history, and marks it `limited` when the evidence only shows a request. Both show a
+  proposal under the field with **Apply** and **Cancel**; the text stays as it was until you apply it. Ticket
+  text is treated as untrusted data. Pull requests and commits are not read, so a suggestion never reports a merge,
+  test run or deployment that the ticket does not state. A failure never blocks saving.
 - **Statuses:** Syncing, Synced, Needs setup (e.g. the ticket has no client or project), Needs review (an
   administrator must reconcile).
 - **Work log** in the ticket lists every entry: date, user, duration, description and status.
@@ -79,4 +98,9 @@ switched on. There is no per-person employee mapping. The real person is in **Us
 
 `GET /time-entries?ticket=KEY` · `POST /time-entries` · `PATCH /time-entries/:id` (administrators) ·
 `POST /time-entries/:id/sync` (retry; administrators: check / resend / link) · `GET /time-entries/report` ·
-`GET|PUT /time-entries/setup` (administrators) · `POST /cron/time-sync` (scheduler secret).
+`GET|PUT /time-entries/setup` (administrators) · `POST /cron/time-sync` (scheduler secret) ·
+`GET /time-entries/timer` (your open timer) · `POST /time-entries/timer` (actions: `start` with a `ticket` and an
+`id`, `pause`, `resume`, `stop`, `discard`, `draft` with a `description`; each takes the `revision` last
+shown, and a stale one is refused with the current timer) ·
+`POST /time-entries/suggest` (a proposed description for a ticket you can see; nothing is saved) ·
+`POST /ai-improve` with `purpose: "work"` (rewrites a work description; the default `comment` rewrites a comment).

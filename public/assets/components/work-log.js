@@ -1,6 +1,10 @@
-// Log work → Odoo timesheets: the "Log work" form, the ticket's Work log, administrator corrections and
-// reconciliation, the Work log page (report for everyone; administrators get setup, reports are in Checks & Reports).
-// Durations are whole minutes; dates are work dates in Asia/Jerusalem. The server checks everything again.
+// Log work → Odoo timesheets: the "Log work" form, the ticket's timer, the completion form for a stopped timer,
+// the ticket's Work log, administrator corrections and reconciliation, the Work log page (report for everyone;
+// administrators get setup, reports are in Checks & Reports).
+// Durations are whole minutes shown as H:MM; dates are work dates in Asia/Jerusalem. The server checks everything again.
+// The timer is the server's: this page only shows it and sends its actions. Nothing here is sent to Odoo by the AI.
+import {parseDurationInput,formatDuration,normalizeDuration,durationFieldError,SHORTCUT_MINUTES} from '../models/work-duration.js';
+import {TIMER_STATES,clockText,liveElapsedMs,timerActions,isOpenSession} from '../models/work-timer.js';
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
 const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.addEventListener('click',fn);return b;};
 const field=(parent,label,node,hint)=>{const l=el('label','wl-field');l.append(el('span','',label),node);if(hint)l.append(el('small','msg',hint));parent.append(l);return node;};
@@ -18,36 +22,14 @@ function withNotes(parent,label,node,note){
   wrap.append(l,noteEl,err);parent.append(wrap);
   return {refresh,setError(text){err.textContent=text||'';node.setAttribute('aria-invalid',text?'true':'false');}};
 }
-export const formatMinutes=m=>[Math.floor(m/60)?Math.floor(m/60)+'h':'',m%60?m%60+'m':''].filter(Boolean).join(' ')||'0m';
+// Whole minutes as H:MM (1:30). Non-numbers count as 0.
+export const formatMinutes=m=>formatDuration(Math.max(0,Math.round(Number(m)||0)));
 const hours=m=>(Math.round(m/60*100)/100).toLocaleString('en-US',{maximumFractionDigits:2});
 const niceDate=d=>{try{return new Date(d+'T12:00:00Z').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric',timeZone:'UTC'});}catch{return d;}};
+const whenText=iso=>{if(!iso)return '—';try{return new Date(iso).toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Jerusalem'});}catch{return iso;}};
+const todayIsrael=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Jerusalem'}).format(new Date());
 const STATUS_CLASS={synced:'ok',syncing:'busy',setup:'warn',review:'crit'};
-// "90", "1:30", "1h 30m", "1.5h", "45m" -> minutes (null when it can't be read).
-// The two boxes: hours 0–24 and minutes 0–59, whole numbers; an empty box counts as 0. Returns the error for each box,
-// and for a total of 0 (under 1 minute). A box with an error is never saved.
-export function durationErrors(hoursText,minutesText){
-  const h=String(hoursText||'').trim()||'0',mi=String(minutesText||'').trim()||'0';
-  const out={hours:'',minutes:'',total:''};
-  if(!/^\d{1,2}$/.test(h)||Number(h)>24)out.hours='Whole number from 0 to 24.';
-  if(!/^\d{1,2}$/.test(mi)||Number(mi)>59)out.minutes='Whole number from 0 to 59.';
-  else if(!out.hours&&Number(h)===24&&Number(mi)>0)out.minutes='With 24 hours, minutes must be 0.';
-  else if(!out.hours&&Number(h)===0&&Number(mi)===0)out.total='Enter at least 1 minute.';
-  return out;
-}
-// The two boxes as total minutes; null when a box has an error. The total is never over 1440 (24 hours).
-export function boxesMinutes(hoursText,minutesText){
-  const e=durationErrors(hoursText,minutesText);
-  if(e.hours||e.minutes)return null;
-  return Number(String(hoursText||'').trim()||'0')*60+Number(String(minutesText||'').trim()||'0');
-}
-export function parseDuration(text){
-  const s=String(text||'').trim().toLowerCase();if(!s)return null;
-  let m=/^(\d{1,2}):([0-5]\d)$/.exec(s);if(m)return Number(m[1])*60+Number(m[2]);
-  if(/^\d+$/.test(s))return Number(s);
-  m=/^(?:(\d+(?:\.\d+)?)\s*h(?:ours?|rs?)?)?\s*(?:(\d+)\s*m(?:in(?:utes?|s)?)?)?$/.exec(s);
-  if(m&&(m[1]||m[2])){const total=Math.round(Number(m[1]||0)*60)+Number(m[2]||0);return Number.isInteger(total)?total:null;}
-  return null;
-}
+const TIMER_LABELS={pause:'Pause',resume:'Resume',stop:'Stop',finish:'Log time…',discard:'Discard'};
 function badge(e){const b=el('span','wl-status wl-'+(STATUS_CLASS[e.status]||'busy'),e.statusLabel);if(e.reason)b.title=e.reason;return b;}
 
 // The tickets matching a search: every word must appear in the key or the title. At most 50 are shown.
@@ -56,13 +38,83 @@ export function ticketMatches(tickets,query){
   return tickets.filter(t=>{const text=(t.key+' '+(t.title||'')).toLowerCase();return words.every(w=>text.includes(w));}).slice(0,50);
 }
 
+// One duration field for every Log work form: H:MM (or decimal hours), 0:01 to 24:00, with the shortcuts.
+// The text becomes H:MM when the field loses focus. Errors appear under the field once it has been checked.
+function durationControl(parent,{hint='Hours and minutes, like 1:30. From 0:01 to 24:00. Decimal hours, like 1.5, also work.'}={}){
+  const box=input('text','');box.inputMode='text';box.autocomplete='off';box.spellcheck=false;box.placeholder='1:30';
+  const f=withNotes(parent,'Duration',box,hint);
+  let checked=false;
+  const total=el('p','wl-total-line');total.setAttribute('aria-live','polite');
+  const minutes=()=>{const r=parseDurationInput(box.value);return r.error?null:r.minutes;};
+  function update(){
+    const m=minutes();total.textContent=m!=null?'Total: '+formatDuration(m):'';
+    for(const c of chips){const on=m!=null&&Number(c.dataset.minutes)===m;c.setAttribute('aria-pressed',String(on));c.classList.toggle('is-selected',on);}
+  }
+  const set=m=>{box.value=formatDuration(m);checked=false;f.setError('');update();};
+  const chips=SHORTCUT_MINUTES.map(m=>{const b=button(formatDuration(m),()=>{set(m);box.focus();},'btn wl-chip');b.dataset.minutes=String(m);return b;});
+  const shortcuts=el('div','wl-shortcuts');shortcuts.setAttribute('role','group');shortcuts.setAttribute('aria-label','Duration shortcuts: sets the total');shortcuts.append(...chips);
+  parent.append(shortcuts,total);
+  const check=()=>{checked=true;const err=durationFieldError(box.value);f.setError(err);update();return err;};
+  box.addEventListener('input',()=>{if(checked)check();else update();});
+  box.addEventListener('blur',()=>{
+    const n=normalizeDuration(box.value);
+    if(n===null){checked=true;f.setError(durationFieldError(box.value));}
+    else if(n){box.value=n;f.setError('');}
+    update();
+  });
+  update();
+  return {box,minutes,check,update,set,reset(){box.value='';checked=false;f.setError('');update();}};
+}
+
 export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTickets=()=>[],onLogged=()=>{}}){
   const views={};
+  // The timer last read from the server, and when it was read (the clock is shown from that moment on).
+  let lastTimer=null,tickHandle=null,pendingStart=null;
+  const stopTick=()=>{if(tickHandle){clearInterval(tickHandle);tickHandle=null;}};
   function dialog(title,onClose){
     const d=el('dialog','business-dialog wl-dialog'),head=el('div','business-dialog-head'),body=el('div','wl-form'),msg=el('p','msg');msg.setAttribute('role','status');d.setAttribute('aria-label',title);
     head.append(el('h2','',title),button('Close',()=>(onClose?onClose():d.close())));d.append(head,body,msg);document.body.append(d);d.addEventListener('close',()=>d.remove());d.showModal();return {d,body,msg};
   }
   const fail=(msg,err)=>{msg.className='msg err';msg.textContent=errorText?errorText(err):err.message||String(err);};
+
+  // "Improve writing" and "Suggest work description" beside a description. A proposal appears below with Apply and
+  // Cancel; the text stays as it was until Apply. Nothing is saved or submitted here, and a failure never blocks saving.
+  function aiHelp({textarea,ticket,timerId=()=>null,afterApply=()=>{}}){
+    const node=el('div','wl-ai'),bar=el('div','wl-ai-bar'),status=el('p','msg'),preview=el('div','wl-ai-preview');
+    status.setAttribute('role','status');preview.hidden=true;
+    const improve=button('Improve writing',()=>run('improve'),'btn wl-ai-btn');
+    const suggest=button('Suggest work description',()=>run('suggest'),'btn wl-ai-btn');
+    bar.append(improve,suggest);node.append(bar,status,preview);
+    let busy=false;
+    const setBusy=on=>{busy=on;improve.disabled=on;suggest.disabled=on;};
+    const hide=()=>{preview.hidden=true;preview.replaceChildren();};
+    const showProposal=(kind,text,evidence)=>{
+      preview.replaceChildren();preview.hidden=false;
+      preview.append(el('p','wl-ai-title',kind==='improve'?'Improved wording':'Suggested description'));
+      const p=el('p','wl-ai-text',text);p.dir='auto';preview.append(p);
+      if(evidence==='limited')preview.append(el('p','wl-note','The ticket has little detail, so check the wording against what you did.'));
+      const apply=button('Apply',()=>{textarea.value=text.slice(0,2000);hide();status.textContent='';afterApply();textarea.focus();},'btn primary');
+      const cancel=button('Cancel',()=>{hide();textarea.focus();},'btn');
+      const acts=el('div','wl-actions');acts.append(apply,cancel);preview.append(acts);
+      apply.focus();
+    };
+    async function run(kind){
+      if(busy)return;
+      const text=textarea.value.trim();
+      if(kind==='improve'&&!text){status.className='msg err';status.textContent='Write the description first, then improve it.';return;}
+      hide();setBusy(true);status.className='msg';status.textContent=kind==='improve'?'Improving the writing…':'Reading the ticket…';
+      try{
+        const r=kind==='improve'
+          ?await api('/ai-improve',{method:'POST',body:{text,purpose:'work'}})
+          :await api('/time-entries/suggest',{method:'POST',body:{ticket,draft:text,...(timerId()?{timerId:timerId()}:{})}});
+        const proposal=String((kind==='improve'?r.text:r.description)||'').trim();
+        if(!proposal){status.textContent='No suggestion came back. Your text is unchanged.';return;}
+        status.textContent='';showProposal(kind,proposal,kind==='suggest'?r.evidence:null);
+      }catch(err){status.className='msg err';status.textContent=(errorText?errorText(err):err.message)+' Your text is unchanged, and you can still save.';}
+      finally{setBusy(false);}
+    }
+    return node;
+  }
 
   // ---- Log work ----
   // afterSave (optional) runs after each saved entry; the Work log page uses it to reload its report.
@@ -84,45 +136,23 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
     const date=input('date',view.today);date.max=view.today;if(minDate)date.min=minDate;date.required=true;
     const dateField=withNotes(body,'Work date',date,()=>(date.value?niceDate(date.value)+' · ':'')+lockNote);
     date.addEventListener('input',dateField.refresh);
-    // Hours (0 to 24) and minutes (0 to 59) are whole numbers side by side; the total in minutes is what gets saved.
-    const duration=el('fieldset','wl-duration');duration.append(el('legend','','Duration'));
-    const pair=el('div','wl-duration-pair');duration.append(pair);
-    const hoursBox=input('number',''),minutesBox=input('number','');
-    for(const n of [hoursBox,minutesBox]){n.min='0';n.step='1';n.inputMode='numeric';n.autocomplete='off';}
-    hoursBox.max='24';minutesBox.max='59';
-    const hoursField=withNotes(pair,'Hours',hoursBox),minutesField=withNotes(pair,'Minutes',minutesBox);
-    const setMinutes=m=>{hoursBox.value=String(Math.floor(m/60));minutesBox.value=String(m%60);};
-    const chips=[['15m',15],['30m',30],['1h',60],['2h',120]].map(([label,m])=>{const b=button(label,()=>{setMinutes(m);update();hoursBox.focus();},'btn wl-chip');b.dataset.minutes=String(m);return b;});
-    const shortcuts=el('div','wl-shortcuts');shortcuts.setAttribute('role','group');shortcuts.setAttribute('aria-label','Duration shortcuts: sets the total');shortcuts.append(...chips);
-    const total=el('p','wl-total-line');total.setAttribute('aria-live','polite');
-    duration.append(shortcuts,total,el('small','wl-note','Enter between 1 minute and 24 hours.'));
-    const durationError=el('small','wl-error');durationError.id='wl-duration-error';durationError.setAttribute('role','alert');duration.append(durationError);
-    body.append(duration);
+    const dur=durationControl(body);
     const desc=el('textarea','inp');desc.rows=3;desc.maxLength=2000;desc.dir='auto';desc.required=true;desc.placeholder='e.g. Fixed the login redirect and tested it in Safari';
     const descField=withNotes(body,'Description',desc,'Required. Saved to the Odoo timesheet line.');
-    // Field errors are shown once Save has been pressed, and then follow the boxes until they are right.
-    let checked=false;
-    const applyDurationErrors=()=>{const e=durationErrors(hoursBox.value,minutesBox.value);hoursField.setError(e.hours);minutesField.setError(e.minutes);durationError.textContent=e.total;return e;};
-    const update=()=>{
-      const m=boxesMinutes(hoursBox.value,minutesBox.value),ok=m!=null&&m>=1;
-      total.textContent=ok?'Total: '+formatMinutes(m):'';
-      for(const c of chips){const on=ok&&Number(c.dataset.minutes)===m;c.setAttribute('aria-pressed',String(on));c.classList.toggle('is-selected',on);}
-      if(checked)applyDurationErrors();
-    };
-    hoursBox.addEventListener('input',update);minutesBox.addEventListener('input',update);
-    const dirty=()=>!!(hoursBox.value.trim()||minutesBox.value.trim()||desc.value.trim());
+    body.append(aiHelp({textarea:desc,ticket:key}));
+    const dirty=()=>!!(dur.box.value.trim()||desc.value.trim());
     // Escape, Close and Cancel all come here: unsaved values are confirmed before they are discarded.
     function requestClose(){if(dirty()&&!window.confirm('Discard this work entry? Your changes will be lost.'))return;d.close();}
     d.addEventListener('cancel',e=>{if(dirty()){e.preventDefault();requestClose();}});
     d.addEventListener('close',()=>{if(opener&&opener.isConnected)opener.focus();});
     const validate=()=>{
       const dateError=!date.value||date.value>view.today?'Choose a work date that is not in the future.':minDate&&date.value<minDate?'Odoo is locked up to '+view.lockDate+'. Choose a later date.':'';
-      const e=applyDurationErrors();checked=true;
+      const durError=dur.check();
       const descError=desc.value.trim()?'':'Describe the work.';
       dateField.setError(dateError);descField.setError(descError);
-      const first=[[dateError,date],[e.hours,hoursBox],[e.minutes,minutesBox],[e.total,hoursBox],[descError,desc]].find(([t])=>t);
+      const first=[[dateError,date],[durError,dur.box],[descError,desc]].find(([t])=>t);
       if(first){first[1].focus();msg.className='msg err';msg.textContent='Fix the fields marked in red.';return null;}
-      return boxesMinutes(hoursBox.value,minutesBox.value);
+      return dur.minutes();
     };
     // The id makes saving safe to repeat: a retry after a lost answer can't log the work twice.
     let id=crypto.randomUUID(),saving=false;
@@ -138,10 +168,9 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
         onLogged(key);render(key);if(afterSave)afterSave();
         if(again){
           // Ticket, user, destination and work date stay; the duration and description are for the next entry.
-          hoursBox.value='';minutesBox.value='';desc.value='';checked=false;
-          for(const f of [dateField,hoursField,minutesField,descField])f.setError('');
-          durationError.textContent='';update();
-          msg.className='msg ok';msg.textContent=note+' Add the next one.';hoursBox.focus();
+          dur.reset();desc.value='';
+          for(const f of [dateField,descField])f.setError('');
+          msg.className='msg ok';msg.textContent=note+' Add the next one.';dur.box.focus();
         }else{d.close();if(toast)toast(note);}
       }catch(err){fail(msg,err);}
       finally{saving=false;setBusy(false);}
@@ -152,37 +181,115 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
     const setBusy=on=>{for(const b of [saveBtn,againBtn,cancelBtn])b.disabled=on;saveBtn.textContent=on?'Saving…':'Save work';};
     const actions=el('div','wl-actions');actions.append(saveBtn,againBtn,cancelBtn);body.append(actions);
     body.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();save(false);}});
-    update();
-    hoursBox.focus();
+    dur.box.focus();
   }
 
-  // ---- Log work from the Work log page: choose the ticket first, then the time ----
-  // Only open tickets the dashboard has loaded for this person. The server checks visibility and status again.
-  function openTicketPicker(afterSave){
-    const pickerOpener=document.activeElement;
-    const tickets=myTickets().filter(t=>!t.closed);
-    const {d,body,msg}=dialog('Log work');
-    body.append(el('p','msg','Choose one of your open tickets, then enter the time you spent on it.'));
-    const search=input('search','');search.placeholder='Search by key or title…';search.autocomplete='off';search.setAttribute('aria-label','Ticket');
-    field(body,'Ticket',search);
-    const list=el('div','wl-ticket-list');body.append(list);
-    const enable=on=>{for(const b of list.querySelectorAll('button'))b.disabled=!on;};
-    const choose=async t=>{
-      enable(false);msg.className='msg';msg.textContent='Opening '+t.key+'…';
-      let view;
-      try{view=await api('/time-entries?ticket='+encodeURIComponent(t.key));}
-      catch(err){fail(msg,err);enable(true);return;}
-      if(!view.canLog){fail(msg,new Error(view.closed?'This ticket is closed. Reopen it before logging work.':"Work logging isn't switched on for you yet."));enable(true);return;}
-      views[t.key]=view;d.close();openForm(t.key,t.title,view,afterSave,pickerOpener);
+  // ---- Timer (on a ticket) ----
+  // The server keeps the timer; the clock shown here only adds the seconds since the answer arrived. Starting sends the
+  // same id again if the first answer was lost, so one press never opens two timers.
+  async function timerAct(action,key,session){
+    const body={action,...(session?{revision:session.revision}:{})};
+    if(action==='start'){
+      if(!pendingStart||pendingStart.key!==key)pendingStart={key,id:crypto.randomUUID()};
+      body.id=pendingStart.id;body.ticket=key;
+    }
+    try{
+      const r=await api('/time-entries/timer',{method:'POST',body});
+      if(action==='start')pendingStart=null;
+      lastTimer={at:Date.now(),timer:r.timer};
+    }catch(err){
+      // A lost answer keeps the same start id for the next press; any other refusal ends it.
+      if(action==='start'&&err.code!=='network')pendingStart=null;
+      if(toast)toast(errorText?errorText(err):err.message,[],true);
+    }
+    // Whatever the server now holds is what is shown (a refused action shows the current timer).
+    await render(key);
+  }
+  function timerButton(action,key,session){
+    if(action==='finish')return openCompletion(key,session);
+    if(action==='discard'){if(!window.confirm('Discard this timer? The time on it is not logged.'))return;return timerAct('discard',key,session);}
+    return timerAct(action,key,session);
+  }
+  function timerBar(key,view){
+    const open=lastTimer&&isOpenSession(lastTimer.timer)?lastTimer.timer:null;
+    const box=el('section','wl-timer');box.setAttribute('aria-label','Timer');
+    if(open&&open.ticket!==key){
+      box.append(el('p','msg','A timer is '+(open.state==='stopped'?'waiting to be logged':open.state)+' on '+open.ticket+'. Finish or discard it before starting another.'),button('Go to '+open.ticket,()=>openIssue&&openIssue(open.ticket),'btn'));
+      return box;
+    }
+    if(!open){
+      if(!view.canLog)return null;
+      box.append(el('p','wl-note','Start a timer, and it keeps running on the server if you close this page. Only one timer at a time.'),button('Start timer',()=>timerAct('start',key,null),'btn'));
+      return box;
+    }
+    const clock=el('span','wl-clock',clockText(liveElapsedMs(open,lastTimer.at,Date.now())));
+    box.append(el('span','wl-timer-state',TIMER_STATES[open.state]||open.state),clock);
+    if(open.state==='stopped')box.append(el('p','wl-note','Log it or discard it. A stopped timer blocks a new one until then.'));
+    for(const a of timerActions(open.state))box.append(button(TIMER_LABELS[a],()=>timerButton(a,key,open),a==='stop'||a==='finish'?'btn primary':'btn'));
+    // Only the text of the clock changes while it runs; nothing is re-fetched until the next action.
+    if(open.state==='running'){const at=lastTimer.at;tickHandle=setInterval(()=>{clock.textContent=clockText(liveElapsedMs(open,at,Date.now()));},1000);}
+    return box;
+  }
+
+  // The completion form for a stopped timer: the server's elapsed time becomes the suggested duration. The timer stays
+  // stopped until this is saved (it is logged with the same id) or discarded, so closing the form loses nothing.
+  function openCompletion(key,session){
+    let current={...session};
+    const {d,body,msg}=dialog('Log timer · '+key,()=>{d.close();});
+    const facts=el('dl','wl-facts');
+    const fact=(k,v)=>{facts.append(el('dt','',k),el('dd','',v));};
+    fact('Ticket',key+(current.ticketTitle?' · '+current.ticketTitle:''));
+    fact('Started',whenText(current.startedAt));fact('Stopped',whenText(current.stoppedAt));
+    fact('Time on the timer',clockText(current.elapsedMs)+(current.suggestedMinutes!=null?' · suggested '+formatDuration(current.suggestedMinutes):''));
+    body.append(facts);
+    if(current.crossesMidnight)body.append(el('p','msg err','This timer started on '+niceDate(current.workDate)+' and was stopped on a later day. Check the work date and time before you save.'));
+    const date=input('date',current.workDate);date.max=todayIsrael();date.required=true;
+    const dateField=withNotes(body,'Work date',date,()=>(date.value?niceDate(date.value)+' · ':'')+'Today or earlier (Israel time).');
+    date.addEventListener('input',dateField.refresh);
+    const dur=durationControl(body);
+    if(current.suggestedMinutes>=1)dur.set(current.suggestedMinutes);
+    else body.append(el('p','msg','The timer ran for under a minute. Enter the time you worked.'));
+    const desc=el('textarea','inp');desc.rows=3;desc.maxLength=2000;desc.dir='auto';desc.required=true;desc.value=current.description||'';desc.placeholder='e.g. Fixed the login redirect and tested it in Safari';
+    const descField=withNotes(body,'Description',desc,'Required. Saved to the Odoo timesheet line. Kept as a draft when you leave this box.');
+    // Drafts are saved one after another, each with the revision the last one returned.
+    let savedDraft=desc.value,chain=Promise.resolve();
+    const doDraft=async()=>{
+      const text=desc.value.slice(0,2000);if(text===savedDraft)return;
+      try{const r=await api('/time-entries/timer',{method:'POST',body:{action:'draft',revision:current.revision,description:text}});current={...current,...r.timer};savedDraft=text;}
+      catch(err){fail(msg,err);}
     };
-    const draw=()=>{
-      const shown=ticketMatches(tickets,search.value);
-      list.replaceChildren(...(shown.length?shown.map(t=>{const b=button('',()=>choose(t),'wl-ticket-opt');b.dir='auto';b.append(el('b','wl-ticket-key',t.key),el('span','wl-ticket-title',t.title||''));return b;})
-        :[el('p','msg',tickets.length?'No open ticket matches.':'No open tickets are loaded for you. Open the Tickets page, then try again.')]));
+    const saveDraft=()=>{chain=chain.then(doDraft);return chain;};
+    desc.addEventListener('blur',saveDraft);
+    body.append(aiHelp({textarea:desc,ticket:key,timerId:()=>current.id,afterApply:saveDraft}));
+    let saving=false;
+    const save=async()=>{
+      if(saving)return;
+      const dateError=!date.value||date.value>todayIsrael()?'Choose a work date that is not in the future.':'';
+      const durError=dur.check();
+      const descError=desc.value.trim()?'':'Describe the work.';
+      dateField.setError(dateError);descField.setError(descError);
+      const first=[[dateError,date],[durError,dur.box],[descError,desc]].find(([t])=>t);
+      if(first){first[1].focus();msg.className='msg err';msg.textContent='Fix the fields marked in red.';return;}
+      saving=true;setBusy(true);msg.className='msg';msg.textContent='Saving…';
+      await chain;
+      const minutes=dur.minutes();
+      try{
+        // The timer's id is the entry id: a repeated save returns the same entry, and the server marks the timer logged.
+        const r=await api('/time-entries',{method:'POST',body:{id:current.id,ticket:key,date:date.value,minutes,description:desc.value.trim()}});
+        d.close();
+        const note=formatMinutes(minutes)+' logged on '+key+(r.entry.status==='synced'?' and saved in Odoo.':' · '+r.entry.statusLabel+(r.entry.reason?': '+r.entry.reason:''));
+        onLogged(key);if(toast)toast(note);
+      }catch(err){fail(msg,err);}
+      finally{saving=false;setBusy(false);}
     };
-    search.addEventListener('input',draw);
-    search.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();const [first]=ticketMatches(tickets,search.value);if(first)choose(first);}});
-    draw();search.focus();
+    const discardBtn=button('Discard timer',()=>{if(!window.confirm('Discard this timer? The time on it is not logged.'))return;d.close();timerAct('discard',key,current);},'btn danger');
+    const saveBtn=button('Log time',save,'btn primary');
+    const keepBtn=button('Keep stopped',()=>{d.close();},'btn');
+    const setBusy=on=>{for(const b of [saveBtn,discardBtn,keepBtn])b.disabled=on;saveBtn.textContent=on?'Saving…':'Log time';};
+    const actions=el('div','wl-actions');actions.append(saveBtn,discardBtn,keepBtn);body.append(actions);
+    // Closing the form in any way keeps the timer stopped and shows it again.
+    d.addEventListener('close',()=>{render(key);});
+    date.focus();
   }
 
   // ---- Correction (administrators) ----
@@ -191,14 +298,16 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
     body.append(el('p','msg','By '+e.author.name+'. The Odoo timesheet line is updated, and the change is kept in the entry\'s history.'));
     const row=el('div','wl-row');body.append(row);
     const date=field(row,'Work date',input('date',e.date));date.max=view?.today||'';
-    const duration=field(row,'Duration',input('text',String(e.minutes)),'Minutes, or like 1h 30m.');
+    const durBox=el('div');body.append(durBox);
+    const dur=durationControl(durBox,{hint:'Hours and minutes, like 1:30. Same rules as a new entry: 0:01 to 24:00.'});
+    dur.set(e.minutes);
     const desc=field(body,'Description',el('textarea','inp'));desc.value=e.description;desc.rows=3;desc.maxLength=2000;desc.dir='auto';
     const reason=field(body,'Reason for the correction (required)',el('textarea','inp'));reason.rows=2;reason.maxLength=1000;reason.dir='auto';
     const actions=el('div','wl-actions');body.append(actions);
     actions.append(button('Save correction',async ev=>{
-      const minutes=parseDuration(duration.value),patch={revision:e.revision,reason:reason.value.trim()};
+      const durError=dur.check(),minutes=dur.minutes(),patch={revision:e.revision,reason:reason.value.trim()};
       if(!patch.reason){fail(msg,new Error('Give a reason for the correction.'));reason.focus();return;}
-      if(!minutes||minutes<1||minutes>1440){fail(msg,new Error('Enter a duration between 1 minute and 24 hours.'));return;}
+      if(durError){fail(msg,new Error(durError));dur.box.focus();return;}
       if(date.value!==e.date)patch.date=date.value;if(minutes!==e.minutes)patch.minutes=minutes;if(desc.value.trim()!==e.description)patch.description=desc.value.trim();
       if(Object.keys(patch).length===2){fail(msg,new Error('Change the date, duration or description.'));return;}
       ev.currentTarget.disabled=true;msg.className='msg';msg.textContent='Saving…';
@@ -242,14 +351,15 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
   }
   async function render(key){
     const target=document.getElementById('work-log');if(!target)return;
+    stopTick();
     const headerButton=document.getElementById('d-logwork');
     if(target.dataset.key!==key){target.dataset.key=key;target.replaceChildren(el('h3','','Work log'),el('p','msg','Loading…'));if(headerButton)headerButton.hidden=true;}
-    let view;
-    try{view=await api('/time-entries?ticket='+encodeURIComponent(key));}
+    let view,timer=null;
+    try{[view,timer]=await Promise.all([api('/time-entries?ticket='+encodeURIComponent(key)),api('/time-entries/timer').catch(()=>null)]);}
     catch(err){if(target.dataset.key!==key)return;if(err.code==='not_found'||err.status===404&&err.code==='server'){target.hidden=true;return;}target.hidden=false;target.replaceChildren(el('h3','','Work log'),el('p','msg err',errorText?errorText(err):err.message));return;}
-    if(target.dataset.key!==key)return;views[key]=view;if(headerButton)headerButton.hidden=!view.canLog;
+    if(target.dataset.key!==key)return;views[key]=view;if(timer)lastTimer={at:Date.now(),timer:timer.timer};else lastTimer=null;if(headerButton)headerButton.hidden=!view.canLog;
     // Nothing to show while work logging is off and the ticket has no entries.
-    target.hidden=!view.logging&&!view.entries.length;
+    target.hidden=!view.logging&&!view.entries.length&&!(lastTimer&&isOpenSession(lastTimer.timer)&&lastTimer.timer.ticket===key);
     const head=el('div','wl-head');head.append(el('h3','','Work log'));
     if(view.canLog)head.append(button('+ Log work',()=>openForm(key,(document.getElementById('d-title')||{}).textContent||'',view),'btn primary'));
     target.replaceChildren(head);
@@ -263,6 +373,7 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
     else if(view.logging&&!view.canLog&&!view.closed)target.append(el('p','msg','Work logging isn\'t switched on for you yet.'));
     if(view.canLog&&view.destination&&(view.destination.setup||view.destination.error))target.append(el('p','msg err',view.destination.setup||view.destination.error));
     else if(view.canLog&&view.destination?.projectId)target.append(el('p','wl-note','New work goes to '+(view.destination.label||view.destination.projectName)+'.'+(view.destination.earlierProjects?.length?' Earlier entries stay on '+view.destination.earlierProjects.join(', ')+'.':'')));
+    if(timer&&!view.closed){const tb=timerBar(key,view);if(tb)target.append(tb);}
     if(view.entries.length){const list=el('ol','wl-list');for(const e of view.entries)list.append(entryRow(e,view));target.append(list);}
   }
   function openFor(key,title){const view=views[key];if(view&&view.canLog)openForm(key,title,view);}
@@ -281,7 +392,7 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
     renderReport(wrap);
   }
   function renderReport(wrap){
-    const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Jerusalem'}).format(new Date());
+    const today=todayIsrael();
     const bar=el('div','wl-report-bar'),from=input('date',report?.from||today.slice(0,8)+'01'),to=input('date',report?.to||today),msg=el('span','msg');
     from.setAttribute('aria-label','From');to.setAttribute('aria-label','To');
     const out=el('div','wl-report');
@@ -303,7 +414,7 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
       const shown=rows.filter(r=>Object.entries(filters).every(([k,v])=>!v||pick[k](r)===v));
       const sum=list=>({logged:list.reduce((n,r)=>n+r.minutes,0),confirmed:list.filter(r=>r.synced).reduce((n,r)=>n+r.minutes,0)});
       const t=sum(shown),cards=el('div','wl-cards');
-      for(const [label,m,cls] of [['Logged',t.logged,''],['Confirmed in Odoo',t.confirmed,'ok'],['Not in Odoo yet',t.logged-t.confirmed,t.logged-t.confirmed?'warn':'']]){const c=el('div','wl-card '+cls);c.append(el('span','',label),el('b','',hours(m)+' h'),el('small','',formatMinutes(m)));cards.append(c);}
+      for(const [label,m,cls] of [['Logged',t.logged,''],['Confirmed in Odoo',t.confirmed,'ok'],['Not in Odoo yet',t.logged-t.confirmed,t.logged-t.confirmed?'warn':'']]){const c=el('div','wl-card '+cls);c.append(el('span','',label),el('b','',formatMinutes(m)),el('small','',hours(m)+' h'));cards.append(c);}
       out.append(cards);
       if(!shown.length){out.append(el('p','msg','No work logged in this period'+(Object.values(filters).some(Boolean)?' with these filters.':'.')));}
       else{
@@ -419,5 +530,34 @@ export function createWorkLog({api,isAdmin,me,errorText,toast,openIssue,myTicket
     if(cfg.updatedBy)box.append(el('p','msg','Last saved by '+cfg.updatedBy.name+', '+new Date(cfg.updatedAt).toLocaleString('en-GB',{timeZone:'Asia/Jerusalem'})+(cfg.mode!=='off'&&cfg.verified?' · checked with Odoo':'')+'.'));
   }
 
-  return {render,openFor,renderPage,reset:()=>{const t=document.getElementById('work-log'),b=document.getElementById('d-logwork');if(b)b.hidden=true;if(t){t.dataset.key='';t.replaceChildren();t.hidden=true;}}};
+  // ---- Log work from the Work log page: choose the ticket first, then the time ----
+  // Only open tickets the dashboard has loaded for this person. The server checks visibility and status again.
+  function openTicketPicker(afterSave){
+    const pickerOpener=document.activeElement;
+    const tickets=myTickets().filter(t=>!t.closed);
+    const {d,body,msg}=dialog('Log work');
+    body.append(el('p','msg','Choose one of your open tickets, then enter the time you spent on it.'));
+    const search=input('search','');search.placeholder='Search by key or title…';search.autocomplete='off';search.setAttribute('aria-label','Ticket');
+    field(body,'Ticket',search);
+    const list=el('div','wl-ticket-list');body.append(list);
+    const enable=on=>{for(const b of list.querySelectorAll('button'))b.disabled=!on;};
+    const choose=async t=>{
+      enable(false);msg.className='msg';msg.textContent='Opening '+t.key+'…';
+      let view;
+      try{view=await api('/time-entries?ticket='+encodeURIComponent(t.key));}
+      catch(err){fail(msg,err);enable(true);return;}
+      if(!view.canLog){fail(msg,new Error(view.closed?'This ticket is closed. Reopen it before logging work.':"Work logging isn't switched on for you yet."));enable(true);return;}
+      views[t.key]=view;d.close();openForm(t.key,t.title,view,afterSave,pickerOpener);
+    };
+    const draw=()=>{
+      const shown=ticketMatches(tickets,search.value);
+      list.replaceChildren(...(shown.length?shown.map(t=>{const b=button('',()=>choose(t),'wl-ticket-opt');b.dir='auto';b.append(el('b','wl-ticket-key',t.key),el('span','wl-ticket-title',t.title||''));return b;})
+        :[el('p','msg',tickets.length?'No open ticket matches.':'No open tickets are loaded for you. Open the Tickets page, then try again.')]));
+    };
+    search.addEventListener('input',draw);
+    search.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();const [first]=ticketMatches(tickets,search.value);if(first)choose(first);}});
+    draw();search.focus();
+  }
+
+  return {render,openFor,renderPage,reset:()=>{stopTick();lastTimer=null;const t=document.getElementById('work-log'),b=document.getElementById('d-logwork');if(b)b.hidden=true;if(t){t.dataset.key='';t.replaceChildren();t.hidden=true;}}};
 }
