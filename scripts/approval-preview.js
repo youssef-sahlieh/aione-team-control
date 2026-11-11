@@ -7,9 +7,8 @@ import settings from '../proxy/settings.js';
 import {memoryStore,saveUser} from '../proxy/src/users.js';
 import {inflateRawSync} from 'node:zlib';
 import {readCatalogWorkbook} from '../public/assets/models/catalog-import.js';
-import {prepareImport,catalogKey,saveMetadata,odooProjectsKey} from '../proxy/src/ticket-metadata.js';
+import {prepareImport,catalogKey,saveMetadata} from '../proxy/src/ticket-metadata.js';
 import {jiraIssue,internalTicket,people} from '../test/fixtures/issues.js';
-import {respondOdoo,sampleProjects} from './preview-odoo.js';
 const port=Number(process.env.PREVIEW_PORT||3100),base='http://localhost:'+port,root=resolve('public');
 const store=memoryStore(),emails=[];
 const admin={email:'admin@aione.biz',name:'Preview Admin',role:'admin',v:1};
@@ -35,7 +34,7 @@ await store.set(catalogKey({JIRA_PROJECT:'AION'}),JSON.stringify({...initialCata
 const sampleClient=initialCatalog.next.entries.find(e=>!e.parentId),sampleSub=initialCatalog.next.entries.find(e=>e.parentId===sampleClient.id);
 for(const [index,key]of [...issues.keys(),internal.key].filter(k=>!['AION-90','AION-91'].includes(k)).entries())if(!['AION-105','AION-106'].includes(key))await saveMetadata({STORE:store,JIRA_PROJECT:'AION'},key,{revision:0,clientId:sampleClient.id,subClientId:sampleSub?.id||null,billing:index%2?'not_billable':'billable',estimatedHours:index===4?null:2,actualHours:index===0?3:index===1?0.5:null,workDone:index===0?'Investigated the issue, implemented the change, and verified the result.':index===1?'Initial investigation completed.':''},admin);
 globalThis.fetch=async(url,options={})=>{
- const u=new URL(url);if(u.hostname==='odoo.preview.invalid')return respondOdoo(options);if(u.hostname!=='jira.preview.invalid')throw new Error('External services are disabled in this preview.');
+ const u=new URL(url);if(u.hostname!=='jira.preview.invalid')throw new Error('External services are disabled in this preview.');
  const body=options.body?JSON.parse(options.body):{},match=/\/issue\/(AION-\d+)/.exec(u.pathname),i=match&&issues.get(match[1]);
  if(u.pathname.endsWith('/search/jql')){const key=/key = (AION-\d+)/.exec(body.jql||'');let list=key?[issues.get(key[1])].filter(Boolean):[...issues.values()];const jql=body.jql||'',isEpic=i=>i.fields.issuetype?.name==='Epic',parents=/parent in \(([^)]*)\)/.exec(jql);if(/issuetype = Epic/.test(jql))list=list.filter(isEpic);else if(/issuetype != Epic/.test(jql))list=list.filter(i=>!isEpic(i));if(parents)list=list.filter(i=>parents[1].split(',').includes(i.fields.parent?.key));if((body.jql||'').includes('statusCategory = Done'))list=list.filter(i=>i.fields.status.statusCategory.key==='done');const label=/labels = "([^"]+)"/.exec(body.jql||'');if(label)list=list.filter(i=>i.fields.labels.includes(label[1]));return Response.json({issues:list,isLast:true});}
  if(u.pathname.endsWith('/user/search'))return Response.json([]);
@@ -46,7 +45,7 @@ globalThis.fetch=async(url,options={})=>{
  if(u.pathname.endsWith('/comment')&&options.method==='POST')return Response.json({id:'preview-comment'});
  return Response.json(i);
 };
-const env={ODOO_URL:'https://odoo.preview.invalid',ODOO_DB:'preview',ODOO_LOGIN:'preview@aione.biz',ODOO_API_KEY:'local-only',INTERNAL_NOTE_RECIPIENTS:settings.INTERNAL_NOTE_RECIPIENTS,ALLOWED_ORIGIN:base,SESSION_SECRET:crypto.randomUUID(),JIRA_PROJECT:'AION',JIRA_SITE:'https://jira.preview.invalid',JIRA_EMAIL:'preview@aione.biz',JIRA_API_TOKEN:'local-only',STORE:store,MAIL_DOMAIN:'aione.biz',APP_URL:base,TEAM_EMAILS:admin.email,TEAM_CONFIG:JSON.stringify({people,devs:['builder','reviewer'],devEmails:{builder:user.email,reviewer:reviewer.email},devColors:{builder:'k1',reviewer:'k3'}}),MAILER:async mail=>{emails.push({...mail,at:new Date().toISOString()});}};
+const env={INTERNAL_NOTE_RECIPIENTS:settings.INTERNAL_NOTE_RECIPIENTS,ALLOWED_ORIGIN:base,SESSION_SECRET:crypto.randomUUID(),JIRA_PROJECT:'AION',JIRA_SITE:'https://jira.preview.invalid',JIRA_EMAIL:'preview@aione.biz',JIRA_API_TOKEN:'local-only',STORE:store,MAIL_DOMAIN:'aione.biz',APP_URL:base,TEAM_EMAILS:admin.email,TEAM_CONFIG:JSON.stringify({people,devs:['builder','reviewer'],devEmails:{builder:user.email,reviewer:reviewer.email},devColors:{builder:'k1',reviewer:'k3'}}),MAILER:async mail=>{emails.push({...mail,at:new Date().toISOString()});}};
 // Offline demo only: run real authorized read tools, then format their results without an external model.
 env.AI_PROVIDER=async body=>{
  const message=text=>({output:[{type:'message',content:[{type:'output_text',text}]}]});
@@ -61,16 +60,6 @@ env.AI_PROVIDER=async body=>{
  if(!body.tools.some(t=>t.name===name))return message('Demo mode: management reports are administrator-only. Ask about your own tickets.');
  return {output:[{type:'function_call',call_id:'demo-read',name,arguments:JSON.stringify(workflow?{workflow,days:Number(/days (7|14|30)/.exec(question)?.[1]||7)}:{text:'',status:'open',updatedDays:0})}]};
 };
-// Sample Odoo projects, billing settings and dashboard entries not in Odoo yet, for the Work entries view (Odoo is synthetic).
-await store.set(odooProjectsKey(env),JSON.stringify({syncedAt:Date.now(),projects:sampleProjects()}));
-await store.set('business:AION:billing:config',JSON.stringify({revision:1,classification:true,emails:'dry',fields:{project:'',task:'x_billing'},values:{project:{},task:{b:'billable',n:'not_billable',i:'inherit'}},quotationUrl:''}));
-await store.set('business:AION:billing:projects',JSON.stringify({revision:1,items:{10:{billing:'billable'}}}));
-await store.set('tw:AION:config',JSON.stringify({fields:{users:'',entryUuid:'x_entry_uuid',userUuid:'',lineRef:''},mapping:{}}));
-for(const [key,minutes,daysAgo] of [['AION-101',90,0],['AION-101',45,2]]){
- const id=crypto.randomUUID(),date=offset(-daysAgo);
- const e={id,ticket:key,source:'jira',ticketTitle:'Checkout fails on retry',date,minutes,description:'Dashboard work not yet in Odoo',author:{email:user.email,name:user.name},createdAt:new Date().toISOString(),revision:1,syncedRevision:0,state:'setup',lineId:null,projectId:10};
- await store.set('tw:AION:e:'+id,JSON.stringify(e));await store.sadd('tw:AION:t:'+key,id);await store.sadd('tw:AION:m:'+date.slice(0,7),id);
-}
 const tokens={admin:(await makeToken(env,admin.email,Date.now(),1)).token,user:(await makeToken(env,user.email,Date.now(),1)).token,reviewer:(await makeToken(env,reviewer.email,Date.now(),1)).token};
 const call=async(action,body,role='user')=>{const response=await handler.fetch(new Request(base+'/date-requests/'+action,{method:'POST',headers:{Authorization:'Bearer '+tokens[role],'Content-Type':'application/json'},body:JSON.stringify(body)}),env);if(!response.ok)throw new Error(await response.text());return (await response.json()).request;};
 await call('submit',{key:'AION-101',proposedDate:offset(3),reason:'API contract clarification is still pending. I need time for implementation and regression tests.',blocker:'Waiting for the integration team to confirm the filter format.'});

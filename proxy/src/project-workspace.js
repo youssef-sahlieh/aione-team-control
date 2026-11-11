@@ -17,7 +17,6 @@ import { billingSnapshot, readBillingConfig, workRows, saveProjectDefault, saveT
 import { companyContext, ticketsByProject, saveAllocation } from './project-budget.js';
 import { todayIn, sourceOf, agreedLineSent } from './time-entries.js';
 import { workPeriod, addDays, projectWork } from './project-work.js';
-import { listWorkEntries } from './work-entries.js';
 
 const problem=(message,status=400,code='workspace',details={})=>{throw new BusinessError(message,status,code,details);};
 const json=d=>Response.json(d,{headers:{'Cache-Control':'no-store'}});
@@ -301,7 +300,7 @@ async function applyImport(env,me,b,deps){
 }
 const strip=p=>({...p,rows:p.rows.map(({apply,...r})=>r)});
 
-export const WORKSPACE_PATHS=['/clients/odoo-projects/tickets','/clients/odoo-projects/work','/clients/odoo-projects/work-entries','/clients/odoo-projects/import/preview','/clients/odoo-projects/import'];
+export const WORKSPACE_PATHS=['/clients/odoo-projects/tickets','/clients/odoo-projects/work','/clients/odoo-projects/import/preview','/clients/odoo-projects/import'];
 // deps: readTicket (a ticket any source, for checks), readDetails (titles, statuses, people of many tickets).
 export async function workspaceRoutes(request,env,url,me,deps){
   if(me.role!=='admin')problem('Only administrators see project billing.',403,'forbidden');
@@ -316,7 +315,6 @@ export async function workspaceRoutes(request,env,url,me,deps){
     const id=Number(q.id);if(!Number.isInteger(id)||id<1)problem('Choose an Odoo project.');
     return json(await projectWork(env,id,q));
   }
-  if(path==='/clients/odoo-projects/work-entries'&&request.method==='GET')return json(await listWorkEntries(env,q));
   if((path==='/clients/odoo-projects/import/preview'||path==='/clients/odoo-projects/import')&&request.method==='POST'){
     const raw=await request.text();if(raw.length>BODY_LIMIT)problem('Import request too large.',413);
     let b;try{b=JSON.parse(raw);}catch{problem('Invalid import request.');}
