@@ -2,6 +2,7 @@ import {createReportBrowser} from './report-browser.js';
 import {createBillingAdmin} from './billing-admin.js';
 import {mountProjectWorkspace,workspaceTicketsChanged} from './project-workspace.js';
 import { createdDate, DASH_PRIORITIES } from '../models/ticket-business.js';
+import { clientErrors, clientBody } from '../models/client-form.js';
 import { BUDGET_LABEL, DEFAULT_VIEW, budgetStatus, hours, signedHours, percent, budgetText, budgetRows, budgetCsvRows, budgetCounts, projectChoices, hiddenFilterCount, BILLING_DEFAULT, BILLING_FILTERS, billingFigures, assignableProjects, MAPPING_KINDS, mappingSuggestion, mappingRows, mappingCounts } from '../models/odoo-projects.js';
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;};
 const button=(text,fn,cls='btn')=>{const b=el('button',cls,text);b.type='button';b.addEventListener('click',fn);return b;};
@@ -257,7 +258,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     if(!enabled){panel.append(el('p','msg err','The updated backend is required.'));return;}
     const msg=el('p','msg');
     if(odooOn){const sync=el('div','catalog-sync');sync.append(button('Sync from Odoo now',async e=>{const b=e.currentTarget;b.disabled=true;msg.className='msg';msg.textContent='Reading contacts and projects from Odoo…';try{const r=await api('/clients/odoo-sync?force=1',{method:'POST',body:{}});if(r.odoo===false){msg.textContent='Odoo is not connected.';return;}if(r.changed)await loadCatalog();else await loadProjects().catch(()=>{});const counts=(r.customers!=null?r.customers+' contacts, ':'')+r.projects+' projects',done=r.changed?r.added+' new from Odoo ('+counts+').':'Already up to date ('+counts+').';msg.textContent=done;if(r.changed){catalogNote={text:done,at:Date.now()};await onChange();await catalogChanged(target,done);}}catch(err){message(msg,err);}finally{b.disabled=false;}},'btn primary'));
-      const create=(key,text,open)=>{const b=button(text,e=>open(e.currentTarget,target),'btn');b.dataset.create=key;return b;};sync.append(create('contact','+ Create contact',openContactDialog),create('project','+ Create project',openProjectDialog));panel.append(sync);}
+      const create=(key,text,open)=>{const b=button(text,e=>open(e.currentTarget,target),'btn');b.dataset.create=key;return b;};if(admin())sync.append(create('client','+ Add client',openClientDialog));sync.append(create('project','+ Create project',openProjectDialog));panel.append(sync);}
     panel.append(msg);{const n=note||(Date.now()-catalogNote.at<15000?catalogNote.text:'');if(n)msg.textContent=n;}
     // Without Odoo a client or project is added here. With Odoo, contacts and projects are created in Odoo from their dialogs.
     if(!odooOn){
@@ -292,14 +293,15 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const head=el('div','clients-head'),actions=el('div','clients-actions'),sync=el('div','clients-sync'),msg=el('p','msg');msg.setAttribute('role','status');
     const say=(text,err)=>{msg.className=err?'msg err':'msg';msg.textContent=text||'';};
     const syncBtn=button('Sync from Odoo now',()=>syncNow(),'btn primary');
+    const addBtn=button('+ Add client',e=>openClientDialog(e.currentTarget,target),'btn');addBtn.dataset.create='client';
     const createBtn=button('+ Create project',e=>openProjectDialog(e.currentTarget,target),'btn');createBtn.dataset.create='project';
     const mapBtn=button('Map tickets',e=>openMapTickets({opener:e.currentTarget}),'btn');mapBtn.dataset.map='all';
-    const more=moreMenu('More',[['Export CSV',()=>exportBudget(table.shown())],['Create contact',opener=>openContactDialog(opener,target)],
+    const more=moreMenu('More',[['Export CSV',()=>exportBudget(table.shown())],
       ...(projectAdmin?[['Dashboard clients & projects',opener=>hostDialog('Dashboard clients & projects',opener,renderProjects)]]:[]),
       ...(epicMapping?[['Jira epics → Odoo projects',opener=>hostDialog('Jira epics → Odoo projects',opener,renderEpicMap)]]:[]),
       ...(billingOn&&admin()?[['Billing setup',opener=>billing.setupDialog(opener)],['Allowances & alerts',opener=>billing.allowancesDialog(opener,billingProjects)],['Billable export',opener=>billing.exportDialog(opener,billingProjects)]]:[]),
       ['How figures are counted',opener=>figuresDialog(opener)]]);
-    head.append(el('h2','','Clients & Projects'),actions);actions.append(syncBtn,createBtn,mapBtn,more);root.append(head,sync,msg);
+    head.append(el('h2','','Clients & Projects'),actions);actions.append(syncBtn,addBtn,createBtn,mapBtn,more);root.append(head,sync,msg);
     const table=projectsTable(root,{say,onMap:(p,opener)=>openMapTickets({opener,project:p})});
     let plan=null,syncing=false;
     function syncLine(){
@@ -355,7 +357,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       ...(data?.unplacedPendingHours>0?[hours(data.unplacedPendingHours)+' of work log time is not in Odoo yet and has no Odoo project. See Work log setup.']:[]),
       'Map tickets gives an Odoo project to tickets saved before every ticket had one. The client comes from the project, Jira links stay as they are, and work already logged stays where it went.'])body.append(el('p','business-guidance',t));
   }
-  // Create contact and Create project in Odoo, each in its own dialog. A failed save keeps what was typed and the dialog
+  // Create project in Odoo, in its own dialog (Add client has its own, below). A failed save keeps what was typed and the dialog
   // stays open; Save is disabled while saving. Escape, Close and Cancel ask before unsaved values are discarded. A save that
   // works closes the dialog, refreshes the table and returns focus to the button that opened it.
   function createDialog({opener,target,key,title,noun,submitLabel,fields,save,done}){
@@ -402,23 +404,186 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     });
     fields[0].control.focus();
   }
-  function openContactDialog(opener,target){
-    const name=input('text',''),email=input('email',''),phone=input('tel','');
-    createDialog({opener,target,key:'contact',title:'Create contact',noun:'contact',submitLabel:'Create contact',
-      fields:[
-        {label:'Contact name',node:name,required:true,dirty:()=>name.value.trim()!=='',check:()=>name.value.trim()?'':'Enter the contact name.'},
-        {label:'Email (optional)',node:email,dirty:()=>email.value.trim()!=='',check:()=>email.value.trim()&&!email.checkValidity()?'Enter an email address like name@example.com, or leave it empty.':''},
-        {label:'Phone (optional)',node:phone,dirty:()=>phone.value.trim()!=='',check:()=>''}],
-      save:()=>api('/clients/odoo/customer',{method:'POST',body:{name:name.value,email:email.value,phone:phone.value}}),
-      done:()=>'Contact “'+name.value.trim()+'” created in Odoo.'});
+  // Add client (administrators, with Odoo): a company, or an individual under a company, saved as an Odoo contact. Name is the
+  // only required field unless Odoo asks for more. Address and Business details fold away until needed, and their values stay.
+  // The browser checks what it can (models/client-form.js); Odoo's refusal is shown beside the field it names. A save Odoo does
+  // not confirm is never sent again by the dialog: the backend checks Odoo before any later save creates a contact. A save that
+  // works shows what Odoo holds, a link to it and, for a company, a project for this client.
+  async function openClientDialog(opener,target){
+    if(document.querySelector('dialog.client-dialog'))return;
+    const {d,body,msg}=dialog('Add client',()=>requestClose());
+    d.classList.add('catalog-dialog','client-dialog','business-dialog-wide');d.setAttribute('aria-label','Add client');
+    d.addEventListener('cancel',e=>{e.preventDefault();requestClose();});
+    d.addEventListener('close',()=>{if(opener?.isConnected)opener.focus();});
+    const F={},tags=[],tagNames=new Map(),companyNames=new Map();
+    let opts=null,required=new Set(),type='company',saving=false,done=false,attempted=false,initial=null,companyQ=null,companyTimer=0,stateToken=0,submit=null,cancel=null;
+    const read=()=>{const v={type};for(const k in F)if(k!=='tagIds')v[k]=F[k].node.value;v.tagIds=[...tags];return v;};
+    const snap=()=>JSON.stringify(read());
+    const dirty=()=>initial!==null&&snap()!==initial;
+    function requestClose(){if(saving)return;if(!done&&dirty()&&!window.confirm('Discard this client? Your changes will be lost.'))return;d.close();}
+    // Shows each field's problem beside it; returns the first field with one (so it can take focus).
+    const showErrors=e=>{let first=null;for(const k in F){const f=F[k],t=e[k]||'';f.err.textContent=t;f.focus.setAttribute('aria-invalid',String(!!t));if(t&&!first)first=k;}return first;};
+    const goto=k=>{for(let n=F[k].row;n;n=n.parentElement)if(n.tagName==='DETAILS')n.open=true;F[k].focus.focus();};
+    // The browser's checks, plus the fields Odoo requires that this form shows.
+    const problems=v=>{const e=clientErrors(v);for(const k of required){const f=F[k];if(!f||f.row.hidden||e[k])continue;const x=v[k];if(Array.isArray(x)?!x.length:!String(x??'').trim())e[k]='This field is required by Odoo.';}return e;};
+    const setBusy=on=>{submit.disabled=on;cancel.disabled=on;submit.textContent=on?'Saving…':'Add client';};
+    const wait=el('p','msg');wait.setAttribute('role','status');
+    const load=async()=>{
+      body.replaceChildren(wait);wait.className='msg';wait.textContent='Loading options from Odoo…';
+      try{opts=await api('/clients/odoo/options');}
+      catch(err){const m=el('p','msg err');m.textContent=err.message;body.replaceChildren(m,button('Try again',()=>load(),'btn primary'));return;}
+      build();
+    };
+    // Odoo's companies for the parent picker, searched by name as the person types (the list is replaced, the choice kept).
+    async function loadCompanies(q){
+      companyQ=q;
+      try{
+        const r=await api('/clients/odoo/companies?q='+encodeURIComponent(q)),sel=F.parentId.node,keep=sel.value;
+        for(const c of r.companies)companyNames.set(c.id,c.name);
+        sel.replaceChildren();option(sel,'Choose the company…','');
+        for(const c of r.companies)option(sel,c.name,String(c.id));
+        if(keep&&!r.companies.some(c=>String(c.id)===keep))option(sel,companyNames.get(Number(keep))||'Selected company',keep);
+        sel.value=keep;F.parentId.refresh();
+        if(document.activeElement===F.parentId.focus)F.parentId.focus.dispatchEvent(new Event('input'));
+      }catch(err){msg.className='msg err';msg.textContent=err.message;}
+    }
+    // The states of the chosen country. Changing the country clears the state; no country leaves it disabled.
+    async function loadStates(id){
+      const token=++stateToken,sel=F.stateId.node;
+      sel.replaceChildren();option(sel,id?'Choose the state or region…':'Choose the country first','');sel.value='';sel.disabled=!id;F.stateId.refresh();
+      if(!id)return;
+      try{const r=await api('/clients/odoo/options?country='+encodeURIComponent(id));if(token!==stateToken)return;for(const s of r.states||[])option(sel,s.name,String(s.id));}
+      catch(err){if(token===stateToken){msg.className='msg err';msg.textContent=err.message;}}
+      finally{if(token===stateToken){sel.disabled=!id;F.stateId.refresh();}}
+    }
+    function setType(v){
+      type=v;if(F.name)F.name.text.textContent=v==='person'?'Contact name':'Company name';
+      if(F.parentId){F.parentId.row.hidden=v!=='person';if(v!=='person'){F.parentId.node.value='';F.parentId.refresh();}else if(companyQ===null)loadCompanies('');}
+    }
+    function build(){
+      const on=k=>opts.supported?.[k]!==false,hiddenFields=[];
+      const want=(k,label)=>{if(on(k))return true;hiddenFields.push(label);return false;};
+      required=new Set(['name',...Object.keys(opts.required||{}).filter(k=>opts.required[k])]);
+      for(const t of opts.tags||[])tagNames.set(t.id,t.name);
+      const form=el('form','business-form catalog-form client-form');form.noValidate=true;
+      const group=(title,collapsible)=>{const box=el(collapsible?'details':'section','client-section'),grid=el('div','client-grid');box.append(el(collapsible?'summary':'h3','client-section-title',title),grid);form.append(box);return grid;};
+      // One field: its label with Required or Optional, the control (a searchable picker when picker), and its error line.
+      const row=(grid,k,label,node,{wide=false,picker=false,blank=false}={})=>{
+        const r=el('div','client-row'+(wide?' wide':'')),l=el('label','business-field'),err=el('small','catalog-error'),text=el('span','client-label',label),isReq=required.has(k);
+        err.id='client-err-'+k+'-'+Math.random().toString(36).slice(2,8);
+        l.append(text,el('span',isReq?'client-mark':'client-mark optional',isReq?'Required':'Optional'),node);
+        const cb=picker?combobox(node,{blank}):null,focus=cb?cb.input:node;
+        focus.setAttribute('aria-describedby',err.id);if(isReq)focus.setAttribute('aria-required','true');
+        r.append(l,err);grid.append(r);F[k]={node,focus,err,row:r,text,refresh:cb?.refresh};
+        return r;
+      };
+      const text=extra=>Object.assign(input('text',''),extra||{});
+      // Basic details
+      const basic=group('Basic details');
+      const typeBox=el('fieldset','client-type');typeBox.append(el('legend','client-label','Type'));
+      const radioName='client-type-'+Math.random().toString(36).slice(2,8);
+      for(const [v,t] of [['company','Company'],['person','Individual']]){
+        const lb=el('label','client-choice'),rb=document.createElement('input');
+        rb.type='radio';rb.name=radioName;rb.value=v;rb.checked=v===type;rb.addEventListener('change',()=>{if(rb.checked)setType(v);});
+        lb.append(rb,document.createTextNode(' '+t));typeBox.append(lb);
+      }
+      const typeRow=el('div','client-row wide');typeRow.append(typeBox);basic.append(typeRow);
+      row(basic,'name',type==='person'?'Contact name':'Company name',text(),{wide:true});
+      if(want('parentId','Parent company')){const parent=el('select','fsel');option(parent,'Choose the company…','');row(basic,'parentId','Parent company',parent,{wide:true,picker:true});F.parentId.row.hidden=type!=='person';}
+      // Contact information
+      const contact=group('Contact information');
+      if(want('email','Email'))row(contact,'email','Email',text({inputMode:'email',autocomplete:'email'}));
+      if(want('phone','Phone'))row(contact,'phone','Phone',text({type:'tel',autocomplete:'tel'}));
+      if(want('mobile','Mobile'))row(contact,'mobile','Mobile',text({type:'tel',autocomplete:'tel'}));
+      if(want('website','Website'))row(contact,'website','Website',text({inputMode:'url',autocomplete:'url'}));
+      // Address (folded away until needed)
+      const address=group('Address',true);
+      if(want('street','Street'))row(address,'street','Street',text({autocomplete:'address-line1'}),{wide:true});
+      if(want('street2','Street 2'))row(address,'street2','Street 2',text({autocomplete:'address-line2'}),{wide:true});
+      if(want('city','City'))row(address,'city','City',text({autocomplete:'address-level2'}));
+      if(want('zip','Postal code'))row(address,'zip','Postal code',text({autocomplete:'postal-code'}));
+      if(want('countryId','Country')){const country=el('select','fsel');option(country,'Choose the country…','');for(const c of opts.countries||[])option(country,c.name,String(c.id));row(address,'countryId','Country',country,{picker:true});}
+      if(want('stateId','State / region'))row(address,'stateId','State / region',el('select','fsel'),{picker:true});
+      // Business details (folded away until needed)
+      const business=group('Business details',true);
+      if(want('vat','Tax ID / VAT'))row(business,'vat','Tax ID / VAT',text());
+      if(want('companyRegistry','Company registration number'))row(business,'companyRegistry','Company registration number',text());
+      if(want('reference','Internal reference'))row(business,'reference','Internal reference',text());
+      if(want('language','Language')){const lang=el('select','fsel');option(lang,'Odoo default','');for(const l of opts.languages||[])option(lang,l.name,l.code);row(business,'language','Language',lang,{picker:true,blank:true});}
+      if(want('tagIds','Tags')){
+        const pick=el('select','fsel'),r=row(business,'tagIds','Tags',pick,{wide:true,picker:true}),chips=el('div','client-chips');
+        chips.setAttribute('role','list');r.insertBefore(chips,F.tagIds.err);
+        // Existing tags only: chosen ones show as chips with a remove button; the picker lists the rest.
+        const renderTags=()=>{
+          chips.replaceChildren(...tags.map(id=>{const name=tagNames.get(id)||'Tag '+id,c=el('span','client-chip',name),x=button('×',()=>{tags.splice(tags.indexOf(id),1);renderTags();F.tagIds.focus.focus();},'client-chip-remove');x.setAttribute('aria-label','Remove tag '+name);c.setAttribute('role','listitem');c.append(x);return c;}));
+          pick.replaceChildren();option(pick,'Add a tag…','');
+          for(const t of opts.tags||[])if(!tags.includes(t.id))option(pick,t.name,String(t.id));
+          pick.value='';F.tagIds.refresh();
+        };
+        pick.addEventListener('change',()=>{const id=Number(pick.value);if(id&&!tags.includes(id))tags.push(id);renderTags();});
+        renderTags();
+      }
+      if(want('notes','Internal notes')){const ta=el('textarea','inp');ta.rows=3;row(business,'notes','Internal notes',ta,{wide:true});}
+      if(F.parentId)F.parentId.focus.addEventListener('input',()=>{const q=F.parentId.focus.value.trim();if(q===companyQ)return;clearTimeout(companyTimer);companyTimer=setTimeout(()=>loadCompanies(q),250);});
+      if(F.countryId)F.countryId.node.addEventListener('change',()=>{loadStates(F.countryId.node.value);});
+      if(F.stateId)loadStates('');
+      // Actions, the messages line and the unsupported note.
+      const actions=el('div','catalog-dialog-actions');submit=el('button','btn primary','Add client');submit.type='submit';cancel=button('Cancel',()=>requestClose());actions.append(submit,cancel);
+      if(hiddenFields.length)form.prepend(el('p','business-guidance','Not available from this Odoo, so not shown: '+hiddenFields.join(', ')+'.'));
+      form.append(msg,actions);
+      // Typing clears the last message; once Add client has been pressed, a field's problem follows its value.
+      const clear=()=>{if(saving||done)return;msg.className='msg';msg.textContent='';if(attempted)showErrors(problems(read()));};
+      form.addEventListener('input',clear);form.addEventListener('change',clear);
+      form.addEventListener('submit',save);
+      body.replaceChildren(form);
+      if(F.name)F.name.focus.focus();
+      initial=snap();
+    }
+    async function save(e){
+      e.preventDefault();if(saving||done)return;
+      attempted=true;const v=read(),first=showErrors(problems(v));
+      if(first){goto(first);msg.className='msg err';msg.textContent='Fix the fields marked in red.';return;}
+      saving=true;setBusy(true);msg.className='msg';msg.textContent='Saving to Odoo…';
+      try{
+        const r=await api('/clients/odoo/customer',{method:'POST',body:clientBody(v,opts.supported||{})});
+        if(r.catalog)catalog=r.catalog;
+        await loadProjects().catch(()=>{});
+        const note='Client “'+(v.name||'').trim()+'” saved in Odoo.';catalogNote={text:note,at:Date.now()};
+        let refreshed=true;
+        try{await onChange();await catalogChanged(target,note);}catch{refreshed=false;}
+        showSaved(r,refreshed);
+      }catch(err){
+        msg.className='msg err';
+        if(err.field&&F[err.field]){showErrors({[err.field]:err.message});goto(err.field);msg.textContent='Odoo did not save this client. Check the field marked in red.';}
+        else msg.textContent=err.message;
+      }finally{saving=false;setBusy(false);}
+    }
+    // What was saved, with a link to the contact in Odoo; a project for this client when the client is on the Clients page.
+    function showSaved(r,refreshed){
+      done=true;
+      const head=el('h3','','Client saved in Odoo');head.tabIndex=-1;const parts=[head];
+      if(r.reconciled)parts.push(el('p','business-guidance','This client was saved a moment ago, so no second one was added.'));
+      if(!refreshed||r.syncFailed)parts.push(el('p','business-guidance','Saved in Odoo. The Clients page shows it after the next sync from Odoo.'));
+      const dl=el('dl','client-summary');for(const s of r.saved||[])dl.append(el('dt','',s.label),el('dd','',s.value));parts.push(dl);
+      if(r.mismatches?.length)parts.push(el('p','msg err','Odoo saved some values differently from what you entered: '+r.mismatches.map(m=>m.label).join(', ')+'. Check them in Odoo.'));
+      if(!r.client)parts.push(el('p','business-guidance','Individuals appear on the Clients page through their company, so no project can be created for this person from here.'));
+      const links=el('div','catalog-dialog-actions');
+      if(r.url){const a=el('a','btn','Open in Odoo');a.href=r.url;a.target='_blank';a.rel='noopener';links.append(a);}
+      if(r.client)links.append(button('Create project for this client',()=>{d.close();openProjectDialog(opener,target,{clientId:r.client.id});},'btn'));
+      links.append(button('Done',()=>d.close(),'btn primary'));
+      parts.push(links);body.replaceChildren(...parts);head.focus();
+    }
+    load();
   }
   // Allocated hours: zero or more, decimals allowed. An empty box means no allocation yet, which is not the same as zero.
   const DECIMAL_HOURS=/^(\d+\.?\d*|\.\d+)$/;
-  function openProjectDialog(opener,target){
+  function openProjectDialog(opener,target,{clientId=''}={}){
     const name=input('text',''),contact=el('select','fsel'),hours=input('number','');
     hours.min='0';hours.step='any';hours.inputMode='decimal';
     option(contact,'Choose contact…','');
     for(const c of clients().filter(c=>!NO_CLIENT.includes(c.name)).sort(byName))option(contact,c.name,c.id);
+    // Opened from Add client: the new client is already chosen.
+    contact.value=String(clientId||'');
     createDialog({opener,target,key:'project',title:'Create project',noun:'project',submitLabel:'Create project',
       fields:[
         {label:'Project name',node:name,required:true,dirty:()=>name.value.trim()!=='',check:()=>name.value.trim()?'':'Enter the project name.'},

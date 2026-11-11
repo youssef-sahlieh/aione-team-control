@@ -459,3 +459,26 @@
   .ws-filters .business-field{flex:1 1 100%}
   .ws-period{margin-left:0}
 }
+/* Add client dialog: two columns when there is room, one under 640px. */
+.client-form{gap:14px}
+.client-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px;min-width:0}
+.client-row{display:flex;flex-direction:column;gap:4px;min-width:0}
+.client-row.wide{grid-column:1/-1}
+.client-row .business-field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.client-label{font-weight:600;font-size:13px}
+.client-mark{font-size:11px;font-weight:600;color:var(--muted,#5b6478);margin-left:6px}
+.client-mark.optional{font-weight:500;opacity:.8}
+.client-section{border:0;padding:0;margin:0;min-width:0}
+.client-section-title{font-size:14px;margin:0 0 8px;padding:8px 0}
+details.client-section>summary.client-section-title{cursor:pointer;list-style:revert}
+.client-type{border:0;padding:0;margin:0;display:flex;gap:16px;flex-wrap:wrap;min-width:0}
+.client-type legend{padding:0;margin-bottom:4px}
+.client-choice{display:inline-flex;align-items:center;gap:6px;font-size:14px;cursor:pointer}
+.client-chips{display:flex;flex-wrap:wrap;gap:6px}
+.client-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 4px 3px 10px;border-radius:999px;background:color-mix(in srgb,var(--accent,#8a97ff) 16%,transparent);font-size:13px}
+.client-chip-remove{border:0;background:transparent;cursor:pointer;font-size:15px;line-height:1;padding:2px 6px;border-radius:999px;color:inherit}
+.client-chip-remove:focus-visible{outline:2px solid var(--accent,#8a97ff);outline-offset:1px}
+.client-summary{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:0}
+.client-summary dt{color:var(--muted,#5b6478);font-size:13px}
+.client-summary dd{margin:0;font-size:14px;word-break:break-word}
+@media(max-width:640px){.client-grid{grid-template-columns:minmax(0,1fr)}}

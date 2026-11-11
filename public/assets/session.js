@@ -102,7 +102,10 @@ async function request(path, method, body) {
     if (res.status === 404 && code === "not_found" && data?.error === "Not found." && /^\/(date-requests|ticket-notes|ticket-metadata|clients|reports)(\/|\?|$)/.test(path)) {
       throw new ApiError("backend_outdated", "The connected backend has not been updated for ticket business fields, clients, reports, date requests, and internal notes. Deploy the current main branch in the existing Vercel project. Localhost:3000 also uses this live backend; the sample preview uses a separate local backend.", 404);
     }
-    throw new ApiError(code, (data && data.error) || "HTTP " + res.status, res.status);
+    const err = new ApiError(code, (data && data.error) || "HTTP " + res.status, res.status);
+    // The form field a refused save is about (client-contact.js), so the dialog can show the reason beside it.
+    if (data && typeof data.field === "string") err.field = data.field;
+    throw err;
   }
   return data;
 }

@@ -263,6 +263,8 @@ test('administrators create a customer or a project in Odoo from the Clients pag
   if(method==='create'){created.push({model,values:args[0]});const id=100+created.length;customers.push({id,display_name:args[0].name});return Response.json({result:id});}
   // Projects are copies of the template (Odoo 18 answers with a list of ids).
   if(method==='copy'){const values=p.args[6].default;created.push({model,copy:args[0],values});const id=100+created.length;projects.push({id,display_name:values.name,partner_id:[values.partner_id,'x']});return Response.json({result:[id]});}
+  // Odoo's field metadata for contacts: the fields the Add client form may set, all writable here.
+  if(model==='res.partner'&&method==='fields_get')return Response.json({result:Object.fromEntries(['name','company_type','is_company','customer_rank','email','phone','parent_id'].map(f=>[f,{type:'char',readonly:false,required:false}]))});
   if(model==='res.partner'&&method==='search_read'){const named=(args[0]||[]).find(t=>t[0]==='name');return Response.json({result:named?customers.filter(c=>c.display_name===named[2]):customers});}
   if(model==='res.partner'&&method==='read')return Response.json({result:args[0].map(id=>({id,active:true,is_company:true,company_id:[1,'Main'],commercial_partner_id:[id,(customers.find(c=>c.id===id)||{}).display_name]}))});
   // The template new projects copy, archived and tagged; the Active tag is already in Odoo.
@@ -277,7 +279,7 @@ test('administrators create a customer or a project in Odoo from the Clients pag
   const c=await api('/clients/odoo/customer','POST',{name:'New Shop',email:'shop@example.invalid',phone:'050'},admin);assert.equal(c.status,201);
   // The same name again is refused: it is already in Odoo, so nothing is created.
   const dup=await api('/clients/odoo/customer','POST',{name:'New Shop'},admin);assert.equal(dup.status,409);assert.equal((await dup.json()).code,'exists');assert.equal(created.length,1);
-  assert.deepEqual(created[0],{model:'res.partner',values:{name:'New Shop',is_company:true,customer_rank:1,email:'shop@example.invalid',phone:'050'}});
+  assert.deepEqual(created[0],{model:'res.partner',values:{name:'New Shop',company_type:'company',customer_rank:1,email:'shop@example.invalid',phone:'050'}});
   const shop=(await c.json()).catalog.entries.find(e=>e.name==='New Shop'&&!e.parentId);assert.ok(shop);
   const pr=await api('/clients/odoo/project','POST',{name:'Shop POS',clientId:shop.id},admin);assert.equal(pr.status,201);
   assert.deepEqual(created[1],{model:'project.project',copy:50,values:{name:'Shop POS',partner_id:customers.find(x=>x.display_name==='New Shop').id,active:true,is_template:false,tag_ids:[[6,0,[2,9]]]}});
