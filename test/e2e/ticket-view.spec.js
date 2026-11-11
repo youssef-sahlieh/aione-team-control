@@ -38,8 +38,8 @@ test("a full-page ticket keeps the sidebar and top bar, with a breadcrumb and J 
   await expect(page.locator("#d-crumb")).toHaveText(first);
   await expect(page.locator("#d-pos")).toHaveText("1 of 3");
   await expect(page).toHaveTitle(new RegExp("^" + first + " · Ticket " + first));
-  // The work log (timer first) is at the top of the ticket's main column, above the description and Activity.
-  expect(await page.evaluate(() => { const log = document.getElementById("work-log"); return log.parentElement.classList.contains("jira-main") && !log.previousElementSibling && !!log.nextElementSibling; })).toBe(true);
+  // The work log is the last section of the ticket's main column, after Activity.
+  expect(await page.evaluate(() => { const log = document.getElementById("work-log"); return log.parentElement.classList.contains("jira-main") && !log.nextElementSibling && log.previousElementSibling.classList.contains("jira-activity"); })).toBe(true);
 
   await page.keyboard.press("j");
   await expect(page.locator("#d-pos")).toHaveText("2 of 3");

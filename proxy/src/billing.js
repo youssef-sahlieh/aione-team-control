@@ -77,7 +77,7 @@ const blankAllowances=()=>({revision:0,items:[]});
 export const readAllowances=env=>readDoc(env,K.allowances(env),blankAllowances);
 const blankTicket=()=>({revision:0,billing:null,allowanceId:null,odoo:null,history:[]});
 const readTicketRecord=(env,key)=>readDoc(env,K.ticket(env,key),blankTicket);
-async function readTicketRecords(env){
+export async function readTicketRecords(env){
   const store=requireStore(env),start=K.ticket(env,''),keys=store.scanKeys?await store.scanKeys(start):[],out={};
   const raws=await mget(store,keys);keys.forEach((k,n)=>{if(raws[n])out[k.slice(start.length)]={...blankTicket(),...JSON.parse(raws[n])};});
   return out;

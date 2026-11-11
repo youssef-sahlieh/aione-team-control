@@ -1,5 +1,21 @@
 import { test, expect } from "@playwright/test";
 
+// The overview's answer for the rows logged so far, in the shape the proxy returns (proxy/src/work-overview.js).
+function overviewOf(rows, canLog) {
+  const hm = (m) => Math.floor(m / 60) + ":" + String(m % 60).padStart(2, "0");
+  const minutes = rows.reduce((n, r) => n + r.minutes, 0);
+  return {
+    period: { key: "this_month", from: "2026-10-01", to: "2026-10-31", timeZone: "Asia/Jerusalem" },
+    filters: { period: "this_month", q: "", person: "", client: "", project: "", billable: false, sync: "all", groupBy: "" },
+    rows: rows.map((r) => ({ id: "d:" + r.id, origin: "dashboard", date: r.date, person: "Builder", client: "", project: "", ticket: "AION-7", ticketTitle: "Fix login redirect", ticketOpenable: true, task: "", description: r.description, minutes: r.minutes, duration: hm(r.minutes), billing: "unclassified", billingSource: "none", status: "synced", statusLabel: "Posted in Odoo", reason: "", openUrl: null, taskUrl: null })),
+    paging: { offset: 0, limit: 50, total: rows.length },
+    totals: { count: rows.length, minutes, durationText: hm(minutes), billableMinutes: 0, billableText: "0:00", pendingCount: 0, heldCount: 0 },
+    groups: [], agreed: null,
+    options: { persons: rows.length ? ["Builder"] : [], clients: [], projects: [] },
+    canLog, isAdmin: false,
+  };
+}
+
 // Work log page: "+ Log work" picks an open ticket, then the time. Every request is intercepted.
 async function mockWorkLog(page, { canLog = true, failFirstPost = false } = {}) {
   const calls = [], unexpected = [], rows = [], dialogs = [];
@@ -19,7 +35,7 @@ async function mockWorkLog(page, { canLog = true, failFirstPost = false } = {}) 
     if (path === "/date-requests") return json({ requests: [] });
     if (path === "/inbox") return json({ items: [], seenAt: null, readTickets: [] });
     if (path === "/time-entries/timer" && method === "GET") return json({ timer: null });
-    if (path === "/time-entries/report") return json({ from: "2026-10-01", to: "2026-10-15", timeZone: "Asia/Jerusalem", statuses: { synced: "Saved in Odoo" }, canLog, rows: [...rows], baselines: [] });
+    if (path === "/time-entries/overview") return json(overviewOf(rows, canLog));
     if (path === "/time-entries" && method === "GET") {
       if (url.searchParams.get("ticket") !== "AION-7") return route.fulfill({ status: 404, json: { code: "not_found", error: "Ticket unavailable." } });
       return json({ ticket: "AION-7", source: "jira", closed: false, logging: true, canLog, today: "2026-10-15", maxMinutes: 1440, lockDate: null, entries: [], summary: { loggedMinutes: 0, pendingMinutes: 0 }, baselineHours: null, totalHours: null, destination: null });
@@ -54,7 +70,7 @@ const duration = (form) => form.getByLabel("Duration", { exact: true });
 const description = (form) => form.getByLabel(/^Description/);
 const chip = (form, label) => form.getByRole("button", { name: label, exact: true });
 
-test("a user picks one of their open tickets on the Work log page, enters the time, and it appears in the report", async ({ page }) => {
+test("a user picks one of their open tickets on the Work log page, enters the time, and it appears in the work log", async ({ page }) => {
   const mock = await mockWorkLog(page);
   const form = await openForm(page);
   await duration(form).fill("1:30");
