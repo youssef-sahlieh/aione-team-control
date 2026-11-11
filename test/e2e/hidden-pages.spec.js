@@ -78,8 +78,10 @@ test("a developer following a paused page's link lands on All tickets", async ({
 
 test("Clients & Projects still works, from the sidebar and from the redirect", async ({ page }) => {
   await open(page, { path: "/dashboard.html?page=workload" });
+  await page.getByRole("button", { name: "Projects", exact: true }).click();   // the redirect lands on Clients, where Work entries is the default view
   await expect(page.locator(".budget-table").first().getByText("Branch A", { exact: true })).toBeVisible();
   await page.getByRole("link", { name: /^Clients$/ }).first().click();
   await expect(page).toHaveURL(/page=clients/);
+  await page.getByRole("button", { name: "Projects", exact: true }).click();   // Work entries is the default view
   await expect(page.locator(".budget-table").first().getByText("Branch A", { exact: true })).toBeVisible();
 });
