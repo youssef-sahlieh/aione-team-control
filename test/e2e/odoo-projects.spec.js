@@ -106,6 +106,10 @@ async function open(page, { extra = [], skip = [], syncChanged = false, clock = 
     return json({ code: "forbidden", error: "Unconfigured test request" }, 403);
   });
   await page.goto("http://127.0.0.1:4173/dashboard.html?page=clients");
+  // The Work entries view is the default; these tests cover the projects table, so switch to it.
+  await page.getByRole("button", { name: "Projects", exact: true }).click();
+  await expect(page.locator(".budget-table").first()).toBeVisible();
+  for (const k of Object.keys(calls)) delete calls[k];   // count only the requests the test itself makes
   return { errors, sent, calls };
 }
 // The projects table is the first .budget-table (the details dialog has its own for work logs).
@@ -161,9 +165,9 @@ test("Clients & Projects lists every active Odoo project with its client, hours,
   await expect(table(page).locator("tfoot")).toContainText("17 h");
   // Search and the client filter are in view; the other filters are behind Filters, which counts them.
   await expect(page.getByLabel("Filter by budget status")).toBeHidden();
-  await page.locator(".clients-page").getByLabel("Filter by client").selectOption("Holding");
+  await page.locator(".clients-pane:not([hidden])").getByLabel("Filter by client").selectOption("Holding");
   await expect(names(page)).toHaveText(["Holding job"]);
-  await page.locator(".clients-page").getByLabel("Filter by client").selectOption("");
+  await page.locator(".clients-pane:not([hidden])").getByLabel("Filter by client").selectOption("");
   await showFilters(page);
   await page.getByLabel("Filter by budget status").selectOption("unmapped");
   await expect(names(page)).toHaveText(["Odoo only", "Holding job"]);
@@ -178,8 +182,8 @@ test("Clients & Projects lists every active Odoo project with its client, hours,
   await page.getByRole("button", { name: "Clear filters" }).click();
   await page.getByLabel("Search Odoo projects by project or client").fill("acme");
   await expect(names(page)).toHaveText(["Branch A"]);
-  // Export CSV (under More) takes the rows the filters leave.
-  const [download] = await Promise.all([page.waitForEvent("download"), fromMore(page, "Export CSV")]);
+  // Export projects CSV (under More) takes the rows the filters leave.
+  const [download] = await Promise.all([page.waitForEvent("download"), fromMore(page, "Export projects CSV")]);
   expect(download.suggestedFilename()).toMatch(/^odoo-projects-\d{4}-\d{2}-\d{2}\.csv$/);
   const csv = await (await import("node:fs/promises")).readFile(await download.path(), "utf8");
   const lines = csv.replace(/^﻿/, "").trim().split("\r\n");
@@ -260,7 +264,7 @@ test("Clients & Projects: Sync from Odoo now reads once, and the dashboard rende
   await expect(page.getByLabel("Filter by missing client")).toHaveValue("present");
   await expect(detailOf(page, "Branch A")).toBeVisible();
   expect(seen.calls["POST /clients/odoo-sync?force=1"]).toBe(1);
-  expect(seen.calls["GET /clients/odoo-projects"]).toBe(2);
+  expect(seen.calls["GET /clients/odoo-projects"]).toBe(1);   // one reload after the sync; the first load is not counted
   expect(seen.errors).toEqual([]);
 });
 
@@ -487,7 +491,7 @@ test("Clients & Projects: an administrator sets allocated hours and links a proj
   await expect(rowOf(page, "Odoo only").locator(".budget-status")).toHaveText("Within budget");
   await expect(rowOf(page, "Odoo only").locator("td").nth(2)).toHaveText("40 h");
   expect(seen.sent[0]).toEqual({ odooId: 11, hours: 40 });
-  expect(seen.calls["GET /clients/odoo-projects"]).toBe(1);
+  expect(seen.calls["GET /clients/odoo-projects"]).toBeUndefined();   // the list is not reloaded after the change
   await rowOf(page, "Odoo only").getByRole("button", { name: "More about Odoo only" }).click();
   const more = detailOf(page, "Odoo only");
   await more.getByRole("button", { name: "Link project" }).click();
