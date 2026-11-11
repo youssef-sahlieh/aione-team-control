@@ -18,6 +18,7 @@ async function mockWorkLog(page, { canLog = true, failFirstPost = false } = {}) 
     if (path === "/internal" || path === "/odoo/tickets") return json({ tickets: [] });
     if (path === "/date-requests") return json({ requests: [] });
     if (path === "/inbox") return json({ items: [], seenAt: null, readTickets: [] });
+    if (path === "/time-entries/timer" && method === "GET") return json({ timer: null });
     if (path === "/time-entries/report") return json({ from: "2026-10-01", to: "2026-10-15", timeZone: "Asia/Jerusalem", statuses: { synced: "Saved in Odoo" }, canLog, rows: [...rows], baselines: [] });
     if (path === "/time-entries" && method === "GET") {
       if (url.searchParams.get("ticket") !== "AION-7") return route.fulfill({ status: 404, json: { code: "not_found", error: "Ticket unavailable." } });
@@ -48,23 +49,22 @@ async function openForm(page) {
   return form;
 }
 
-const hours = (form) => form.getByRole("spinbutton", { name: /^Hours/ });
-const minutes = (form) => form.getByRole("spinbutton", { name: /^Minutes/ });
+// One duration field, H:MM (decimal hours also work).
+const duration = (form) => form.getByLabel("Duration", { exact: true });
 const description = (form) => form.getByLabel(/^Description/);
 const chip = (form, label) => form.getByRole("button", { name: label, exact: true });
 
 test("a user picks one of their open tickets on the Work log page, enters the time, and it appears in the report", async ({ page }) => {
   const mock = await mockWorkLog(page);
   const form = await openForm(page);
-  await hours(form).fill("1");
-  await minutes(form).fill("30");
+  await duration(form).fill("1:30");
   await description(form).fill("Fixed the redirect after login");
   await form.getByRole("button", { name: "Save work", exact: true }).click();
 
   await expect.poll(() => mock.calls.find((c) => c.method === "POST" && c.path === "/time-entries")?.body)
     .toMatchObject({ ticket: "AION-7", date: "2026-10-15", minutes: 90, description: "Fixed the redirect after login" });
   await expect(page.locator(".wl-page")).toContainText("Fixed the redirect after login");
-  await expect(page.locator(".wl-page")).toContainText("1h 30m");
+  await expect(page.locator(".wl-page")).toContainText("1:30");
   expect(mock.unexpected).toEqual([]);
 });
 
@@ -78,20 +78,18 @@ test("the Log work button is hidden when this person may not log work", async ({
 test("the shortcuts set the total, are highlighted when they match, and the total is shown", async ({ page }) => {
   await mockWorkLog(page);
   const form = await openForm(page);
-  await chip(form, "1h").click();
-  await expect(hours(form)).toHaveValue("1");
-  await expect(minutes(form)).toHaveValue("0");
-  await expect(form.getByText("Total: 1h", { exact: true })).toBeVisible();
-  await expect(chip(form, "1h")).toHaveAttribute("aria-pressed", "true");
+  await chip(form, "1:00").click();
+  await expect(duration(form)).toHaveValue("1:00");
+  await expect(form.getByText("Total: 1:00", { exact: true })).toBeVisible();
+  await expect(chip(form, "1:00")).toHaveAttribute("aria-pressed", "true");
   // A shortcut sets the total rather than adding to it.
-  await chip(form, "15m").click();
-  await expect(hours(form)).toHaveValue("0");
-  await expect(minutes(form)).toHaveValue("15");
-  await expect(form.getByText("Total: 15m", { exact: true })).toBeVisible();
-  await expect(chip(form, "15m")).toHaveAttribute("aria-pressed", "true");
-  await expect(chip(form, "1h")).toHaveAttribute("aria-pressed", "false");
+  await chip(form, "0:15").click();
+  await expect(duration(form)).toHaveValue("0:15");
+  await expect(form.getByText("Total: 0:15", { exact: true })).toBeVisible();
+  await expect(chip(form, "0:15")).toHaveAttribute("aria-pressed", "true");
+  await expect(chip(form, "1:00")).toHaveAttribute("aria-pressed", "false");
   // Typing a total that matches no shortcut clears the highlight.
-  await minutes(form).fill("20");
+  await duration(form).fill("0:20");
   await expect(form.locator(".wl-chip[aria-pressed='true']")).toHaveCount(0);
 });
 
@@ -99,29 +97,26 @@ test("invalid durations are named beside their box, and nothing is saved", async
   const mock = await mockWorkLog(page);
   const form = await openForm(page);
   await description(form).fill("Checked the redirect");
-  await hours(form).fill("24");
-  await minutes(form).fill("30");
+  await duration(form).fill("24:30");
   await form.getByRole("button", { name: "Save work", exact: true }).click();
-  await expect(minutes(form)).toHaveAttribute("aria-invalid", "true");
-  await expect(form.getByText("With 24 hours, minutes must be 0.")).toBeVisible();
-  await hours(form).fill("0");
-  await minutes(form).fill("0");
+  await expect(duration(form)).toHaveAttribute("aria-invalid", "true");
+  await expect(form.getByText("Enter at most 24:00.")).toBeVisible();
+  await duration(form).fill("0:00");
   await form.getByRole("button", { name: "Save work", exact: true }).click();
-  await expect(form.getByText("Enter at least 1 minute.")).toBeVisible();
+  await expect(form.getByText("Enter at least 0:01.")).toBeVisible();
   expect(mock.calls.some((c) => c.method === "POST" && c.path === "/time-entries")).toBe(false);
 });
 
 test("Save & add another keeps the ticket and date, and clears the duration and description", async ({ page }) => {
   const mock = await mockWorkLog(page);
   const form = await openForm(page);
-  await hours(form).fill("1");
+  await duration(form).fill("1:00");
   await description(form).fill("First part");
   await form.getByRole("button", { name: "Save & add another", exact: true }).click();
   await expect(form.locator(".msg.ok")).toContainText("Add the next one.");
-  await expect(hours(form)).toHaveValue("");
-  await expect(minutes(form)).toHaveValue("");
+  await expect(duration(form)).toHaveValue("");
   await expect(description(form)).toHaveValue("");
-  await expect(hours(form)).toBeFocused();
+  await expect(duration(form)).toBeFocused();
   await expect(form.getByLabel("Work date")).toHaveValue("2026-10-15");
   await expect(form.getByText(/15 Oct 2026/)).toBeVisible();
   expect(mock.calls.find((c) => c.method === "POST" && c.path === "/time-entries")?.body).toMatchObject({ ticket: "AION-7", date: "2026-10-15", minutes: 60 });
@@ -130,13 +125,11 @@ test("Save & add another keeps the ticket and date, and clears the duration and 
 test("a failed save keeps every value, shows the error, and the retry is the same entry", async ({ page }) => {
   const mock = await mockWorkLog(page, { failFirstPost: true });
   const form = await openForm(page);
-  await hours(form).fill("2");
-  await minutes(form).fill("5");
+  await duration(form).fill("2:05");
   await description(form).fill("Kept after a failure");
   await form.getByRole("button", { name: "Save work", exact: true }).click();
   await expect(form.locator(".msg.err")).toContainText("Odoo is busy");
-  await expect(hours(form)).toHaveValue("2");
-  await expect(minutes(form)).toHaveValue("5");
+  await expect(duration(form)).toHaveValue("2:05");
   await expect(description(form)).toHaveValue("Kept after a failure");
   await form.getByRole("button", { name: "Save work", exact: true }).click();
   await expect.poll(() => mock.calls.filter((c) => c.method === "POST" && c.path === "/time-entries").length).toBe(2);
@@ -165,14 +158,10 @@ test("Escape with unsaved values asks before discarding them; without them the f
   expect(mock.dialogs.length).toBe(1);
 });
 
-test("on a phone the form fits the screen, Hours and Minutes stay side by side, and the actions stay in view", async ({ page }) => {
+test("on a phone the form fits the screen and the actions stay in view", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 700 });
   await mockWorkLog(page);
   const form = await openForm(page);
-  const left = async (box) => (await box.boundingBox()).x;
-  const top = async (box) => (await box.boundingBox()).y;
-  expect(await top(hours(form))).toBeCloseTo(await top(minutes(form)), 0);
-  expect(await left(minutes(form))).toBeGreaterThan(await left(hours(form)));
   const fits = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
   expect(fits).toBe(true);
   const save = form.getByRole("button", { name: "Save work", exact: true });
