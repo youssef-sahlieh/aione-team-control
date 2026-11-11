@@ -86,9 +86,6 @@ async function open(page) {
     return json({ code: "forbidden", error: "Unconfigured test request" }, 403);
   });
   await page.goto("http://127.0.0.1:4173/dashboard.html?page=clients");
-  // The Work entries view is the default; these tests cover the projects table, so switch to it.
-  await page.getByRole("button", { name: "Projects", exact: true }).click();
-  await expect(page.locator(".budget-table").first()).toBeVisible();
   return { errors, sent, calls };
 }
 const rowOf = (page, name) => page.locator(".budget-table tbody tr.budget-main", { has: page.getByRole("button", { name, exact: true }) });
