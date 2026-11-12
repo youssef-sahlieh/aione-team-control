@@ -3,7 +3,7 @@
 // administrators). Each one stays unread until you click it (or "Mark all read").
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const ago = (iso) => { const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000); return s < 60 ? "just now" : s < 3600 ? Math.round(s / 60) + " min ago" : s < 86400 ? Math.round(s / 3600) + " h ago" : Math.round(s / 86400) + " d ago"; };
-const KIND = { mention: "mentioned you", note: "sent you an internal note", review: "asked you to review", review_update: "has a review update", review_closed: "says the pull request closed", "db-expiry": "moved a database's expiry earlier" };
+const KIND = { mention: "mentioned you", note: "sent you an internal note", review: "asked you to review", review_update: "has a review update", review_closed: "says the pull request closed", "db-expiry": "moved a database's expiry earlier", due: "asks you to set a due date" };
 const EVERY = 15000; // how often the bell checks while the page is visible
 
 export function createInboxBell({ api, button, count, panel, issues, mine, open, toast }) {

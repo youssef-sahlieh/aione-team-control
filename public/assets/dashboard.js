@@ -916,6 +916,24 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
   $("b-rmdev").addEventListener("click",e=>devPopover(e.currentTarget,selected(),"remove"));
   $("b-due").textContent="Date request";
   $("b-due").addEventListener("click",e=>duePopover(e.currentTarget,selected()));
+  // Reminds the developers on the selected open tickets with no due date (Odoo tickets follow Odoo's SLA, so not those).
+  $("b-remind").addEventListener("click",async e=>{
+    const b=e.currentTarget, all=selected().map(issueByKey).filter(Boolean);
+    const tickets=all.filter(i=>!i.due&&i.cat!=="done"&&!isOdoo(i.key)).map(i=>({key:i.key,title:i.summary||"",devs:i.devs||[]}));
+    const left=all.length-tickets.length;
+    if(!tickets.length){ toast("None of the selected tickets needs a reminder: they have a due date, are done, or are Odoo tickets (Odoo sets their deadline)."); return; }
+    b.disabled=true;
+    try{
+      const r=await api("/remind-due-dates",{method:"POST",body:{tickets}});
+      const lines=(r.reminded||[]).map(x=>"ai1_"+x.dev+": "+x.tickets+" ticket"+(x.tickets===1?"":"s")+(x.emailed?" · emailed":" · notified in the dashboard"));
+      if((r.noDev||[]).length) lines.push("No developer yet: "+r.noDev.join(", "));
+      if((r.noEmail||[]).length) lines.push("No email on file: "+r.noEmail.map(d=>"ai1_"+d).join(", "));
+      if(left) lines.push(left+" skipped (has a due date, done, or an Odoo ticket)");
+      const n=(r.reminded||[]).length;
+      toast(n?"Reminded "+n+" developer"+(n===1?"":"s")+" about due dates.":"Nobody was reminded.",lines,!n);
+    }catch(err){ toast("Couldn't send the reminders: "+errorText(err),null,true); }
+    finally{ b.disabled=false; }
+  });
   $("b-status").addEventListener("click",e=>statusPopover(e.currentTarget,selected()));
   $("b-asg").addEventListener("click",e=>assigneePopover(e.currentTarget,selected()));
   $("b-clear").addEventListener("click",()=>{ state.sel.clear(); render(); });
@@ -1291,18 +1309,20 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
       row.appendChild(acts); box.appendChild(row);
     });
   }
-  // Files added to a Jira ticket go to Jira as they are, through the proxy (up to 4 MB each).
+  // Files added to a Jira or Odoo ticket go there as they are, through the proxy (up to 4 MB each). In Odoo
+  // they are the ticket's own files: no message is posted, so the customer isn't emailed.
   $("j-file").addEventListener("change",async e=>{
-    const key=dz.key, files=[...e.target.files]; e.target.value=""; if(!key||isInt(key)||isOdoo(key)||!files.length) return;
+    const key=dz.key, files=[...e.target.files]; e.target.value=""; if(!key||isInt(key)||!files.length) return;
+    const where=isOdoo(key)?"Odoo":"Jira", route=isOdoo(key)?"/odoo/tickets/":"/jira/issue/";
     const msg=$("j-attmsg"), idle=msg.textContent; let ok=0; const fails=[];
     for(const [n,f] of files.entries()){
       if(f.size>4*1024*1024){ fails.push(f.name+": bigger than 4 MB"); continue; }
       msg.className="msg"; msg.textContent="Uploading "+(n+1)+" of "+files.length+": "+f.name+"…";
-      try{ await apiFile("/jira/issue/"+key+"/attachments?name="+encodeURIComponent(f.name),{method:"POST",body:f,type:f.type||"application/octet-stream"}); ok++; }
+      try{ await apiFile(route+key+"/attachments?name="+encodeURIComponent(f.name),{method:"POST",body:f,type:f.type||"application/octet-stream"}); ok++; }
       catch(err){ fails.push(f.name+": "+errorText(err)); }
     }
     msg.textContent=idle; msg.className="msg";
-    if(fails.length) toast((ok?ok+" added to Jira. ":"")+"Not added:",fails,true); else toast(ok===1?"Attachment added to Jira.":ok+" attachments added to Jira.");
+    if(fails.length) toast((ok?ok+" added to "+where+". ":"")+"Not added:",fails,true); else toast(ok===1?"Attachment added to "+where+".":ok+" attachments added to "+where+".");
     if(ok&&dz.key===key){ loadDetail(key); refreshKeys([key]); }
   });
   $("i-file").addEventListener("change",async e=>{

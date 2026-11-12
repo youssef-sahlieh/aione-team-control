@@ -138,7 +138,38 @@ test("Odoo tickets show their attachments and each chatter message's files", asy
   await expect(msgs.first().locator(".cimg img")).toHaveAttribute("src", /^blob:/);
   await expect(msgs.last()).toContainText("invoice.pdf"); await expect(msgs.last().getByRole("button", { name: "Download" })).toBeVisible();
   await expect(page.locator("#d-att")).toBeVisible(); await expect(page.locator("#d-acount")).toHaveText("(2)");
-  for (const upload of await page.locator('label[for="j-file"]').all()) await expect(upload).toBeHidden();
+  await expect(page.locator('label[for="j-file"]').filter({ visible: true })).toHaveCount(1);
+  expect(mock.errors).toEqual([]);
+});
+
+// Odoo: "+ Add files" uploads to the ticket itself (no message, so the customer isn't emailed).
+test("files can be added to an Odoo ticket", async ({ page }) => {
+  const mock = await mockDashboard(page, { odoo: true });
+  const uploads = [];
+  await page.route("**/odoo/tickets/HD-300/attachments?name=*", async (r) => { uploads.push(new URL(r.request().url()).searchParams.get("name")); return r.fulfill({ status: 201, json: { attachment: { id: 778, filename: uploads.at(-1), mimeType: "application/pdf", size: 5 } } }); });
+  await page.goto("/dashboard.html#HD-300");
+  await page.locator("#j-file").setInputFiles({ name: "quote.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-") });
+  await expect(page.locator("#toast")).toContainText("Attachment added to Odoo.");
+  expect(uploads).toEqual(["quote.pdf"]);
+  expect(mock.calls.some((c) => c.path.includes("/attachments") && c.path.startsWith("/jira/"))).toBe(false);
+  expect(mock.calls.some((c) => c.path.endsWith("/note"))).toBe(false);
+  expect(mock.errors).toEqual([]);
+});
+
+// Selected tickets with no due date: their developers are reminded; done, dated and Odoo tickets are left out.
+test("the selection bar reminds developers to set a due date", async ({ page }) => {
+  const mock = await mockDashboard(page);
+  let sent = null;
+  await page.route("**/remind-due-dates", (r) => { sent = r.request().postDataJSON(); return r.fulfill({ json: { reminded: [{ dev: "builder", tickets: 1, emailed: true }], noDev: [], noEmail: [], skippedOdoo: 0 } }); });
+  await page.goto("/dashboard.html?page=tickets");
+  await page.getByLabel("Select AION-101").first().check();
+  await page.getByLabel("Select " + internalTicket.key).first().check();
+  await page.locator("#b-remind").click();
+  await expect(page.locator("#toast")).toContainText("Reminded 1 developer about due dates.");
+  await expect(page.locator("#toast")).toContainText("ai1_builder: 1 ticket · emailed");
+  expect(sent.tickets.length).toBeGreaterThan(0);
+  expect(sent.tickets).toEqual([{ key: internalTicket.key, title: internalTicket.title || internalTicket.summary || "", devs: ["builder"] }]);
+  await expect(page.locator("#toast")).toContainText("1 skipped");
   expect(mock.errors).toEqual([]);
 });
 

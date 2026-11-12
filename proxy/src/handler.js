@@ -24,6 +24,7 @@ import { dateRequestRoutes } from "./date-requests.js";
 import { ticketNoteRoutes } from "./ticket-notes.js";
 import { internalRoutes } from "./internal.js";
 import { inboxRoutes, notifyMentions, jiraMentionEmails, addToInbox } from "./inbox.js";
+import { remindDueDates } from "./due-reminders.js";
 import { readReplyTarget, replyBody, visibilityText } from "./comment-reply.js";
 import { odooConfigured, odooRoutes, odooTicketInfo, odooTicketForTime, odooTicketsDetails, postOdooNote } from "./odoo.js";
 import { timeRoutes, timeSyncCron } from "./time-entries.js";
@@ -377,6 +378,18 @@ async function jiraDevs(env) {
   return devs;
 }
 
+// Developers' emails and names: the team setting's emails first, then every dashboard account with a developer name
+// (several accounts on one name: the one whose email starts with the name, then a company address, wins).
+async function developerDirectory(env, team) {
+  const accounts = env.STORE ? await developerAccounts(env.STORE).catch(() => []) : [];
+  const devEmails = { ...(team.devEmails && typeof team.devEmails === "object" ? team.devEmails : {}) }, devNames = {};
+  for (const u of accounts) {
+    if (!devEmails[u.dev]) devEmails[u.dev] = normEmail(u.email);
+    if (!devNames[u.dev]) devNames[u.dev] = String(u.name || "").trim() || normEmail(u.email);
+  }
+  return { accounts, devEmails, devNames };
+}
+
 async function route(request, env, url) {
   const path = url.pathname;
   const method = request.method;
@@ -688,19 +701,23 @@ async function route(request, env, url) {
     // Every dashboard account with a developer name is a developer too (even before any ticket has its label), and
     // its email is that developer's when the team setting has none. Several accounts on one name: the one whose email
     // starts with the name, then a company address, wins.
-    const accounts = env.STORE ? await developerAccounts(env.STORE).catch(() => []) : [];
-    team.devEmails = { ...(team.devEmails && typeof team.devEmails === "object" ? team.devEmails : {}) };
-    team.devNames = {};
-    for (const u of accounts) {
-      if (!team.devEmails[u.dev]) team.devEmails[u.dev] = normEmail(u.email);
-      if (!team.devNames[u.dev]) team.devNames[u.dev] = String(u.name || "").trim() || normEmail(u.email);
-    }
+    const { accounts, devEmails, devNames } = await developerDirectory(env, team);
+    team.devEmails = devEmails; team.devNames = devNames;
     team.devs = [...new Set([...(Array.isArray(team.devs) ? team.devs : []), ...fromJira, ...accounts.map((u) => u.dev)])];
     return json({ ...team, site: env.JIRA_SITE, project: P, email, name: me.name, role: me.role, dev: me.dev, accounts: !!env.STORE, odoo: odooConfigured(env), github: githubConfigured(env), billingRequired: billingRequired(env), mail: isAdmin && mailEnabled(env), ai:{enabled:aiConfigured(env),readOnly:true}, dbReport:isAdmin&&odooConfigured(env)&&!!env.STORE,knowledge:odooConfigured(env), capabilities:["ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1","db-report-v1","db-report-company-v1","db-report-pos-version-v1","epic-map-v1","ticket-bulk-import-v1","project-admin-v1","project-budget-v1","billing-v1"] });
   }
 
   // Jira people are searchable for everyone, so anyone can @mention them in a Jira comment.
   if (!isAdmin && path === "/mail") return fail("forbidden", "Only administrators can do that.", 403);
+
+  // "Remind about due date" on selected tickets: each developer is notified (and emailed when mail is set up).
+  if (path === "/remind-due-dates" && method === "POST") {
+    if (!isAdmin) return fail("forbidden", "Only administrators can do that.", 403);
+    let team = {};
+    try { team = JSON.parse(env.TEAM_CONFIG || "{}"); } catch {}
+    const { devEmails } = await developerDirectory(env, team);
+    return remindDueDates(env, me, await readJson(request), { devEmails, sendMail: mailEnabled(env) ? (from, b) => sendMail(env, from, b) : null });
+  }
 
   if (path === "/mail" && method === "POST") {
     const b = await readJson(request), res = await sendMail(env, email, b);

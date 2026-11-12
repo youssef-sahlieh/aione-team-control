@@ -104,6 +104,7 @@
   <button type="button" class="admin-only" id="b-adddev" title="Add a developer to the selected tickets">Add developer</button>
   <button type="button" class="admin-only" id="b-rmdev" title="Remove a developer from the selected tickets">Remove developer</button>
   <button type="button" id="b-due">Due date</button>
+  <button type="button" class="admin-only" id="b-remind" title="Notify and email each developer on the selected tickets that have no due date">Remind about due date</button>
   <button type="button" id="b-status">Status</button>
   <button type="button" class="admin-only" id="b-asg" title="Change the Jira assignee who owns the selected tickets">Set assignee</button>
   <button type="button" class="admin-only" id="b-client">Client / Sub-client</button>
@@ -137,7 +138,7 @@
     <div class="blk"><h3>Due date history</h3><div id="d-hist"></div></div>
     <div class="blk"><h3>Assignee</h3><p class="blk-hint">The owner of the ticket. Used by the By assignee view and the Assignee filter.<span id="d-asg-hint" hidden> Choosing a name saves it at once.</span></p><div class="inline"><span id="d-asgname" class="who"></span><label class="tgl" id="d-asg-tgl" hidden>Change to <select class="fsel auto" id="d-asg-pick" aria-label="Assignee"></select></label><button class="btn" id="d-asg" type="button" hidden>Find someone in Jira…</button><span class="msg" id="d-asgmsg" aria-live="polite"></span></div></div>
     <div class="blk int-hide"><h3>Attachments <span id="d-acount"></span></h3><div id="d-att" class="atts"></div>
-      <div class="inline jira-only"><label class="btn" for="j-file">+ Add files</label><input type="file" id="j-file" multiple hidden><span class="msg" id="j-attmsg">Up to 4 MB each. Uploaded to the Jira ticket as they are.</span></div></div>
+      <div class="inline"><label class="btn" for="j-file">+ Add files</label><input type="file" id="j-file" multiple hidden><span class="msg" id="j-attmsg">Up to 4 MB each. Added to the ticket in Jira or Odoo as they are (Odoo doesn't email the customer).</span></div></div>
     <div class="blk int-only"><h3>Attachments <span id="i-acount"></span></h3><div id="i-att" class="atts"></div>
       <div class="inline"><label class="btn" for="i-file">+ Add files</label><input type="file" id="i-file" multiple hidden><span class="msg" id="i-attmsg">Up to 4 MB each.</span></div></div>
     <div class="blk"><h3>Description</h3><div class="desc rich" id="d-desc" dir="auto"></div><div class="inline odoo-hide"><button class="btn ai-suggest" id="d-aidesc" type="button">✧ Suggest description with AI</button></div><div class="ai-desc" id="d-aidesc-out" hidden></div></div>
