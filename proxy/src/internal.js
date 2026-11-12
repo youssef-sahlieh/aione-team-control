@@ -5,7 +5,7 @@
 // Store keys: "it:<KEY>" ticket (JSON), "itickets" set of keys, "it:seq" counter for the next number,
 // "ia:<attachment id>:<n>" the attachment's bytes in base64 chunks (files are listed on the ticket).
 
-import { INTERNAL_ASSIGNEE, requireBilling, readMetadata, withTicketLock, guardedTransition, saveMetadata, readCatalog, selectionErrors, internalDefaults, chosenProject, BusinessError, validHours, agreedDeveloperOf } from "./ticket-metadata.js";
+import { INTERNAL_ASSIGNEE, requireBilling, readMetadata, withTicketLock, guardedTransition, saveMetadata, readCatalog, selectionErrors, internalDefaults, chosenProject, BusinessError, validHours, agreedDeveloperOf, internalOdooProject } from "./ticket-metadata.js";
 
 export const MAX_FILE = 4 * 1024 * 1024; // Vercel accepts request bodies up to 4.5 MB
 export const MAX_FILES = 20;
@@ -144,6 +144,11 @@ export async function internalRoutes(request, env, url, me, deps = {}) {
     const people = teamPeople(env);
     // Agreed hours are administrators' only. Refused here, before anything is saved or a ticket number is taken.
     if (me.role !== "admin" && b.metadata && ("agreedHours" in b.metadata || "agreedDev" in b.metadata)) return fail("forbidden", "Only administrators can set agreed hours.", 403);
+    // With Odoo, an internal ticket goes to the "Internal Tickets" project unless another is chosen. Set before the billing check.
+    if (odooConfigured(env) && (b.metadata?.odooProjectId == null)) {
+      const internal = await internalOdooProject(env);
+      if (internal) b.metadata = { ...(b.metadata || {}), odooProjectId: internal.id };
+    }
     if(me.role==="admin")requireBilling(b.metadata,env,await projectDefaultOf(env,b.metadata?.odooProjectId));
     if(b.assignee===undefined)b.assignee=INTERNAL_ASSIGNEE;
     // With Odoo, the ticket needs its Odoo project (checked here, before a ticket number is taken). Without Odoo, a ticket

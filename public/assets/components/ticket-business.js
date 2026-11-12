@@ -114,7 +114,10 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const box=el('div','business-form');parent.append(box);
     const clientGroup=el('fieldset','business-section business-client-section');clientGroup.append(el('legend','',odooOn?'Odoo project & billing':'Client & billing'));box.append(clientGroup);
     // Once set, only administrators change it (the backend checks this too).
-    const locked=!admin()&&!creating&&placed(values),selects=placement(clientGroup,values,{disabled:closed||locked,required:creating});
+    // A new internal ticket starts on the "Internal Tickets" Odoo project (the backend defaults the same), unless one is given.
+    const internalId=()=>{const p=odooProjects.find(x=>!x.archived&&!x.missingClient&&String(x.clientName||'').trim().toLowerCase()==='internal'&&String(x.name||'').trim().toLowerCase()==='internal tickets');return p?p.id:null;};
+    const start=creating&&odooOn&&values.odooProjectId==null&&internalId()!=null?{...values,odooProjectId:internalId()}:values;
+    const locked=!admin()&&!creating&&placed(values),selects=placement(clientGroup,start,{disabled:closed||locked,required:creating});
     if(locked&&odooOn)clientGroup.append(el('p','business-guidance','Ask an administrator to move this ticket to another Odoo project.'));
     // With billing-v1 the ticket's billing has its own section (Inherit, Billable, Not billable); new tickets keep this one.
     let billing;if(admin()&&(creating||!billingOn)){billing=field(clientGroup,'Billing (administrators only)',el('select','fsel'));billingOptions(billing,values.billing);billing.disabled=closed;if(creating&&billingNeeded)billing.setAttribute('aria-required','true');}
