@@ -28,7 +28,15 @@ jobs:
       - run: npm ci --prefix proxy
       - run: npm ci
       - run: npm test
-      - run: npx playwright install --with-deps chromium
+      # The runner's package mirrors fail intermittently; retry the install before failing the deploy.
+      - name: Install Chromium and its system libraries
+        run: |
+          for attempt in 1 2 3 4; do
+            if npx playwright install --with-deps chromium; then exit 0; fi
+            echo "Attempt $attempt failed; retrying in 60s"
+            sleep 60
+          done
+          exit 1
       - run: npm run test:e2e
       - run: npm run test:approvals -- --output=test-results/approvals
       - uses: actions/upload-artifact@v4
