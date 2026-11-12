@@ -1,0 +1,47 @@
+/* Odoo Helpdesk followers: the drawer button and the dialog. Colours come from tokens.css. */
+.fol-slot{margin:0 0 10px}
+.fol-slot:empty{display:none}
+.fol-btn{display:inline-flex;align-items:center;gap:4px}
+.fol-count{font-variant-numeric:tabular-nums;color:var(--muted)}
+
+.followers-dialog{width:min(560px,calc(100vw - 32px));max-height:min(86dvh,760px);padding:0;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--fg);box-shadow:0 18px 64px #132a4a26}
+.followers-dialog::backdrop{background:var(--scrim,#0b121e66)}
+.followers-dialog form,.followers-dialog>div{margin:0}
+.fol-title{margin:0;padding:20px 22px 0;font-size:19px;letter-spacing:-.2px}
+.fol-body{padding:14px 22px;display:flex;flex-direction:column;gap:12px;overflow:auto;max-height:calc(min(86dvh,760px) - 150px)}
+.fol-foot{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;padding:14px 22px 20px;border-top:1px solid var(--line)}
+.fol-label{font-weight:600;font-size:14px}
+.fol-body .msg{margin:0}
+.fol-body .msg.err,.fol-error{color:var(--crit)}
+.fol-help{font-size:13px}
+
+.fol-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.fol-row{display:flex;flex-direction:column;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--sunk);overflow-wrap:anywhere}
+
+.fol-results{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;max-height:38dvh;overflow:auto;border:1px solid var(--line);border-radius:8px}
+.fol-results li+li{border-top:1px solid var(--line)}
+.fol-pick{width:100%;display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:10px 12px;border:0;background:transparent;color:inherit;text-align:start;cursor:pointer;font:inherit;overflow-wrap:anywhere}
+.fol-pick:hover:not(:disabled){background:var(--sunk)}
+.fol-pick[aria-pressed="true"]{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
+.fol-pick:disabled{cursor:default;opacity:.6}
+.fol-tag{font-style:normal;font-size:12px;color:var(--muted)}
+
+.fol-sub{margin:4px 0 0;font-size:14px}
+.fol-chips{display:flex;flex-wrap:wrap;gap:6px;min-height:28px;align-items:center}
+.fol-chip{display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border:1px solid var(--line-strong);border-radius:999px;background:var(--accent-soft);color:var(--fg);font:inherit;font-size:13px;cursor:pointer;max-width:100%;overflow-wrap:anywhere}
+.fol-chip:hover{border-color:var(--accent)}
+
+.fol-notify{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px}
+.fol-notify input{width:18px;height:18px;margin:0}
+
+.fol-btn:focus-visible,.fol-pick:focus-visible,.fol-chip:focus-visible,.followers-dialog button:focus-visible,.followers-dialog input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+@media (max-width:600px){
+  .followers-dialog{width:calc(100vw - 16px);max-height:calc(100dvh - 16px);border-radius:10px}
+  .fol-title{padding:16px 16px 0}
+  .fol-body{padding:12px 16px;max-height:calc(100dvh - 16px - 140px)}
+  .fol-foot{padding:12px 16px 16px}
+  .fol-foot .btn{flex:1 1 auto}
+  .fol-results{max-height:34dvh}
+}
+@media (prefers-reduced-motion:reduce){.fol-pick,.fol-chip{transition:none}}

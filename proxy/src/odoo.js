@@ -255,6 +255,53 @@ export async function conversation(env, rows, users, allStages) {
   return shown;
 }
 
+// Standard chatter followers (mail.followers) of a helpdesk.ticket. A follower is added through the ticket's own
+// message_subscribe, or, when the caller asks to notify, through Odoo's invite wizard (mail.wizard.invite). No follower
+// record is written directly, and subtype_ids is never sent, so existing followers keep their subscriptions.
+const CONTACT_PAGE = 20;
+const followerIds = async (env, id) => (await odoo(env, "mail.followers", "search_read",
+  [[["res_model", "=", "helpdesk.ticket"], ["res_id", "=", id]]], { fields: ["partner_id"], limit: 500 }))
+  .flatMap((r) => (Array.isArray(r.partner_id) ? [r.partner_id[0]] : []));
+
+async function followersOf(env, id) {
+  const ids = [...new Set(await followerIds(env, id))];
+  const partners = ids.length ? await odoo(env, "res.partner", "read", [ids], { fields: ["name", "email"] }) : [];
+  return partners.map((p) => ({ id: p.id, name: p.name || "", email: p.email || "" })).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// Existing active contacts whose name or email contains the term, one page at a time, with whether each already follows.
+async function contactsFor(env, id, term, offset) {
+  const q = term.replace(/[%_\\]/g, " ").trim();
+  const following = new Set(await followerIds(env, id));
+  const rows = await odoo(env, "res.partner", "search_read",
+    [["&", ["active", "=", true], "|", ["name", "ilike", q], ["email", "ilike", q]]],
+    { fields: ["name", "email"], order: "name asc", limit: CONTACT_PAGE + 1, offset });
+  return { contacts: rows.slice(0, CONTACT_PAGE).map((p) => ({ id: p.id, name: p.name || "", email: p.email || "", following: following.has(p.id) })), hasMore: rows.length > CONTACT_PAGE };
+}
+
+// Adds the partners that are not following yet. Returns those added (none when all already follow).
+async function addFollowers(env, id, partnerIds, notify) {
+  const already = new Set(await followerIds(env, id));
+  const fresh = partnerIds.filter((p) => !already.has(p));
+  if (!fresh.length) return [];
+  const active = await odoo(env, "res.partner", "search_read", [[["id", "in", fresh], ["active", "=", true]]], { fields: ["id"] });
+  if (active.length !== fresh.length) throw new OdooError("Some contacts can't be added: they no longer exist or are inactive.", { definite: true });
+  try {
+    if (notify) {
+      const wizard = await odoo(env, "mail.wizard.invite", "create", [{ res_model: "helpdesk.ticket", res_id: id, partner_ids: [[6, 0, fresh]], send_email: true }]);
+      await odoo(env, "mail.wizard.invite", "action_invite", [[wizard]]);
+    } else {
+      await odoo(env, "helpdesk.ticket", "message_subscribe", [[id]], { partner_ids: fresh });
+    }
+  } catch (err) {
+    // The call may have been saved even though no answer came back: read the followers before reporting a failure.
+    const now = new Set(await followerIds(env, id));
+    if (fresh.every((p) => now.has(p))) return fresh;
+    throw err;
+  }
+  return fresh;
+}
+
 export async function odooRoutes(request, env, url, me) {
   const path = url.pathname, method = request.method;
   if (!odooConfigured(env)) return fail("odoo_off", "Odoo isn't connected. See SETUP.md.", 501);
@@ -285,7 +332,7 @@ export async function odooRoutes(request, env, url, me) {
       return json({ tickets: shown.map((t) => view(env, t, maps, allStages)) });
     }
 
-    const m = /^\/odoo\/tickets\/(HD-\d+)(\/note|\/attachments(?:\/\d{1,20})?)?$/.exec(path);
+    const m = /^\/odoo\/tickets\/(HD-\d+)(\/note|\/followers(?:\/search)?|\/attachments(?:\/\d{1,20})?)?$/.exec(path);
     if (!m) return fail("not_found", "Not found.", 404);
     const [t] = await odoo(env, "helpdesk.ticket", "search_read", [byRef(m[1])], { fields: [...FIELDS, "description"], limit: 1 });
     if (!t || !mine(t)) return fail("not_found", "No such Odoo ticket.", 404);
@@ -324,6 +371,32 @@ export async function odooRoutes(request, env, url, me) {
       let bin = ""; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
       const fileId = await odoo(env, "ir.attachment", "create", [{ name, datas: btoa(bin), res_model: "helpdesk.ticket", res_id: id, ...(/^[\w.+-]+\/[\w.+-]+$/.test(type) ? { mimetype: type } : {}) }]);
       return json({ attachment: { id: fileId, filename: name, mimeType: type, size: bytes.length } }, 201);
+    }
+    // Followers: the same access as the ticket itself (administrators, or the ticket's developer).
+    if (m[2] && m[2].startsWith("/followers")) {
+      if (m[2] === "/followers" && method === "GET") return json({ followers: await followersOf(env, id) });
+      if (m[2] === "/followers/search" && method === "GET") {
+        const term = String(url.searchParams.get("q") || "").trim();
+        if (term.length < 2 || term.length > 80) return fail("bad_request", "Type at least 2 letters of a name or email.", 400);
+        const offset = Math.min(Math.max(Number(url.searchParams.get("offset")) || 0, 0), 5000);
+        return json(await contactsFor(env, id, term, offset));
+      }
+      if (m[2] === "/followers" && method === "POST") {
+        const b = await readJson(request);
+        const ids = b && Array.isArray(b.partnerIds) ? b.partnerIds : null;
+        if (!ids || !ids.length || ids.length > CONTACT_PAGE || ids.some((x) => !Number.isInteger(x) || x <= 0) || new Set(ids).size !== ids.length)
+          return fail("bad_request", "Choose up to 20 different contacts.", 400);
+        if (b.notify !== undefined && typeof b.notify !== "boolean") return fail("bad_request", "The notify option must be yes or no.", 400);
+        let added;
+        try {
+          added = await addFollowers(env, id, ids, b.notify === true);
+        } catch (err) {
+          if (err && err.definite) return fail("odoo", err.message || "Odoo refused the change.", /access/i.test(err.kind || "") ? 403 : 422);
+          return fail("odoo_unknown", "Odoo didn't confirm the change. Reload the followers before trying again.", 502);
+        }
+        return json({ followers: await followersOf(env, id), added: added.length });
+      }
+      return fail("not_found", "Not found.", 404);
     }
     if (m[2] && m[2] !== "/note") return fail("not_found", "Not found.", 404);
 

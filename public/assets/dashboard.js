@@ -2,6 +2,7 @@
 // sign-in and holds the Jira token. Team details (people, developers, emails) come from the proxy too,
 // so they aren't in this public code.
 import { createTicketBusiness, combobox } from "./components/ticket-business.js";
+import { createTicketFollowers } from "./components/ticket-followers.js";
 import { previewFile, canPreview } from "./components/file-preview.js";
 import { INTERNAL_ASSIGNEE, sortTickets, validSort, createdDate } from "./models/ticket-business.js";
 import { api, apiFile, getSession, signOut, onApiWrite } from "./session.js";
@@ -199,6 +200,7 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
       box.appendChild(row);
     });
   }
+  const followers=createTicketFollowers({api});
   const odooApi={
     list:days=>api("/odoo/tickets?closedDays="+days),
     detail:key=>api("/odoo/tickets/"+key),
@@ -1150,7 +1152,7 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
     $("drawer").hidden=false; $("scrim").hidden=false; $("drawer").classList.toggle("is-int",isInt(key)); $("drawer").classList.toggle("is-odoo",isOdoo(key));
     $("d-key").textContent=key+(isInt(key)?"":" ↗"); $("d-key").href=$("d-open").href=ticketUrl(key); if(isInt(key)) $("d-key").removeAttribute("href");
     $("d-title").textContent=i?i.summary:key; $("d-status").textContent=i?i.status:""; $("d-status").className="stbtn "+(i?stK(i):"");
-    $("d-facts").replaceChildren(); $("d-desc").replaceChildren(el("span",null,"Loading…")); $("d-comments").replaceChildren(); $("d-ccount").textContent=""; $("d-trans").replaceChildren(el("span","msg","Loading…"));
+    $("d-facts").replaceChildren(); $("d-desc").replaceChildren(el("span",null,"Loading…")); followers.clear(); $("d-comments").replaceChildren(); $("d-ccount").textContent=""; $("d-trans").replaceChildren(el("span","msg","Loading…"));
     ["d-devmsg","d-duemsg","d-cmsg"].forEach(id=>setMsg(id,"")); $("d-att").replaceChildren(el("span","msg","Loading…")); $("d-acount").textContent=""; $("d-asgname").textContent=i?i.assigneeName:""; $("d-after").replaceChildren(new Option("Keep current assignee",""));    dz.labels=i?i.labels.slice():[]; dz.devs=new Set(i?i.devs:[]); renderDevChips(); $("d-due").value=i&&i.due?i.due:"";
     document.title=key+" · "+(i?i.summary:key)+" · "+appTitle; renderTicketNav();
     ["d-devmsg","d-duemsg","d-cmsg"].forEach(id=>setMsg(id,"")); $("d-att").replaceChildren(el("span","msg","Loading…")); $("d-acount").textContent=""; fillAssigneePick(i); $("d-after").replaceChildren(new Option("Keep current assignee",""));    dz.labels=i?i.labels.slice():[]; dz.devs=new Set(i?i.devs:[]); renderDevChips(); $("d-due").value=i&&i.due?i.due:"";
@@ -1207,6 +1209,7 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
   // Drawer contents for an Odoo ticket: details, description and chatter come from Odoo.
   async function renderOdoo(key){
     const i=issueByKey(key); $("d-odoo").href=(i&&i.odooUrl)||"#";
+    followers.show(key);
     try{
       const d=await odooDetail(key,true); if(dz.key!==key) return; const t=d.ticket, c=t.customer||{};
       $("d-title").textContent=t.summary; $("d-status").textContent=t.status; $("d-status").className="stbtn "+stK({status:t.status,cat:t.statusCat});
