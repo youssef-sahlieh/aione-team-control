@@ -292,6 +292,12 @@ export async function chosenProject(env,id){
   if(!p.clientId)problem('Odoo project “'+p.name+'” has no client. Set its customer in Odoo, refresh the projects, then choose it.',400,'project_no_client');
   return p;
 }
+// Internal tickets go to this Odoo project unless another is chosen: the active "Internal Tickets" project under the "Internal" customer.
+export const INTERNAL_ODOO_PROJECT='Internal Tickets';
+export async function internalOdooProject(env){
+  const {projects}=await readOdooProjects(env);
+  return projects.find(p=>p.active&&p.clientId&&nameKey(p.clientName||'')===nameKey(INTERNAL_CLIENT)&&nameKey(p.name||'')===nameKey(INTERNAL_ODOO_PROJECT))||null;
+}
 // The catalog project (so the catalog client, which reports group by) an Odoo project is under: the catalog project linked
 // to it, or among several, the one under the project's Odoo customer. Null when that can't be told (Needs mapping).
 export function catalogProjectFor(catalog,odooId,project){

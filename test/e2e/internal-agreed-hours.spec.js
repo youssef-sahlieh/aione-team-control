@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 // Agreed hours on the New internal ticket form. Synthetic developers and tickets only: every request is intercepted,
 // so nothing reaches Odoo, Jira or mail, and no work entry is created.
-async function open(page, { role = "admin" } = {}) {
+async function open(page, { role = "admin", odoo = false } = {}) {
   const errors = [], posts = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.addInitScript((role) => {
@@ -22,7 +22,7 @@ async function open(page, { role = "admin" } = {}) {
     if (path === "/config") return json({
       site: "https://jira.example.invalid", project: "AION", people: {}, devs: ["rami", "sondos"],
       devNames: { rami: "Rami Ahmad", sondos: "Sondos Ali" }, role, dev: role === "admin" ? "" : "sondos",
-      email: "boss@example.invalid", name: "Synthetic Admin", accounts: true, odoo: false, mail: false,
+      email: "boss@example.invalid", name: "Synthetic Admin", accounts: true, odoo, mail: false,
       ai: { enabled: false }, capabilities: ["ticket-business-v1", "agreed-hours-v1"],
     });
     if (path === "/jira/search") return json({ issues: [], isLast: true });
@@ -30,6 +30,10 @@ async function open(page, { role = "admin" } = {}) {
     if (path === "/internal" && method === "POST") return json({ ticket: { key: "INT-900", summary: body.summary, devs: body.devs, status: "To Do", priority: "Medium", internal: true, assigneeName: "Youssef", metadata: body.metadata } }, 201);
     if (path === "/date-requests") return json({ requests: [] });
     if (path === "/clients") return json({ revision: 1, entries: [] });
+    if (path === "/clients/odoo-projects/options") return json({ syncedAt: Date.now(), projects: [
+      { id: 371, name: "Internal Tickets", label: "Internal / Internal Tickets", clientName: "Internal", archived: false, missingClient: false, known: true },
+      { id: 12, name: "Support", label: "Acme → Support", clientName: "Acme", archived: false, missingClient: false, known: true }] });
+    if (path === "/clients/odoo-sync") return json({ syncedAt: Date.now(), state: "ok" });
     if (path === "/ticket-metadata/batch") return json({ records: {} });
     if (method === "GET") return json({ issues: [], tickets: [], isLast: true, records: {}, entries: [], requests: [], revision: 1 });
     return json({ code: "forbidden", error: "Unconfigured test request" }, 403);
@@ -114,5 +118,14 @@ test("New internal ticket, several developers: hours without a chosen recipient 
   await pop.getByRole("button", { name: "Create ticket" }).click();
   await expect.poll(() => s.posts.length).toBe(1);
   expect(s.posts[0].metadata).toMatchObject({ agreedHours: 4, agreedDev: "rami" });
+  expect(s.errors).toEqual([]);
+});
+
+test("New internal ticket with Odoo: the project starts on Internal Tickets", async ({ page }) => {
+  const s = await open(page, { odoo: true });
+  await page.locator("#create-ticket").click();
+  const pop = page.locator("#pop");
+  await expect(pop.locator("select").filter({ has: page.locator("option[value='371']") }).first()).toHaveValue("371");
+  await expect(pop.locator(".fld").filter({ hasText: "Title" }).locator("input")).toBeVisible();
   expect(s.errors).toEqual([]);
 });
