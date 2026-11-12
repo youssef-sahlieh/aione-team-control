@@ -5,7 +5,7 @@
 // Store keys: "it:<KEY>" ticket (JSON), "itickets" set of keys, "it:seq" counter for the next number,
 // "ia:<attachment id>:<n>" the attachment's bytes in base64 chunks (files are listed on the ticket).
 
-import { INTERNAL_ASSIGNEE, requireBilling, readMetadata, withTicketLock, guardedTransition, saveMetadata, readCatalog, selectionErrors, internalDefaults, chosenProject, BusinessError } from "./ticket-metadata.js";
+import { INTERNAL_ASSIGNEE, requireBilling, readMetadata, withTicketLock, guardedTransition, saveMetadata, readCatalog, selectionErrors, internalDefaults, chosenProject, BusinessError, validHours, agreedDeveloperOf } from "./ticket-metadata.js";
 
 export const MAX_FILE = 4 * 1024 * 1024; // Vercel accepts request bodies up to 4.5 MB
 export const MAX_FILES = 20;
@@ -142,6 +142,8 @@ export async function internalRoutes(request, env, url, me, deps = {}) {
     if("due" in b)return fail(me.role==="admin"?"date_request":"forbidden","Use the date request process to set an approved date.",me.role==="admin"?400:403);
     const t = { summary: "", description: "", priority: "Medium", due: null, status: "Open", assignee: null, devs: [], comments: [], dueHistory: [] };
     const people = teamPeople(env);
+    // Agreed hours are administrators' only. Refused here, before anything is saved or a ticket number is taken.
+    if (me.role !== "admin" && b.metadata && ("agreedHours" in b.metadata || "agreedDev" in b.metadata)) return fail("forbidden", "Only administrators can set agreed hours.", 403);
     if(me.role==="admin")requireBilling(b.metadata,env,await projectDefaultOf(env,b.metadata?.odooProjectId));
     if(b.assignee===undefined)b.assignee=INTERNAL_ASSIGNEE;
     // With Odoo, the ticket needs its Odoo project (checked here, before a ticket number is taken). Without Odoo, a ticket
@@ -154,10 +156,20 @@ export async function internalRoutes(request, env, url, me, deps = {}) {
     if (err) return fail("bad_request", err, 400);
     if (!t.summary) return fail("bad_request", "Write a title.", 400);
     if (me.role === "admin" && !t.devs.length) return fail("bad_request", "Choose at least one developer.", 400);
+    // Optional agreed hours, with the rules of an existing ticket: a valid number, and a developer of this ticket.
+    // Checked before a ticket number is taken. Blank adds nothing, so the ticket is saved as before.
+    const { agreedHours, agreedDev, ...rest } = metadata;
+    const agreed = agreedHours != null ? { agreedHours, ...(agreedDev != null ? { agreedDev } : {}) } : {};
+    if ("agreedHours" in agreed) {
+      if (!validHours(agreed.agreedHours)) return fail("bad_request", "Agreed hours: enter a positive number with up to two decimal places (maximum 1,000,000).", 400);
+      const picked = agreedDeveloperOf({ devs: t.devs }, agreed.agreedDev ?? null, null);
+      if (!picked.dev) return fail(picked.code, picked.error, 400);
+    }
     t.key = "INT-" + (await store.incr("it:seq"));
     t.created = t.updated = now();
     t.createdBy = by(me);
-    await saveMetadata(env,t.key,{...metadata,revision:0},me,{creating:true});
+    // The ticket's title and developers go in, so the agreed hours' Odoo line can be made on creation.
+    await saveMetadata(env,t.key,{...rest,...agreed,revision:0},me,{creating:true,ticket:{title:t.summary,devs:t.devs}});
     await saveTicket(store, t);
     await store.sadd("itickets", t.key);
     await recordTicketEvent(env, t.key, me, { action: "created", changes: { status: { from: null, to: t.status }, assignee: { from: null, to: t.assignee }, developers: { from: null, to: t.devs.join(", ") } } });

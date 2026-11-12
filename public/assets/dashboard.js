@@ -1334,6 +1334,8 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
       const row=el("div","inline"); row.append(ai,note); desc.closest(".fld").appendChild(row); }
     const prio=fld("Priority",el("select","fsel")); INT_PRIORITIES.forEach(x=>prio.appendChild(new Option(x,x))); prio.value=t?t.priority:"Medium";
     let devs=null, due=null, asg=null;
+    // The ticket's developers as the agreed hours' recipients: one is used automatically, several need a choice.
+    const recipients=()=>devs?[...devs].sort().map(d=>({dev:d,name:DEV_NAME[d]||d})):[];
     if(!t){
       // Assignee: Karim, Youssef or Rami, like the Jira tickets. Youssef is pre-selected.
       asg=fld("Assignee",el("select","fsel")); asg.appendChild(new Option("Choose…",""));
@@ -1343,12 +1345,12 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
       if(IS_ADMIN){
         devs=new Set(); const rc=el("div","rcpts");
         allDevs().forEach(d=>{ const c=el("button","fc "+devK(d)); c.type="button"; c.appendChild(el("span","sw")); c.appendChild(el("span",null,"ai1_"+d)); c.setAttribute("aria-pressed","false");
-          c.addEventListener("click",()=>{ devs.has(d)?devs.delete(d):devs.add(d); c.setAttribute("aria-pressed",String(devs.has(d))); }); rc.appendChild(c); });
+          c.addEventListener("click",()=>{ devs.has(d)?devs.delete(d):devs.add(d); c.setAttribute("aria-pressed",String(devs.has(d))); newFields?.setDevelopers(recipients()); }); rc.appendChild(c); });
         fld("Developer(s)",rc);
       } else fld("Developer",el("span","dev "+devK(MY_DEV),"ai1_"+MY_DEV+" (you)"));
       body.appendChild(el("p","date-context","Create the ticket first, then request or approve its due date."));
     }
-    const newFields=!t?business.createFields(body,{creating:true,values:prefill?{odooProjectId:prefill.odooProjectId}:{}}):null;
+    const newFields=!t?business.createFields(body,{creating:true,values:prefill?{odooProjectId:prefill.odooProjectId}:{},developers:recipients()}):null;
     const foot=el("div","foot"); const msg=el("span","msg"); const save=el("button","btn primary sp",t?"Save":"Create ticket"); save.type="button";
     save.addEventListener("click",async()=>{
       if(!title.value.trim()){ msg.textContent="Write a title."; msg.className="msg err"; title.focus(); return; }

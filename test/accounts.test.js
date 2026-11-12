@@ -260,6 +260,47 @@ const tests = [
     assert.equal((await call("/internal/INT-2", { method: "DELETE", token: a.token })).status, 200);
     assert.equal((await call("/internal/INT-2", { token: a.token, method: "PUT", body: { status: "Open" } })).status, 404);
   }],
+  ["internal tickets: agreed hours at creation are administrators' only, with the developer rules; blank adds none", async () => {
+    const a = await login("youssef@aione.biz", "Team-password-1", "10.0.0.9");
+    const u = await login("bashar.b@aione.biz", "Pass-for-bashar", "10.0.0.10");
+    const adminMeta = (extra) => ({ clientId: "fixture-client", subClientId: null, billing: "billable", ...extra });
+    const create = (token, body) => call("/internal", { method: "POST", token, body: { summary: "Agreed hours check", devs: ["ai1_rami"], ...body } });
+    const numberOf = (r) => Number(r.data.ticket.key.slice(4));
+    // A developer forging agreed hours is refused before anything is saved or a ticket number is taken.
+    const before = numberOf(await create(a.token, { summary: "Before the forged request", metadata: adminMeta() }));
+    const forged = await create(u.token, { devs: undefined, metadata: { clientId: "fixture-client", subClientId: null, agreedHours: 5 } });
+    assert.equal(forged.status, 403);
+    const forgedDev = await create(u.token, { metadata: { clientId: "fixture-client", subClientId: null, agreedDev: "bashar" } });
+    assert.equal(forgedDev.status, 403);
+    assert.equal(numberOf(await create(a.token, { summary: "After the forged request", metadata: adminMeta() })), before + 1, "no number was taken");
+    // One developer: the hours go to that developer, and a developer who is not in the ticket's list stays refused.
+    const one = await create(a.token, { metadata: adminMeta({ agreedHours: 12.5 }) });
+    assert.equal(one.status, 201);
+    const oneMeta = (await call("/ticket-metadata?key=" + one.data.ticket.key, { token: a.token })).data.metadata;
+    assert.equal(oneMeta.agreedHours, 12.5); assert.equal(oneMeta.agreedDev, "rami"); assert.equal(oneMeta.agreedDeveloper, "rami");
+    // Several developers: a recipient is required, and it must be one of them.
+    const many = { devs: ["ai1_rami", "ai1_sondos"] };
+    const noRecipient = await create(a.token, { ...many, metadata: adminMeta({ agreedHours: 4 }) });
+    assert.equal(noRecipient.status, 400); assert.equal(noRecipient.data.code, "agreed_choose_developer");
+    const notOnTicket = await create(a.token, { ...many, metadata: adminMeta({ agreedHours: 4, agreedDev: "ellen" }) });
+    assert.equal(notOnTicket.status, 400); assert.equal(notOnTicket.data.code, "agreed_developer_unknown");
+    const chosen = await create(a.token, { ...many, metadata: adminMeta({ agreedHours: 4, agreedDev: "sondos" }) });
+    assert.equal(chosen.status, 201);
+    assert.equal((await call("/ticket-metadata?key=" + chosen.data.ticket.key, { token: a.token })).data.metadata.agreedDev, "sondos");
+    // A developer sees the ticket's fields but never the agreed hours.
+    const bashars = await create(a.token, { devs: ["ai1_bashar"], metadata: adminMeta({ agreedHours: 3 }) });
+    const seen = (await call("/ticket-metadata?key=" + bashars.data.ticket.key, { token: u.token })).data.metadata;
+    assert.equal("agreedHours" in seen && seen.agreedHours != null, false, "hidden from a developer");
+    // Blank: the ticket is saved and no agreed hours are set.
+    const blank = await create(a.token, { metadata: adminMeta() });
+    assert.equal(blank.status, 201);
+    assert.equal((await call("/ticket-metadata?key=" + blank.data.ticket.key, { token: a.token })).data.metadata.agreedHours ?? null, null);
+    // Invalid values are refused with the same rule as an existing ticket, and nothing is saved.
+    for (const bad of [0, 1.005, 1000001, "12"]) {
+      const r = await create(a.token, { metadata: adminMeta({ agreedHours: bad }) });
+      assert.equal(r.status, 400, "refused: " + bad);
+    }
+  }],
   ["invitation link handed to the admin when email isn't set up", async () => {
     env = makeEnv(); delete env.MAILER;
     const a = await login("youssef@aione.biz", "Team-password-1");
