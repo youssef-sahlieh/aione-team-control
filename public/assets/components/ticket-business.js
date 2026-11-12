@@ -123,15 +123,23 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
     const estimated=field(workGroup,'Estimated hours',input('number',values.estimatedHours)),actual=field(workGroup,logged?'Actual hours before the work log':'Actual hours',input('number',values.actualHours));
     if(logged){const total=el('p','msg business-total','Actual hours with the work log: '+values.totalActualHours+' h ('+(Math.round(values.loggedMinutes/60*100)/100)+' h logged).');workGroup.append(total);}
     // Agreed hours: administrators only. They are the figure Odoo gets for the ticket; empty clears them.
-    let agreed=null,agreedTo=null,agreedBlocked='';if(admin()&&!creating){agreed=field(workGroup,'Agreed hours (administrators only)',input('number',values.agreedHours));agreed.min='0.01';agreed.max='1000000';agreed.step='0.01';agreed.disabled=closed;agreed.title='Odoo gets one line with these hours for the developer. Empty clears them.';
-      // Who Odoo gets the agreed hours for: the ticket's developer, never its assignee or the person saving.
-      if(Array.isArray(developers)){
+    // On a new ticket it is optional: blank adds no agreed hours. setDevelopers(list) refreshes the recipients as the developers change.
+    let agreed=null,agreedTo=null,agreedBlocked='',setDevelopers=()=>{};if(admin()){agreed=field(workGroup,'Agreed hours (administrators only)',input('number',values.agreedHours));agreed.min='0.01';agreed.max='1000000';agreed.step='0.01';agreed.disabled=closed;agreed.title='Odoo gets one line with these hours for the developer. Empty clears them.';
+      // Who Odoo gets the agreed hours for: one of the ticket's developers, never its assignee or the person saving.
+      if(creating||Array.isArray(developers)){
         const note=el('p','business-guidance agreed-developer');note.id='agreed-developer-'+Math.random().toString(36).slice(2,9);agreed.setAttribute('aria-describedby',note.id);
-        if(!developers.length){agreedBlocked='Add a developer to this ticket before setting agreed hours: Odoo gets them as that developer’s work.';note.textContent=agreedBlocked;}
-        else if(developers.length===1)note.textContent='Odoo gets these hours as '+developers[0].name+'’s work.';
-        else{agreedTo=field(workGroup,'Agreed hours go to',el('select','fsel'));option(agreedTo,'Choose developer…','');for(const d of developers)option(agreedTo,d.name===d.dev?d.name:d.name+' ('+d.dev+')',d.dev);
-          agreedTo.value=developers.some(d=>d.dev===values.agreedDev)?values.agreedDev:'';agreedTo.disabled=closed;agreedTo.setAttribute('aria-describedby',note.id);
-          note.textContent='This ticket has several developers. Choose who Odoo gets the agreed hours for.';}
+        const holder=el('div','agreed-recipient');workGroup.append(holder);
+        const paint=list=>{
+          const keep=agreedTo?agreedTo.value:(values.agreedDev??'');
+          agreedTo=null;agreedBlocked='';holder.replaceChildren();
+          if(!list.length){agreedBlocked='Add a developer to this ticket before setting agreed hours: Odoo gets them as that developer’s work.';note.textContent=agreedBlocked;}
+          else if(list.length===1)note.textContent='Odoo gets these hours as '+list[0].name+'’s work.';
+          else{agreedTo=field(holder,'Agreed hours go to',el('select','fsel'));option(agreedTo,'Choose developer…','');for(const d of list)option(agreedTo,d.name===d.dev?d.name:d.name+' ('+d.dev+')',d.dev);
+            agreedTo.value=list.some(d=>d.dev===keep)?keep:'';agreedTo.disabled=closed;agreedTo.setAttribute('aria-describedby',note.id);
+            note.textContent='This ticket has several developers. Choose who Odoo gets the agreed hours for.';}
+        };
+        setDevelopers=list=>paint(Array.isArray(list)?list:[]);
+        paint(Array.isArray(developers)?developers:[]);
         workGroup.append(note);
       }}
     for(const n of [estimated,actual]){n.min='0.01';n.max='1000000';n.step='0.01';n.disabled=closed;}
@@ -142,7 +150,7 @@ export function createTicketBusiness({api,context,onChange,openIssue}){
       // Checked before sending, so the form keeps what was typed: no developer, or several and none chosen.
       if(hours!==null&&agreedBlocked&&changed)throw new Error(agreedBlocked);
       if(hours!==null&&agreedTo){if(!agreedTo.value&&changed)throw new Error('Choose who the agreed hours go to.');if(agreedTo.value&&agreedTo.value!==(values.agreedDev??'')){out.agreedHours=hours;out.agreedDev=agreedTo.value;}}}return out;};
-    return {read,box,selects};
+    return {read,box,selects,setDevelopers:list=>setDevelopers(list)};
   }
   async function load(keys){
     if(!enabled)return;const unique=[...new Set(keys)];
