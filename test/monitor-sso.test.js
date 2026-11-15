@@ -12,6 +12,7 @@ const { privateKey } = await subtle.generateKey({ name: "Ed25519" }, true, ["sig
 const privateJwk = await subtle.exportKey("jwk", privateKey);
 const ACCOUNT_ID = "acct-youssef-0000000001";
 const STORE = memoryStore();
+const MFA_AUTH_TIME = Math.floor(Date.now() / 1000) - 30;
 await saveUser(STORE, { id: ACCOUNT_ID, email: "youssef@aione.biz", name: "Youssef", role: "admin", dev: "", pw: null, v: 0 });
 const env = {
   ALLOWED_ORIGIN: "https://dashboard.ai1.host", TEAM_EMAILS: "youssef@aione.biz,ellen@aione.biz", JIRA_PROJECT: "AION",
@@ -20,6 +21,9 @@ const env = {
 };
 const get = (path, init, e = env) => handler.fetch(new Request("https://proxy.test" + path, init), e);
 const signedIn = async (email = "youssef@aione.biz") => (await makeToken(env, email)).token;
+const signedInWithMfa = async (email = "youssef@aione.biz") => (
+  await makeToken(env, email, Date.now(), 0, undefined, { amr: ["pwd", "otp"], auth_time: MFA_AUTH_TIME })
+).token;
 
 test("the public key lets AI1 Monitor check tokens, without any private part", async () => {
   const r = await get("/sso/monitor/keys");
@@ -61,6 +65,19 @@ test("the token names the person, carries their role, and verifies with the publ
   // Changing the claims breaks the signature.
   const forged = Buffer.from(JSON.stringify({ ...claims, role: "admin", email: "someone@aione.biz" })).toString("base64url");
   assert.equal(await subtle.verify("Ed25519", publicKey, b64urlDecode(sig), new TextEncoder().encode(head + "." + forged)), false);
+});
+
+test("Monitor assertions carry signed MFA assurance only after an MFA login", async () => {
+  const passwordOnly = await (await get("/sso/monitor", { method: "POST", headers: { Authorization: "Bearer " + await signedIn() } })).json();
+  const passwordClaims = JSON.parse(b64urlDecode(passwordOnly.token.split(".")[1]).toString());
+  assert.deepEqual(passwordClaims.amr, []);
+  assert.equal(passwordClaims.acr, undefined);
+
+  const verified = await (await get("/sso/monitor", { method: "POST", headers: { Authorization: "Bearer " + await signedInWithMfa() } })).json();
+  const verifiedClaims = JSON.parse(b64urlDecode(verified.token.split(".")[1]).toString());
+  assert.deepEqual(verifiedClaims.amr, ["pwd", "otp"]);
+  assert.equal(verifiedClaims.auth_time, MFA_AUTH_TIME);
+  assert.equal(verifiedClaims.acr, "urn:aione:loa:2");
 });
 
 test("a person with no stored account can't get a token, even with a valid session", async () => {

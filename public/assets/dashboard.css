@@ -608,3 +608,4 @@ button.key.odoo:hover{text-decoration:underline}
 .cmt .cimg img{max-height:none}
 
 .db-expiry{display:inline-flex;flex-wrap:wrap;gap:4px;align-items:center}
+.mfa-panel{display:grid;gap:16px;margin-bottom:20px}.mfa-summary{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.mfa-summary h2{margin:0 0 4px}.mfa-summary p{margin:0;color:var(--muted)}.mfa-actions{display:flex;gap:8px}.mfa-enrollment{display:grid;gap:12px;max-width:560px;padding-top:4px}.mfa-enrollment p{margin:0;color:var(--muted)}.mfa-recovery-codes{max-width:560px;padding:16px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);font:600 14px/1.7 var(--mono);letter-spacing:.04em}.mono{font-family:var(--mono)}

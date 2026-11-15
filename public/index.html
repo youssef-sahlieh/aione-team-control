@@ -29,6 +29,20 @@
   </div><div class="foot">Only approved AIONE team members can open this app.</div></div>
 </main>
 
+<main class="auth" id="view-mfa" hidden>
+  <div class="card"><div class="band"></div><div class="cbody">
+    <div class="mark"><img class="brand-logo logo-on-light" src="assets/brand/aione-logo.png" alt="AIONE, all in one business solutions" width="240" height="48"><img class="brand-logo logo-on-dark" src="assets/brand/aione-logo-light.png" alt="AIONE, all in one business solutions" width="240" height="48"><span class="mark-name">Team Control</span></div>
+    <h1>Verify your sign-in</h1>
+    <p class="lead">Enter the six-digit code from your authenticator app or one unused recovery code.</p>
+    <form id="mfa-form" novalidate>
+      <div class="field"><label for="mfa-code">Authentication code</label><input class="input" id="mfa-code" autocomplete="one-time-code" required></div>
+      <p class="msg err" id="mfa-msg" role="alert" hidden></p>
+      <button class="btn primary" id="mfa-btn" type="submit">Verify</button>
+      <div class="row"><button class="link" id="mfa-back" type="button">Back to sign in</button></div>
+    </form>
+  </div><div class="foot">This extra check protects administrative access.</div></div>
+</main>
+
 <main class="auth" id="view-forgot" hidden>
   <div class="card"><div class="band"></div><div class="cbody">
     <div class="mark"><img class="brand-logo logo-on-light" src="assets/brand/aione-logo.png" alt="AIONE, all in one business solutions" width="240" height="48"><img class="brand-logo logo-on-dark" src="assets/brand/aione-logo-light.png" alt="AIONE, all in one business solutions" width="240" height="48"><span class="mark-name">Team Control</span></div>

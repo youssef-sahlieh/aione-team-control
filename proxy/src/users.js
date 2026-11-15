@@ -108,7 +108,7 @@ export async function developerNames(store, devs) {
 }
 
 // What the dashboard may see about a user (never the password hash).
-export const publicUser = (u) => ({ email: u.email, accountId: u.id || "", name: u.name, role: u.role, dev: u.dev || "", hasPassword: !!u.pw, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null, lastLoginIp: u.lastLoginIp || "", githubLogin: u.githubLogin || "" });
+export const publicUser = (u) => ({ email: u.email, accountId: u.id || "", name: u.name, role: u.role, dev: u.dev || "", hasPassword: !!u.pw, mfaEnabled: Boolean(u.mfa?.secret && u.mfa?.verifiedAt), createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null, lastLoginIp: u.lastLoginIp || "", githubLogin: u.githubLogin || "" });
 
 // The last successful sign-in (time and IP address), shown on Manage users. Never blocks or fails a sign-in.
 export async function recordLogin(store, email, ip, at = new Date().toISOString()) {

@@ -19,26 +19,38 @@ export async function cookieSessionRequest(request,env,run,{readToken,makeToken}
   const webhook=path==="/notifications/jira-created";
   if(mutation&&!webhook){
     if(request.headers.get("Origin")!==url.origin)return json({code:"csrf",error:"Request origin is not allowed."},403);
-    const anonymous=["/login","/forgot","/reset","/reset/check"].includes(path)||(path==="/logout"&&!me);
+    const anonymous=["/login","/forgot","/reset","/reset/check","/mfa/challenge"].includes(path)||(path==="/logout"&&!me);
     if(!anonymous&&(!stored||request.headers.get("X-AION-CSRF")!==stored.csrf))return json({code:"csrf",error:"Refresh your session and try again."},403);
   }
-  const info=(user,expiresAt,csrf)=>({email:user.email,name:user.name,role:user.role,expiresAt,csrf});
+  const info=(user,expiresAt,csrf)=>({
+    email:user.email,name:user.name,role:user.role,expiresAt,csrf,
+    mfaVerified:Array.isArray(user.amr)&&user.amr.some(value=>value==="otp"||value==="recovery"),
+    mfaEnrollmentRequired:Boolean(user.mfaEnrollmentRequired),
+  });
   const cookie=(value,maxAge)=>`${name}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure?"; Secure":""}`;
   if(path==="/session"&&request.method==="GET")return me&&stored?json(info(me,c.exp,stored.csrf)):json({code:"session",error:"Please sign in again."},401);
   if(path==="/logout"&&request.method==="POST"){
     if(c.sid)await env.STORE.del("sess:"+c.sid);
     const response=json({ok:true});response.headers.set("Set-Cookie",cookie("",0));return response;
   }
-  if(path==="/login"&&request.method==="POST"){
+  if((path==="/login"||path==="/mfa/challenge")&&request.method==="POST"){
     if(!env.STORE)return json({code:"no_store",error:"Secure sessions require the account database."},503);
     // The existing login verifier issues an internal token; it is never returned to the browser.
-    const response=await run(forwarded);if(!response.ok)return response;
+    const response=await run(forwarded);if(!response.ok||response.status===202)return response;
     const login=await response.json(),verified=claims(login.token);
     // Login verification itself needs the legacy token format only for this internal operation.
-    const sid=random(),csrf=random();const session=await makeToken(env,login.email,Date.now(),verified.v,sid);
+    const sid=random(),csrf=random();const session=await makeToken(env,login.email,Date.now(),verified.v,sid,{amr:verified.amr,auth_time:verified.auth_time});
     await env.STORE.set("sess:"+sid,JSON.stringify({csrf}),SESSION_SECONDS);
     if(c.sid)await env.STORE.del("sess:"+c.sid);
-    const result=json(info(login,session.expiresAt,csrf));result.headers.set("Set-Cookie",cookie(session.token,SESSION_SECONDS));return result;
+    const result=json(info({...login,amr:verified.amr},session.expiresAt,csrf));result.headers.set("Set-Cookie",cookie(session.token,SESSION_SECONDS));return result;
+  }
+  if(path==="/mfa/setup/verify"&&request.method==="POST"){
+    const response=await run(forwarded);if(!response.ok)return response;
+    const data=await response.json();
+    if(!data.token)return json(data);
+    const resultBody={...data,mfaVerified:true};
+    delete resultBody.token;
+    const result=json(resultBody);result.headers.set("Set-Cookie",cookie(data.token,SESSION_SECONDS));return result;
   }
   return run(forwarded);
 }
