@@ -41,6 +41,27 @@
 
   <div id="pagestate" class="state">Loading users…</div>
 
+  <section class="upanel mfa-panel" id="mfa-security" hidden aria-labelledby="mfa-heading">
+    <div class="mfa-summary">
+      <div><h2 id="mfa-heading">Sign-in security</h2><p id="mfa-description">Protect your administrator account with an authenticator app.</p></div>
+      <span class="flag" id="mfa-status">Checking…</span>
+    </div>
+    <div class="mfa-actions" id="mfa-actions"></div>
+    <form class="mfa-enrollment" id="mfa-enrollment" hidden>
+      <p>Add the setup key to your authenticator app, then enter the current six-digit code.</p>
+      <label class="ufield"><span>Setup key</span><input class="inp mono" id="mfa-secret" readonly></label>
+      <label class="ufield"><span>Authentication code</span><input class="inp" id="mfa-setup-code" inputmode="numeric" autocomplete="one-time-code" required></label>
+      <div class="uactions"><button class="btn" id="mfa-cancel" type="button">Cancel</button><button class="btn primary" id="mfa-verify" type="submit">Enable MFA</button></div>
+    </form>
+    <form class="mfa-enrollment" id="mfa-disable-form" hidden>
+      <p>Enter a current authenticator code or one unused recovery code to disable MFA.</p>
+      <label class="ufield"><span>Authentication code</span><input class="inp" id="mfa-disable-code" autocomplete="one-time-code" required></label>
+      <div class="uactions"><button class="btn" id="mfa-disable-cancel" type="button">Cancel</button><button class="btn danger" type="submit">Disable MFA</button></div>
+    </form>
+    <div id="mfa-recovery" hidden><p><b>Save these one-time recovery codes now.</b> They will not be shown again.</p><pre class="mfa-recovery-codes" id="mfa-recovery-codes"></pre></div>
+    <p class="msg" id="mfa-message" role="status" hidden></p>
+  </section>
+
   <section class="upanel" id="list" hidden>
     <div class="ustats" id="stats" aria-label="Summary"></div>
     <div class="utools">

@@ -1,6 +1,6 @@
 // Users page (administrators only): invite people, choose Administrator or User, pick whose tickets a User sees,
 // set the GitHub username used for review requests, send password links and remove accounts. Everything is checked again by the proxy.
-import { api, getSession, signOut } from "./session.js";
+import { api, getSession, saveSession, signOut } from "./session.js";
 import { startFrame, appConfig } from "./app/frame.js";
 
 startFrame({ current: "users" });
@@ -13,6 +13,7 @@ const OTHER = "__other";
 let me = null, devs = [], devColors = {}, users = [];
 let editing = null; // the person being managed; null while inviting someone new
 let role = "user";
+let mfaSetup = null;
 const devK = (d) => devColors[d] || "k" + (1 + [...d].reduce((a, c) => a + c.charCodeAt(0), 0) % 8);
 
 let toastTimer = null;
@@ -222,6 +223,97 @@ async function load() {
   render();
 }
 
+function mfaMessage(text, ok) {
+  const message = $("mfa-message");
+  message.textContent = text || "";
+  message.className = "msg" + (text ? (ok ? " ok" : " err") : "");
+  message.hidden = !text;
+}
+
+function closeMfaForms() {
+  $("mfa-enrollment").hidden = true;
+  $("mfa-disable-form").hidden = true;
+  $("mfa-setup-code").value = "";
+  $("mfa-disable-code").value = "";
+  mfaSetup = null;
+}
+
+function renderMfa(status) {
+  $("mfa-security").hidden = false;
+  $("mfa-status").textContent = status.enabled ? "Enabled" : status.required ? "Enrollment required" : "Not enabled";
+  $("mfa-status").className = "flag " + (status.enabled ? "k6" : "k1");
+  $("mfa-description").textContent = status.enabled
+    ? `${status.recoveryCodesRemaining} recovery codes remain. Your next sign-in will require an authenticator or recovery code.`
+    : status.policy === "enforce"
+      ? "MFA is required for this administrator account."
+      : "MFA will become mandatory for administrator accounts after the enrollment window.";
+  const button = el("button", "btn " + (status.enabled ? "danger" : "primary"), status.enabled ? "Disable MFA" : "Set up MFA");
+  button.type = "button";
+  button.addEventListener("click", async () => {
+    mfaMessage("");
+    $("mfa-recovery").hidden = true;
+    if (status.enabled) {
+      closeMfaForms();
+      $("mfa-disable-form").hidden = false;
+      $("mfa-disable-code").focus();
+      return;
+    }
+    button.disabled = true;
+    try {
+      mfaSetup = await api("/mfa/setup", { method: "POST", body: {} });
+      $("mfa-secret").value = mfaSetup.secret;
+      $("mfa-enrollment").hidden = false;
+      $("mfa-setup-code").focus();
+    } catch (error) {
+      mfaMessage(errText(error), false);
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("mfa-actions").replaceChildren(button);
+}
+
+async function loadMfa() {
+  renderMfa(await api("/mfa/status"));
+}
+
+$("mfa-cancel").addEventListener("click", closeMfaForms);
+$("mfa-disable-cancel").addEventListener("click", closeMfaForms);
+$("mfa-enrollment").addEventListener("submit", async event => {
+  event.preventDefault();
+  if (!mfaSetup) return;
+  const button = $("mfa-verify");
+  button.disabled = true;
+  try {
+    const result = await api("/mfa/setup/verify", { method: "POST", body: { token: mfaSetup.token, code: $("mfa-setup-code").value } });
+    if (result.token && result.expiresAt) saveSession({ ...getSession(), token: result.token, expiresAt: result.expiresAt, mfaVerified: true });
+    closeMfaForms();
+    $("mfa-recovery-codes").textContent = result.recoveryCodes.join("\n");
+    $("mfa-recovery").hidden = false;
+    mfaMessage("MFA is enabled. Save the recovery codes before leaving this page.", true);
+    await loadMfa();
+  } catch (error) {
+    mfaMessage(errText(error), false);
+  } finally {
+    button.disabled = false;
+  }
+});
+$("mfa-disable-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const button = event.submitter;
+  button.disabled = true;
+  try {
+    await api("/mfa/disable", { method: "POST", body: { code: $("mfa-disable-code").value } });
+    closeMfaForms();
+    mfaMessage("MFA has been disabled.", true);
+    await loadMfa();
+  } catch (error) {
+    mfaMessage(errText(error), false);
+  } finally {
+    button.disabled = false;
+  }
+});
+
 $("signout").addEventListener("click", () => signOut());
 
 async function start() {
@@ -234,7 +326,7 @@ async function start() {
     if (!cfg.accounts) { showState("User accounts aren't switched on yet: the proxy needs its database (see SETUP.md, \"User accounts\"). Until then, Youssef and Ellen sign in with the team password.", true); return; }
     me = { email: cfg.email, name: cfg.name };
     devs = cfg.devs || []; devColors = cfg.devColors || {};
-    await load();
+    await Promise.all([load(), loadMfa()]);
     showState("");
     $("list").hidden = false;
   } catch (err) {

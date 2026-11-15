@@ -54,9 +54,13 @@ export async function monitorToken(env, me, now = Date.now()) {
   const key = await crypto.subtle.importKey("jwk", jwk, { name: "Ed25519" }, false, ["sign"]);
   const iat = Math.floor(now / 1000), exp = iat + MONITOR_TOKEN_SECONDS;
   const head = jsonPart({ alg: "EdDSA", typ: "JWT", kid: jwk.kid || "ai1-monitor-1" });
+  const amr = Array.isArray(me.amr) ? me.amr.filter(value => ["pwd", "otp", "recovery"].includes(value)) : [];
+  const authTime = Number.isInteger(me.auth_time) && me.auth_time <= iat ? me.auth_time : null;
+  const mfa = amr.includes("otp") || amr.includes("recovery");
   const body = jsonPart({
     iss: MONITOR_ISSUER, aud: MONITOR_AUDIENCE, sub: me.id, email: me.email, name: me.name || me.email,
-    role: me.role, dev: me.dev || "", iat, exp, jti: b64url(crypto.getRandomValues(new Uint8Array(12)))
+    role: me.role, dev: me.dev || "", iat, exp, jti: b64url(crypto.getRandomValues(new Uint8Array(12))),
+    amr, ...(authTime === null ? {} : { auth_time: authTime }), ...(mfa ? { acr: "urn:aione:loa:2" } : {}),
   });
   const sig = await crypto.subtle.sign("Ed25519", key, enc.encode(head + "." + body));
   return { token: head + "." + body + "." + b64url(sig), expiresAt: exp * 1000 };
@@ -79,5 +83,9 @@ export async function checkMonitorToken(token, publicKeys, now = Date.now()) {
   const t = Math.floor(now / 1000);
   if (!(claims.exp > t) || claims.exp - claims.iat > MONITOR_TOKEN_SECONDS || claims.iat > t + CLOCK_SKEW_SECONDS) throw new Error("token_expired");
   if (!claims.email || !claims.jti) throw new Error("token_claims");
+  if (!Array.isArray(claims.amr) || !claims.amr.every(value => ["pwd", "otp", "recovery"].includes(value))) throw new Error("token_claims");
+  if (claims.auth_time !== undefined && (!Number.isInteger(claims.auth_time) || claims.auth_time > claims.iat)) throw new Error("token_claims");
+  if (claims.acr !== undefined && claims.acr !== "urn:aione:loa:2") throw new Error("token_claims");
+  if (claims.acr === "urn:aione:loa:2" && !claims.amr.some(value => value === "otp" || value === "recovery")) throw new Error("token_claims");
   return claims;
 }

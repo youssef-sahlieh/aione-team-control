@@ -34,6 +34,10 @@ import { knowledgeRoutes } from "./knowledge.js";
 import { odooAppRoutes, odooTranslations } from "./odoo-app.js";
 import { monitorCallbackUrl, monitorPublicKeys, monitorToken } from "./monitor-sso.js";
 import { cookieSessionRequest } from "./sessions.js";
+import {
+  beginMfaLogin, beginMfaSetup, completeMfaLogin, completeMfaSetup,
+  disableMfa, mfaEnabled, mfaPolicy, mfaRequired, mfaSessionAssured, publicMfaStatus,
+} from "./mfa.js";
 import { SESSION_MS, SESSION_SECONDS } from "./session-policy.js";
 import { aiChat, aiBrief, aiConfigured, aiDescription, aiImproveWriting, aiWorkDescription, AIError } from "./ai.js";
 import { githubConfigured, syncPulls, prsByKey } from "./github.js";
@@ -111,9 +115,11 @@ const teamEmails = (env) => String(env.TEAM_EMAILS || "").split(",").map((e) => 
 
 // Sessions carry the account's version (v), so a password reset or removal ends them right away.
 // With the database, every token is registered ("sess:<id>"), so signing out (or an administrator) can cancel it.
-export async function makeToken(env, email, now = Date.now(), v = 0, sid = undefined) {
+export async function makeToken(env, email, now = Date.now(), v = 0, sid = undefined, assurance = {}) {
   if (!sid && env.STORE && !env.COOKIE_SESSIONS) { sid = b64url(crypto.getRandomValues(new Uint8Array(18))); await env.STORE.set("sess:" + sid, JSON.stringify({ email, at: now }), SESSION_SECONDS); }
-  const body = b64url(enc.encode(JSON.stringify({ email, v, exp: now + SESSION_MS, ...(sid?{sid}:{}) })));
+  const amr = Array.isArray(assurance.amr) ? assurance.amr.filter(value => ["pwd", "otp", "recovery"].includes(value)) : [];
+  const authTime = Number.isInteger(assurance.auth_time) ? assurance.auth_time : Math.floor(now / 1000);
+  const body = b64url(enc.encode(JSON.stringify({ email, v, exp: now + SESSION_MS, amr, auth_time: authTime, ...(sid?{sid}:{}) })));
   return { token: body + "." + b64url(await hmac(env.SESSION_SECRET, body)), expiresAt: now + SESSION_MS };
 }
 
@@ -137,7 +143,12 @@ export async function readToken(env, header, now = Date.now()) {
   if (env.STORE) {
     const u = await getUser(env.STORE, email);
     if (!u || u.v !== v) return null;
-    return { email: u.email, name: u.name, role: u.role, dev: u.dev || "", ...(claims.sid ? { sid: claims.sid } : {}) };
+    return {
+      email: u.email, name: u.name, role: u.role, dev: u.dev || "",
+      amr: Array.isArray(claims.amr) ? claims.amr : [],
+      auth_time: Number.isInteger(claims.auth_time) ? claims.auth_time : null,
+      ...(claims.sid ? { sid: claims.sid } : {}),
+    };
   }
   if (!teamEmails(env).includes(email)) return null;
   return { email, name: firstName(email), role: "admin", dev: "" };
@@ -417,7 +428,13 @@ async function route(request, env, url) {
     const account = stored && (await ensureAccountId(env.STORE, stored));
     // A deleted and recreated account has the same email but a new ID, so the old code must not sign it in.
     if (!account || account.id !== grant.accountId) return fail("forbidden", "This account can't use AI1 Monitor.", 403);
-    try { return json(await monitorToken(env, account)); } catch { return fail("not_configured", "AI1 Monitor sign-in isn't set up.", 503); }
+    try {
+      return json(await monitorToken(env, {
+        ...account,
+        amr: Array.isArray(grant.amr) ? grant.amr : [],
+        auth_time: Number.isInteger(grant.authTime) ? grant.authTime : null,
+      }));
+    } catch { return fail("not_configured", "AI1 Monitor sign-in isn't set up.", 503); }
   }
   if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1", "db-report-v1", "db-report-company-v1", "db-report-pos-version-v1", "time-entries-v1","epic-map-v1","analytics-v1","ticket-bulk-import-v1","project-admin-v1","project-budget-v1","billing-v1"], build: String(env.BUILD || "").slice(0, 7)});
 
@@ -446,8 +463,19 @@ async function route(request, env, url) {
         if(await env.STORE.compareAndSet("u:"+u.email,JSON.stringify(u),JSON.stringify(upgraded)))u=upgraded;
         else{u=await getUser(env.STORE,email);if(!u||!await checkPassword(password,u.pw))return fail("login","That email and password don't match.",401);}
       }
+      if (mfaEnabled(u)) {
+        const challenge = await beginMfaLogin(env.STORE, u);
+        return json({ code: "mfa_required", mfaRequired: true, challenge, expiresIn: 300 }, 202);
+      }
+      if (mfaPolicy(env) === "enforce" && mfaRequired(u)) {
+        return fail("mfa_enrollment_required", "Multi-factor authentication enrollment is required. Contact an administrator for recovery.", 403);
+      }
       await recordLogin(env.STORE, u.email, ip);
-      return json({ email: u.email, name: u.name, role: u.role, ...(await makeToken(env, u.email, Date.now(), u.v)) });
+      return json({
+        email: u.email, name: u.name, role: u.role,
+        mfaEnrollmentRequired: mfaPolicy(env) === "enroll" && mfaRequired(u),
+        ...(await makeToken(env, u.email, Date.now(), u.v, undefined, { amr: ["pwd"] })),
+      });
     }
     const { success } = await (env.LOGIN_LIMIT || memoryLimit).limit({ key: ip });
     if (!success) return fail("rate_limited", "Too many sign-in attempts. Wait a minute and try again.", 429);
@@ -492,6 +520,21 @@ async function route(request, env, url) {
     return json({ ok: true, email: u.email });
   }
 
+  if (path === "/mfa/challenge" && method === "POST") {
+    if (!env.STORE) return fail("no_store", "Multi-factor authentication needs the account database.", 503);
+    const ip = clientIp(request);
+    const body = (await readJson(request)) || {};
+    if (await overLimit(env, "mfa-ip:" + ip, 12, 300)) return fail("rate_limited", "Too many authentication attempts. Wait a few minutes and try again.", 429);
+    const result = await completeMfaLogin(env, env.STORE, body.challenge, body.code);
+    if (!result) return fail("mfa_invalid", "That authentication code is invalid or already used.", 401);
+    const { user, method } = result;
+    await recordLogin(env.STORE, user.email, ip);
+    return json({
+      email: user.email, name: user.name, role: user.role,
+      ...(await makeToken(env, user.email, Date.now(), user.v, undefined, { amr: ["pwd", method] })),
+    });
+  }
+
   const me = await readToken(env, request.headers.get("Authorization"));
   // Signing out cancels this sign-in on the server, so a copy of the token stops working too.
   if (path === "/logout" && method === "POST") {
@@ -499,6 +542,44 @@ async function route(request, env, url) {
     return json({ ok: true });
   }
   if (!me) return fail("session", "Please sign in again.", 401);
+
+  const signedInUser = env.STORE ? await getUser(env.STORE, me.email) : null;
+  if (path === "/mfa/status" && method === "GET") {
+    return signedInUser ? json({ ...publicMfaStatus(env, signedInUser), sessionAssured: mfaSessionAssured(env, me) }) : fail("session", "Please sign in again.", 401);
+  }
+  if (path === "/mfa/setup" && method === "POST") {
+    if (!signedInUser) return fail("session", "Please sign in again.", 401);
+    try { return json(await beginMfaSetup(env, env.STORE, signedInUser)); }
+    catch (error) {
+      return String(error?.message) === "mfa_encryption_not_configured"
+        ? fail("not_configured", "Multi-factor authentication is not configured yet.", 503)
+        : fail("server", "Multi-factor authentication setup failed.", 500);
+    }
+  }
+  if (path === "/mfa/setup/verify" && method === "POST") {
+    if (!signedInUser) return fail("session", "Please sign in again.", 401);
+    const body = (await readJson(request)) || {};
+    const result = await completeMfaSetup(env, env.STORE, signedInUser, body.token, body.code);
+    if (!result) return fail("mfa_invalid", "That authentication code is invalid or the setup expired.", 400);
+    const saved = await getUser(env.STORE, signedInUser.email);
+    return json({ ok: true, ...result, ...(await makeToken(env, saved.email, Date.now(), saved.v, me.sid, { amr: ["pwd", "otp"] })) });
+  }
+  if (path === "/mfa/disable" && method === "POST") {
+    if (!signedInUser) return fail("session", "Please sign in again.", 401);
+    if (mfaPolicy(env) === "enforce" && mfaRequired(signedInUser)) return fail("mfa_required", "Multi-factor authentication is required for this account.", 409);
+    const body = (await readJson(request)) || {};
+    return await disableMfa(env, env.STORE, signedInUser, body.code)
+      ? json({ ok: true })
+      : fail("mfa_invalid", "A current authenticator or recovery code is required.", 403);
+  }
+  if (
+    signedInUser && mfaPolicy(env) === "enforce" && mfaRequired(signedInUser)
+    && (!mfaEnabled(signedInUser) || !mfaSessionAssured(env, me))
+  ) return fail(
+    mfaEnabled(signedInUser) ? "mfa_verification_required" : "mfa_enrollment_required",
+    mfaEnabled(signedInUser) ? "Verify multi-factor authentication by signing in again." : "Multi-factor authentication enrollment is required.",
+    403,
+  );
   // Same-tab sign-in, step 1: the AION dashboard asks for a one-time code for the state that AI1 Monitor set.
   // The code is good for 60 seconds, works once, and is bound to that state.
   if (path === "/sso/monitor/code" && method === "POST") {
@@ -508,7 +589,11 @@ async function route(request, env, url) {
     const stored = env.STORE ? await getUser(env.STORE, me.email) : null;
     const account = stored && (await ensureAccountId(env.STORE, stored));
     if (!account) return fail("forbidden", "This account can't use AI1 Monitor.", 403);
-    const code = await createLinkToken(env.STORE, account.email, "monitor-sso:" + state, 60, { accountId: account.id });
+    const code = await createLinkToken(env.STORE, account.email, "monitor-sso:" + state, 60, {
+      accountId: account.id,
+      amr: Array.isArray(me.amr) ? me.amr : [],
+      authTime: Number.isInteger(me.auth_time) ? me.auth_time : null,
+    });
     return json({ code, callback: monitorCallbackUrl(env) });
   }
   // The signed-in person asks for a token to open AI1 Monitor as themselves.

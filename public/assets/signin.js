@@ -12,13 +12,15 @@ function showMsg(id, text, kind) {
 
 function showView(name) {
   $("view-signin").hidden = name !== "signin";
+  $("view-mfa").hidden = name !== "mfa";
   $("view-forgot").hidden = name !== "forgot";
-  (name === "forgot" ? $("forgot-email") : $("email")).focus();
+  (name === "forgot" ? $("forgot-email") : name === "mfa" ? $("mfa-code") : $("email")).focus();
 }
 
 if (getSession()) {
   location.replace("dashboard.html" + location.search + location.hash);
 } else {
+  let mfaChallenge = "";
   showView("signin");
   if (!proxyReady()) {
     $("signin-btn").disabled = true;
@@ -33,6 +35,15 @@ if (getSession()) {
     $("signin-msg").hidden = true;
     try {
       const s = await api("/login", { method: "POST", body: { email: $("email").value, password: $("password").value } });
+      if (s.mfaRequired && s.challenge) {
+        mfaChallenge = s.challenge;
+        $("mfa-code").value = "";
+        $("mfa-msg").hidden = true;
+        btn.disabled = false;
+        btn.textContent = "Sign in";
+        showView("mfa");
+        return;
+      }
       saveSession(s);
       location.replace("dashboard.html" + location.search + location.hash);
     } catch (err) {
@@ -44,6 +55,36 @@ if (getSession()) {
         : "Sign-in didn't work (" + err.message + "). Try again, or ask Youssef.", "err");
       $("password").select();
     }
+  });
+
+  $("mfa-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = $("mfa-btn");
+    btn.disabled = true;
+    btn.textContent = "Verifying…";
+    $("mfa-msg").hidden = true;
+    try {
+      const session = await api("/mfa/challenge", {
+        method: "POST",
+        body: { challenge: mfaChallenge, code: $("mfa-code").value },
+      });
+      saveSession(session);
+      mfaChallenge = "";
+      location.replace("dashboard.html" + location.search + location.hash);
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = "Verify";
+      showMsg("mfa-msg", err.code === "mfa_invalid" ? "That code is invalid or already used. Try the current code."
+        : err.code === "rate_limited" ? "Too many tries. Wait a few minutes and try again."
+        : err.code === "network" ? "Can't reach the AIONE server. Check your connection and try again."
+        : err.message, "err");
+      $("mfa-code").select();
+    }
+  });
+  $("mfa-back").addEventListener("click", () => {
+    mfaChallenge = "";
+    $("password").value = "";
+    showView("signin");
   });
 
   $("forgot-link").addEventListener("click", () => {
