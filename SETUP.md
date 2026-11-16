@@ -19,6 +19,7 @@ The proxy's secrets are **Vercel environment variables**: vercel.com → aione-t
 | `ODOO_URL`, `ODOO_DB`, `ODOO_LOGIN`, `ODOO_API_KEY` | The Odoo Helpdesk connection (see "Odoo Helpdesk tickets") |
 | `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET` | Not used now: the Microsoft 365 alternative to Gmail, if an admin ever sets it up |
 | `JIRA_NOTIFICATION_SECRET` | Secret for the new-ticket Jira Automation webhook (at least 32 characters) |
+| `GITHUB_WEBHOOK_SECRET` | Secret for the GitHub issues webhook that creates internal tickets (at least 32 characters). See "GitHub issues become internal tickets" |
 | `NO_DEVELOPER_NOTIFY_TO` | Optional recipient override; defaults to `youssef@aione.biz,ellen@aione.biz` |
 | `APP_URL` | The dashboard address, like `https://dashboard.ai1.host`. Used in links in emails |
 
@@ -82,6 +83,19 @@ Managers also have a separate **Internal tickets** sidebar page, showing only `I
 - With "Email developer on assign" on, developers get an email when an administrator opens a ticket for them or adds them to one.
 
 They're stored in the same Upstash Redis database as the user accounts. The free plan holds 256 MB in total, which is plenty for tickets; attachments use most of it, so keep large files in Jira or a shared drive.
+
+### GitHub issues become internal tickets
+
+Each new GitHub issue (not pull request) in a repository listed in `GITHUB_ISSUE_SOURCES` (`proxy/settings.js`) becomes an internal ticket, with the title, description, labels, author and a link to the issue. The ticket's source is **GitHub**, its repository and issue number are shown in the ticket panel, and the number links to the original issue. Nothing is written back to GitHub. The ticket goes to the developer named in the setting (`bashar.k` for `KAD-org/flutter_pos`) when exactly one account has that developer name; otherwise it is created without a developer and only administrators see it.
+
+Setup, once per repository:
+
+1. Set `GITHUB_WEBHOOK_SECRET` in Vercel (at least 32 characters, random). Redeploy.
+2. The proxy's `GITHUB_TOKEN` must be able to **read issues** in the repository (in addition to pull requests).
+3. In the repository on GitHub: **Settings → Webhooks → Add webhook**. Payload URL `https://aione-team-proxy.vercel.app/github/webhook`, content type `application/json`, the same secret, and only the **Issues** event.
+4. Existing issues: an administrator calls `POST /github/issues/import` with `{"repo":"KAD-org/flutter_pos"}` (open and closed issues; each call imports as many pages as fit in its time limit, so repeat with `{"repo":…,"page":nextPage}` until `done` is true). Issues already imported are skipped, so it is safe to run again.
+
+A delivery GitHub sends twice creates one ticket. GitHub doesn't retry failed deliveries on its own; redeliver them from the webhook's **Recent Deliveries** page.
 
 ## Odoo Helpdesk tickets
 

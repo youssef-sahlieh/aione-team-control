@@ -29,6 +29,9 @@ export default {
   GITHUB_REPOS: "KAD-org/flutter_pos,KAD-org/flutter_pos_api,KAD-org/alam_portal,KAD-org/AlamPortal",
   // Other spellings people use for this project's ticket keys in PRs (AIONE-12 means AION-12).
   GITHUB_JIRA_ALIASES: "AIONE",
+  // GitHub issues (not pull requests) that become internal tickets, by repository. Each names the developer its new tickets
+  // go to (as on the Users page). Webhook: /github/webhook, secret in GITHUB_WEBHOOK_SECRET (at least 32 characters).
+  GITHUB_ISSUE_SOURCES: { "KAD-org/flutter_pos": { developer: "bashar.k" } },
   // Where links in emails point (the dashboard, on GitHub Pages at its own domain).
   APP_URL: "https://dashboard.ai1.host"
 };
