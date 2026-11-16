@@ -8,6 +8,11 @@ const SYNC_MS = 2 * 60 * 1000;
 // review and commit times, so the index is read again once.
 const INDEX_KEY = "github:prs:v4", LOCK_KEY = "github:prs:lock";
 const MAX_PAGES_FIRST_SYNC = 40; // 4,000 PRs per repository
+// The index keeps every pull request that names a ticket, plus every open or draft one that names none (the Needs
+// review page lists all open pull requests). An index saved before that (no SCOPE) is read again from the start once,
+// so open pull requests it dropped come back.
+const SCOPE = "linked+open";
+const keep = (r) => r.keys.length > 0 || r.state === "open" || r.state === "draft";
 
 export const githubConfigured = (env) => !!(env.GITHUB_TOKEN && repos(env).length);
 export function repos(env) { return String(env.GITHUB_REPOS || "").split(",").map((r) => r.trim()).filter((r) => /^[\w.-]+\/[\w.-]+$/.test(r)); }
@@ -65,7 +70,7 @@ async function gh(env, path) {
   return res.json();
 }
 
-// The whole index: every pull request that names a ticket, and when it was last synced. statusError is the last
+// The whole index: every pull request that names a ticket or is open (see keep), and when it was last synced. statusError is the last
 // failure to read review states ("" when the last sync read them all).
 export async function pullIndex(env) { try { return JSON.parse((await env.STORE.get(INDEX_KEY)) || "null") || { prs: {}, cursors: {}, syncedAt: 0 }; } catch { return { prs: {}, cursors: {}, syncedAt: 0 }; } }
 
@@ -81,6 +86,7 @@ export async function syncPulls(env, { force = false } = {}) {
   const owner = crypto.randomUUID();
   if (!(await env.STORE.setIfAbsent(LOCK_KEY, owner, 120))) return { index, synced: false };
   try {
+    if (index.scope !== SCOPE) { index.cursors = {}; index.scope = SCOPE; }
     const errors = {}, at = Date.now();
     const failRepo = (repo, stage, e) => {
       const error = String((e && e.message) || e).slice(0, 200);
@@ -97,7 +103,7 @@ export async function syncPulls(env, { force = false } = {}) {
           for (const pr of list) {
             if (cursor && pr.updated_at <= cursor) { done = true; break; }
             const r = record(env, repo, pr, index.prs[repo + "#" + pr.number]);
-            if (r.keys.length) index.prs[r.id] = r; else delete index.prs[r.id];
+            if (keep(r)) index.prs[r.id] = r; else delete index.prs[r.id];
             if (!newest || pr.updated_at > newest) newest = pr.updated_at;
           }
           if (list.length < 100) done = true;

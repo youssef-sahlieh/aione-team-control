@@ -280,7 +280,7 @@ test("a pull request whose review data was never read is unknown, never awaiting
   assert.deepEqual(prReviewState(pr({ created: day(0), status: undefined }), [{ createdAt: day(1) }]), { state: "unknown", reason: "", since: day(1), sinceKind: "requested", counts: true });
 });
 
-test("administrators see the queue of tickets whose pull requests need a review; everyone else gets 403", async () => {
+test("administrators see every open pull request, one row each, with the tickets it names; everyone else gets 403", async () => {
   const t = setup();
   const adminToken = await t.seed("admin-1", "admin@aione.test", "Ellen", "admin");
   const reviewer = await t.seed("u-1", "sam@aione.test", "Sam", "user");
@@ -291,32 +291,38 @@ test("administrators see the queue of tickets whose pull requests need a review;
   assert.equal(body.configured, true);
   assert.equal(body.syncError, "");
   assert.equal(body.ticketsError, "");
-  assert.deepEqual(body.counts, { tickets: 2, prs: 1 }, "one pull request naming two tickets: two tickets, one pull request");
-  const jiraTicket = body.tickets.find((x) => x.key === "AION-71");
-  assert.equal(jiraTicket.title, "Forecourt opening cash");
-  assert.equal(jiraTicket.assignee, "Dev One");
-  assert.equal(jiraTicket.status, "In Progress");
-  assert.deepEqual(jiraTicket.prs.map((p) => [p.state, p.reviewers]), [["awaiting", []]], "no reviewer assigned");
-  assert.equal(body.tickets.find((x) => x.key === "INT-45").assignee, "Sam");
+  assert.equal(body.canFlag, true);
+  assert.deepEqual(body.counts, { prs: 1, tickets: 2, awaiting: 1 }, "one pull request naming two tickets: one row, two tickets");
+  assert.equal(body.prs.length, 1);
+  const [row] = body.prs;
+  assert.deepEqual([row.id, row.repo, row.number, row.author, row.state, row.draft, row.rami, row.reviewers], [PR_ID, "KAD-org/flutter_pos", 553, "dev1", "awaiting", false, false, []]);
+  assert.deepEqual(row.tickets.map((x) => [x.key, x.title, x.status, x.assignee]), [["AION-71", "Forecourt opening cash", "In Progress", "Dev One"], ["INT-45", "Refund rounding", "Open", "Sam"]]);
   assert.equal((await t.call("GET", "/reviews/queue", reviewer)).status, 403);
 });
 
-test("the queue leaves out drafts, merged and closed pull requests, and approvals that need nothing more", async () => {
+test("unlinked, draft, approved and changes-requested pull requests are all listed; merged and closed ones are not", async () => {
   const t = setup({ prs: {
-    "KAD-org/flutter_pos#10": pulled(10, { state: "draft" }),
+    "KAD-org/flutter_pos#10": pulled(10, { state: "draft", keys: [] }),
     "KAD-org/flutter_pos#11": pulled(11, { state: "merged", merged: now }),
     "KAD-org/flutter_pos#12": pulled(12, { state: "closed" }),
     "KAD-org/flutter_pos#13": pulled(13, { status: { reviews: [{ by: "rev", state: "APPROVED", at: day(2) }], lastCommitAt: day(1), decision: "APPROVED" } }),
-    "KAD-org/flutter_pos#14": pulled(14, { status: { reviews: [{ by: "rev", state: "APPROVED", at: day(1) }], lastCommitAt: day(2), decision: "APPROVED" } }),
+    "KAD-org/flutter_pos#14": pulled(14, { keys: [], status: { reviews: [], requested: [], requests: [] } }),
+    "KAD-org/flutter_pos#15": pulled(15, { keys: ["AION-9999"], status: { reviews: [{ by: "rev", state: "CHANGES_REQUESTED", at: day(3) }], lastCommitAt: day(1) } }),
+    // A repository no longer in GITHUB_REPOS is not listed.
+    "KAD-org/old#1": pulled(1, { id: "KAD-org/old#1" }),
   } });
   const adminToken = await t.seed("admin-1", "admin@aione.test", "Ellen", "admin");
   const body = await (await t.call("GET", "/reviews/queue", adminToken)).json();
-  assert.deepEqual(body.tickets.map((x) => x.key), ["AION-84"]);
-  assert.deepEqual(body.tickets[0].prs.map((p) => [p.number, p.state, p.reason]), [[14, "approved", "stale"]]);
-  assert.deepEqual(body.counts, { tickets: 1, prs: 1 });
+  const rows = Object.fromEntries(body.prs.map((p) => [p.number, p]));
+  assert.deepEqual(Object.keys(rows).map(Number).sort((a, b) => a - b), [10, 13, 14, 15]);
+  assert.deepEqual([rows[10].draft, rows[10].state, rows[10].tickets], [true, "draft", []], "a draft is listed, unlinked, and not awaiting");
+  assert.deepEqual([rows[13].state, rows[13].tickets.map((x) => x.key)], ["approved", ["AION-83"]]);
+  assert.deepEqual([rows[14].state, rows[14].tickets], ["awaiting", []], "an unlinked pull request is listed");
+  assert.deepEqual([rows[15].state, rows[15].tickets], ["changes_requested", []], "a key Jira doesn't know is not a link");
+  assert.deepEqual(body.counts, { prs: 4, tickets: 1, awaiting: 1 });
 });
 
-test("the queue lists the longest wait first, and a ticket with two pull requests shows both", async () => {
+test("the queue lists the longest wait first, and two pull requests on one ticket are separate rows", async () => {
   const t = setup({ prs: {
     "KAD-org/flutter_pos#20": pulled(20, { keys: ["AION-71"], status: { reviews: [], requests: [{ at: day(1) }], requested: [] } }),
     "KAD-org/flutter_pos#21": pulled(21, { keys: ["AION-71", "AION-80"], status: { reviews: [], requests: [{ at: day(5) }], requested: [] } }),
@@ -324,11 +330,10 @@ test("the queue lists the longest wait first, and a ticket with two pull request
   } });
   const adminToken = await t.seed("admin-1", "admin@aione.test", "Ellen", "admin");
   const body = await (await t.call("GET", "/reviews/queue", adminToken)).json();
-  assert.deepEqual(body.tickets.map((x) => x.key), ["AION-71", "AION-80"]);
-  assert.deepEqual(body.tickets[0].prs.map((p) => p.number), [20, 21]);
-  // A real review wait comes first; the time changes were requested is not one, so it follows.
-  assert.deepEqual(body.tickets[1].prs.map((p) => [p.number, p.state, p.sinceKind]), [[21, "awaiting", "requested"], [22, "changes_requested", "changes"]]);
-  assert.deepEqual(body.counts, { tickets: 2, prs: 3 });
+  // Real review waits first (oldest first); the time changes were requested is not one, so it follows.
+  assert.deepEqual(body.prs.map((p) => [p.number, p.state, p.sinceKind]), [[20, "awaiting", "requested"], [21, "awaiting", "requested"], [22, "changes_requested", "changes"]]);
+  assert.deepEqual(body.prs.filter((p) => p.tickets.some((x) => x.key === "AION-71")).map((p) => p.number), [20, 21]);
+  assert.deepEqual(body.counts, { prs: 3, tickets: 2, awaiting: 2 });
 });
 
 test("the queue names each pull request's reviewers, including ones asked on GitHub, and says when there are none", async () => {
@@ -338,8 +343,7 @@ test("the queue names each pull request's reviewers, including ones asked on Git
   await t.seed("u-2", "lee@aione.test", "Lee", "user");
   await t.call("PUT", "/reviews/pr?id=" + encodeURIComponent(PR_ID), adminToken, { reviewerIds: ["u-2"] });
   const body = await (await t.call("GET", "/reviews/queue", adminToken)).json();
-  const aion = body.tickets.find((x) => x.key === "AION-71");
-  assert.deepEqual(aion.prs[0].reviewers.map((r) => r.name), ["Lee", "Sam"]);
+  assert.deepEqual(body.prs[0].reviewers.map((r) => r.name), ["Lee", "Sam"]);
   assert.deepEqual(body.reviewers, ["Lee", "Sam"]);
 });
 
@@ -348,7 +352,7 @@ test("a failed sync or a failed Jira read is said so, and the queue is never rep
   const a1 = await pullsDown.seed("admin-1", "admin@aione.test", "Ellen", "admin");
   const stale = await (await pullsDown.call("GET", "/reviews/queue", a1)).json();
   assert.match(stale.syncError, /Couldn't read pull requests/);
-  assert.ok(stale.tickets.some((x) => x.key === "AION-71"), "the last synced pull requests still show");
+  assert.ok(stale.prs.some((p) => p.id === PR_ID), "the last synced pull requests still show");
 
   const statusDown = setup({ syncedAt: 0 });
   const a2 = await statusDown.seed("admin-1", "admin@aione.test", "Ellen", "admin");
@@ -359,20 +363,20 @@ test("a failed sync or a failed Jira read is said so, and the queue is never rep
   const a3 = await jiraDown.seed("admin-1", "admin@aione.test", "Ellen", "admin");
   const noTitles = await (await jiraDown.call("GET", "/reviews/queue", a3)).json();
   assert.equal(noTitles.ticketsError, "Jira couldn't be read, so titles and assignees may be missing.");
-  assert.equal(noTitles.tickets.find((x) => x.key === "AION-71").title, "AION-71");
+  assert.equal(noTitles.prs[0].tickets.find((x) => x.key === "AION-71").title, "AION-71");
 
   const off = setup({ configured: false });
   const a4 = await off.seed("admin-1", "admin@aione.test", "Ellen", "admin");
   const notSet = await (await off.call("GET", "/reviews/queue", a4)).json();
   assert.equal(notSet.configured, false);
-  assert.deepEqual(notSet.tickets, []);
+  assert.deepEqual(notSet.prs, []);
 
   const none = setup({ prs: {} });
   const a5 = await none.seed("admin-1", "admin@aione.test", "Ellen", "admin");
   const empty = await (await none.call("GET", "/reviews/queue", a5)).json();
   assert.equal(empty.configured, true);
   assert.equal(empty.syncError, "");
-  assert.deepEqual(empty.tickets, []);
+  assert.deepEqual(empty.prs, []);
 });
 
 test("an administrator reads any ticket read-only, whether or not a pull request names it", async () => {
@@ -389,13 +393,9 @@ test("an administrator reads any ticket read-only, whether or not a pull request
 test("the queue says who should review, keeps a closed ticket's open pull request, and marks a failed repository's data stale", async () => {
   const closedIssue = { key: "AION-90", fields: { summary: "Old till", status: { name: "Done", statusCategory: { key: "done" } }, assignee: { displayName: "Dev One" }, labels: ["ai1_sam"] } };
   const t = setup({ issues: [...ISSUES, closedIssue], prs: {
-    // A person and a team asked on GitHub: the team's request time is unknown, the person's is known.
     "KAD-org/flutter_pos#30": pulled(30, { keys: ["AION-71"], status: { reviews: [], requested: ["sam-gh", "Mobile"], requests: [{ by: "sam-gh", kind: "user", at: day(2) }, { by: "Mobile", kind: "team", at: null }], at: Date.parse(day(4)) } }),
-    // Nobody asked and nobody reviewed.
     "KAD-org/flutter_pos#31": pulled(31, { keys: ["AION-90"], created: day(1), status: { reviews: [], requested: [], requests: [], at: Date.parse(day(4)) } }),
-    // GitHub's review data was never read.
     "KAD-org/flutter_pos#32": pulled(32, { keys: ["AION-80"], created: day(0), status: undefined }),
-    // Changes requested by someone no longer asked.
     "KAD-org/flutter_pos#33": pulled(33, { keys: ["AION-81"], status: { reviews: [{ by: "lee-gh", state: "CHANGES_REQUESTED", at: day(3) }], requested: [], requests: [], lastCommitAt: day(2), at: Date.parse(day(4)) } }),
   } });
   const adminToken = await t.seed("admin-1", "admin@aione.test", "Ellen", "admin");
@@ -404,20 +404,102 @@ test("the queue says who should review, keeps a closed ticket's open pull reques
   const index = JSON.parse(await t.STORE.get("github:prs:v4"));
   await t.STORE.set("github:prs:v4", JSON.stringify({ ...index, okAt: Date.parse(day(4)), repoErrors: { "KAD-org/flutter_pos": { stage: "status", error: "GitHub GraphQL answered 502", at: Date.parse(day(5)) } }, repoOkAt: { "KAD-org/flutter_pos": Date.parse(day(4)) } }));
   const body = await (await t.call("GET", "/reviews/queue", adminToken)).json();
-  const pr = (n) => body.tickets.flatMap((x) => x.prs).find((p) => p.number === n);
+  const pr = (n) => body.prs.find((p) => p.number === n);
   assert.deepEqual(pr(30).reviewers, [{ name: "Sam", login: "sam-gh", kind: "user", review: "", pending: true }, { name: "Mobile", login: "", kind: "team", review: "", pending: true }]);
   assert.equal(pr(30).reviewerState, "pending");
   assert.deepEqual([pr(30).since, pr(30).sinceKind], [day(2), "requested"]);
   assert.deepEqual([pr(31).reviewerState, pr(31).sinceKind], ["none", "opened"]);
   assert.deepEqual([pr(32).state, pr(32).reviewerState, pr(32).reviewers], ["unknown", "unavailable", []]);
   assert.deepEqual([pr(33).state, pr(33).reviewerState, pr(33).reviewers.map((r) => [r.name, r.review, r.pending])], ["changes_requested", "given", [["Lee", "CHANGES_REQUESTED", false]]]);
-  const closed = body.tickets.find((x) => x.key === "AION-90");
-  assert.deepEqual([closed.status, closed.ticketDone, closed.devs], ["Done", true, ["Sam"]]);
-  assert.equal(body.tickets.find((x) => x.key === "AION-71").ticketDone, false);
-  // The failed repository's pull requests stay, marked stale with when their review data was read.
-  assert.ok(body.tickets.flatMap((x) => x.prs).every((p) => p.stale));
+  const closed = pr(31).tickets[0];
+  assert.deepEqual([closed.key, closed.status, closed.done, closed.devs], ["AION-90", "Done", true, ["Sam"]]);
+  assert.equal(pr(30).tickets[0].done, false);
+  assert.ok(body.prs.every((p) => p.stale));
   assert.equal(pr(30).statusAt, day(4));
   assert.deepEqual({ ...body.refresh, attemptedAt: undefined }, { attemptedAt: undefined, okAt: day(4), repos: 1, failedRepos: 1, failures: [{ repo: "KAD-org/flutter_pos", stage: "status", error: "GitHub GraphQL answered 502", lastOkAt: day(4) }] });
-  // Real review waits first (#30 asked on day 2), then the rest by their time.
-  assert.equal(body.tickets[0].key, "AION-71");
+  assert.equal(body.prs[0].number, 30);
+});
+
+test("the Rami flag is saved per pull request, survives a GitHub sync, and does nothing else", async () => {
+  const other = "KAD-org/flutter_pos#554";
+  const t = setup({ syncedAt: 0, prs: { [PR_ID]: pr(), [other]: pulled(554, { keys: ["AION-71"] }) } });
+  const adminToken = await t.seed("admin-1", "admin@aione.test", "Ellen", "admin");
+  const flag = (id, flagged, token = adminToken) => t.call("PUT", "/reviews/rami?id=" + encodeURIComponent(id), token, { flagged });
+  const calls = [];
+  const fetchBefore = globalThis.fetch;
+  globalThis.fetch = (url, init) => { calls.push(String(url)); return fetchBefore(url, init); };
+  const res = await flag(PR_ID, true);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { id: PR_ID, rami: true });
+  assert.deepEqual(calls, [], "ticking Rami asks GitHub (or anything else) for nothing");
+  assert.deepEqual(await t.STORE.smembers("review-flags:rami"), [PR_ID]);
+  assert.equal(await t.STORE.get("inbox:admin@aione.test"), null, "nobody is notified");
+  assert.equal(await t.STORE.get("review:" + PR_ID), null, "no review assignment is made");
+  globalThis.fetch = fetchBefore;
+
+  // A sync (syncedAt 0 makes the queue read GitHub) leaves the flag alone; the other pull request on the same ticket has
+  // its own flag.
+  const body = await (await t.call("GET", "/reviews/queue?refresh=1", adminToken)).json();
+  assert.deepEqual(body.prs.map((p) => [p.id, p.rami]).sort(), [[PR_ID, true], [other, false]]);
+  assert.equal(body.prs.find((p) => p.id === PR_ID).reviewers.length, 0, "no reviewer was added");
+
+  assert.equal((await flag(PR_ID, false)).status, 200);
+  assert.deepEqual(await t.STORE.smembers("review-flags:rami"), []);
+  const after = await (await t.call("GET", "/reviews/queue", adminToken)).json();
+  assert.ok(after.prs.every((p) => !p.rami));
+});
+
+test("only administrators change the Rami flag; reviewers see it read-only, and bad requests are refused", async () => {
+  const t = setup();
+  const adminToken = await t.seed("admin-1", "admin@aione.test", "Ellen", "admin");
+  const reviewer = await t.seed("u-1", "sam@aione.test", "Sam", "user");
+  const flag = (id, body, token = adminToken, method = "PUT") => t.call(method, "/reviews/rami?id=" + encodeURIComponent(id), token, body);
+  assert.equal((await flag(PR_ID, { flagged: true }, reviewer)).status, 403);
+  assert.deepEqual(await t.STORE.smembers("review-flags:rami"), []);
+  assert.equal((await flag("not a pr", { flagged: true })).status, 400);
+  assert.equal((await flag(PR_ID, { flagged: "yes" })).status, 400);
+  assert.equal((await flag("KAD-org/flutter_pos#999", { flagged: true })).status, 404, "an unknown pull request can't be flagged");
+  assert.equal((await flag(PR_ID, { flagged: true }, adminToken, "POST")).status, 405);
+  assert.equal((await flag(PR_ID, { flagged: true })).status, 200);
+  // The reviewer sees the flag on their own list, without a way to change it.
+  await t.call("PUT", "/reviews/pr?id=" + encodeURIComponent(PR_ID), adminToken, { reviewerIds: ["u-1"] });
+  const mine = await (await t.call("GET", "/reviews/me", reviewer)).json();
+  assert.equal(mine.items[0].rami, true);
+});
+
+test("Rami (RAMI_EMAIL) gets the open flagged pull requests to check, and reads their tickets; nobody else gets that list", async () => {
+  const other = "KAD-org/flutter_pos#554", closed = "KAD-org/flutter_pos#555";
+  const t = setup({ prs: {
+    [PR_ID]: pr(),
+    [other]: pr({ id: other, number: 554, title: "chore: bump dependencies", keys: [], state: "draft", updated: "2026-01-01T00:00:00Z" }),
+    [closed]: pr({ id: closed, number: 555, title: "fix: shift report", keys: ["AION-81"], state: "closed" })
+  } });
+  t.env.RAMI_EMAIL = "Rami@aione.test";
+  const adminToken = await t.seed("admin-1", "admin@aione.test", "Ellen", "admin");
+  const rami = await t.seed("u-9", "rami@aione.test", "Rami", "user");
+  const outsider = await t.seed("u-2", "lee@aione.test", "Lee", "user");
+  const before = await (await t.call("GET", "/reviews/me", rami)).json();
+  assert.deepEqual(before.flagged, [], "nothing flagged yet");
+  for (const id of [PR_ID, other, closed]) assert.equal((await t.call("PUT", "/reviews/rami?id=" + encodeURIComponent(id), adminToken, { flagged: true })).status, 200);
+  assert.equal((await t.call("GET", "/reviews/ticket?key=AION-81", rami)).status, 404, "a closed flagged pull request gives no ticket access");
+
+  const mine = await (await t.call("GET", "/reviews/me", rami)).json();
+  assert.deepEqual(mine.items, [], "a flag is not a review assignment");
+  assert.deepEqual(mine.flagged.map((p) => [p.id, p.draft, p.tickets.map((k) => k.key)]), [[PR_ID, false, ["AION-71"]], [other, true, []]], "open ones only, newest first; a key Jira doesn't know is not a link");
+  assert.equal(mine.flagged[0].tickets[0].title, "Forecourt opening cash");
+  assert.equal(mine.flagged[0].url, "https://github.com/KAD-org/flutter_pos/pull/553");
+  assert.equal((await t.call("GET", "/reviews/ticket?key=AION-71", rami)).status, 200, "Rami reads a flagged pull request's ticket");
+  assert.equal((await t.call("GET", "/reviews/ticket/attachment?key=AION-80&id=10001", rami)).status, 404);
+  assert.deepEqual(t.github, [], "no GitHub request");
+
+  const theirs = await (await t.call("GET", "/reviews/me", outsider)).json();
+  assert.equal(theirs.flagged, undefined);
+  assert.equal((await t.call("GET", "/reviews/ticket?key=AION-71", outsider)).status, 404);
+  // Unflagging takes the pull request, and its ticket access, away.
+  await t.call("PUT", "/reviews/rami?id=" + encodeURIComponent(PR_ID), adminToken, { flagged: false });
+  assert.deepEqual((await (await t.call("GET", "/reviews/me", rami)).json()).flagged.map((p) => p.id), [other]);
+  assert.equal((await t.call("GET", "/reviews/ticket?key=AION-71", rami)).status, 404);
+  // Without RAMI_EMAIL nobody gets the list.
+  delete t.env.RAMI_EMAIL;
+  assert.equal((await (await t.call("GET", "/reviews/me", rami)).json()).flagged, undefined);
 });

@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {STATUS_LABEL, reviewLabel, sortQueue, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, queueStateLabel, queueReasonText, waitingFor, longestWaitFirst, filterQueue, queueCounts, queueOptions, NO_REVIEWER, waitLine, safePrUrl, reviewerText, noReviewerText, sortTickets, queueSummary, activeFilters, exactTime} from "../../public/assets/models/reviews.js";
+import {STATUS_LABEL, reviewLabel, sortQueue, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, queueStateLabel, queueReasonText, waitingFor, longestWaitFirst, filterQueue, queueOptions, NO_REVIEWER, waitLine, safePrUrl, reviewerText, noReviewerText, sortPrs, groupByTicket, QUICK_FILTERS, VIEWS, queueSummary, activeFilters, exactTime} from "../../public/assets/models/reviews.js";
 
 test("the queue puts what needs the reviewer first and finished work last, newest first within a status",()=>{
   const queue=sortQueue([
@@ -47,8 +47,8 @@ test("the assignment line names who asked and when",()=>{
   assert.equal(assignedLine({}),"Asked");
 });
 
-const pr = (over) => ({ id: "acme/web#1", repo: "acme/web", number: 1, title: "Fix totals", url: "https://github.test/1", author: "ellen", state: "awaiting", reason: "", since: "2026-11-01T10:00:00Z", reviewers: [], ...over });
-const ticket = (over) => ({ key: "AION-1", title: "Forecourt cash", status: "In Review", assignee: "Ellen", client: "Acme", subClient: "Till", since: "2026-11-01T10:00:00Z", prs: [pr({})], ...over });
+const pr = (over) => ({ id: "acme/web#1", repo: "acme/web", number: 1, title: "Fix totals", url: "https://github.test/1", author: "ellen", state: "awaiting", reason: "", since: "2026-11-01T10:00:00Z", reviewers: [], tickets: [], rami: false, draft: false, ...over });
+const tk = (over) => ({ key: "AION-1", title: "Forecourt cash", status: "In Review", done: false, assignee: "Ellen", client: "Acme", subClient: "Till", ...over });
 
 test("the queue states read in plain words, with the reason only where the state doesn't say why",()=>{
   assert.equal(queueStateLabel({state:"awaiting"}),"Awaiting review");
@@ -81,45 +81,86 @@ test("the longest wait comes first, and an unknown wait goes last",()=>{
   assert.deepEqual(sorted, ["2026-11-01T00:00:00Z", "2026-11-05T00:00:00Z", null]);
 });
 
-test("a search matches the ticket key, the ticket title or the pull request title, case-insensitively",()=>{
-  const tickets = [ticket({ key: "AION-1", title: "Forecourt cash", prs: [pr({ id: "a#1", title: "Fix totals" })] }), ticket({ key: "AION-2", title: "Refund rounding", prs: [pr({ id: "b#2", title: "Round refunds" })] })];
-  assert.deepEqual(filterQueue(tickets, { search: "aion-2" }).map((t) => t.key), ["AION-2"]);
-  assert.deepEqual(filterQueue(tickets, { search: "forecourt" }).map((t) => t.key), ["AION-1"]);
-  assert.deepEqual(filterQueue(tickets, { search: "ROUND REFUNDS" }).map((t) => t.key), ["AION-2"]);
-  assert.deepEqual(filterQueue(tickets, { search: "nothing like this" }), []);
+test("a search matches the pull request title, repository and number, author, and a linked ticket's key or title",()=>{
+  const prs = [pr({ id: "acme/web#1", title: "Fix totals", tickets: [tk({ key: "AION-1", title: "Forecourt cash" })] }), pr({ id: "acme/api#2", repo: "acme/api", number: 2, title: "Round refunds", author: "lee", tickets: [] })];
+  const ids = (f) => filterQueue(prs, f).map((p) => p.id);
+  assert.deepEqual(ids({ search: "aion-1" }), ["acme/web#1"]);
+  assert.deepEqual(ids({ search: "FORECOURT" }), ["acme/web#1"]);
+  assert.deepEqual(ids({ search: "round refunds" }), ["acme/api#2"]);
+  assert.deepEqual(ids({ search: "acme/api#2" }), ["acme/api#2"]);
+  assert.deepEqual(ids({ search: "LEE" }), ["acme/api#2"]);
+  assert.deepEqual(ids({ search: "nothing like this" }), []);
 });
 
-test("a ticket that matches keeps all its pull requests, but a PR-title match keeps only that pull request",()=>{
-  const tickets = [ticket({ key: "AION-1", title: "Forecourt cash", prs: [pr({ id: "a#1", title: "Fix totals" }), pr({ id: "a#2", title: "Cash drawer" })] })];
-  assert.equal(filterQueue(tickets, { search: "forecourt" })[0].prs.length, 2);
-  const byPr = filterQueue(tickets, { search: "drawer" });
-  assert.deepEqual(byPr[0].prs.map((p) => p.id), ["a#2"]);
-});
-
-test("the project, repository, state and reviewer filters combine, and 'No reviewer assigned' finds the unreviewed",()=>{
+test("the project, repository, state, reviewer and quick filters all combine; an unlinked pull request has no project",()=>{
   const lee = { name: "Lee", login: "lee" };
-  const tickets = [
-    ticket({ key: "AION-1", client: "Acme", prs: [pr({ id: "web#1", repo: "acme/web", state: "awaiting", reviewers: [lee] })] }),
-    ticket({ key: "AION-2", client: "Beta", prs: [pr({ id: "api#2", repo: "acme/api", state: "changes_requested", reviewers: [] })] })
+  const prs = [
+    pr({ id: "web#1", repo: "acme/web", state: "awaiting", reviewers: [lee], reviewerState: "pending", tickets: [tk({ client: "Acme" })], rami: true }),
+    pr({ id: "api#2", repo: "acme/api", state: "changes_requested", reviewerState: "given", reviewers: [{ name: "Sam" }], tickets: [tk({ key: "AION-2", client: "Beta" })] }),
+    pr({ id: "api#3", repo: "acme/api", state: "awaiting", reviewerState: "none", tickets: [] }),
+    pr({ id: "web#4", repo: "acme/web", state: "draft", draft: true, reviewerState: "none", tickets: [], rami: true }),
+    pr({ id: "web#5", repo: "acme/web", state: "unknown", reviewerState: "unavailable", tickets: [] })
   ];
-  assert.deepEqual(filterQueue(tickets, { client: "Beta" }).map((t) => t.key), ["AION-2"]);
-  assert.deepEqual(filterQueue(tickets, { repo: "acme/web" }).map((t) => t.key), ["AION-1"]);
-  assert.deepEqual(filterQueue(tickets, { state: "changes_requested" }).map((t) => t.key), ["AION-2"]);
-  assert.deepEqual(filterQueue(tickets, { reviewer: "Lee" }).map((t) => t.key), ["AION-1"]);
-  assert.deepEqual(filterQueue(tickets, { reviewer: NO_REVIEWER }).map((t) => t.key), ["AION-2"]);
-  assert.deepEqual(filterQueue(tickets, { client: "Acme", state: "changes_requested" }), []);
+  const ids = (f) => filterQueue(prs, f).map((p) => p.id);
+  assert.deepEqual(ids({ client: "Beta" }), ["api#2"]);
+  assert.deepEqual(ids({ repo: "acme/web" }), ["web#1", "web#4", "web#5"]);
+  assert.deepEqual(ids({ state: "draft" }), ["web#4"]);
+  assert.deepEqual(ids({ reviewer: "Lee" }), ["web#1"]);
+  // Unknown reviewer data is not "no reviewer".
+  assert.deepEqual(ids({ reviewer: NO_REVIEWER }), ["api#3", "web#4"]);
+  assert.deepEqual(ids({ quick: "linked" }), ["web#1", "api#2"]);
+  assert.deepEqual(ids({ quick: "unlinked" }), ["api#3", "web#4", "web#5"]);
+  assert.deepEqual(ids({ quick: "rami" }), ["web#1", "web#4"]);
+  assert.deepEqual(ids({ quick: "no_reviewer" }), ["api#3", "web#4"]);
+  assert.deepEqual(ids({ quick: "changes" }), ["api#2"]);
+  assert.deepEqual(ids({ quick: "rami", repo: "acme/web", state: "draft" }), ["web#4"]);
+  assert.deepEqual(ids({ quick: "unlinked", client: "Acme" }), []);
+  assert.equal(ids({ quick: "nonsense" }).length, 5, "an unknown quick filter keeps everything");
 });
 
-test("counts give tickets and distinct pull requests, so a pull request on two tickets counts once",()=>{
-  const shared = pr({ id: "web#9" });
-  const tickets = [ticket({ key: "AION-1", prs: [shared] }), ticket({ key: "AION-2", prs: [shared, pr({ id: "web#10" })] })];
-  assert.deepEqual(queueCounts(tickets), { tickets: 2, prs: 2 });
-  assert.deepEqual(queueCounts([]), { tickets: 0, prs: 0 });
+test("the quick filters are the six asked for, in order, and the list is the default view",()=>{
+  assert.deepEqual(QUICK_FILTERS.map(([, label]) => label), ["All PRs", "Linked to ticket", "Unlinked PRs", "Rami flagged", "No reviewer", "Changes requested"]);
+  assert.deepEqual(VIEWS.map(([v]) => v), ["prs", "tickets"]);
 });
 
-test("the filter menus list each client, repository and reviewer once, in order",()=>{
-  const tickets = [ticket({ client: "Beta", prs: [pr({ repo: "acme/web", reviewers: [{ name: "Sam" }] })] }), ticket({ key: "AION-2", client: "Acme", prs: [pr({ id: "x#3", repo: "acme/api", reviewers: [{ name: "Lee" }, { name: "Sam" }] })] })];
-  assert.deepEqual(queueOptions(tickets), { clients: ["Acme", "Beta"], repos: ["acme/api", "acme/web"], reviewers: ["Lee", "Sam"] });
+test("the filter menus list each project, repository and reviewer once, in order",()=>{
+  const prs = [pr({ repo: "acme/web", reviewers: [{ name: "Sam" }], tickets: [tk({ client: "Beta" })] }), pr({ id: "x#3", repo: "acme/api", reviewers: [{ name: "Lee" }, { name: "Sam" }], tickets: [tk({ key: "AION-2", client: "Acme" }), tk({ key: "AION-3", client: "" })] }), pr({ id: "y#4", repo: "acme/api", tickets: [] })];
+  assert.deepEqual(queueOptions(prs), { clients: ["Acme", "Beta"], repos: ["acme/api", "acme/web"], reviewers: ["Lee", "Sam"] });
+});
+
+test("the default sort puts the longest real review wait first, then other times, then unknown ones",()=>{
+  const prs = [
+    pr({ id: "a#1", repo: "a", number: 1, since: "2026-10-01T00:00:00Z", sinceKind: "opened", tickets: [tk({ key: "AION-10" })] }),
+    pr({ id: "b#2", repo: "b", number: 2, since: "", sinceKind: "", tickets: [] }),
+    pr({ id: "c#3", repo: "c", number: 3, since: "2026-11-05T00:00:00Z", sinceKind: "requested", tickets: [tk({ key: "AION-3" })] }),
+    pr({ id: "c#4", repo: "c", number: 4, since: "2026-11-02T00:00:00Z", sinceKind: "requested", tickets: [tk({ key: "AION-2" })] })
+  ];
+  const ids = (sort) => sortPrs(prs, sort).map((p) => p.id);
+  assert.deepEqual(ids(), ["c#4", "c#3", "a#1", "b#2"]);
+  assert.deepEqual(ids("recent"), ["c#3", "c#4", "a#1", "b#2"]);
+  assert.deepEqual(ids("key"), ["c#4", "c#3", "a#1", "b#2"], "ticket keys in number order, unlinked last");
+  assert.deepEqual(ids("repo"), ["a#1", "b#2", "c#3", "c#4"]);
+  assert.deepEqual(prs.map((p) => p.id), ["a#1", "b#2", "c#3", "c#4"], "the input is not reordered");
+});
+
+test("the By ticket view lists each ticket with its pull requests, a shared pull request under both, and the unlinked last",()=>{
+  const shared = pr({ id: "web#9", tickets: [tk({ key: "AION-1" }), tk({ key: "AION-2", title: "Till float" })] });
+  const groups = groupByTicket([pr({ id: "web#8", tickets: [] }), shared, pr({ id: "web#10", tickets: [tk({ key: "AION-2", title: "Till float" })] })]);
+  assert.deepEqual(groups.map((g) => [g.key, g.prs.map((p) => p.id)]), [["AION-1", ["web#9"]], ["AION-2", ["web#9", "web#10"]], ["", ["web#8"]]]);
+  assert.equal(groups[1].title, "Till float");
+  assert.deepEqual(groupByTicket([pr({ tickets: [tk({})] })]).map((g) => g.key), ["AION-1"], "no unlinked group when there are none");
+  assert.deepEqual(groupByTicket([]), []);
+});
+
+test("the summary cards count pull requests, distinct linked tickets, unlinked, no reviewer, Rami and awaiting",()=>{
+  const prs = [
+    pr({ id: "web#9", reviewerState: "none", tickets: [tk({ key: "AION-1" }), tk({ key: "AION-2" })], rami: true }),
+    pr({ id: "web#10", state: "changes_requested", reviewerState: "given", reviewers: [{ name: "Lee" }], tickets: [tk({ key: "AION-2" })] }),
+    pr({ id: "web#11", state: "unknown", reviewerState: "unavailable", tickets: [] }),
+    pr({ id: "web#12", state: "draft", draft: true, reviewerState: "none", tickets: [], rami: true })
+  ];
+  assert.deepEqual(queueSummary(prs), { prs: 4, tickets: 2, unlinked: 2, noReviewer: 2, rami: 2, awaiting: 1 });
+  assert.deepEqual(queueSummary([]), { prs: 0, tickets: 0, unlinked: 0, noReviewer: 0, rami: 0, awaiting: 0 });
 });
 
 test("only a known request time is called waiting for review; otherwise the time says what it is",()=>{
@@ -152,45 +193,6 @@ test("reviewers say who they are, whether a team, and where their review stands"
   assert.equal(reviewerText({ name: "Ana" }), "Ana");
   assert.equal(noReviewerText({ reviewerState: "none" }), "No reviewer requested");
   assert.equal(noReviewerText({ reviewerState: "unavailable" }), "Reviewer data unavailable");
-});
-
-test("the quick filters find no reviewer, changes requested and missing review data; search finds a repository",()=>{
-  const tickets = [
-    ticket({ key: "AION-1", prs: [pr({ id: "web#1", repo: "acme/web", number: 1, reviewerState: "none" }), pr({ id: "web#2", repo: "acme/web", number: 2, state: "changes_requested", reviewerState: "given", reviewers: [{ name: "Lee" }] })] }),
-    ticket({ key: "AION-2", prs: [pr({ id: "api#3", repo: "acme/api", number: 3, state: "unknown", reviewerState: "unavailable" })] })
-  ];
-  assert.deepEqual(filterQueue(tickets, { quick: "no_reviewer" }).flatMap((t) => t.prs.map((p) => p.id)), ["web#1"]);
-  assert.deepEqual(filterQueue(tickets, { quick: "changes" }).flatMap((t) => t.prs.map((p) => p.id)), ["web#2"]);
-  assert.deepEqual(filterQueue(tickets, { quick: "unavailable" }).flatMap((t) => t.prs.map((p) => p.id)), ["api#3"]);
-  // Unknown reviewer data is not "no reviewer".
-  assert.deepEqual(filterQueue(tickets, { reviewer: NO_REVIEWER }).flatMap((t) => t.prs.map((p) => p.id)), ["web#1"]);
-  assert.deepEqual(filterQueue(tickets, { search: "acme/api" }).map((t) => t.key), ["AION-2"]);
-  assert.deepEqual(filterQueue(tickets, { search: "web#2" }).flatMap((t) => t.prs.map((p) => p.id)), ["web#2"]);
-});
-
-test("the default sort puts the longest real review wait first, then other times, then unknown ones",()=>{
-  const tickets = [
-    ticket({ key: "AION-10", prs: [pr({ id: "a#1", since: "2026-10-01T00:00:00Z", sinceKind: "opened" })] }),
-    ticket({ key: "AION-2", prs: [pr({ id: "b#2", since: "", sinceKind: "" })] }),
-    ticket({ key: "AION-3", prs: [pr({ id: "c#3", number: 3, since: "2026-11-05T00:00:00Z", sinceKind: "requested" }), pr({ id: "c#4", number: 4, since: "2026-11-02T00:00:00Z", sinceKind: "requested" })] })
-  ];
-  const waited = sortTickets(tickets);
-  assert.deepEqual(waited.map((t) => t.key), ["AION-3", "AION-10", "AION-2"]);
-  assert.deepEqual(waited[0].prs.map((p) => p.id), ["c#4", "c#3"]);
-  assert.equal(waited[0].since, "2026-11-02T00:00:00Z");
-  assert.deepEqual(sortTickets(tickets, "recent").map((t) => t.key), ["AION-3", "AION-10", "AION-2"]);
-  assert.deepEqual(sortTickets(tickets, "recent")[0].prs.map((p) => p.id), ["c#3", "c#4"]);
-  assert.deepEqual(sortTickets(tickets, "key").map((t) => t.key), ["AION-2", "AION-3", "AION-10"]);
-});
-
-test("the summary counts each pull request once, even when it names two tickets",()=>{
-  const shared = pr({ id: "web#9", reviewerState: "none" });
-  const tickets = [
-    ticket({ key: "AION-1", prs: [shared] }),
-    ticket({ key: "AION-2", prs: [shared, pr({ id: "web#10", state: "changes_requested", reviewerState: "given", reviewers: [{ name: "Lee" }] }), pr({ id: "web#11", state: "unknown", reviewerState: "unavailable" })] })
-  ];
-  assert.deepEqual(queueSummary(tickets), { prs: 3, tickets: 2, noReviewer: 1, changes: 1, unavailable: 1 });
-  assert.deepEqual(queueSummary([]), { prs: 0, tickets: 0, noReviewer: 0, changes: 0, unavailable: 0 });
 });
 
 test("the active filters read as chips; the sort and empty values are not filters",()=>{

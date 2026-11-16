@@ -38,7 +38,7 @@ function toast(text) {
 // count needs every ticket and your filters, so the dashboard's last one stays. A failed read keeps the last count.
 function refreshCounts(cfg, admin) {
   fetchDateRequests(api).then(all => setNavCount("requests", pendingDateCount(all, { admin, email: cfg.email || "" })), () => {});
-  if (admin) api("/reviews/queue").then(q => setNavCount("reviews", q.configured ? q.counts.tickets : 0), () => {});
+  if (admin) api("/reviews/queue").then(q => setNavCount("reviews", q.configured ? q.counts.awaiting : 0), () => {});
   else setNavCount("reviews", 0);
 }
 

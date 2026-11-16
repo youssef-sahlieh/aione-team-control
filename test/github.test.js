@@ -196,3 +196,26 @@ test("a repository that can't be read keeps its last pull requests and the other
   assert.ok(after.repoOkAt["KAD-org/flutter_pos_api"] > first.repoOkAt["KAD-org/flutter_pos_api"] || after.repoOkAt["KAD-org/flutter_pos_api"] === after.syncedAt);
   assert.doesNotMatch(JSON.stringify(after), /gh-token/);
 });
+
+test("open pull requests that name no ticket are kept for the review queue, and dropped once they close", async () => {
+  const { env, call, pulls, gh } = setup();
+  const admin = { email: "admin@aione.biz", name: "Admin", role: "admin", dev: "", v: 1 };
+  await saveUser(env.STORE, admin);
+  const { token } = await makeToken(env, admin.email, Date.now(), 1);
+  // An index saved before unlinked pull requests were kept (no scope) is read again in full once.
+  await env.STORE.set("github:prs:v4", JSON.stringify({ prs: {}, cursors: { "KAD-org/flutter_pos": "2026-10-20T00:00:00Z", "KAD-org/flutter_pos_api": "2026-10-20T00:00:00Z" }, syncedAt: 0 }));
+  await call("/github/prs?keys=AION-71", token);
+  const index = () => env.STORE.get("github:prs:v4").then((raw) => JSON.parse(raw).prs);
+  const kept = await index();
+  assert.equal(kept["KAD-org/flutter_pos#550"]?.state, "open", "the unlinked open pull request is in the index");
+  assert.deepEqual(kept["KAD-org/flutter_pos#550"].keys, []);
+  assert.equal(kept["KAD-org/flutter_pos_api#170"]?.state, "closed", "a closed one that names a ticket stays, as before");
+  // Once it closes, the unlinked pull request leaves the index.
+  // GitHub lists the most recently updated first.
+  const [merged, unlinked] = pulls["KAD-org/flutter_pos"];
+  pulls["KAD-org/flutter_pos"] = [{ ...unlinked, state: "closed", updated_at: "2026-10-14T10:00:00Z" }, merged];
+  const before = gh.length;
+  await call("/github/prs?keys=AION-71&refresh=1", token);
+  assert.ok(gh.length > before);
+  assert.equal((await index())["KAD-org/flutter_pos#550"], undefined);
+});
