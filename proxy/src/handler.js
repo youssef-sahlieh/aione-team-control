@@ -37,6 +37,7 @@ import { cookieSessionRequest } from "./sessions.js";
 import { SESSION_MS, SESSION_SECONDS } from "./session-policy.js";
 import { aiChat, aiBrief, aiConfigured, aiDescription, aiImproveWriting, aiWorkDescription, AIError } from "./ai.js";
 import { githubConfigured, syncPulls, prsByKey } from "./github.js";
+import { githubWebhook, importGithubIssues } from "./github-issues.js";
 import { reviewRoutes, requestWaitingReviews, adfText } from "./reviews.js";
 import { recordTicketEvent, ticketLogRoutes, readTicketLog } from "./ticket-log.js";
 import { integrationRoutes } from "./integrations.js";
@@ -422,6 +423,11 @@ async function route(request, env, url) {
   if (path === "/health" && method === "GET") return json({ok:true, apiVersion:1, capabilities:["date-requests-v1", "ticket-notes-v1", "odoo-helpdesk-v1", "ticket-business-v1","agreed-hours-v1","reports-all-v1","reports-saved-v1", "db-report-v1", "db-report-company-v1", "db-report-pos-version-v1", "time-entries-v1","epic-map-v1","analytics-v1","ticket-bulk-import-v1","project-admin-v1","project-budget-v1","billing-v1"], build: String(env.BUILD || "").slice(0, 7)});
 
   // Jira Automation uses its own secret, never a team password or a user's browser session.
+  // GitHub issue webhook (issues: opened). GitHub has no sign-in, so the HMAC signature is the only check.
+  if (path === "/github/webhook") {
+    if (method !== "POST") return fail("method", "Use POST for GitHub events.", 405);
+    return githubWebhook(request, env);
+  }
   if (path === "/notifications/jira-created") {
     if (method !== "POST") return fail("method", "Use POST for Jira events.", 405);
     if (!env.JIRA_NOTIFICATION_SECRET || env.JIRA_NOTIFICATION_SECRET.length < 32) return fail("notification_off", "Ticket notifications aren't configured.", 503);
@@ -680,6 +686,13 @@ async function route(request, env, url) {
     sendMail:(from,body)=>sendMail(env,from,body)
   });
   if (path === "/inbox" || path.startsWith("/inbox/")) return inboxRoutes(request, env, url, me);
+  // Brings in the existing issues of a GitHub repository as internal tickets (administrators; safe to repeat).
+  if (path === "/github/issues/import" && method === "POST") {
+    if (me.role !== "admin") return fail("forbidden", "Only administrators can import GitHub issues.", 403);
+    const b = (await readJson(request)) || {};
+    try { return json(await importGithubIssues(env, { repo: b.repo, page: b.page })); }
+    catch (err) { return fail("github_import", String(err.message || "The import failed."), err.status || 500); }
+  }
   if (path === "/internal" || path.startsWith("/internal/")) return internalRoutes(request, env, url, me, { sendMail: (from, body) => sendMail(env, from, body) });
   if (path === "/odoo/tickets" || path.startsWith("/odoo/tickets/")) return odooRoutes(request, env, url, me);
   if (path.startsWith("/monitor/odoo/")) return odooAppRoutes(request, env, url, me);

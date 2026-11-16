@@ -1242,11 +1242,21 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
       $("d-reply").placeholder="Write a reply to the customer (Odoo emails it to them). For the team, use Internal note.";
     }catch(err){ if(dz.key===key) $("d-desc").replaceChildren(el("span","msg err",errorText(err))); }
   }
+  // A ticket made from a GitHub issue: its source, repository and a link to the original issue (the same facts list as Jira's).
+  function githubFacts(t){
+    const g=t.source==="github"&&t.external?t.external:null; if(!g) return [];
+    const link=el("a",null,"#"+g.number); link.href=g.url; link.target="_blank"; link.rel="noopener";
+    const w=el("div"); w.appendChild(el("dt",null,"GitHub Issue")); const dd=el("dd"); dd.appendChild(link); w.appendChild(dd);
+    const out=[fact("Source","GitHub"),fact("Repository",g.repo),w];
+    if(g.labels&&g.labels.length) out.push(fact("Labels",g.labels.join(", ")));
+    if(g.assignmentError) out.push(fact("Developer","Not set: "+g.assignmentError));
+    return out;
+  }
   function renderInternal(key){
     const t=INT[key]; if(!t){ $("d-desc").replaceChildren(el("span",null,"Ticket not found.")); return; }
     const ni=normInternal(t);
     $("d-title").textContent=t.summary; $("d-status").textContent=t.status; $("d-status").className="stbtn "+stK(ni);
-    $("d-facts").replaceChildren(fact("Type","Internal (not in Jira)"),fact("Assignee",ni.assigneeName),fact("Priority",t.priority),fact("Developers",(t.devs||[]).map(d=>"ai1_"+d).join(", ")),fact("Opened by",t.createdBy&&t.createdBy.name),fact("Created date",createdDate(t.created)),fact("Updated",ago(t.updated)),fact("Due",t.due?fmtDate(t.due):"not set"),fact("Closed",t.closedAt?ago(t.closedAt):""));
+    $("d-facts").replaceChildren(fact("Type","Internal (not in Jira)"),...githubFacts(t),fact("Assignee",ni.assigneeName),fact("Priority",t.priority),fact("Developers",(t.devs||[]).map(d=>"ai1_"+d).join(", ")),fact("Opened by",t.createdBy&&t.createdBy.name),fact("Created date",createdDate(t.created)),fact("Updated",ago(t.updated)),fact("Due",t.due?fmtDate(t.due):"not set"),fact("Closed",t.closedAt?ago(t.closedAt):""));
     dz.labels=ni.labels.slice(); dz.devs=new Set(ni.devs); renderDevChips(); $("d-due").value=t.due||"";
     HIST[key]={updated:t.updated,changes:(t.dueHistory||[]).map(h=>({when:h.when,by:h.by,from:h.from,to:h.to}))}; renderDrawerHist(key);
     fillAssigneePick(issueByKey(key));
