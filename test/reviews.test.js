@@ -503,3 +503,47 @@ test("Rami (RAMI_EMAIL) gets the open flagged pull requests to check, and reads 
   delete t.env.RAMI_EMAIL;
   assert.equal((await (await t.call("GET", "/reviews/me", rami)).json()).flagged, undefined);
 });
+
+test("Rami's internal notes on a flagged pull request: saved with author and time, kept when unflagged, never sent to GitHub", async () => {
+  const t = setup();
+  t.env.RAMI_EMAIL = "rami@aione.test";
+  const adminToken = await t.seed("admin-1", "admin@aione.test", "Ellen", "admin");
+  const rami = await t.seed("u-9", "rami@aione.test", "Rami", "user");
+  const outsider = await t.seed("u-2", "lee@aione.test", "Lee", "user");
+  const notes = (token) => t.call("GET", "/reviews/notes?id=" + encodeURIComponent(PR_ID), token);
+  const add = (token, body) => t.call("POST", "/reviews/notes?id=" + encodeURIComponent(PR_ID), token, body);
+  const flag = (flagged) => t.call("PUT", "/reviews/rami?id=" + encodeURIComponent(PR_ID), adminToken, { flagged });
+
+  assert.equal((await notes(rami)).status, 404, "an unflagged pull request gives Rami no notes");
+  assert.equal((await add(rami, { body: "x" })).status, 404);
+  await flag(true);
+  const first = await add(rami, { body: "  Check the till float  " });
+  assert.equal(first.status, 201);
+  const saved = (await first.json()).note;
+  assert.equal(saved.body, "Check the till float", "trimmed");
+  assert.equal(saved.author.email, "rami@aione.test");
+  assert.equal(saved.author.name, "Rami");
+  assert.ok(saved.at);
+  assert.equal((await add(adminToken, { body: "Second note" })).status, 201);
+  assert.deepEqual((await (await notes(rami)).json()).notes.map((n) => n.body), ["Check the till float", "Second note"], "oldest first");
+  assert.equal((await add(rami, { body: "   " })).status, 400);
+  assert.equal((await add(rami, { body: "x".repeat(2001) })).status, 400);
+  assert.equal((await add(outsider, { body: "hi" })).status, 404);
+  assert.equal((await notes(outsider)).status, 404);
+  assert.deepEqual(t.github, [], "notes are never sent to GitHub");
+  assert.equal((await (await t.call("GET", "/reviews/me", rami)).json()).flagged[0].notes, 2);
+
+  await flag(false);
+  assert.equal((await notes(rami)).status, 404, "unflagged: Rami loses access");
+  assert.equal((await (await notes(adminToken)).json()).notes.length, 2, "the notes are kept");
+  await flag(true);
+  assert.equal((await (await notes(rami)).json()).notes.length, 2, "flagged again: the same notes are back");
+
+  // A closed pull request leaves Rami's view; the notes stay for administrators.
+  const index = JSON.parse(await t.STORE.get("github:prs:v4"));
+  index.prs[PR_ID].state = "closed";
+  await t.STORE.set("github:prs:v4", JSON.stringify(index));
+  assert.equal((await notes(rami)).status, 404, "closed: Rami loses access");
+  assert.equal((await add(rami, { body: "late" })).status, 404);
+  assert.equal((await (await notes(adminToken)).json()).notes.length, 2);
+});

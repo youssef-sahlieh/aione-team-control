@@ -104,9 +104,10 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
   body .business-list .gr.head>span{flex:none;font-size:12px;white-space:nowrap}
   body .business-list .gr.head>.c-rep,body .business-list .gr.head>.c-upd,body .business-list .gr.head>.c-note,body .business-list .gr.head>.c-actions,body .business-list .gr.head>span:empty{display:none!important}
   body .business-list .gr.head .column-sort{min-height:40px;padding:4px 8px;font-size:12px}
-  body .business-list .gr:not(.head){display:grid!important;grid-template-columns:24px minmax(0,1fr) minmax(0,1fr) 40px!important;grid-template-areas:"ck key key actions" "ck ttl ttl ttl" "ck st due due" "ck who dev dev" "ck prio client client"!important;gap:8px 10px!important;width:auto;min-width:0;padding:14px 12px;align-items:center}
+  body .business-list .gr:not(.head){display:grid!important;grid-template-columns:24px minmax(0,1fr) minmax(0,1fr) 40px!important;grid-template-areas:"ck key key actions" "ck ttl ttl ttl" "ck st due due" "ck who dev dev" "ck prio client client" "ck note note note"!important;gap:8px 10px!important;width:auto;min-width:0;padding:14px 12px;align-items:center}
   body .business-list .gr:not(.head)>*{grid-column:auto!important}
   body .business-list .gr:not(.head)>.c-ck{grid-area:ck!important;align-self:start}
+  body .business-list .gr:not(.head)>.c-note{grid-area:note!important;justify-self:start}
   body .business-list .gr:not(.head)>.c-key{grid-area:key!important}
   body .business-list .gr:not(.head)>.c-ttl{grid-area:ttl!important;white-space:normal}
   body .business-list .gr:not(.head)>.c-st{grid-area:st!important;justify-self:start}
@@ -116,7 +117,7 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
   body .business-list .gr:not(.head)>.c-prio{grid-area:prio!important;justify-self:start}
   body .business-list .gr:not(.head)>.c-clientName{grid-area:client!important}
   body .business-list .gr:not(.head)>.c-actions{grid-area:actions!important;justify-self:end}
-  body .business-list .gr:not(.head)>:not(.c-ck):not(.c-key):not(.c-ttl):not(.c-st):not(.c-due):not(.c-who):not(.c-dev):not(.c-prio):not(.c-clientName):not(.c-actions){display:none!important}
+  body .business-list .gr:not(.head)>:not(.c-ck):not(.c-key):not(.c-ttl):not(.c-st):not(.c-due):not(.c-who):not(.c-dev):not(.c-prio):not(.c-clientName):not(.c-note):not(.c-actions){display:none!important}
   body .business-list .gr:not(.head) .business-key-date{display:none}
   /* Touch sizes: checkboxes, the calendar arrows, filter chips, the account button and the Rami flag. */
   .ck{width:24px;height:24px}
