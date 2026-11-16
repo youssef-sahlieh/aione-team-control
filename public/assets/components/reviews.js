@@ -187,8 +187,52 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     const actions = el("div", "review-actions");
     if (url) { const a = el("a", "btn primary", "Open on GitHub to comment"); a.href = url; a.target = "_blank"; a.rel = "noopener"; actions.append(a); }
     for (const t of pr.tickets) actions.append(btn("Read " + t.key, "btn", () => openTicket(t.key)));
-    c.append(actions);
+    c.append(actions, notesPanel(pr));
     return c;
+  }
+
+  // Internal notes on a flagged pull request. Loaded when opened; saved here only, never sent to GitHub.
+  function notesPanel(pr) {
+    const box = el("details", "review-notes");
+    const summary = el("summary", "", "Notes (" + (pr.notes || 0) + ")");
+    const list = el("div", "review-notes-list");
+    const form = el("form", "review-note-form");
+    const text = el("textarea", "");
+    text.rows = 2; text.maxLength = 2000; text.setAttribute("aria-label", "Internal note on " + pr.repo + " #" + pr.number);
+    const send = el("button", "btn primary", "Add note"); send.type = "submit";
+    const msg = el("p", "msg err");
+    msg.setAttribute("role", "alert");
+    form.append(text, send, msg);
+    box.append(summary, list, form);
+    let notes = null;
+    const show = () => {
+      summary.textContent = "Notes (" + notes.length + ")";
+      list.replaceChildren();
+      if (!notes.length) list.append(el("p", "empty-copy", "No notes yet."));
+      for (const n of notes) {
+        const row = el("div", "review-note");
+        row.append(el("p", "review-note-meta", (n.author?.name || "Someone") + " · " + exactTime(n.at)), el("p", "review-note-body", n.body));
+        list.append(row);
+      }
+    };
+    box.addEventListener("toggle", async () => {
+      if (!box.open || notes) return;
+      list.textContent = "Loading…";
+      try { notes = (await api("/reviews/notes?id=" + encodeURIComponent(pr.id))).notes; show(); }
+      catch (err) { list.replaceChildren(el("p", "msg err", errorText(err))); }
+    });
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const body = text.value.trim();
+      if (!body || !notes) return;
+      send.disabled = true; msg.textContent = "";
+      try {
+        const saved = (await api("/reviews/notes?id=" + encodeURIComponent(pr.id), { method: "POST", body: { body } })).note;
+        notes = [...notes, saved]; text.value = ""; show();
+      } catch (err) { msg.textContent = "Couldn't save the note: " + errorText(err); }
+      finally { send.disabled = false; }
+    });
+    return box;
   }
 
   // The reviewer's "Needs review" page. Rami also gets the pull requests flagged for him, above his reviews.

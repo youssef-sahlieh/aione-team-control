@@ -187,7 +187,7 @@ import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
     if(problem){ box.appendChild(el("span","msg err","Couldn't load pull requests: "+problem)); return; }
     if(!list){ $("d-prs-count").textContent=""; box.appendChild(el("span","msg","Looking for pull requests…")); loadPrs([key]); return; }
     $("d-prs-count").textContent="("+list.length+")";
-    if(!PR_CHECKS&&list.length) box.appendChild(el("p","msg","Check results aren't shown: the GitHub token needs read access to Checks and Commit statuses."));
+    if(!PR_CHECKS&&list.length) box.appendChild(el("p","pr-note","Check results aren't shown: the GitHub token needs read access to Checks and Commit statuses."));
     if(!list.length){ box.appendChild(el("span","msg","No pull request mentions "+key+" yet. Put "+key+" in the PR title, branch or the release note's Jira line.")); return; }
     list.forEach(p=>{
       const row=el("div","pr-row"), a=el("a","pr-link",p.repo+" #"+p.number); a.href=p.url; a.target="_blank"; a.rel="noopener";

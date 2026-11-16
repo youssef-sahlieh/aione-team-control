@@ -42,6 +42,33 @@ const ramiFlags = async (env) => new Set(await env.STORE.smembers(RAMI_KEY));
 // Rami's dashboard account (the RAMI_EMAIL setting). He sees the open pull requests flagged for him, to check them and
 // comment on GitHub himself. Being flagged is not a review: no assignment, no GitHub request, no notification.
 const isRami = (env, user) => !!lc(env.RAMI_EMAIL) && lc(user.email) === lc(env.RAMI_EMAIL);
+// Internal comments on a pull request, for Rami and administrators. Stored apart from GitHub: nothing is posted to
+// GitHub, and they are kept when the flag is removed or the pull request closes ("pr-notes:<owner/repo#number>", a JSON
+// list changed with compare-and-set, oldest first).
+const notesKey = (prId) => "pr-notes:" + prId;
+const NOTE_MAX = 2000, NOTES_PER_PR = 200;
+async function readNotes(env, prId) {
+  const raw = await env.STORE.get(notesKey(prId));
+  return raw ? JSON.parse(raw) : [];
+}
+// Administrators always can. Rami can only while the pull request is open and still flagged for him.
+async function notesAccess(env, user, isAdmin, prId) {
+  if (isAdmin) return true;
+  if (!isRami(env, user) || !(await ramiFlags(env)).has(prId)) return false;
+  return isOpen(await prRecord(env, prId));
+}
+// Adds one note. Returns the note, or "full" when the pull request has reached NOTES_PER_PR.
+async function addNote(env, prId, author, body) {
+  const key = notesKey(prId);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const raw = await env.STORE.get(key);
+    const notes = raw ? JSON.parse(raw) : [];
+    if (notes.length >= NOTES_PER_PR) return "full";
+    const note = { id: crypto.randomUUID(), author, at: nowIso(), body };
+    if (await env.STORE.writeIndexed(key, raw, JSON.stringify([...notes, note]), [], [])) return note;
+  }
+  throw new Error("The notes changed while they were being saved. Try again.");
+}
 async function flaggedOpen(env) {
   const [index, flags] = await Promise.all([pullIndex(env), ramiFlags(env)]);
   const configured = new Set(repos(env));
@@ -237,10 +264,11 @@ async function myQueue(env, user, deps) {
   if (!isRami(env, user)) return json({ items, prError });
   const open = await flaggedOpen(env);
   const { details, error: ticketsError } = await ticketDetails(env, deps, [...new Set(open.flatMap((pr) => (pr.keys || []).filter((k) => TICKET.test(k))))]);
-  const flagged = open.map((pr) => ({
+  const flagged = (await Promise.all(open.map(async (pr) => ({
     id: pr.id, repo: pr.id.split("#")[0], number: pr.number, title: pr.title, url: pr.url, author: pr.author || "", draft: pr.state === "draft", updated: pr.updated || null,
-    tickets: (pr.keys || []).filter((k) => details.has(k) || (!!ticketsError && jiraKey(k))).map((k) => ({ key: k, title: details.get(k)?.title || k }))
-  })).sort((a, b) => String(b.updated || "").localeCompare(String(a.updated || "")) || a.id.localeCompare(b.id));
+    tickets: (pr.keys || []).filter((k) => details.has(k) || (!!ticketsError && jiraKey(k))).map((k) => ({ key: k, title: details.get(k)?.title || k })),
+    notes: (await readNotes(env, pr.id)).length
+  })))).sort((a, b) => String(b.updated || "").localeCompare(String(a.updated || "")) || a.id.localeCompare(b.id));
   return json({ items, prError, flagged, ticketsError });
 }
 
@@ -593,6 +621,22 @@ export async function reviewRoutes(request, env, url, me, deps) {
     const b = await readJson();
     if (typeof b?.flagged !== "boolean") return fail("bad_request", "Say whether the pull request is flagged.", 400);
     return setRamiFlag(env, prId, b.flagged);
+  }
+
+  // Internal notes on a pull request (see notesAccess): never sent to GitHub.
+  if (path === "/reviews/notes") {
+    if (!PR_ID.test(prId)) return fail("bad_request", "Choose a pull request.", 400);
+    if (!(await notesAccess(env, user, isAdmin, prId))) return fail("not_found", "Pull request unavailable.", 404);
+    if (method === "GET") return json({ notes: await readNotes(env, prId) });
+    if (method === "POST") {
+      const b = await readJson();
+      const body = typeof b?.body === "string" ? b.body.trim() : "";
+      if (!body || body.length > NOTE_MAX) return fail("bad_request", "Write a note of up to " + NOTE_MAX + " characters.", 400);
+      const note = await addNote(env, prId, { email: user.email, name: user.name || user.email }, body);
+      if (note === "full") return fail("full", "This pull request has the most notes it can hold.", 409);
+      return json({ note }, 201);
+    }
+    return fail("method", "Use GET or POST here.", 405);
   }
 
   if (path === "/reviews/pr") {

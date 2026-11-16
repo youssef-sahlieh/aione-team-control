@@ -16,6 +16,16 @@ body[data-workspace-page=reviews]:has(#workspace-content > .queue) #refresh{disp
 .review-flagged-list h2,.review-list-heading{font-size:15px;margin:0}
 .review-list-heading{margin-bottom:12px}
 .review-card.review-flagged{border-left:3px solid var(--muted)}
+.review-notes{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+.review-notes>summary{cursor:pointer;font-size:13px;font-weight:600;min-height:32px;display:flex;align-items:center}
+.review-notes-list{display:grid;gap:8px;margin:8px 0}
+.review-note{border-left:2px solid var(--line-strong);padding:2px 0 2px 10px}
+.review-note-meta{margin:0;font-size:12px;color:var(--muted)}
+.review-note-body{margin:2px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}
+.review-note-form{display:grid;gap:6px;margin-top:8px}
+.review-note-form textarea{width:100%;box-sizing:border-box;font:inherit;font-size:14px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:inherit;resize:vertical}
+.review-note-form .btn{justify-self:start}
+.review-note-form .msg{margin:0}
 .review-card .review-actions a.btn{text-decoration:none}
 .review-head-line{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .review-title{font-weight:600;color:var(--fg);text-decoration:none;overflow-wrap:anywhere}
