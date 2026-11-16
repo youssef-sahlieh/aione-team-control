@@ -43,8 +43,8 @@ export function assignedLine(item) {
 }
 
 // The administrators' queue (GET /reviews/queue): one state per pull request, as the proxy works it out from GitHub.
-// "unknown": GitHub's review data couldn't be read, so the pull request is listed but never called awaiting. The proxy
-// leaves drafts out of the queue; their label is here so one is never shown raw.
+// "unknown": GitHub's review data couldn't be read, so the pull request is listed but never called awaiting. "draft":
+// a draft pull request nobody has reviewed yet (it is not waiting for a review).
 export const QUEUE_STATE_LABEL = { awaiting: "Awaiting review", changes_requested: "Changes requested", approved: "Approved", draft: "Draft", unknown: "Review information unavailable" };
 export const queueStateLabel = (pr) => QUEUE_STATE_LABEL[pr.state] || QUEUE_STATE_LABEL.unknown;
 export const NO_REVIEWER = "__none";
@@ -106,50 +106,50 @@ export function reviewerText(r) {
 // When a pull request lists no reviewer: say whether none was asked or GitHub's data is missing.
 export const noReviewerText = (pr) => (pr.reviewerState === "unavailable" ? "Reviewer data unavailable" : "No reviewer requested");
 const noReviewer = (pr) => (pr.reviewerState ? pr.reviewerState === "none" : !pr.reviewers.length);
-const unavailable = (pr) => pr.state === "unknown" || pr.reviewerState === "unavailable";
 
-// The quick filters above the list, and what each keeps.
-export const QUICK_FILTERS = [["", "All"], ["no_reviewer", "No reviewer"], ["changes", "Changes requested"], ["unavailable", "Review data unavailable"]];
-const QUICK = { no_reviewer: noReviewer, changes: (pr) => pr.state === "changes_requested", unavailable };
+// The queue is one row per open pull request (GET /reviews/queue: prs). pr.tickets lists the tickets it names; none
+// means it is unlinked. pr.rami is the Rami reference flag. pr.draft says it is a draft.
+const linked = (pr) => (pr.tickets || []).length > 0;
 
-export const SORTS = [["wait", "Longest wait first"], ["recent", "Most recent first"], ["key", "Ticket key"]];
+// The quick filters above the list, and what each keeps. They combine with the search and the menus.
+export const QUICK_FILTERS = [["", "All PRs"], ["linked", "Linked to ticket"], ["unlinked", "Unlinked PRs"], ["rami", "Rami flagged"], ["no_reviewer", "No reviewer"], ["changes", "Changes requested"]];
+const QUICK = { linked, unlinked: (pr) => !linked(pr), rami: (pr) => !!pr.rami, no_reviewer: noReviewer, changes: (pr) => pr.state === "changes_requested" };
 
-// The choices for the queue's filters, taken from the tickets that are there now.
-export function queueOptions(tickets) {
+export const SORTS = [["wait", "Longest wait first"], ["recent", "Most recent first"], ["key", "Ticket key"], ["repo", "Repository"]];
+
+// The views: one row per pull request (the default), or the pull requests under each ticket they name.
+export const VIEWS = [["prs", "List"], ["tickets", "By ticket"]];
+
+// The choices for the queue's filters, taken from the pull requests that are there now.
+export function queueOptions(prs) {
   const sorted = (set) => [...set].filter(Boolean).sort((a, b) => a.localeCompare(b));
-  const prs = tickets.flatMap((t) => t.prs);
   return {
-    clients: sorted(new Set(tickets.map((t) => t.client))),
+    clients: sorted(new Set(prs.flatMap((pr) => (pr.tickets || []).map((t) => t.client)))),
     repos: sorted(new Set(prs.map((pr) => pr.repo))),
     reviewers: sorted(new Set(prs.flatMap((pr) => pr.reviewers.map((r) => r.name))))
   };
 }
 
-// Narrows the queue. A ticket that matches by key or title keeps all its pull requests; otherwise only pull requests
-// whose title or repository (as "repo#number") matches stay. A ticket with no pull request left is dropped. Order is kept.
-export function filterQueue(tickets, f = {}) {
+// Narrows the pull requests. Every filter must match. The search looks at the title, "repo#number", the author and
+// each linked ticket's key and title, case-insensitively. A project matches through a linked ticket, so an unlinked
+// pull request has no project. Order is kept.
+export function filterQueue(prs, f = {}) {
   const q = (f.search || "").trim().toLowerCase();
   const has = (text) => (text || "").toLowerCase().includes(q);
   const quick = QUICK[f.quick];
-  return tickets
-    .filter((t) => !f.client || t.client === f.client)
-    .map((t) => {
-      const ticketMatch = !q || has(t.key) || has(t.title);
-      const prs = t.prs.filter((pr) => (ticketMatch || has(pr.title) || has(pr.repo + "#" + pr.number))
-        && (!f.repo || pr.repo === f.repo)
-        && (!f.state || pr.state === f.state)
-        && (!quick || quick(pr))
-        && (!f.reviewer || (f.reviewer === NO_REVIEWER ? noReviewer(pr) : pr.reviewers.some((r) => r.name === f.reviewer))));
-      return { ...t, prs };
-    })
-    .filter((t) => t.prs.length);
+  return prs.filter((pr) => (!q || has(pr.title) || has(pr.repo + "#" + pr.number) || has(pr.author) || (pr.tickets || []).some((t) => has(t.key) || has(t.title)))
+    && (!f.client || (pr.tickets || []).some((t) => t.client === f.client))
+    && (!f.repo || pr.repo === f.repo)
+    && (!f.state || pr.state === f.state)
+    && (!quick || quick(pr))
+    && (!f.reviewer || (f.reviewer === NO_REVIEWER ? noReviewer(pr) : pr.reviewers.some((r) => r.name === f.reviewer))));
 }
 
-// Orders the tickets and the pull requests in each one.
+// Orders the pull requests.
 //   wait (default): the longest real wait first, as the proxy does: a review request or new-commit time comes before a
 //   time that isn't a review wait (changes requested, approval, PR age), and a pull request with no time goes last.
-//   recent: the newest of those times first. key: by ticket key, numbers in order.
-// A ticket's time is its first pull request's, so after filtering it follows the pull requests still shown.
+//   recent: the newest of those times first. key: by first linked ticket key (numbers in order), unlinked last.
+//   repo: by repository, then number.
 const WAIT_RANK = { requested: 0, commit: 0 };
 const time = (x) => { const t = Date.parse(x.since || ""); return Number.isNaN(t) ? null : t; };
 const byWait = (a, b) => {
@@ -158,32 +158,44 @@ const byWait = (a, b) => {
   return ra - rb || (ta ?? 0) - (tb ?? 0);
 };
 const byRecent = (a, b) => (time(b) ?? -Infinity) - (time(a) ?? -Infinity) || 0;
-export function sortTickets(tickets, sort = "wait") {
-  const cmp = sort === "recent" ? byRecent : byWait;
-  const out = tickets.map((t) => {
-    const prs = [...t.prs].sort((a, b) => cmp(a, b) || a.number - b.number);
-    return { ...t, prs, since: prs[0]?.since || "", sinceKind: prs[0]?.sinceKind || "" };
-  });
-  const byKey = (a, b) => a.key.localeCompare(b.key, "en", { numeric: true });
-  return out.sort(sort === "key" ? byKey : (a, b) => cmp(a, b) || byKey(a, b));
+const firstKey = (pr) => (pr.tickets || [])[0]?.key || "";
+const byKey = (a, b) => (!firstKey(a) - !firstKey(b)) || firstKey(a).localeCompare(firstKey(b), "en", { numeric: true });
+const byRepo = (a, b) => a.repo.localeCompare(b.repo) || a.number - b.number;
+export function sortPrs(prs, sort = "wait") {
+  const cmp = { recent: byRecent, key: byKey, repo: byRepo }[sort] || byWait;
+  return [...prs].sort((a, b) => cmp(a, b) || byWait(a, b) || byRepo(a, b));
 }
 
-// Tickets and distinct pull requests. A pull request that names two tickets counts once as a pull request.
-export function queueCounts(tickets) {
-  return { tickets: tickets.length, prs: new Set(tickets.flatMap((t) => t.prs.map((pr) => pr.id))).size };
+// The "By ticket" view: each linked ticket with its pull requests (in the order given), in first-seen order, then one
+// group of the unlinked ones (key ""). A pull request naming two tickets is under both.
+export function groupByTicket(prs) {
+  const groups = new Map(), unlinked = [];
+  for (const pr of prs) {
+    if (!linked(pr)) { unlinked.push(pr); continue; }
+    for (const t of pr.tickets) {
+      if (!groups.has(t.key)) groups.set(t.key, { ...t, prs: [] });
+      groups.get(t.key).prs.push(pr);
+    }
+  }
+  const out = [...groups.values()];
+  if (unlinked.length) out.push({ key: "", title: "", prs: unlinked });
+  return out;
 }
 
-// The summary strip: distinct open pull requests, the tickets they name, and how many have no reviewer, changes
-// requested or no review data. Each pull request counts once however many tickets it names.
-export function queueSummary(tickets) {
-  const prs = [...new Map(tickets.flatMap((t) => t.prs.map((pr) => [pr.id, pr]))).values()];
+// The summary cards, from the pull requests given: open pull requests, distinct linked tickets, unlinked pull requests,
+// no reviewer, flagged for Rami, and awaiting review (drafts are never awaiting).
+export function queueSummary(prs) {
   return {
-    prs: prs.length, tickets: tickets.length,
-    noReviewer: prs.filter(noReviewer).length, changes: prs.filter(QUICK.changes).length, unavailable: prs.filter(unavailable).length
+    prs: prs.length,
+    tickets: new Set(prs.flatMap((pr) => (pr.tickets || []).map((t) => t.key))).size,
+    unlinked: prs.filter(QUICK.unlinked).length,
+    noReviewer: prs.filter(noReviewer).length,
+    rami: prs.filter(QUICK.rami).length,
+    awaiting: prs.filter((pr) => pr.state === "awaiting").length
   };
 }
 
-// The filters in use, as removable chips: [{ name, text }]. The sort isn't a filter.
+// The filters in use, as removable chips: [{ name, text }]. The sort and the view aren't filters.
 export function activeFilters(f = {}) {
   const out = [];
   const quick = QUICK_FILTERS.find(([v]) => v && v === f.quick);
@@ -195,4 +207,3 @@ export function activeFilters(f = {}) {
   if (f.state) out.push({ name: "state", text: "State: " + (QUEUE_STATE_LABEL[f.state] || f.state) });
   return out;
 }
-

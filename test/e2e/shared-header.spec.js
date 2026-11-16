@@ -26,7 +26,7 @@ async function mockApp(page, { datesDelay = 0, pendingDates = 1 } = {}) {
       if (datesDelay && calls.dates > 1) await new Promise((r) => setTimeout(r, datesDelay));
       return json({ requests: [...Array.from({ length: calls.dates > 1 ? pendingDates : 1 }, (_, i) => request("AION-" + (i + 1), "pending")), request("AION-9", "approved")] });
     }
-    if (path === "/reviews/queue") return json({ configured: true, syncedAt: "2026-11-08T11:00:00Z", syncError: "", ticketsError: "", reviewers: [], clients: [], counts: { tickets: 2, prs: 2 }, tickets: [] });
+    if (path === "/reviews/queue") return json({ configured: true, syncedAt: "2026-11-08T11:00:00Z", syncError: "", ticketsError: "", reviewers: [], clients: [], counts: { prs: 3, tickets: 2, awaiting: 2 }, prs: [], canFlag: true });
     if (path === "/inbox") return json({ seenAt: "2026-11-01T00:00:00.000Z", readTickets: [], items: [
       { id: "m1", type: "mention", key: "AION-1", title: "Ticket AION-1", by: "Lee", text: "Can you look?", at: "2026-11-08T10:00:00Z", read: false },
       { id: "m2", type: "note", key: "AION-2", title: "Ticket AION-2", by: "Lee", text: "Note", at: "2026-11-08T09:00:00Z", read: false }

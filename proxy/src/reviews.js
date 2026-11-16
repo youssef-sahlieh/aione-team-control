@@ -14,8 +14,12 @@
 // github.state: "no_login" (no GitHub login set yet) | "pending" | "requested" | "failed".
 // The shown status (needs_review, in_review, approved, changes_requested, closed, unlinked) is worked out from the
 // assignment and the synced pull request, so it is never stored and cannot go stale.
-// Administrators also get the workspace queue (GET /reviews/queue): every open pull request that names a ticket, with
-// its review state from GitHub (prReviewState), grouped by ticket. Nothing is stored for it either.
+// Administrators also get the workspace queue (GET /reviews/queue): every open pull request (drafts too), whether or not
+// it names a ticket, with its review state from GitHub (prReviewState) and the tickets it names. Nothing is stored for it
+// except the Rami reference flag:
+//   "review-flags:rami"           set of pull request IDs ("owner/repo#number") an administrator ticked "Rami" on. A
+//                                 reference marker only: it never asks GitHub for anything, assigns no one and notifies
+//                                 no one. It lives apart from the pull request index, so a GitHub sync never touches it.
 import { addToInbox } from "./inbox.js";
 import { ensureAccountId, getUser, listUsers } from "./users.js";
 import { githubConfigured, prRecord, pullIndex, repos, requestReviewer, requestedLogins, syncPulls } from "./github.js";
@@ -33,6 +37,16 @@ const lc = (s) => String(s || "").trim().toLowerCase();
 const isOpen = (pr) => !!pr && (pr.state === "open" || pr.state === "draft");
 const docKey = (prId) => "review:" + prId;
 const setKey = (accountId) => "reviews-by:" + accountId;
+const RAMI_KEY = "review-flags:rami";
+const ramiFlags = async (env) => new Set(await env.STORE.smembers(RAMI_KEY));
+// Rami's dashboard account (the RAMI_EMAIL setting). He sees the open pull requests flagged for him, to check them and
+// comment on GitHub himself. Being flagged is not a review: no assignment, no GitHub request, no notification.
+const isRami = (env, user) => !!lc(env.RAMI_EMAIL) && lc(user.email) === lc(env.RAMI_EMAIL);
+async function flaggedOpen(env) {
+  const [index, flags] = await Promise.all([pullIndex(env), ramiFlags(env)]);
+  const configured = new Set(repos(env));
+  return [...flags].map((id) => index.prs[id]).filter((pr) => isOpen(pr) && configured.has(pr.id.split("#")[0]));
+}
 const loginOf = (byId, accountId) => byId.get(accountId)?.githubLogin || "";
 const failed = (code, error) => ({ state: "failed", error, code, at: nowIso() });
 
@@ -201,25 +215,33 @@ function assignmentRow(a, pr, login) {
 
 const prSummary = (pr, prId) => pr && { id: prId, repo: prId.split("#")[0], number: pr.number, title: pr.title, url: pr.url, author: pr.author, state: pr.state, keys: pr.keys, updated: pr.updated };
 
-// GET /reviews/me: the signed-in person's assignments, with the GitHub link state.
-async function myQueue(env, user) {
+// GET /reviews/me: the signed-in person's assignments, with the GitHub link state. For Rami (see isRami) also flagged:
+// the open pull requests flagged for him, newest activity first, each with the tickets it names that exist.
+async function myQueue(env, user, deps) {
   let prError = "";
   if (githubConfigured(env)) {
     try { prError = (await syncPulls(env)).index.listError || ""; } catch (e) { prError = e.message || "Couldn't read pull requests."; }
   }
   const users = await listUsers(env.STORE), byId = new Map(users.map((u) => [u.id, u]));
-  const items = [];
+  const items = [], rami = await ramiFlags(env);
   for (const prId of await env.STORE.smembers(setKey(user.id))) {
     const pr = await prRecord(env, prId);
     if (pr) await settle(env, prId, pr, users);
     const doc = await readDoc(env, prId);
     for (const a of doc?.assignments || []) {
       if (a.reviewerId !== user.id) continue;
-      items.push({ prId, pr: prSummary(pr, prId), ...assignmentRow(a, pr, user.githubLogin) });
+      items.push({ prId, pr: prSummary(pr, prId), rami: rami.has(prId), ...assignmentRow(a, pr, user.githubLogin) });
     }
   }
   items.sort((x, y) => (x.assignedAt < y.assignedAt ? 1 : -1));
-  return json({ items, prError });
+  if (!isRami(env, user)) return json({ items, prError });
+  const open = await flaggedOpen(env);
+  const { details, error: ticketsError } = await ticketDetails(env, deps, [...new Set(open.flatMap((pr) => (pr.keys || []).filter((k) => TICKET.test(k))))]);
+  const flagged = open.map((pr) => ({
+    id: pr.id, repo: pr.id.split("#")[0], number: pr.number, title: pr.title, url: pr.url, author: pr.author || "", draft: pr.state === "draft", updated: pr.updated || null,
+    tickets: (pr.keys || []).filter((k) => details.has(k) || (!!ticketsError && jiraKey(k))).map((k) => ({ key: k, title: details.get(k)?.title || k }))
+  })).sort((a, b) => String(b.updated || "").localeCompare(String(a.updated || "")) || a.id.localeCompare(b.id));
+  return json({ items, prError, flagged, ticketsError });
 }
 
 // What the administrator (all reviewers) or a reviewer (their own assignment only) sees for one pull request.
@@ -354,6 +376,11 @@ async function ticketAttachment(env, deps, key, id) {
   } });
 }
 
+// An open pull request flagged for Rami that names the ticket: Rami reads its tickets like a reviewer (read-only).
+async function flaggedPr(env, user, key) {
+  return (isRami(env, user) && (await flaggedOpen(env)).find((pr) => pr.keys?.includes(key))) || null;
+}
+
 // An open pull request that names the ticket, for the ticket dialog's link (administrators see every ticket).
 async function openPrFor(env, key) {
   return Object.values((await pullIndex(env)).prs).find((pr) => isOpen(pr) && pr.keys?.includes(key)) || null;
@@ -448,16 +475,16 @@ function refreshInfo(env, index) {
   };
 }
 
-// The administrators' queue: open pull requests that name a ticket and need a review now, grouped by ticket. A pull
-// request is listed when prReviewState says so, and "changes requested" is listed too. Approved ones are left out
-// unless they are stale or GitHub needs more approvals. Drafts, merged and closed pull requests never appear; a pull
-// request whose review data was never read is listed with the "unknown" state. The ticket's own status doesn't matter:
-// a closed ticket with an open pull request stays (ticketDone says so).
-// Read-only: nothing is stored. Sync and Jira failures come back as fields, so the page can say so. A repository that
-// failed to refresh keeps its last pull requests, each marked stale with when its review data was read (statusAt).
-// refresh=true asks GitHub again now (Retry), unless the index was read less than 15 seconds ago.
+// The administrators' queue: every open pull request in the configured repositories, one row each, whether or not it
+// names a ticket. Drafts are listed (draft: true; a draft nobody reviewed yet shows the "draft" state, not "awaiting").
+// Approved and changes-requested pull requests stay listed with that state. tickets lists the tickets it names that
+// exist (a key Jira doesn't know is not a link); none means "unlinked". A ticket's own status doesn't matter: a closed
+// ticket with an open pull request stays (done says so). rami: the reference flag (see RAMI_KEY).
+// Read-only apart from the sync: nothing is stored. Sync and Jira failures come back as fields, so the page can say so.
+// A repository that failed to refresh keeps its last pull requests, each marked stale with when its review data was read
+// (statusAt). refresh=true asks GitHub again now (Retry), unless the index was read less than 15 seconds ago.
 async function adminQueue(env, deps, me, refresh = false) {
-  if (!githubConfigured(env)) return json({ configured: false, syncedAt: null, syncError: "", ticketsError: "", tickets: [], counts: { tickets: 0, prs: 0 }, reviewers: [], clients: [], refresh: null });
+  if (!githubConfigured(env)) return json({ configured: false, syncedAt: null, syncError: "", ticketsError: "", prs: [], counts: { prs: 0, tickets: 0, awaiting: 0 }, reviewers: [], clients: [], canFlag: me.role === "admin", refresh: null });
   let syncError = "";
   try {
     const before = await pullIndex(env);
@@ -466,53 +493,58 @@ async function adminQueue(env, deps, me, refresh = false) {
   const index = await pullIndex(env);
   syncError = syncError || index.listError || index.statusError || "";
   const failedRepos = index.repoErrors || {};
-  const open = Object.values(index.prs).filter((pr) => pr.state === "open" && pr.keys?.length);
-  const [docs, users, catalog] = await Promise.all([Promise.all(open.map((pr) => readDoc(env, pr.id))), listUsers(env.STORE), readCatalog(env)]);
+  // Only the configured repositories: one removed from GITHUB_REPOS doesn't linger.
+  const configured = new Set(repos(env));
+  const open = Object.values(index.prs).filter((pr) => isOpen(pr) && configured.has(pr.id.split("#")[0]));
+  const [docs, users, catalog, rami] = await Promise.all([Promise.all(open.map((pr) => readDoc(env, pr.id))), listUsers(env.STORE), readCatalog(env), ramiFlags(env)]);
   const devNames = new Map(users.filter((u) => u.dev).map((u) => [lc(u.dev), u.name]));
   const byId = new Map(users.map((u) => [u.id, u])), byLogin = new Map(users.filter((u) => u.githubLogin).map((u) => [lc(u.githubLogin), u]));
-  const named = [...new Set(open.flatMap((pr) => pr.keys.filter((k) => TICKET.test(k))))];
+  const named = [...new Set(open.flatMap((pr) => (pr.keys || []).filter((k) => TICKET.test(k))))];
   const { details, error: ticketsError } = await ticketDetails(env, deps, named);
   const known = (key) => details.has(key) || (!!ticketsError && jiraKey(key));
-
-  const rows = [];
-  open.forEach((pr, i) => {
-    const keys = pr.keys.filter((k) => TICKET.test(k) && known(k));
-    if (!keys.length) return;
-    const assignments = docs[i]?.assignments || [];
-    const review = prReviewState(pr, assignments);
-    if (review.state === "approved" && !review.counts) return;
-    const reviewers = reviewersOf(pr, assignments, byId, byLogin);
-    rows.push({ pr, keys, review, reviewers, reviewerState: reviewerState(pr, reviewers) });
-  });
-
-  const groups = new Map();
-  for (const row of rows) for (const key of row.keys) groups.set(key, [...(groups.get(key) || []), row]);
-  const tickets = await Promise.all([...groups].map(async ([key, list]) => {
+  const linked = named.filter(known);
+  const tickets = new Map(await Promise.all(linked.map(async (key) => {
     const d = details.get(key) || { title: key, status: "", assignee: "", devs: [], done: false };
     const m = publicMetadata(await readMetadata(env, key), me, catalog);
-    const prs = list
-      .map(({ pr, review, reviewers, reviewerState }) => {
-        const repo = pr.id.split("#")[0];
-        return {
-          id: pr.id, repo, number: pr.number, title: pr.title, url: pr.url, author: pr.author || "", created: pr.created || null,
-          state: review.state, reason: review.reason, since: review.since, sinceKind: review.sinceKind, reviewers, reviewerState,
-          stale: !!failedRepos[repo], statusAt: pr.status?.at ? new Date(pr.status.at).toISOString() : null
-        };
-      })
-      .sort((a, b) => byWait(a, b) || a.number - b.number);
+    return [key, {
+      key, title: d.title, status: d.status, done: !!d.done, assignee: d.assignee,
+      devs: (d.devs || []).map((x) => devNames.get(lc(x)) || x), client: m.clientName || "", subClient: m.subClientName || ""
+    }];
+  })));
+
+  const prs = open.map((pr, i) => {
+    const assignments = docs[i]?.assignments || [];
+    let review = prReviewState(pr, assignments);
+    const draft = pr.state === "draft";
+    if (draft && (review.state === "awaiting" || review.state === "unknown")) review = { ...review, state: "draft", reason: "" };
+    const reviewers = reviewersOf(pr, assignments, byId, byLogin);
+    const repo = pr.id.split("#")[0];
     return {
-      key, title: d.title, status: d.status, ticketDone: !!d.done, assignee: d.assignee,
-      devs: (d.devs || []).map((x) => devNames.get(lc(x)) || x), client: m.clientName || "", subClient: m.subClientName || "",
-      since: prs[0]?.since || "", sinceKind: prs[0]?.sinceKind || "", prs
+      id: pr.id, repo, number: pr.number, title: pr.title, url: pr.url, author: pr.author || "", created: pr.created || null, draft,
+      state: review.state, reason: review.reason, since: review.since, sinceKind: review.sinceKind, reviewers, reviewerState: reviewerState(pr, reviewers),
+      tickets: (pr.keys || []).filter((k) => tickets.has(k)).map((k) => tickets.get(k)),
+      rami: rami.has(pr.id), stale: !!failedRepos[repo], statusAt: pr.status?.at ? new Date(pr.status.at).toISOString() : null
     };
-  }));
-  tickets.sort((a, b) => byWait(a, b) || a.key.localeCompare(b.key));
-  const reviewers = [...new Set(rows.flatMap((r) => r.reviewers.map((x) => x.name)))].sort((a, b) => a.localeCompare(b));
-  const clients = [...new Set(tickets.map((t) => t.client).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  }).sort((a, b) => byWait(a, b) || a.repo.localeCompare(b.repo) || a.number - b.number);
+
+  const reviewers = [...new Set(prs.flatMap((p) => p.reviewers.map((x) => x.name)))].sort((a, b) => a.localeCompare(b));
+  const clients = [...new Set([...tickets.values()].map((t) => t.client).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   return json({
     configured: true, syncedAt: index.syncedAt ? new Date(index.syncedAt).toISOString() : null, syncError, ticketsError,
-    tickets, counts: { tickets: tickets.length, prs: rows.length }, reviewers, clients, refresh: refreshInfo(env, index)
+    prs, counts: { prs: prs.length, tickets: tickets.size, awaiting: prs.filter((p) => p.state === "awaiting").length },
+    reviewers, clients, canFlag: me.role === "admin", refresh: refreshInfo(env, index)
   });
+}
+
+// PUT /reviews/rami?id=owner/repo#number { flagged }: sets or clears the Rami reference flag, and nothing else. No
+// GitHub call, no reviewer, no notification, no ticket. Clearing works for any pull request ID, even one that has
+// closed since; setting needs a pull request the index knows.
+async function setRamiFlag(env, prId, flagged) {
+  if (flagged) {
+    if (!(await prRecord(env, prId))) return fail("not_found", "Pull request unavailable.", 404);
+    await env.STORE.sadd(RAMI_KEY, prId);
+  } else await env.STORE.srem(RAMI_KEY, prId);
+  return json({ id: prId, rami: flagged });
 }
 
 // The tickets with an open pull request that needs a review, by the administrators' queue rule, from the last synced
@@ -542,7 +574,7 @@ export async function reviewRoutes(request, env, url, me, deps) {
   const readJson = async () => { try { return await request.json(); } catch { return null; } };
   const forbidden = () => fail("forbidden", "Only administrators can do that.", 403);
 
-  if (method === "GET" && path === "/reviews/me") return myQueue(env, user);
+  if (method === "GET" && path === "/reviews/me") return myQueue(env, user, deps);
 
   if (method === "GET" && path === "/reviews/people") {
     if (!isAdmin) return forbidden();
@@ -552,6 +584,15 @@ export async function reviewRoutes(request, env, url, me, deps) {
   if (method === "GET" && path === "/reviews/queue") {
     if (!isAdmin) return forbidden();
     return adminQueue(env, deps, me, url.searchParams.get("refresh") === "1");
+  }
+
+  if (path === "/reviews/rami") {
+    if (method !== "PUT") return fail("method", "Use PUT here.", 405);
+    if (!isAdmin) return forbidden();
+    if (!PR_ID.test(prId)) return fail("bad_request", "Choose a pull request.", 400);
+    const b = await readJson();
+    if (typeof b?.flagged !== "boolean") return fail("bad_request", "Say whether the pull request is flagged.", 400);
+    return setRamiFlag(env, prId, b.flagged);
   }
 
   if (path === "/reviews/pr") {
@@ -607,8 +648,9 @@ export async function reviewRoutes(request, env, url, me, deps) {
   if (method === "GET" && path === "/reviews/ticket") {
     const key = url.searchParams.get("key") || "";
     if (!TICKET.test(key)) return fail("bad_request", "Choose a ticket.", 400);
-    // Administrators read any ticket (read-only); others only the tickets of their own pull requests.
-    const pr = isAdmin ? await openPrFor(env, key) : await reviewedPr(env, user.id, key);
+    // Administrators read any ticket (read-only); others only the tickets of their own pull requests, and Rami those of
+    // the pull requests flagged for him.
+    const pr = isAdmin ? await openPrFor(env, key) : (await reviewedPr(env, user.id, key)) || (await flaggedPr(env, user, key));
     const ticket = (isAdmin || pr) && (await readReviewTicket(env, deps, key));
     if (!ticket) return fail("not_found", "Ticket unavailable.", 404);
     return json({ ticket, pr: prSummary(pr, pr?.id || "") });
@@ -616,7 +658,7 @@ export async function reviewRoutes(request, env, url, me, deps) {
   if (method === "GET" && path === "/reviews/ticket/attachment") {
     const key = url.searchParams.get("key") || "", id = url.searchParams.get("id") || "";
     if (!TICKET.test(key) || !ATTACHMENT.test(id)) return fail("bad_request", "Choose an attachment.", 400);
-    if (!isAdmin && !(await reviewedPr(env, user.id, key))) return fail("not_found", "Attachment unavailable.", 404);
+    if (!isAdmin && !(await reviewedPr(env, user.id, key)) && !(await flaggedPr(env, user, key))) return fail("not_found", "Attachment unavailable.", 404);
     return (await ticketAttachment(env, deps, key, id)) || fail("not_found", "Attachment unavailable.", 404);
   }
   return fail("not_found", "Not found.", 404);

@@ -2,7 +2,7 @@
 // block). Reviewers get a "Needs review" queue with a read-only view of the tickets the pull request mentions. The
 // proxy keeps the assignments (proxy/src/reviews.js); GitHub is asked for the review when the reviewer has a GitHub
 // username set by an administrator (Users page). Nothing here changes a Jira ticket.
-import { reviewLabel, sortQueue, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, QUEUE_STATE_LABEL, queueStateLabel, queueReasonText, queueOptions, filterQueue, queueCounts, queueSummary, sortTickets, activeFilters, waitingFor, waitLine, exactTime, safePrUrl, reviewerText, noReviewerText, QUICK_FILTERS, SORTS, NO_REVIEWER } from "../models/reviews.js";
+import { reviewLabel, sortQueue, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, QUEUE_STATE_LABEL, queueStateLabel, queueReasonText, queueOptions, filterQueue, queueSummary, sortPrs, groupByTicket, activeFilters, waitingFor, waitLine, exactTime, safePrUrl, reviewerText, noReviewerText, QUICK_FILTERS, SORTS, VIEWS, NO_REVIEWER } from "../models/reviews.js";
 import { setNavCount } from "../app/nav.js";
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
@@ -24,7 +24,7 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
   // The administrators' queue: the last answer from the proxy, the last error, whether a read is under way, and what the
   // person chose (filters, sort, folded tickets). These live as long as the page, so a refresh or a dialog keeps them.
   let adminRoot = null, adminData = null, adminError = "", adminLoading = false;
-  const adminFilters = { search: "", client: "", repo: "", reviewer: "", state: "", quick: "", sort: "wait" };
+  const adminFilters = { search: "", client: "", repo: "", reviewer: "", state: "", quick: "", sort: "wait", view: "prs" };
   const collapsed = new Set();
 
   // A dialog with a title, a body and a Close button. The body is replaced when the content arrives.
@@ -162,6 +162,7 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     if (item.pr) { title.href = item.pr.url; title.target = "_blank"; title.rel = "noopener"; }
     head.append(title, el("span", "review-status " + item.status, reviewLabel(item.status)));
     c.append(head);
+    if (item.rami) c.append(el("span", "queue-rami-tag", "Flagged for Rami"));
     const repo = item.pr ? item.pr.repo + " #" + item.pr.number : item.prId;
     c.append(el("p", "review-meta", repo + " · " + assignedLine(item) + (item.pr && item.pr.author ? " · by " + item.pr.author : "")));
     const gh = githubNote(item.github);
@@ -173,7 +174,24 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     return c;
   }
 
-  // The reviewer's "Needs review" page.
+  // A pull request flagged for Rami: open it on GitHub to check and comment there. Not a review request.
+  function flaggedCard(pr) {
+    const c = el("article", "review-card review-flagged");
+    const head = el("div", "review-head-line");
+    const url = safePrUrl(pr.url);
+    const title = el(url ? "a" : "span", "review-title", pr.title || pr.repo + " #" + pr.number);
+    if (url) { title.href = url; title.target = "_blank"; title.rel = "noopener"; }
+    head.append(title);
+    if (pr.draft) head.append(el("span", "review-status", "Draft"));
+    c.append(head, el("p", "review-meta", pr.repo + " #" + pr.number + (pr.author ? " · by " + pr.author : "") + (pr.tickets.length ? "" : " · No linked ticket")));
+    const actions = el("div", "review-actions");
+    if (url) { const a = el("a", "btn primary", "Open on GitHub to comment"); a.href = url; a.target = "_blank"; a.rel = "noopener"; actions.append(a); }
+    for (const t of pr.tickets) actions.append(btn("Read " + t.key, "btn", () => openTicket(t.key)));
+    c.append(actions);
+    return c;
+  }
+
+  // The reviewer's "Needs review" page. Rami also gets the pull requests flagged for him, above his reviews.
   async function renderPersonalQueue(target) {
     queueTarget = target;
     target.replaceChildren();
@@ -182,6 +200,15 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     try {
       const data = await api("/reviews/me");
       if (data.prError) target.insertBefore(el("p", "msg err", "Pull requests can't be refreshed right now: " + data.prError), list);
+      if (Array.isArray(data.flagged)) {
+        const section = el("section", "review-flagged-list");
+        section.append(el("h2", "", "Flagged for you to check (" + data.flagged.length + ")"), el("p", "review-note", "An administrator flagged these pull requests for you to check. Comment on GitHub. This isn't a review request."));
+        if (data.ticketsError) section.append(el("p", "msg err", data.ticketsError));
+        if (!data.flagged.length) section.append(el("p", "empty-copy", "Nothing is flagged for you right now."));
+        for (const pr of data.flagged) section.append(flaggedCard(pr));
+        target.insertBefore(section, list);
+        list.before(el("h2", "review-list-heading", "Your reviews"));
+      }
       list.replaceChildren();
       if (!data.items.length) { list.append(el("p", "empty-copy", "Nothing needs your review right now.")); return; }
       for (const item of sortQueue(data.items)) list.appendChild(card(item));
@@ -190,7 +217,7 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     }
   }
 
-  // The sidebar's count for administrators: the tickets waiting, the same number the page's heading shows unfiltered.
+  // The sidebar's count for administrators: the pull requests awaiting review.
   function setQueueBadge(count) {
     setNavCount("reviews", count);
   }
@@ -203,8 +230,7 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     try {
       adminData = await api("/reviews/queue" + (force === true ? "?refresh=1" : ""));
       adminError = "";
-      if (adminData.configured) setQueueBadge(adminData.counts.tickets);
-      else setQueueBadge(0);
+      setQueueBadge(adminData.configured ? adminData.counts.awaiting : 0);
     } catch (err) {
       adminError = errorText(err);
     }
@@ -272,20 +298,17 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     return notices;
   }
 
-  // The summary strip: distinct pull requests, tickets, and the three things that need someone's attention.
-  function drawStats(target, s, filtered) {
-    const stat = (n, label, quick) => {
-      const box = el("div", "queue-stat" + (quick && n ? " notable" : ""));
+  // The six summary cards, always for every open pull request (the filters don't change them).
+  function drawStats(target, s) {
+    const stat = (n, label, notable) => {
+      const box = el("div", "queue-stat" + (notable && n ? " notable" : ""));
+      box.dataset.stat = label;
       box.append(el("b", "", String(n)), el("span", "", label));
       return box;
     };
     target.replaceChildren(
-      stat(s.prs, s.prs === 1 ? "open pull request" : "open pull requests"),
-      stat(s.tickets, s.tickets === 1 ? "linked ticket" : "linked tickets"),
-      stat(s.noReviewer, "no reviewer", true),
-      stat(s.changes, "changes requested", true),
-      stat(s.unavailable, "review data unavailable", true),
-      el("p", "queue-stats-scope", filtered ? "Counts for the filtered list" : "All pull requests in the queue")
+      stat(s.prs, "Open PRs"), stat(s.tickets, "Linked tickets"), stat(s.unlinked, "Unlinked PRs"),
+      stat(s.noReviewer, "No reviewer", true), stat(s.rami, "Flagged for Rami"), stat(s.awaiting, "Awaiting review")
     );
   }
 
@@ -294,47 +317,46 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     if (!adminRoot || !adminRoot.root.isConnected) return;
     drawBusy();
     const d = adminData;
-    const tickets = d && d.configured ? d.tickets : [];
-    const opts = queueOptions(tickets);
+    const prs = d && d.configured ? d.prs : [];
+    const opts = queueOptions(prs);
     const f = adminFilters;
-    const { client, repo, reviewer, state, sort, quick } = adminRoot.controls;
+    const { client, repo, reviewer, state, sort, quick, views } = adminRoot.controls;
     f.client = fillSelect(client, [["", "All projects"], ...opts.clients.map((c) => [c, c])], f.client);
     f.repo = fillSelect(repo, [["", "All repositories"], ...opts.repos.map((r) => [r, r])], f.repo);
     f.reviewer = fillSelect(reviewer, [["", "All reviewers"], [NO_REVIEWER, "No reviewer requested"], ...opts.reviewers.map((r) => [r, r])], f.reviewer);
     state.value = f.state;
     sort.value = f.sort;
     for (const b of quick) b.setAttribute("aria-pressed", String(b.dataset.quick === f.quick));
+    for (const b of views) b.setAttribute("aria-pressed", String(b.dataset.view === f.view));
 
     const updated = updatedLine(d);
     adminRoot.updated.replaceWith(updated);
     adminRoot.updated = updated;
     adminRoot.notices.replaceChildren(...queueNotices(d));
-    const shown = sortTickets(filterQueue(tickets, f), f.sort);
+    const shown = sortPrs(filterQueue(prs, f), f.sort);
     const active = activeFilters(f);
-    const all = queueCounts(tickets), now = queueCounts(shown);
-    drawStats(adminRoot.stats, queueSummary(shown), active.length > 0);
+    drawStats(adminRoot.stats, queueSummary(prs));
     adminRoot.stats.hidden = !d || !d.configured;
 
     const chips = adminRoot.active;
     chips.replaceChildren();
-    const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
-    const shownText = "Showing " + plural(now.tickets, "ticket", "tickets") + " · " + plural(now.prs, "pull request", "pull requests");
-    chips.append(el("span", "queue-showing", active.length ? shownText + " of " + all.tickets + " · " + all.prs : shownText));
+    const plural = (n) => n + (n === 1 ? " pull request" : " pull requests");
+    chips.append(el("span", "queue-showing", active.length ? "Showing " + shown.length + " of " + plural(prs.length) : "Showing " + plural(shown.length)));
     for (const a of active) {
       const chip = btn(a.text + " ×", "queue-chip", () => { f[a.name] = ""; if (a.name === "search") adminRoot.controls.search.value = ""; drawAdminQueue(); adminRoot.controls.search.focus(); });
       chip.setAttribute("aria-label", "Remove filter " + a.text);
       chips.append(chip);
     }
     if (active.length) chips.append(btn("Clear filters", "linkbtn", () => clearFilters()));
-    chips.hidden = !d || !d.configured || !tickets.length;
+    chips.hidden = !d || !d.configured || !prs.length;
 
     const list = adminRoot.list;
     list.replaceChildren();
     if (!d) { if (!adminError) list.append(el("p", "empty-copy", "Loading the review queue…")); return; }
     if (!d.configured) return;
-    if (!tickets.length) {
-      // With a sync or Jira problem, an empty list doesn't mean nothing needs review: the notices say what failed.
-      list.append(el("p", "empty-copy", d.syncError || d.ticketsError ? "No pull requests to show. Some data couldn't be read, see above." : "Nothing needs review right now."));
+    if (!prs.length) {
+      // With a sync or Jira problem, an empty list doesn't mean there are no pull requests: the notices say what failed.
+      list.append(el("p", "empty-copy", d.syncError || d.ticketsError ? "No pull requests to show. Some data couldn't be read, see above." : "No open pull requests right now."));
       return;
     }
     if (!shown.length) {
@@ -343,9 +365,17 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     }
     const head = el("div", "queue-cols");
     head.setAttribute("aria-hidden", "true");
-    head.append(el("span", "", "Pull request"), el("span", "", "Review state"), el("span", "", "Reviewers"), el("span", "", "Time"), el("span", "", ""));
+    head.append(el("span", "", "Pull request"), el("span", "", "Review state"), el("span", "", "Reviewers"), el("span", "", "Time"), el("span", "", "Rami"), el("span", "", ""));
     list.append(head);
-    for (const t of shown) list.appendChild(adminTicket(t));
+    if (f.view === "tickets") for (const g of groupByTicket(shown)) list.appendChild(adminTicket(g));
+    else {
+      const box = el("section", "queue-ticket queue-flat");
+      box.setAttribute("aria-label", "Open pull requests");
+      const ul = el("ul", "queue-prs");
+      for (const pr of shown) ul.appendChild(adminPrRow(pr));
+      box.append(ul);
+      list.append(box);
+    }
   }
 
   function clearFilters() {
@@ -355,34 +385,43 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     adminRoot.controls.search.focus();
   }
 
-  // One ticket: its key, title and status (the ticket's, not the pull request's), who works on it, then each pull request
-  // waiting on it. The pull requests fold away; the fold is remembered while the page is open.
+  // "By ticket" view: one ticket, its key, title and status (the ticket's, not the pull request's), who works on it,
+  // then each pull request on it. The unlinked pull requests come last in a group of their own (key ""). The pull
+  // requests fold away; the fold is remembered while the page is open.
   function adminTicket(t) {
-    const c = el("section", "queue-ticket" + (t.ticketDone ? " done" : ""));
-    const listId = "queue-prs-" + t.key.replace(/[^\w-]/g, "_");
-    const open = !collapsed.has(t.key);
+    const unlinked = !t.key, foldKey = t.key || "__unlinked";
+    const c = el("section", "queue-ticket" + (t.done ? " done" : ""));
+    const listId = "queue-prs-" + foldKey.replace(/[^\w-]/g, "_");
+    const open = !collapsed.has(foldKey);
     const head = el("div", "queue-ticket-head");
     const toggle = el("button", "queue-toggle");
     toggle.type = "button";
     toggle.setAttribute("aria-expanded", String(open));
     toggle.setAttribute("aria-controls", listId);
-    toggle.setAttribute("aria-label", "Pull requests for " + t.key);
+    toggle.setAttribute("aria-label", unlinked ? "Unlinked pull requests" : "Pull requests for " + t.key);
     toggle.append(el("span", "queue-caret"));
     const main = el("div", "queue-ticket-main");
     const title = el("h2", "queue-ticket-title");
-    title.append(el("span", "queue-key", t.key), el("span", "", t.title && t.title !== t.key ? t.title : "Title not available"));
     const meta = el("p", "queue-ticket-meta");
     const part = (cls, text) => meta.append(el("span", cls, text));
-    part("ticket-status" + (t.ticketDone ? " done" : ""), "Ticket: " + (t.status || "status unknown"));
-    if (t.ticketDone) part("queue-closed-note", "Ticket closed · PR still open");
-    part(t.client ? "" : "queue-missing", t.client ? [t.client, t.subClient].filter(Boolean).join(" › ") : "No project mapped");
-    part("", "Assignee: " + (t.assignee || "Unassigned"));
-    if (t.devs && t.devs.length) part("", (t.devs.length === 1 ? "Developer: " : "Developers: ") + t.devs.join(", "));
+    if (unlinked) {
+      title.append(el("span", "queue-unlinked", "Unlinked"), el("span", "", "Pull requests that name no ticket"));
+    } else {
+      title.append(el("span", "queue-key", t.key), el("span", "", t.title && t.title !== t.key ? t.title : "Title not available"));
+      part("ticket-status" + (t.done ? " done" : ""), "Ticket: " + (t.status || "status unknown"));
+      if (t.done) part("queue-closed-note", "Ticket closed · PR still open");
+      part(t.client ? "" : "queue-missing", t.client ? [t.client, t.subClient].filter(Boolean).join(" › ") : "No project mapped");
+      part("", "Assignee: " + (t.assignee || "Unassigned"));
+      if (t.devs && t.devs.length) part("", (t.devs.length === 1 ? "Developer: " : "Developers: ") + t.devs.join(", "));
+    }
     part("queue-pr-count", t.prs.length + (t.prs.length === 1 ? " PR" : " PRs"));
     main.append(title, meta);
-    const openTicketBtn = btn("Open ticket", "btn", () => openTicket(t.key));
-    openTicketBtn.setAttribute("aria-label", "Open ticket " + t.key + " (read-only)");
-    head.append(toggle, main, openTicketBtn);
+    head.append(toggle, main);
+    if (!unlinked) {
+      const openTicketBtn = btn("Open ticket", "btn", () => openTicket(t.key));
+      openTicketBtn.setAttribute("aria-label", "Open ticket " + t.key + " (read-only)");
+      head.append(openTicketBtn);
+    }
     const prs = el("ul", "queue-prs");
     prs.id = listId;
     prs.hidden = !open;
@@ -391,22 +430,58 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
       const next = prs.hidden;
       prs.hidden = !next;
       toggle.setAttribute("aria-expanded", String(next));
-      if (next) collapsed.delete(t.key); else collapsed.add(t.key);
+      if (next) collapsed.delete(foldKey); else collapsed.add(foldKey);
     });
     c.append(head, prs);
     return c;
+  }
+
+  // Saves the Rami reference flag. It only marks the pull request: nothing is sent to GitHub and nobody is notified.
+  // The box is locked while saving and goes back if the save fails.
+  async function setRami(pr, box) {
+    const flagged = box.checked;
+    box.disabled = true;
+    try {
+      await api("/reviews/rami?id=" + encodeURIComponent(pr.id), { method: "PUT", body: { flagged } });
+      for (const p of adminData.prs) if (p.id === pr.id) p.rami = flagged;
+      drawAdminQueue();
+      const again = adminRoot.list.querySelector('input[data-rami="' + CSS.escape(pr.id) + '"]');
+      if (again) again.focus();
+    } catch (err) {
+      box.checked = !flagged;
+      box.disabled = false;
+      toast("Couldn't save the Rami flag", [errorText(err)], true);
+    }
   }
 
   // The reviewers shown in the row; more than this fold into "+N more".
   const SHOWN_REVIEWERS = 3;
 
   function adminPrRow(pr) {
-    const row = el("li", "queue-pr");
+    const linked = pr.tickets && pr.tickets.length > 0;
+    const row = el("li", "queue-pr " + (linked ? "linked" : "unlinked") + (pr.draft ? " draft" : "") + " state-" + (QUEUE_STATE_LABEL[pr.state] ? pr.state : "unknown"));
     const who = el("div", "queue-cell queue-pr-main");
-    who.append(el("span", "queue-pr-title", pr.title || "Untitled pull request"));
+    const title = el("span", "queue-pr-title", pr.title || "Untitled pull request");
+    title.dir = "auto";
+    if (pr.draft) title.prepend(el("span", "queue-draft", "Draft"), " ");
+    who.append(title);
     const ref = el("span", "queue-pr-ref");
-    ref.append(el("span", "queue-repo", pr.repo + "#" + pr.number), " · by " + (pr.author || "unknown"));
+    ref.append(el("span", "queue-repo", pr.repo + " #" + pr.number), " · by " + (pr.author || "unknown"));
     who.append(ref);
+    const links = el("span", "queue-pr-tickets");
+    if (linked) {
+      for (const t of pr.tickets) {
+        const b = btn(t.key, "queue-ticket-link", () => openTicket(t.key));
+        b.title = (t.title || t.key) + (t.status ? " · " + t.status : "") + " (opens read-only)";
+        b.setAttribute("aria-label", "Open ticket " + t.key + " (read-only)");
+        links.append(b);
+      }
+    } else {
+      const tag = el("span", "queue-unlinked", "Unlinked");
+      tag.title = "No ticket named. To link it, name the ticket (for example AION-12 or INT-5) in the pull request's title, description or branch.";
+      links.append(tag);
+    }
+    who.append(links);
 
     const st = el("div", "queue-cell queue-state");
     st.append(el("span", "review-status " + (QUEUE_STATE_LABEL[pr.state] ? pr.state : "unknown"), queueStateLabel(pr)));
@@ -439,16 +514,28 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     wait.append(el("span", "queue-wait-label", w.label));
     if (w.at) wait.append(timeEl(w.at, w.text));
 
+    // The Rami reference flag: always visible; only people allowed to change it (canFlag) can tick it.
+    const flag = el("label", "queue-cell queue-rami");
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = !!pr.rami;
+    box.dataset.rami = pr.id;
+    box.disabled = !(adminData && adminData.canFlag);
+    box.setAttribute("aria-label", "Rami: flag " + pr.repo + " #" + pr.number + " for Rami's reference");
+    box.title = "Reference only. It doesn't request a review, assign anyone or change anything on GitHub.";
+    box.addEventListener("change", () => setRami(pr, box));
+    flag.append(box, el("span", "", "Rami"));
+
     const act = el("div", "queue-cell queue-pr-actions");
     const href = safePrUrl(pr.url);
     if (href) {
       const link = el("a", "btn", "Open PR ↗");
       link.href = href; link.target = "_blank"; link.rel = "noopener noreferrer";
-      link.setAttribute("aria-label", "Open pull request " + pr.repo + "#" + pr.number + " on GitHub (opens in a new tab)");
+      link.setAttribute("aria-label", "Open pull request " + pr.repo + " #" + pr.number + " on GitHub (opens in a new tab)");
       act.append(link);
     } else act.append(el("span", "queue-none", "Link unavailable"));
 
-    row.append(who, st, rv, wait, act);
+    row.append(who, st, rv, wait, flag, act);
     return row;
   }
 
@@ -474,13 +561,13 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     bar.setAttribute("role", "search");
     const search = el("input", "queue-search");
     search.type = "search";
-    search.placeholder = "Search ticket, PR title or repository";
+    search.placeholder = "Search PR title, repository, author or ticket";
     search.setAttribute("aria-label", "Search the review queue");
     search.value = adminFilters.search;
     search.addEventListener("input", () => { adminFilters.search = search.value; drawAdminQueue(); });
     const menu = (label, name) => { const s = el("select", "queue-filter"); s.name = name; s.setAttribute("aria-label", label); s.addEventListener("change", () => { adminFilters[name] = s.value; drawAdminQueue(); }); return s; };
     const client = menu("Project", "client"), repo = menu("Repository", "repo"), reviewer = menu("Reviewer", "reviewer"), state = menu("Review state", "state"), sort = menu("Sort", "sort");
-    state.replaceChildren(...[["", "Any review state"], ...Object.entries(QUEUE_STATE_LABEL).filter(([v]) => v !== "draft")].map(([v, t]) => { const o = el("option", "", t); o.value = v; return o; }));
+    state.replaceChildren(...[["", "Any review state"], ...Object.entries(QUEUE_STATE_LABEL)].map(([v, t]) => { const o = el("option", "", t); o.value = v; return o; }));
     sort.replaceChildren(...SORTS.map(([v, t]) => { const o = el("option", "", t); o.value = v; return o; }));
     bar.append(search, client, repo, reviewer, state, sort);
 
@@ -492,13 +579,22 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
       b.dataset.quick = v;
       return b;
     });
-    quickBar.append(...quick);
+    const viewBar = el("div", "queue-views");
+    viewBar.setAttribute("role", "group");
+    viewBar.setAttribute("aria-label", "View");
+    const views = VIEWS.map(([v, t]) => {
+      const b = btn(t, "queue-chip", () => { adminFilters.view = v; drawAdminQueue(); });
+      b.dataset.view = v;
+      return b;
+    });
+    viewBar.append(...views);
+    quickBar.append(...quick, viewBar);
     const active = el("div", "queue-active");
     const notices = el("div", "queue-notices");
     const list = el("div", "queue-list");
     root.append(head, notices, stats, bar, quickBar, active, list);
     target.append(root);
-    adminRoot = { root, controls: { search, client, repo, reviewer, state, sort, quick }, updated, status, refresh, stats, active, notices, list };
+    adminRoot = { root, controls: { search, client, repo, reviewer, state, sort, quick, views }, updated, status, refresh, stats, active, notices, list };
     drawAdminQueue();
     return loadQueue();
   }
