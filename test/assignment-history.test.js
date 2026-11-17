@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mordiAccount, assigneeChanges, analyzeAssignments, readHistories, checkTickets, assignmentHistoryRoute } from "../proxy/src/assignment-history.js";
+import { mordiAccount, assigneeChanges, analyzeAssignments, readHistories, readRecentHistories, checkTickets, assignmentHistoryRoute } from "../proxy/src/assignment-history.js";
 
 const MORDI = "mordi-acc-1", OTHER = "other-acc-2";
 const team = (people) => JSON.stringify({ people });
@@ -127,6 +127,32 @@ test("a history longer than the check reads is incomplete", async () => {
   const entries = Array.from({ length: 1100 }, () => otherField("2026-01-01T00:00:00.000+0000"));
   const read = await readHistories(fakeJira({ "AION-3": entries }).jira, "AION-3");
   assert.equal(read.complete, false);
+});
+
+test("only the last 6 assignee changes decide: Mordi only in older changes is unknown, in the last 6 is ever", async () => {
+  const at = (n) => "2026-01-" + String(10 + n).padStart(2, "0") + "T00:00:00.000+0000";
+  // 20 assignee changes; Mordi was assignee in change 3 only, which is outside the last 6.
+  const older = Array.from({ length: 20 }, (_, n) => change(at(n), n === 0 ? null : OTHER, n === 2 ? MORDI : OTHER));
+  const oldOnly = await readRecentHistories(fakeJira({ "AION-20": older }).jira, "AION-20");
+  const oldVerdict = analyzeAssignments({ changes: assigneeChanges(oldOnly.histories).slice(-6), complete: false, currentId: OTHER, mordiId: MORDI, created: null });
+  assert.equal(oldVerdict.state, "unknown");
+
+  // Mordi in change 16 of 20 is inside the last 6, so it is ever.
+  const recent = Array.from({ length: 20 }, (_, n) => change(at(n), n === 0 ? null : OTHER, n === 15 ? MORDI : OTHER));
+  const f = fakeJira({ "AION-21": recent });
+  const recentRead = await readRecentHistories(f.jira, "AION-21");
+  const recentVerdict = analyzeAssignments({ changes: assigneeChanges(recentRead.histories).slice(-6), complete: false, currentId: OTHER, mordiId: MORDI, created: null });
+  assert.equal(recentVerdict.state, "ever");
+});
+
+test("the newest changelog page is read first, and reading stops once 6 assignee changes are held", async () => {
+  // 250 entries over 3 pages; the 6 assignee changes sit at the end, so only pages 0 and 2 are read.
+  const entries = Array.from({ length: 250 }, (_, n) => (n >= 244 ? change("2026-01-" + String(10 + (n % 10)).padStart(2, "0") + "T00:00:00.000+0000", OTHER, MORDI) : otherField("2026-01-01T00:00:00.000+0000")));
+  const { jira, calls } = fakeJira({ "AION-22": entries });
+  const read = await readRecentHistories(jira, "AION-22");
+  assert.equal(calls.length, 2);
+  assert.equal(read.reachedStart, false);
+  assert.equal(assigneeChanges(read.histories).length, 6);
 });
 
 test("tickets are checked, cached while Jira's updated time is the same, and re-read after a reassignment", async () => {

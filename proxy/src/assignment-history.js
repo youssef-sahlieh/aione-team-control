@@ -4,10 +4,10 @@
 // ids to people). Nothing is hardcoded and no display name is matched against assignees. If Mordi is missing, listed
 // twice, or has no account id, every ticket is Unknown and the reason says what to configure.
 //
-// Evidence: the ticket's changelog, read page by page. A ticket is "ever" when any assignee change went to Mordi,
-// the ticket started with Mordi (the first change's "from", or the current assignee when it never changed), or Mordi is
-// the current assignee. It is "never" only when the whole history was read and none of that is true. Any failure, or
-// a history too long to read in full, is "unknown", never "never".
+// Evidence: the last 6 assignee changes in the ticket's changelog, read from the newest page backwards. A ticket is
+// "ever" when any of those changes went to Mordi, the earliest of them was from Mordi, or Mordi is the current assignee.
+// It is "never" only when the whole history has 6 or fewer assignee changes, was read, and none of that is true. Any
+// failure, or a history with more than 6 assignee changes, is "unknown", never "never".
 //
 // Cost: results are cached per ticket and reused while Jira's `updated` stamp is the same. A reassignment changes
 // `updated`, so the next check reads the new history; nothing is fetched on every page render.
@@ -17,7 +17,8 @@ const MAX_PAGES = 10;            // up to 1000 history entries per ticket
 const CONCURRENCY = 4;
 const BUDGET_MS = 15000;         // a single request never waits on Jira longer than this in total
 const MAX_KEYS = 50;
-const CACHE_PREFIX = "jira-assignment:v1:";
+const RECENT = 6;                // only the last 6 assignee changes decide the verdict
+const CACHE_PREFIX = "jira-assignment:v2:";
 const ACCOUNT_ID = /^[\w:-]{1,128}$/;
 const JIRA_KEY = /^[A-Z][A-Z0-9_]*-\d+$/;
 
@@ -103,6 +104,33 @@ export async function readHistories(jira, key) {
   return { histories, complete: false };
 }
 
+// Reads the changelog from the newest page backwards, stopping once it holds RECENT assignee changes or reaches the
+// start. `reachedStart` says the earliest entry was read.
+export async function readRecentHistories(jira, key) {
+  const fetchPage = async (page) => {
+    const r = await jira("/rest/api/3/issue/" + key + "/changelog?startAt=" + page * PAGE + "&maxResults=" + PAGE, { signal: AbortSignal.timeout(5000) });
+    if (!r || !r.ok || !r.data || !Array.isArray(r.data.values)) return null;
+    return r.data;
+  };
+  const head = await fetchPage(0);
+  if (!head) return { failed: true, reason: "Jira's history couldn't be read." };
+  if (typeof head.total !== "number") {
+    const full = await readHistories(jira, key);
+    return full.failed ? full : { histories: full.histories, reachedStart: full.complete };
+  }
+  const lastPage = Math.max(0, Math.ceil(head.total / PAGE) - 1);
+  const collected = [];
+  let reachedStart = false;
+  for (let page = lastPage, reads = 0; reads < MAX_PAGES; page--, reads++) {
+    const data = page === 0 ? head : await fetchPage(page);
+    if (!data) return { failed: true, reason: "Jira's history couldn't be read." };
+    collected.unshift(...data.values);
+    if (page === 0) { reachedStart = true; break; }
+    if (assigneeChanges(collected).length >= RECENT) break;
+  }
+  return { histories: collected, reachedStart };
+}
+
 async function readCache(env, key) {
   if (!env.STORE) return null;
   try { const raw = await env.STORE.get(CACHE_PREFIX + key); return raw ? JSON.parse(raw) : null; } catch { return null; }
@@ -118,10 +146,12 @@ async function checkTicket(env, jira, issue, mordi, now) {
   try {
     const cached = await readCache(env, issue.key);
     if (cached && cached.updated === issue.updated && cached.mordiId === mordi.id && cached.result) return { ...cached.result, cached: true };
-    const read = await readHistories(jira, issue.key);
+    const read = await readRecentHistories(jira, issue.key);
     if (read.failed) return { ...base, state: "unknown", events: [], assignedToMordi: false, reason: read.reason, verifiedAt: null };
+    const all = assigneeChanges(read.histories);
+    const recent = all.slice(-RECENT);
     const verdict = analyzeAssignments({
-      changes: assigneeChanges(read.histories), complete: read.complete,
+      changes: recent, complete: read.reachedStart && all.length <= RECENT,
       currentId: issue.assigneeId || null, mordiId: mordi.id, created: issue.created || null
     });
     const result = { ...base, ...verdict, verifiedAt: new Date(now()).toISOString() };

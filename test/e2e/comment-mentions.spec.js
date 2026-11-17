@@ -80,13 +80,14 @@ test("moving the cursor into a finished mention does not reopen the picker", asy
   const note = page.locator("#note");
   await note.click();
   await page.keyboard.type("@Carmel");
+  // Wait for the search result before choosing it: Enter only picks a result that is on screen.
+  await expect(page.getByRole("option", { name: "Carmel Yacoub" })).toBeVisible();
   await page.keyboard.press("Enter");
   await page.keyboard.type("ok");
   await expect(box(page)).toBeHidden();
   await note.click({ position: { x: 8, y: 8 } });
   await page.keyboard.press("Home");
   await page.keyboard.press("ArrowRight");
-  await expect(box(page)).toBeHidden();
   await expect(box(page)).toBeHidden();
 });
 
