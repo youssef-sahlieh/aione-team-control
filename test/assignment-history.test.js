@@ -129,6 +129,16 @@ test("a history longer than the check reads is incomplete", async () => {
   assert.equal(read.complete, false);
 });
 
+test("Mordi as the reporter is flagged on the result, separately from the assignee verdict", async () => {
+  const env = { ...cfg, STORE: memoryStore() };
+  const issues = [{ key: "AION-30", assigneeId: OTHER, reporterId: MORDI, created: "2026-01-01T00:00:00.000+0000", updated: "2026-02-01T00:00:00.000+0000" }];
+  const out = await checkTickets({ env, jira: fakeJira({ "AION-30": [] }).jira, issues });
+  assert.equal(out.results[0].reporterIsMordi, true);
+  assert.equal(out.results[0].state, "never");
+  const other = await checkTickets({ env, jira: fakeJira({ "AION-30": [] }).jira, issues: [{ ...issues[0], reporterId: OTHER }] });
+  assert.equal(other.results[0].reporterIsMordi, false);
+});
+
 test("only the last 6 assignee changes decide: Mordi only in older changes is unknown, in the last 6 is ever", async () => {
   const at = (n) => "2026-01-" + String(10 + n).padStart(2, "0") + "T00:00:00.000+0000";
   // 20 assignee changes; Mordi was assignee in change 3 only, which is outside the last 6.

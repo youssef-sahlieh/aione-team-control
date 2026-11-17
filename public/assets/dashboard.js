@@ -306,7 +306,7 @@ import "./app/keyboard.js";
   const needsReply=i=>i.last&&!i.last.fromTeam&&Date.parse(i.updated)>=Date.now()-(typeof state!=="undefined"?state.updDays:3)*dayMs;
 
   const F=createFilters;
-  const state={issues:null,mordiFilter:"",history:new Map(),historyNote:"",focus:"open",f:F(),q:"",view:"list",group:"",sel:new Set(),fopen:false,hperiod:7,updDays:3,dueDays:7,closedDays:30,mainIssues:[],closedIssues:[],internalIssues:[],odooIssues:[],pageIndex:0,pageSize:25};
+  const state={issues:null,mordiFilter:"",history:new Map(),historyErrors:new Map(),historyNote:"",focus:"open",f:F(),q:"",view:"list",group:"",sel:new Set(),fopen:false,hperiod:7,updDays:3,dueDays:7,closedDays:30,mainIssues:[],closedIssues:[],internalIssues:[],odooIssues:[],pageIndex:0,pageSize:25};
   try{ const u=+localStorage.getItem("aion.upd"), d=+localStorage.getItem("aion.due"); if(u>=1&&u<=30) state.updDays=u; if(d>=1&&d<=90) state.dueDays=d; const cd=+localStorage.getItem("aion.closed"); if(cd>=1&&cd<=365) state.closedDays=cd; }catch(e){}
   try{ const v=localStorage.getItem("aion.view"); if(v) state.view=v; state.fopen=localStorage.getItem("aion.fopen")==="1"; const gg=localStorage.getItem("aion.group"); if(gg!==null) state.group=gg; }catch(e){}
 
@@ -503,9 +503,13 @@ import "./app/keyboard.js";
       const data=await api("/jira/assignment-history",{method:"POST",body:{keys:todo.map(i=>i.key)}});
       const updated=new Map(todo.map(i=>[i.key,i.updated||""]));
       state.historyNote=data.configured?"":(data.reason||"");
-      for(const r of data.results||[]) state.history.set(r.key,{result:r,updated:updated.get(r.key)||""});
+      for(const r of data.results||[]){ state.history.set(r.key,{result:r,updated:updated.get(r.key)||""}); state.historyErrors.delete(r.key); }
       render();
-    }catch(err){ state.historyNote="Mordi's assignment history couldn't be checked: "+errorText(err); }
+    }catch(err){
+      state.historyNote="Mordi's assignment history couldn't be checked: "+errorText(err);
+      todo.forEach(i=>state.historyErrors.set(i.key,"The check failed: "+errorText(err)));
+      render();
+    }
     finally{ todo.forEach(i=>historyPending.delete(i.key)); }
   }
   function render(){
@@ -669,7 +673,7 @@ import "./app/keyboard.js";
     const r=el("div","gr item "+stK(i)+(state.sel.has(i.key)?" sel":"")); r.dataset.key=i.key;
     const ckw=el("span","c-ck"); ckw.appendChild(selBox(i,on=>r.classList.toggle("sel",on))); r.appendChild(ckw);
     const kw=el("span","c-key"); kw.appendChild(keyLink(i));kw.appendChild(el("small","business-key-date",createdDate(i.created)));
-    const hres=historyResultFor(i,state.history.get(i.key)), hv=historyView(hres);
+    const hres0=historyResultFor(i,state.history.get(i.key)), hres=hres0.state==="unknown"&&!state.history.get(i.key)&&state.historyErrors.has(i.key)?{state:"unknown",reason:state.historyErrors.get(i.key),events:[]}:hres0, hv=historyView(hres);
     if(hv.label){ const hb=el("button","flag hist hist-"+hv.tone,hv.label); hb.type="button"; const lines=historyDetails(hres); hb.title=lines.join(" "); hb.setAttribute("aria-label",hv.label+". "+lines.join(" "));
       hb.addEventListener("click",e=>{ e.stopPropagation(); toast(hv.label,lines,false); }); kw.appendChild(hb); }
     r.appendChild(kw);
