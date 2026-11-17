@@ -39,6 +39,7 @@ import { aiChat, aiBrief, aiConfigured, aiDescription, aiImproveWriting, aiWorkD
 import { githubConfigured, syncPulls, prsByKey } from "./github.js";
 import { githubWebhook, importGithubIssues } from "./github-issues.js";
 import { reviewRoutes, requestWaitingReviews, adfText } from "./reviews.js";
+import { assignmentHistoryRoute } from "./assignment-history.js";
 import { recordTicketEvent, ticketLogRoutes, readTicketLog } from "./ticket-log.js";
 import { integrationRoutes } from "./integrations.js";
 import { epicMapRoutes } from "./epic-map.js";
@@ -640,6 +641,7 @@ async function route(request, env, url) {
   }
 
   if (path === "/users" || path.startsWith("/users/")) return accountRoutes(request, env, url, me);
+  if (path === "/jira/assignment-history") return assignmentHistoryRoute(request, env, { searchIssues: readBusinessSearch, jira: (p, i) => jira(env, p, i), json, fail, readJson });
   if (path === "/reviews" || path.startsWith("/reviews/")) return reviewRoutes(request, env, url, me, { jira });
   if (path === "/ticket-notes") return ticketNoteRoutes(request, env, url, me, {
     postToOdoo:(key, text) => postOdooNote(env, key, me, text),

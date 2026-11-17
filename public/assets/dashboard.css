@@ -332,6 +332,12 @@ button.key.int:hover{text-decoration:underline}
 button.key.odoo{font-family:var(--mono);font-size:12.5px;color:#714b67;font-weight:600;text-align:left;cursor:pointer;background:none;border:0;padding:0}
 button.key.odoo:hover{text-decoration:underline}
 @media (prefers-color-scheme: dark){ .flag.odoo{--k:#d6a4c8;--ks:#3a2434;border-color:#d6a4c8} button.key.odoo{color:#d6a4c8} }
+/* Mordi assignment history: green = assigned before, orange-red = never assigned, gray = unknown. Buttons, so they can be opened. */
+.flag.hist{border:1px solid var(--k);cursor:pointer;font:inherit;font-size:11.5px;margin-top:2px;display:inline-block}
+.flag.hist-ever{--k:#1e6b3a;--ks:#e4f2e8}
+.flag.hist-never{--k:#a33a12;--ks:#fbe9e0}
+.flag.hist-unknown{--k:#5d5d5d;--ks:#ededed}
+@media (prefers-color-scheme: dark){ .flag.hist-ever{--k:#8fd3a4;--ks:#17301f} .flag.hist-never{--k:#f2a27e;--ks:#3a1f14} .flag.hist-unknown{--k:#c8c8c8;--ks:#2b2b2b} }
 
 /* Audit & Deploy page (monitor.html) */
 .mon-tabs{margin:4px 0}

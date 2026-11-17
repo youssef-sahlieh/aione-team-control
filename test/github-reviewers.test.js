@@ -121,3 +121,16 @@ test("GitHub's refusal is reported as it is, and no change is claimed", async ()
   assert.equal((await res.json()).code, "not_eligible");
   assert.deepEqual(t.gh.requested, []);
 });
+
+test("a GitHub 403 names the repository and the token permission to check, and claims no change", async () => {
+  const t = setup({ writeStatus: 403 });
+  const admin = await t.seed("admin-1", "admin@aione.test", "Ellen", "admin");
+  const res = await t.call("POST", URL_PATH, admin, { confirmed: true, add: ["sam-gh"] });
+  assert.equal(res.status, 502);
+  const body = await res.json();
+  assert.equal(body.code, "github_access");
+  assert.match(body.error, /KAD-org\/flutter_pos/);
+  assert.match(body.error, /write access to pull requests/);
+  assert.match(body.error, /Nothing was changed/);
+  assert.deepEqual(t.gh.requested, []);
+});

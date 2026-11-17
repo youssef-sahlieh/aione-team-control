@@ -29,6 +29,7 @@ import { replyPreview, commentAuthor, signatureNode, newSendId, keepSendId, repl
 import { mountHeaderTools } from "./app/header-tools.js";
 import { setNavCount } from "./app/nav.js";
 import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
+import { HISTORY_FILTERS, historyResultFor, historyView, passesHistoryFilter, historyDetails } from "./models/assignment-history.js";
 import "./app/keyboard.js";
 
   // The dashboard keeps loading after the page itself has loaded; the browser's own scroll restore could then
@@ -305,7 +306,7 @@ import "./app/keyboard.js";
   const needsReply=i=>i.last&&!i.last.fromTeam&&Date.parse(i.updated)>=Date.now()-(typeof state!=="undefined"?state.updDays:3)*dayMs;
 
   const F=createFilters;
-  const state={issues:null,focus:"open",f:F(),q:"",view:"list",group:"",sel:new Set(),fopen:false,hperiod:7,updDays:3,dueDays:7,closedDays:30,mainIssues:[],closedIssues:[],internalIssues:[],odooIssues:[],pageIndex:0,pageSize:25};
+  const state={issues:null,mordiFilter:"",history:new Map(),historyNote:"",focus:"open",f:F(),q:"",view:"list",group:"",sel:new Set(),fopen:false,hperiod:7,updDays:3,dueDays:7,closedDays:30,mainIssues:[],closedIssues:[],internalIssues:[],odooIssues:[],pageIndex:0,pageSize:25};
   try{ const u=+localStorage.getItem("aion.upd"), d=+localStorage.getItem("aion.due"); if(u>=1&&u<=30) state.updDays=u; if(d>=1&&d<=90) state.dueDays=d; const cd=+localStorage.getItem("aion.closed"); if(cd>=1&&cd<=365) state.closedDays=cd; }catch(e){}
   try{ const v=localStorage.getItem("aion.view"); if(v) state.view=v; state.fopen=localStorage.getItem("aion.fopen")==="1"; const gg=localStorage.getItem("aion.group"); if(gg!==null) state.group=gg; }catch(e){}
 
@@ -334,7 +335,7 @@ import "./app/keyboard.js";
 
   function passFilters(i,t,skip){
     const filters=state.f;
-    return business.matches(i,state.businessFilter)&&matchesFilters(i,t,{filters,query:state.q,needsReply,assigneeKey:i=>assigneeFilterKey(i,PEOPLE)},skip);
+    return business.matches(i,state.businessFilter)&&matchesFilters(i,t,{filters,query:state.q,needsReply,assigneeKey:i=>assigneeFilterKey(i,PEOPLE)},skip)&&passesHistoryFilter(historyResultFor(i,state.history.get(i.key)),state.mordiFilter);
   }
   const focusDef=()=>FOCUS.find(x=>x.id===state.focus)||FOCUS[0];
   // The tickets the current filters and scope allow. The All open tile, the sidebar count and the list all count from this.
@@ -342,7 +343,7 @@ import "./app/keyboard.js";
   // Open tickets in scope: the same number as the All open tile and the sidebar's All open item.
   function openCount(){ const t=todayStr(), open=FOCUS.find(x=>x.id==="open"); return scopedIssues(t).filter(i=>open.f(i,t)).length; }
   function visible(skip){ const t=todayStr(), fd=focusDef(); return (state.issues||[]).filter(i=>fd.f(i,t)&&passFilters(i,t,skip)); }
-  function filterCount(){ const f=state.f; return Object.values(state.businessFilter||{}).filter(Boolean).length+ f.reporter.size+f.assignee.size+f.dev.size+f.status.size+f.type.size+f.priority.size+(f.epic?1:0)+(f.due!=="any"?1:0)+(f.activity!=="any"?1:0)+(f.source!=="all"?1:0)+(state.q?1:0); }
+  function filterCount(){ const f=state.f; return Object.values(state.businessFilter||{}).filter(Boolean).length+ f.reporter.size+f.assignee.size+f.dev.size+f.status.size+f.type.size+f.priority.size+(f.epic?1:0)+(f.due!=="any"?1:0)+(f.activity!=="any"?1:0)+(f.source!=="all"?1:0)+(state.q?1:0)+(state.mordiFilter?1:0); }
   const showTicketBriefs=()=>ticketBriefs.enabled();
 
   function renderQuickFilters(){
@@ -356,6 +357,8 @@ import "./app/keyboard.js";
     pick("Status",[["","All statuses"],...[...new Set([...(state.issues||[]).map(i=>i.status),...state.f.status])].sort((a,b)=>stIdx(a)-stIdx(b)).map(x=>[x,x])],val(state.f.status),v=>state.f.status=new Set(v?[v]:[]));
     if(IS_ADMIN)pick("Priority",[["","All priorities"],...[...new Set([...(state.issues||[]).map(i=>i.priority||"None"),...state.f.priority])].sort((a,b)=>a.localeCompare(b)).map(x=>[x,x])],val(state.f.priority),v=>state.f.priority=new Set(v?[v]:[]));
     pick("Due date",DUE_OPTS,state.f.due,v=>state.f.due=v);
+    const historySelect=pick("Mordi assignment history",HISTORY_FILTERS,state.mordiFilter,v=>state.mordiFilter=v);
+    historySelect.title=state.historyNote||"Whether each Jira ticket was ever assigned to Mordi, from its Jira history.";
     business.filters(box,state.businessFilter,()=>{state.pageIndex=0;render();});
     const moreField=el("div","quick-field more-filter-field");moreField.append(el("span",null,"Additional filters"),more);box.appendChild(moreField);
     moreField.hidden=!IS_ADMIN;more.hidden=!IS_ADMIN;
@@ -489,6 +492,22 @@ import "./app/keyboard.js";
   // Redraws keep your place on the page: a redraw that briefly makes the page shorter (lists emptied and
   // rebuilt) would otherwise send you back to the top while you scroll.
   let afterRender=()=>{}; // set up with the ticket view: marks the open ticket in the list
+  // Mordi assignment history is checked only for a ticket when it is opened. A ticket is asked again only when
+  // Jira's updated time changes. A failed check stays Unknown and is not cached.
+  const historyPending=new Set();
+  async function checkHistory(keys){
+    const todo=(state.issues||[]).filter(i=>keys.includes(i.key)&&historyResultFor(i,null).state!=="na"&&!historyPending.has(i.key)&&(!state.history.get(i.key)||state.history.get(i.key).updated!==(i.updated||"")));
+    if(!todo.length) return;
+    todo.forEach(i=>historyPending.add(i.key));
+    try{
+      const data=await api("/jira/assignment-history",{method:"POST",body:{keys:todo.map(i=>i.key)}});
+      const updated=new Map(todo.map(i=>[i.key,i.updated||""]));
+      state.historyNote=data.configured?"":(data.reason||"");
+      for(const r of data.results||[]) state.history.set(r.key,{result:r,updated:updated.get(r.key)||""});
+      render();
+    }catch(err){ state.historyNote="Mordi's assignment history couldn't be checked: "+errorText(err); }
+    finally{ todo.forEach(i=>historyPending.delete(i.key)); }
+  }
   function render(){
     const y=window.scrollY; renderNow(); afterRender(); if(BELL) BELL.update();
     if(y&&Math.abs(window.scrollY-y)>1) window.scrollTo(0,Math.min(y,document.documentElement.scrollHeight-innerHeight));
@@ -649,7 +668,11 @@ import "./app/keyboard.js";
   function gridRow(i,t){
     const r=el("div","gr item "+stK(i)+(state.sel.has(i.key)?" sel":"")); r.dataset.key=i.key;
     const ckw=el("span","c-ck"); ckw.appendChild(selBox(i,on=>r.classList.toggle("sel",on))); r.appendChild(ckw);
-    const kw=el("span","c-key"); kw.appendChild(keyLink(i));kw.appendChild(el("small","business-key-date",createdDate(i.created))); r.appendChild(kw);
+    const kw=el("span","c-key"); kw.appendChild(keyLink(i));kw.appendChild(el("small","business-key-date",createdDate(i.created)));
+    const hres=historyResultFor(i,state.history.get(i.key)), hv=historyView(hres);
+    if(hv.label){ const hb=el("button","flag hist hist-"+hv.tone,hv.label); hb.type="button"; const lines=historyDetails(hres); hb.title=lines.join(" "); hb.setAttribute("aria-label",hv.label+". "+lines.join(" "));
+      hb.addEventListener("click",e=>{ e.stopPropagation(); toast(hv.label,lines,false); }); kw.appendChild(hb); }
+    r.appendChild(kw);
     const tt=el("button","ttl c-ttl"); tt.type="button"; tt.title="Open details";
     const s=el("span","s",i.summary); s.dir="auto"; tt.appendChild(s);
     const tags=tagsFor(i,t,state.group!=="epic"); if(tags.childNodes.length) tt.appendChild(tags);
@@ -1009,7 +1032,7 @@ import "./app/keyboard.js";
   }
   function showState(msg,isErr){ const s=$("pagestate"); s.hidden=!msg; s.className="state"+(isErr?" err":""); s.textContent=msg||""; }
   function errorText(err){ const c=err&&err.code;
-    if(c==="too_large"||c==="bad_request"||c==="forbidden"||c==="not_found") return err.message;
+    if(c==="too_large"||c==="bad_request"||c==="forbidden"||c==="not_found"||c==="github"||c==="github_access"||c==="not_eligible"||c==="rate_limit"||c==="missing"||c==="unknown") return err.message;
     if(c==="session") return "Your sign-in has expired. Sign in again.";
     if(c==="network") return "Can't reach the AIONE server. Check your connection and try again.";
     if(c==="rate_limited") return "Jira is busy. Wait a moment and try again.";
@@ -1108,7 +1131,7 @@ import "./app/keyboard.js";
   $("grp").addEventListener("change",e=>{ state.group=e.target.value; try{localStorage.setItem("aion.group",state.group);}catch(x){} render(); });
   $("ticket-filters-toggle").addEventListener("click",()=>{ticketFiltersOpen=!ticketFiltersOpen;try{localStorage.setItem(ticketFiltersKey,ticketFiltersOpen?"1":"0");}catch{}renderFilters();});
   $("ftoggle").addEventListener("click",()=>{ state.fopen=!state.fopen; try{localStorage.setItem("aion.fopen",state.fopen?"1":"0");}catch(e){} renderFilters(); });
-  $("fclear").addEventListener("click",()=>{ state.f=defaultFilters();state.businessFilter={}; state.q=""; $("q").value=""; state.sel.clear(); render(); });
+  $("fclear").addEventListener("click",()=>{ state.f=defaultFilters();state.businessFilter={}; state.mordiFilter=""; state.q=""; $("q").value=""; state.sel.clear(); render(); });
   let qt=null; $("q").addEventListener("input",e=>{ clearTimeout(qt); qt=setTimeout(()=>{ state.q=e.target.value.trim(); render(); },150); });
 
   const dz={key:null,labels:[],devs:new Set()};
@@ -1160,7 +1183,7 @@ import "./app/keyboard.js";
     if(e.target.closest&&e.target.closest("input,textarea,select,[contenteditable]:not([contenteditable=false])")) return;
     e.preventDefault(); stepTicket(e.code==="KeyJ"?1:-1);
   });
-  function openDrawer(key){ setTimeout(()=>{ if(dz.key===key) renderPrs(key); },0);
+  function openDrawer(key){ setTimeout(()=>{ if(dz.key===key) renderPrs(key); },0); checkHistory([key]);
     if(dz.key&&dz.key!==key&&!closeDrawer(false,true))return;
     if(location.hash!=="#"+key){ const url=location.pathname+location.search+"#"+key; if(drawerPushed) history.replaceState(history.state,"",url); else { history.pushState(history.state,"",url); drawerPushed=true; } }
     const opening=!dz.key;dz.key=key;applyDrawerSize();
