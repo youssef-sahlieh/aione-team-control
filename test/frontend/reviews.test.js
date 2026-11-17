@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {STATUS_LABEL, reviewLabel, sortQueue, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, queueStateLabel, queueReasonText, waitingFor, longestWaitFirst, filterQueue, queueOptions, NO_REVIEWER, waitLine, safePrUrl, reviewerText, noReviewerText, sortPrs, groupByTicket, QUICK_FILTERS, VIEWS, queueSummary, activeFilters, exactTime, attentionReasons, menuFilterCount, CHECKS_LABEL} from "../../public/assets/models/reviews.js";
+import {STATUS_LABEL, reviewLabel, sortQueue, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, queueStateLabel, queueReasonText, waitingFor, longestWaitFirst, filterQueue, queueOptions, NO_REVIEWER, waitLine, safePrUrl, reviewerText, noReviewerText, sortPrs, groupByTicket, QUICK_FILTERS, VIEWS, queueSummary, activeFilters, exactTime, attentionReasons, menuFilterCount, CHECKS_LABEL, DEFAULT_SORT, SORTS} from "../../public/assets/models/reviews.js";
 
 test("the queue puts what needs the reviewer first and finished work last, newest first within a status",()=>{
   const queue=sortQueue([
@@ -145,7 +145,7 @@ test("the Filters button counts only the four menus that are set",()=>{
 
 test("the filter menus list each project, repository and reviewer once, in order",()=>{
   const prs = [pr({ repo: "acme/web", reviewers: [{ name: "Sam" }], tickets: [tk({ client: "Beta" })] }), pr({ id: "x#3", repo: "acme/api", reviewers: [{ name: "Lee" }, { name: "Sam" }], tickets: [tk({ key: "AION-2", client: "Acme" }), tk({ key: "AION-3", client: "" })] }), pr({ id: "y#4", repo: "acme/api", tickets: [] })];
-  assert.deepEqual(queueOptions(prs), { clients: ["Acme", "Beta"], repos: ["acme/api", "acme/web"], reviewers: ["Lee", "Sam"] });
+  assert.deepEqual(queueOptions(prs), { clients: ["Acme", "Beta"], repos: ["acme/api", "acme/web"], reviewers: ["Lee", "Sam"], authors: ["ellen"] });
 });
 
 test("the default sort puts the longest real review wait first, then other times, then unknown ones",()=>{
@@ -156,11 +156,50 @@ test("the default sort puts the longest real review wait first, then other times
     pr({ id: "c#4", repo: "c", number: 4, since: "2026-11-02T00:00:00Z", sinceKind: "requested", tickets: [tk({ key: "AION-2" })] })
   ];
   const ids = (sort) => sortPrs(prs, sort).map((p) => p.id);
-  assert.deepEqual(ids(), ["c#4", "c#3", "a#1", "b#2"]);
+  assert.deepEqual(ids("wait"), ["c#4", "c#3", "a#1", "b#2"]);
   assert.deepEqual(ids("recent"), ["c#3", "c#4", "a#1", "b#2"]);
   assert.deepEqual(ids("key"), ["c#4", "c#3", "a#1", "b#2"], "ticket keys in number order, unlinked last");
   assert.deepEqual(ids("repo"), ["a#1", "b#2", "c#3", "c#4"]);
   assert.deepEqual(prs.map((p) => p.id), ["a#1", "b#2", "c#3", "c#4"], "the input is not reordered");
+});
+
+test("the default order is the newest pull request first by GitHub's created time, unknown times last, and the other orders stay",()=>{
+  const prs = [
+    pr({ id: "a#1", repo: "a", number: 1, created: "2026-10-01T00:00:00Z" }),
+    pr({ id: "b#2", repo: "b", number: 2, created: "" }),
+    pr({ id: "c#3", repo: "c", number: 3, created: "2026-11-05T00:00:00Z" }),
+    pr({ id: "c#4", repo: "c", number: 4, created: "2026-11-02T00:00:00Z" })
+  ];
+  assert.equal(DEFAULT_SORT, "created");
+  assert.deepEqual(sortPrs(prs).map((p) => p.id), ["c#3", "c#4", "a#1", "b#2"]);
+  assert.deepEqual(sortPrs(prs, "created").map((p) => p.id), ["c#3", "c#4", "a#1", "b#2"]);
+  assert.ok(SORTS.some(([k]) => k === "wait") && SORTS.some(([k]) => k === "recent"), "the other sorts are still offered");
+});
+
+test("the Opened by filter keeps the author's pull requests, and the reviewer relationship narrows the chosen reviewer only",()=>{
+  const prs = [
+    pr({ id: "a#1", author: "ellen", reviewers: [{ name: "Lee", pending: true, review: "" }] }),
+    pr({ id: "b#2", author: "sam", reviewers: [{ name: "Lee", pending: false, review: "APPROVED" }] }),
+    pr({ id: "c#3", author: "ellen", reviewers: [{ name: "Sam", pending: false, review: "CHANGES_REQUESTED" }] }),
+    pr({ id: "d#4", author: "ellen", reviewers: [] })
+  ];
+  const ids = (f) => filterQueue(prs, f).map((p) => p.id);
+  assert.deepEqual(ids({ author: "ellen" }), ["a#1", "c#3", "d#4"]);
+  assert.deepEqual(ids({ reviewer: "Lee" }), ["a#1", "b#2"], "any relationship is the default");
+  assert.deepEqual(ids({ reviewer: "Lee", relation: "requested" }), ["a#1"]);
+  assert.deepEqual(ids({ reviewer: "Lee", relation: "reviewed" }), ["b#2"]);
+  assert.deepEqual(ids({ reviewer: "Lee", relation: "approved" }), ["b#2"]);
+  assert.deepEqual(ids({ reviewer: "Sam", relation: "changes" }), ["c#3"]);
+  assert.deepEqual(ids({ reviewer: "Sam", relation: "approved" }), [], "a reviewer who never approved isn't matched");
+  assert.deepEqual(ids({ reviewer: NO_REVIEWER, relation: "requested" }), ["d#4"], "the relationship doesn't apply to none requested");
+  assert.equal(menuFilterCount({ author: "ellen", reviewer: "Lee", relation: "requested" }), 2);
+});
+
+test("the active filter chips name the author and the reviewer's part, and the menus count both",()=>{
+  const chips = activeFilters({ author: "ellen", reviewer: "Lee", relation: "changes" });
+  assert.deepEqual(chips.map((c) => [c.name, c.text]), [["author", "Opened by: ellen"], ["reviewer", "Reviewer: Lee (Changes requested)"]]);
+  assert.deepEqual(activeFilters({ reviewer: "Lee", relation: "any" }).map((c) => c.text), ["Reviewer: Lee"]);
+  assert.deepEqual(activeFilters({ reviewer: NO_REVIEWER, relation: "requested" }).map((c) => c.text), ["Reviewer: none requested"]);
 });
 
 test("the By ticket view lists each ticket with its pull requests, a shared pull request under both, and the unlinked last",()=>{

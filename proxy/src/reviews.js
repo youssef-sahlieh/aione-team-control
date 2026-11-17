@@ -22,7 +22,7 @@
 //                                 no one. It lives apart from the pull request index, so a GitHub sync never touches it.
 import { addToInbox } from "./inbox.js";
 import { ensureAccountId, getUser, listUsers } from "./users.js";
-import { githubConfigured, prRecord, pullIndex, repos, requestReviewer, requestedLogins, syncPulls } from "./github.js";
+import { assignableLogins, githubConfigured, githubRequest, prRecord, pullIndex, repos, requestReviewer, requestedLogins, requestedUsers, syncPulls } from "./github.js";
 import { readFile } from "./internal.js";
 import { publicMetadata, readCatalog, readMetadata } from "./ticket-metadata.js";
 
@@ -607,6 +607,80 @@ export async function ticketsAwaitingReview(env) {
   return out;
 }
 
+// GitHub review requests on one pull request (never on AIONE tickets). Administrators only. Who can be asked comes from
+// GitHub itself, so a login typed by hand is refused unless GitHub lists it as a reviewer for the repository.
+const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+const GITHUB_REVIEWERS_MAX = 10;
+
+function githubFailure(r) {
+  if (r.status === 422) return fail("not_eligible", r.data?.message || "GitHub won't let that account review this pull request.", 400);
+  if (r.rateLimited) return fail("rate_limit", "GitHub's rate limit is reached. Nothing more was changed; retry later.", 429);
+  if (r.status === 403) return fail("github_access", "The GitHub token can't change review requests on this repository.", 502);
+  if (r.status === 404) return fail("missing", "GitHub can't find this pull request.", 404);
+  return fail("github", "GitHub answered " + r.status + ". Retry later.", 502);
+}
+
+async function githubReviewers(env, prId, pr) {
+  if (!githubConfigured(env)) return fail("github", "GitHub isn't set up for this dashboard.", 503);
+  const repo = prId.split("#")[0];
+  try {
+    const [requested, eligible] = await Promise.all([requestedUsers(env, repo, pr.number), assignableLogins(env, repo)]);
+    const author = lc(pr.author || "");
+    return json({ pr: prSummary(pr, prId), author: pr.author || "", requested, eligible: eligible.filter((u) => lc(u.login) !== author), canManage: isOpen(pr) });
+  } catch {
+    return fail("github", "GitHub didn't answer. Try again.", 502);
+  }
+}
+
+async function changeGithubReviewers(env, prId, pr, b) {
+  if (!githubConfigured(env)) return fail("github", "GitHub isn't set up for this dashboard.", 503);
+  if (!isOpen(pr)) return fail("conflict", "Closed or merged pull requests can't get reviewers.", 409);
+  // The page sends confirmed only after the person has agreed in its confirmation step.
+  if (b?.confirmed !== true) return fail("bad_request", "Confirm the change before it is sent to GitHub.", 400);
+  const list = (x) => (x === undefined ? [] : Array.isArray(x) && x.every((v) => typeof v === "string" && GITHUB_LOGIN.test(v)) ? [...new Set(x.map(lc))] : null);
+  const add = list(b.add), remove = list(b.remove);
+  if (!add || !remove) return fail("bad_request", "Choose GitHub logins to request or remove.", 400);
+  if (add.length + remove.length === 0) return fail("bad_request", "Choose someone to request or remove.", 400);
+  if (add.length + remove.length > GITHUB_REVIEWERS_MAX) return fail("bad_request", "Change up to " + GITHUB_REVIEWERS_MAX + " reviewers at a time.", 400);
+  if (add.includes(lc(pr.author || ""))) return fail("bad_request", "This person wrote the pull request, so GitHub can't ask them to review it.", 400);
+  if (add.some((l) => remove.includes(l))) return fail("bad_request", "Someone can't be both requested and removed in one change.", 400);
+
+  const repo = prId.split("#")[0];
+  const path = "/repos/" + repo + "/pulls/" + pr.number + "/requested_reviewers";
+  let requested, eligible;
+  try {
+    [requested, eligible] = await Promise.all([requestedUsers(env, repo, pr.number), assignableLogins(env, repo)]);
+  } catch {
+    return fail("github", "GitHub didn't answer. Nothing was changed.", 502);
+  }
+  const current = new Set(requested.map((u) => lc(u.login)));
+  const allowed = new Set(eligible.map((u) => lc(u.login)));
+  const spelled = new Map([...eligible, ...requested].map((u) => [lc(u.login), u.login]));
+  const toAdd = add.filter((l) => !current.has(l));
+  const toRemove = remove.filter((l) => current.has(l));
+  const refused = toAdd.filter((l) => !allowed.has(l));
+  if (refused.length) return fail("not_eligible", "GitHub doesn't list " + refused.join(", ") + " as a reviewer for this repository.", 400);
+
+  // Removals first, so a failure part-way is visible in the refreshed list below.
+  if (toRemove.length) {
+    const r = await githubRequest(env, "DELETE", path, { reviewers: toRemove.map((l) => spelled.get(l)) });
+    if (!r.ok) return githubFailure(r);
+  }
+  if (toAdd.length) {
+    const r = await githubRequest(env, "POST", path, { reviewers: toAdd.map((l) => spelled.get(l)) });
+    if (!r.ok) return githubFailure(r);
+  }
+  // Refresh the stored pull request so the queue shows the new requests; a refresh failure does not undo the change.
+  await syncPulls(env, { force: true }).catch(() => null);
+  const now = await requestedUsers(env, repo, pr.number).catch(() => null);
+  return json({
+    requested: now ?? requested.filter((u) => !toRemove.includes(lc(u.login))).concat(toAdd.map((l) => ({ login: spelled.get(l), avatar: "" }))),
+    added: toAdd.map((l) => spelled.get(l)),
+    removed: toRemove.map((l) => spelled.get(l)),
+    skipped: { alreadyRequested: add.filter((l) => current.has(l)), notRequested: remove.filter((l) => !current.has(l)) }
+  });
+}
+
 // Reviewer and administrator routes. deps.jira is the proxy's Jira call (see handler.js).
 export async function reviewRoutes(request, env, url, me, deps) {
   const store = env.STORE, path = url.pathname, method = request.method;
@@ -704,6 +778,16 @@ export async function reviewRoutes(request, env, url, me, deps) {
     }
     const users = await listUsers(store);
     return prView(env, prId, pr, { isAdmin, id: user.id }, users);
+  }
+
+  if (path === "/reviews/github-reviewers") {
+    if (!isAdmin) return forbidden();
+    if (!PR_ID.test(prId)) return fail("bad_request", "Choose a pull request.", 400);
+    const pr = await prRecord(env, prId);
+    if (!pr) return fail("not_found", "Pull request unavailable.", 404);
+    if (method === "GET") return githubReviewers(env, prId, pr);
+    if (method === "POST") return changeGithubReviewers(env, prId, pr, await readJson());
+    return fail("method", "Use GET or POST here.", 405);
   }
 
   if (method === "GET" && path === "/reviews/ticket") {

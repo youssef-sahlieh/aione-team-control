@@ -35,7 +35,7 @@ const EMPTY = { prs: [], counts: { prs: 0, tickets: 0, awaiting: 0 } };
 // queueBody: an answer, or a function of the call (n from 1, forced: ?refresh=1) that returns { status, json, delay }.
 // ramiStatus: the answer to PUT /reviews/rami. calls.rami lists what each PUT asked for.
 async function mockReviews(page, { role = "admin", queueBody = queue(), queueStatus = 200, ramiStatus = 200, meItems = [], meExtra = {} } = {}) {
-  const calls = { queue: 0, forced: 0, me: 0, writes: 0, rami: [], other: [] };
+  const calls = { queue: 0, forced: 0, me: 0, writes: 0, rami: [], other: [], github: [] };
   const email = role === "admin" ? "admin@example.invalid" : "user@example.invalid";
   await page.clock.setFixedTime(NOW);
   await page.addInitScript(({ role, email }) => { localStorage.setItem("aione-session", JSON.stringify({ token: "t", email, expiresAt: Date.now() + 3600000, role })); }, { role, email });
@@ -65,6 +65,16 @@ async function mockReviews(page, { role = "admin", queueBody = queue(), queueSta
       calls.rami.push({ method: req.method(), id: url.searchParams.get("id"), flagged: body.flagged });
       return ramiStatus === 200 ? route.fulfill({ json: { id: url.searchParams.get("id"), rami: body.flagged } }) : route.fulfill({ status: ramiStatus, json: { code: "unavailable", error: "Store is down." } });
     }
+    if (path === "/reviews/github-reviewers") {
+      // GitHub's own review requests on one pull request: who is asked now, and who GitHub allows.
+      if (req.method() === "POST") {
+        const body = req.postDataJSON();
+        calls.github.push(body);
+        const requested = [{ login: "sam-gh", avatar: "" }, ...(body.add || []).map((login) => ({ login, avatar: "" }))].filter((u) => !(body.remove || []).includes(u.login));
+        return route.fulfill({ json: { requested, added: body.add || [], removed: body.remove || [], skipped: { alreadyRequested: [], notRequested: [] } } });
+      }
+      return route.fulfill({ json: { pr: {}, author: "dev1", requested: [{ login: "sam-gh", avatar: "" }], eligible: [{ login: "bashar-gh", avatar: "" }, { login: "sam-gh", avatar: "" }], canManage: true } });
+    }
     if (path === "/reviews/me") { calls.me++; return route.fulfill({ json: { items: meItems, prError: "", ...meExtra } }); }
     if (path === "/reviews/ticket") return route.fulfill({ json: { pr: null, ticket: { key: "AION-84", title: "Refund rounding", status: "To Do", priority: "High", type: "Bug", epic: "", assignee: "", reporter: "Ellen", devs: ["builder"], due: null, created: "2026-10-01T10:00:00.000+0000", updated: "2026-10-14T10:00:00.000+0000", description: "Rounds the refund down.", attachments: [], comments: [], commentsTotal: 0 } } });
     if (path === "/internal") return route.fulfill({ json: { tickets: [] } });
@@ -90,6 +100,8 @@ test("an administrator sees every open pull request once, linked or not, longest
   await page.goto("/dashboard.html?page=reviews");
   await expect(page.locator("#page-heading")).toHaveText("Pull Requests");
   await expect(page.locator("#page-description")).toHaveText("Monitor and manage code changes");
+  // The default is newest first now; this test checks the longest-wait order, so it asks for that.
+  await page.getByRole("combobox", { name: "Sort" }).selectOption("wait");
   // The four cards and their counts.
   await expect(stat(page, "Open PRs")).toHaveText("7");
   await expect(stat(page, "No reviewer")).toHaveText("4");
@@ -274,6 +286,7 @@ test("search, tabs, cards, the Filters menu and sort combine on the page, and Cl
   const calls = await mockReviews(page, { queueBody: healthy() });
   await page.goto("/dashboard.html?page=reviews");
   await expect(page.locator(".queue-pr")).toHaveCount(7);
+  await page.getByRole("combobox", { name: "Sort" }).selectOption("wait");
   const reads = calls.queue;
   const search = page.getByRole("searchbox", { name: "Search the review queue" });
 
@@ -322,9 +335,9 @@ test("search, tabs, cards, the Filters menu and sort combine on the page, and Cl
   await expect(page.locator(".queue-active .queue-chip")).toHaveCount(0);
 
   await openFilters(page);
-  await page.getByRole("combobox", { name: "Reviewer" }).selectOption("Mobile");
+  await page.getByRole("combobox", { name: "Reviewer", exact: true }).selectOption("Mobile");
   await expect(refs(page)).toHaveText(["acme/web #20"]);
-  await page.getByRole("combobox", { name: "Reviewer" }).selectOption("");
+  await page.getByRole("combobox", { name: "Reviewer", exact: true }).selectOption("");
   // A project matches through a linked ticket: unlinked pull requests have none.
   await page.getByRole("combobox", { name: "Project" }).selectOption("Beta");
   await expect(refs(page)).toHaveText(["acme/web #20", "acme/web #15"]);
@@ -358,6 +371,7 @@ test("the Filters menu closes with Escape and its Done button, and the cards and
 test("the By ticket view groups the same pull requests under their tickets, with the unlinked last", async ({ page }) => {
   await mockReviews(page, { queueBody: healthy() });
   await page.goto("/dashboard.html?page=reviews");
+  await page.getByRole("combobox", { name: "Sort" }).selectOption("wait");
   const views = page.getByRole("group", { name: "View" });
   await expect(views.getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "true");
   await views.getByRole("button", { name: "By ticket" }).click();
@@ -585,4 +599,21 @@ test("at phone width the queue, its tabs and the open Filters menu fit with no s
   await prRow(page, "acme/web #20").getByRole("button", { name: "Details for acme/web #20" }).click();
   await expect(prRow(page, "acme/web #20").locator(".queue-detail")).toBeVisible();
   expect(await fits()).toBe(true);
+});
+
+test("GitHub reviewers: a change is shown and confirmed before anything is sent, and only the confirmed change goes to GitHub", async ({ page }) => {
+  const calls = await mockReviews(page, { queueBody: healthy() });
+  await page.goto("/dashboard.html?page=reviews");
+  await expect(page.locator(".queue-pr")).toHaveCount(7);
+  await page.getByRole("button", { name: "Manage GitHub reviewers for acme/api #7" }).click();
+  const dialog = page.locator("dialog.review-dialog[open]");
+  await expect(dialog.getByRole("heading", { name: "GitHub reviewers: acme/api #7" })).toBeVisible();
+  await expect(dialog.getByRole("checkbox", { name: "sam-gh · review requested" })).toBeVisible();
+  await dialog.getByRole("checkbox", { name: "bashar-gh", exact: true }).check();
+  await dialog.getByRole("button", { name: "Review changes…" }).click();
+  await expect(dialog.getByText("Ask for a review: bashar-gh")).toBeVisible();
+  expect(calls.github).toEqual([]);
+  await dialog.getByRole("button", { name: "Confirm on GitHub" }).click();
+  await expect(dialog.getByText("Saved. The list below is what GitHub now shows.")).toBeVisible();
+  expect(calls.github).toEqual([{ confirmed: true, add: ["bashar-gh"], remove: [] }]);
 });

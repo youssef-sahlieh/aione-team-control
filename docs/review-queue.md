@@ -52,15 +52,23 @@ The navigation badge is the Awaiting review count.
 Quick filters: All PRs, Linked to ticket, Unlinked PRs, Rami flagged, No reviewer, Changes requested. They combine with:
 
 - the search, which matches the title, `repo#number`, the author, or a linked ticket's key or title
-- the Project, Repository, Reviewer and Review state menus
+- the Project, Repository, Opened by, Reviewer and Review state menus
 
 A project matches through a linked ticket, so an unlinked pull request has no project.
+
+**Opened by** lists the pull request authors in the queue. **Reviewer** lists the reviewers; the **Reviewer's part**
+menu, active once a reviewer is chosen, narrows it to: Any relationship, Review requested (a request is open on
+GitHub or in the dashboard), Has reviewed, Approved, or Changes requested. "No reviewer requested" needs no part.
+
+Every active filter is a removable chip above the list, with **Clear all**. The chips name the author and the
+reviewer's part, for example "Reviewer: Lee (Changes requested)".
 
 Sort options:
 
 | Sort | Order |
 | --- | --- |
-| Longest wait | the default; see Times |
+| Newest PR first | the default: by when GitHub created the pull request, newest first; a pull request with no creation time goes last |
+| Longest wait | see Times |
 | Most recent | newest time first |
 | Ticket key | by key number, unlinked last |
 | Repository | by repository, then number |
@@ -68,6 +76,29 @@ Sort options:
 **List** (the default) shows one row per pull request. **By ticket** groups the same rows under each ticket they name,
 with the unlinked ones last. A pull request that names two tickets is under both in that view. All of this happens on
 the page, so the queue isn't read again.
+
+## GitHub reviewers on a pull request
+
+Each row has a **Reviewers** button (administrators only). It manages GitHub's own review requests on that pull request.
+It never touches a ticket: a ticket's status change requests nothing, and a dashboard assignment (the "Reviewers" picker
+in the row's details) is a separate thing that stays as it was.
+
+- **Read.** `GET /reviews/github-reviewers?id=owner/repo#number` returns who GitHub has a review requested from now
+  (`requested`), and who GitHub allows as a reviewer on the repository (`eligible`, from GitHub's assignee list). The
+  author is never offered. Nothing comes from the dashboard's own directory.
+- **Change.** `POST /reviews/github-reviewers?id=…` with `{ "confirmed": true, "add": [logins], "remove": [logins] }`.
+  Removals go first (`DELETE .../requested_reviewers`), then requests (`POST .../requested_reviewers`), both with
+  GitHub's REST API. Logins are matched case-insensitively and sent with GitHub's own spelling.
+- **Confirmation.** The page shows what will be sent and sends it only from **Confirm on GitHub**. The server refuses
+  any change without `confirmed: true`, so the step can't be skipped by calling the route directly.
+- **Refused before GitHub is called:** a non-administrator (403); a closed or merged pull request (409); a malformed
+  login; the author; someone both added and removed; more than 10 changes at once; a login GitHub doesn't list for the
+  repository (400, `not_eligible`). Someone already requested is skipped, and someone not requested isn't removed.
+- **Afterwards.** The stored pull request is refreshed (`syncPulls` with `force`), so the queue shows the new requests.
+  A failed refresh doesn't undo the change. If GitHub refuses or doesn't answer, nothing more is sent and the message
+  says which.
+- **GitHub token.** The token is read on the server only and is never sent to the page. It needs read access to pull
+  requests and metadata to read the lists, and write access to pull requests (review requests) to change them.
 
 ## The Rami flag
 
