@@ -90,7 +90,7 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 /* Phones: the large form fills the screen. */
 @media (max-width:600px){
   /* --vvh (app/keyboard.js) is the height left above the on-screen keyboard; 100dvh is the fallback. */
-  .pop.modal{inset:0!important;transform:none;width:100%;max-height:none;height:100dvh;height:var(--vvh,100dvh);border-radius:0;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+  .pop.modal{inset:0!important;top:var(--vvt,0px)!important;transform:none;width:100%;max-height:none;height:100dvh;height:var(--vvh,100dvh);border-radius:0;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
   .pop.modal::before{display:none}
 }
 
