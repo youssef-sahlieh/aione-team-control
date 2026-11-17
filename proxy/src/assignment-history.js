@@ -145,9 +145,10 @@ async function checkTicket(env, jira, issue, mordi, now) {
   const base = { key: issue.key, updated: issue.updated || "" };
   try {
     const cached = await readCache(env, issue.key);
-    if (cached && cached.updated === issue.updated && cached.mordiId === mordi.id && cached.result) return { ...cached.result, cached: true };
+    const reporterIsMordi = !!mordi.id && issue.reporterId === mordi.id;
+    if (cached && cached.updated === issue.updated && cached.mordiId === mordi.id && cached.result) return { ...cached.result, reporterIsMordi, cached: true };
     const read = await readRecentHistories(jira, issue.key);
-    if (read.failed) return { ...base, state: "unknown", events: [], assignedToMordi: false, reason: read.reason, verifiedAt: null };
+    if (read.failed) return { ...base, state: "unknown", events: [], assignedToMordi: false, reporterIsMordi, reason: read.reason, verifiedAt: null };
     const all = assigneeChanges(read.histories);
     const recent = all.slice(-RECENT);
     const verdict = analyzeAssignments({
@@ -156,7 +157,7 @@ async function checkTicket(env, jira, issue, mordi, now) {
     });
     const result = { ...base, ...verdict, verifiedAt: new Date(now()).toISOString() };
     if (result.state !== "unknown") await writeCache(env, issue.key, { updated: issue.updated || "", mordiId: mordi.id, result });
-    return { ...result, cached: false };
+    return { ...result, reporterIsMordi, cached: false };
   } catch {
     return { ...base, state: "unknown", events: [], assignedToMordi: false, reason: "Jira's history couldn't be checked.", verifiedAt: null };
   }
@@ -193,9 +194,10 @@ export async function assignmentHistoryRoute(request, env, { searchIssues, jira,
   let visible = [];
   if (jiraKeys.length) {
     try {
-      const data = await searchIssues({ jql: "key in (" + jiraKeys.join(",") + ")", fields: ["assignee", "created", "updated"], maxResults: MAX_KEYS });
+      const data = await searchIssues({ jql: "key in (" + jiraKeys.join(",") + ")", fields: ["assignee", "reporter", "created", "updated"], maxResults: MAX_KEYS });
       visible = (data.issues || []).map((i) => ({
-        key: i.key, assigneeId: i.fields?.assignee?.accountId || null, created: i.fields?.created || null, updated: i.fields?.updated || ""
+        key: i.key, assigneeId: i.fields?.assignee?.accountId || null, reporterId: i.fields?.reporter?.accountId || null,
+        created: i.fields?.created || null, updated: i.fields?.updated || ""
       }));
     } catch {
       return fail("jira", "Jira couldn't be asked which tickets you can see.", 502);

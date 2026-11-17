@@ -15,6 +15,8 @@ export function historyResultFor(issue, entry) {
 }
 
 export function historyView(result) {
+  // Mordi as the reporter is a fact from the ticket itself, so it shows even when the assignee history is not known.
+  if (result && result.reporterIsMordi && result.state !== "ever") return { state: result.state, label: "Mordi: reporter", tone: "ever" };
   switch (result && result.state) {
     case "ever": return { state: "ever", label: "Mordi: assigned before", tone: "ever" };
     case "never": return { state: "never", label: "Mordi: never assigned", tone: "never" };
@@ -40,6 +42,7 @@ const when = (iso) => {
 export function historyDetails(result) {
   const lines = [];
   if (!result || result.state === "na") return ["Not applicable: this ticket was not created in Jira, so it has no Jira assignment history."];
+  if (result.reporterIsMordi) lines.push("Mordi is the reporter of this ticket.");
   if (result.state === "ever") lines.push("Mordi was assigned to this ticket.");
   else if (result.state === "never") lines.push("The complete Jira history was checked: Mordi was never assigned to this ticket.");
   else lines.push("Unknown: " + (result.reason || "the Jira history hasn't been checked."));
