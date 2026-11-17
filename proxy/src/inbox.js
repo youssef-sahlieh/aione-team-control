@@ -62,10 +62,12 @@ export async function notifyMentions(env, me, { emails, key, title, text, sendMa
   if (!to.length) return [];
   const by = me.name || me.email;
   await addToInbox(env.STORE, to.map((p) => p.email), { type, key, title, by, text }, me.email);
-  if (sendMail) {
+  // Rami (RAMI_EMAIL) is shown mentions on the dashboard only: he gets no email from this path.
+  const mailTo = to.filter((p) => !env.RAMI_EMAIL || p.email !== norm(env.RAMI_EMAIL));
+  if (sendMail && mailTo.length) {
     const link = String(env.APP_URL || "").replace(/\/$/, "") + "/dashboard.html?page=tickets#" + key;
     try {
-      await sendMail(me.email, { to: to.map((p) => p.email), subject: "[AION] " + by + " mentioned you on " + key, html: "<p>" + esc(by) + " mentioned you in a comment on <b>" + esc(key) + "</b> — " + esc(title) + ":</p><blockquote style=\"white-space:pre-wrap\">" + esc(text) + "</blockquote><p><a href=\"" + esc(link) + "\">Open the ticket in AION Team Control</a></p>" });
+      await sendMail(me.email, { to: mailTo.map((p) => p.email), subject: "[AION] " + by + " mentioned you on " + key, html: "<p>" + esc(by) + " mentioned you in a comment on <b>" + esc(key) + "</b> — " + esc(title) + ":</p><blockquote style=\"white-space:pre-wrap\">" + esc(text) + "</blockquote><p><a href=\"" + esc(link) + "\">Open the ticket in AION Team Control</a></p>" });
     } catch { console.warn("mention_mail_failed"); }
   }
   return to.map((p) => p.name);

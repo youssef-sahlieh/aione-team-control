@@ -2,12 +2,13 @@
 // block). Reviewers get a "Needs review" queue with a read-only view of the tickets the pull request mentions. The
 // proxy keeps the assignments (proxy/src/reviews.js); GitHub is asked for the review when the reviewer has a GitHub
 // username set by an administrator (Users page). Nothing here changes a Jira ticket.
-import { reviewLabel, sortQueue, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, QUEUE_STATE_LABEL, queueStateLabel, queueReasonText, queueOptions, filterQueue, queueSummary, sortPrs, groupByTicket, activeFilters, waitingFor, waitLine, exactTime, safePrUrl, reviewerText, noReviewerText, QUICK_FILTERS, SORTS, VIEWS, NO_REVIEWER } from "../models/reviews.js";
+import { reviewLabel, sortQueue, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, QUEUE_STATE_LABEL, queueStateLabel, queueReasonText, queueOptions, filterQueue, queueSummary, sortPrs, groupByTicket, activeFilters, menuFilterCount, attentionReasons, CHECKS_LABEL, waitLine, exactTime, safePrUrl, reviewerText, noReviewerText, QUICK_FILTERS, SORTS, VIEWS, NO_REVIEWER } from "../models/reviews.js";
 import { setNavCount } from "../app/nav.js";
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const btn = (text, cls, action) => { const b = el("button", cls, text); b.type = "button"; b.addEventListener("click", action); return b; };
 const day = (iso) => (iso ? new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—");
+const stamp = (iso) => new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 const size = (n) => (n < 1024 ? n + " B" : n < 1048576 ? Math.round(n / 1024) + " KB" : (n / 1048576).toFixed(1) + " MB");
 // A select whose options can change on refresh; the chosen value stays when it is still offered.
 const fillSelect = (select, pairs, value) => {
@@ -22,10 +23,14 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
   dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
   let queueTarget = null;
   // The administrators' queue: the last answer from the proxy, the last error, whether a read is under way, and what the
-  // person chose (filters, sort, folded tickets). These live as long as the page, so a refresh or a dialog keeps them.
+  // person chose (filters, sort, view). These live as long as the page, so a refresh or a dialog keeps them.
   let adminRoot = null, adminData = null, adminError = "", adminLoading = false;
   const adminFilters = { search: "", client: "", repo: "", reviewer: "", state: "", quick: "", sort: "wait", view: "prs" };
-  const collapsed = new Set();
+  const collapsed = new Set();   // By ticket: the folded ticket groups
+  const expanded = new Set();    // List: the pull requests whose details are open
+  // The filter menu closes on a click outside it (set by renderAdminQueue).
+  let closeFilters = null;
+  document.addEventListener("click", (e) => { if (closeFilters) closeFilters(e.target); });
 
   // A dialog with a title, a body and a Close button. The body is replaced when the content arrives.
   function open(title, body) {
@@ -291,16 +296,16 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     adminRoot.root.setAttribute("aria-busy", String(adminLoading));
     adminRoot.refresh.disabled = adminLoading;
     adminRoot.refresh.textContent = adminLoading ? "Refreshing…" : "Refresh";
-    adminRoot.status.textContent = adminLoading && adminData ? "Refreshing the review queue…" : "";
+    adminRoot.status.textContent = adminLoading && adminData ? "Refreshing…" : "";
   }
 
-  // When the pull requests were last read in full, for the page head.
+  // The compact sync indicator in the page head: when the pull requests were last read in full. The exact time is its tooltip.
   function updatedLine(d) {
     const line = el("p", "queue-updated");
     if (!d || !d.configured) return line;
     const ok = d.refresh ? d.refresh.okAt : d.syncError ? null : d.syncedAt;
-    if (ok) line.append("Last successful update ", timeEl(ok, exactTime(ok)), " (" + waitingFor(ok) + " ago)");
-    else line.append("No complete update yet");
+    if (ok) line.append(el("span", "queue-dot"), "Synced ", timeEl(ok, stamp(ok)));
+    else line.append(el("span", "queue-dot warn"), "Not synced yet");
     return line;
   }
 
@@ -342,21 +347,23 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     return notices;
   }
 
-  // The six summary cards, always for every open pull request (the filters don't change them).
-  function drawStats(target, s) {
-    const stat = (n, label, notable) => {
-      const box = el("div", "queue-stat" + (notable && n ? " notable" : ""));
-      box.dataset.stat = label;
-      box.append(el("b", "", String(n)), el("span", "", label));
-      return box;
-    };
-    target.replaceChildren(
-      stat(s.prs, "Open PRs"), stat(s.tickets, "Linked tickets"), stat(s.unlinked, "Unlinked PRs"),
-      stat(s.noReviewer, "No reviewer", true), stat(s.rami, "Flagged for Rami"), stat(s.awaiting, "Awaiting review")
-    );
+  // The four summary cards. Each one is a button that sets the matching quick filter; the cards always count every
+  // open pull request (the filters don't change them).
+  const CARDS = [["Open PRs", "", false], ["No reviewer", "no_reviewer", true], ["Unlinked PRs", "unlinked", false], ["Flagged for Rami", "rami", false]];
+  function drawStats(target, s, quick) {
+    const count = { "Open PRs": s.prs, "No reviewer": s.noReviewer, "Unlinked PRs": s.unlinked, "Flagged for Rami": s.rami };
+    target.replaceChildren(...CARDS.map(([label, value, notable]) => {
+      const b = el("button", "queue-stat" + (notable && count[label] ? " notable" : ""));
+      b.type = "button";
+      b.dataset.stat = label;
+      b.setAttribute("aria-pressed", String(quick === value));
+      b.append(el("b", "", String(count[label])), el("span", "", label));
+      b.addEventListener("click", () => { adminFilters.quick = value; drawAdminQueue(); });
+      return b;
+    }));
   }
 
-  // Redraws the results from the current data and filters. The search box and the filter menus stay in place.
+  // Redraws the results from the current data and filters. The search box and the filter menu stay in place.
   function drawAdminQueue() {
     if (!adminRoot || !adminRoot.root.isConnected) return;
     drawBusy();
@@ -364,14 +371,23 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     const prs = d && d.configured ? d.prs : [];
     const opts = queueOptions(prs);
     const f = adminFilters;
-    const { client, repo, reviewer, state, sort, quick, views } = adminRoot.controls;
+    const { client, repo, reviewer, state, sort, quick, views, filterBtn, filterBadge } = adminRoot.controls;
     f.client = fillSelect(client, [["", "All projects"], ...opts.clients.map((c) => [c, c])], f.client);
     f.repo = fillSelect(repo, [["", "All repositories"], ...opts.repos.map((r) => [r, r])], f.repo);
     f.reviewer = fillSelect(reviewer, [["", "All reviewers"], [NO_REVIEWER, "No reviewer requested"], ...opts.reviewers.map((r) => [r, r])], f.reviewer);
     state.value = f.state;
     sort.value = f.sort;
-    for (const b of quick) b.setAttribute("aria-pressed", String(b.dataset.quick === f.quick));
+    const sum = queueSummary(prs);
+    const tabCount = { "": sum.prs, attention: sum.attention, unlinked: sum.unlinked, rami: sum.rami };
+    const live = !!(d && d.configured);
+    for (const b of quick) {
+      b.setAttribute("aria-pressed", String(b.dataset.quick === f.quick));
+      b.querySelector(".queue-count").textContent = live ? String(tabCount[b.dataset.quick] ?? 0) : "";
+    }
     for (const b of views) b.setAttribute("aria-pressed", String(b.dataset.view === f.view));
+    const menus = menuFilterCount(f);
+    filterBadge.textContent = menus ? String(menus) : "";
+    filterBadge.hidden = !menus;
 
     const updated = updatedLine(d);
     adminRoot.updated.replaceWith(updated);
@@ -379,8 +395,8 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     adminRoot.notices.replaceChildren(...queueNotices(d));
     const shown = sortPrs(filterQueue(prs, f), f.sort);
     const active = activeFilters(f);
-    drawStats(adminRoot.stats, queueSummary(prs));
-    adminRoot.stats.hidden = !d || !d.configured;
+    drawStats(adminRoot.stats, sum, f.quick);
+    adminRoot.stats.hidden = !live;
 
     const chips = adminRoot.active;
     chips.replaceChildren();
@@ -391,12 +407,12 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
       chip.setAttribute("aria-label", "Remove filter " + a.text);
       chips.append(chip);
     }
-    if (active.length) chips.append(btn("Clear filters", "linkbtn", () => clearFilters()));
+    if (active.length) chips.append(btn("Clear all", "linkbtn", () => clearFilters()));
     chips.hidden = !d || !d.configured || !prs.length;
 
     const list = adminRoot.list;
     list.replaceChildren();
-    if (!d) { if (!adminError) list.append(el("p", "empty-copy", "Loading the review queue…")); return; }
+    if (!d) { if (!adminError) list.append(el("p", "empty-copy", "Loading pull requests…")); return; }
     if (!d.configured) return;
     if (!prs.length) {
       // With a sync or Jira problem, an empty list doesn't mean there are no pull requests: the notices say what failed.
@@ -407,10 +423,6 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
       list.append(el("p", "empty-copy", "No pull requests match these filters."), btn("Clear filters", "btn", () => clearFilters()));
       return;
     }
-    const head = el("div", "queue-cols");
-    head.setAttribute("aria-hidden", "true");
-    head.append(el("span", "", "Pull request"), el("span", "", "Review state"), el("span", "", "Reviewers"), el("span", "", "Time"), el("span", "", "Rami"), el("span", "", ""));
-    list.append(head);
     if (f.view === "tickets") for (const g of groupByTicket(shown)) list.appendChild(adminTicket(g));
     else {
       const box = el("section", "queue-ticket queue-flat");
@@ -501,17 +513,61 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
   // The reviewers shown in the row; more than this fold into "+N more".
   const SHOWN_REVIEWERS = 3;
 
+  // The details of one pull request, shown when its row is expanded. Only what the proxy knows is shown: a description
+  // that hasn't been read yet says so, and checks GitHub couldn't be asked about are "not available", never passing.
+  function detailBody(pr) {
+    const grid = el("div", "queue-detail-grid");
+    const desc = el("section", "queue-detail-desc");
+    desc.append(el("h3", "", "Description"));
+    if (typeof pr.description !== "string") desc.append(el("p", "queue-detail-empty", "Not read yet. The description appears after the next refresh."));
+    else if (!pr.description.trim()) desc.append(el("p", "queue-detail-empty", "No description."));
+    else desc.append(el("pre", "queue-desc", pr.description));
+
+    const facts = el("dl", "queue-facts");
+    const fact = (k, ...nodes) => { facts.append(el("dt", "", k)); const dd = el("dd"); dd.append(...nodes); facts.append(dd); };
+    if (pr.tickets && pr.tickets.length) {
+      fact("Linked tickets", ...pr.tickets.map((t) => {
+        const b = btn(t.key, "queue-ticket-link", () => openTicket(t.key));
+        b.title = (t.title || t.key) + (t.status ? " · " + t.status : "") + " (opens read-only)";
+        b.setAttribute("aria-label", "Open ticket " + t.key + " (read-only)");
+        return b;
+      }));
+    } else fact("Linked tickets", el("span", "queue-none", "None. Name a ticket (for example AION-12 or INT-5) in the title, description or branch to link it."));
+    const reason = queueReasonText(pr);
+    fact("Review state", el("span", "", queueStateLabel(pr) + (reason ? " · " + reason : "")));
+    const names = pr.reviewers.map(reviewerText);
+    fact("Reviewers", el("span", "", names.length ? names.join(", ") : noReviewerText(pr)));
+    if (pr.unresolved != null) fact("Review comments", el("span", "", (pr.unresolved ? pr.unresolved + " unresolved" : "None unresolved") + (pr.comments != null ? " · " + pr.comments + " in all" : "")));
+    const checks = (pr.checks && pr.checks.state) || "unavailable";
+    let checkText = CHECKS_LABEL[checks] || CHECKS_LABEL.unavailable;
+    if (checks === "failure" && pr.checks.failed && pr.checks.failed.length) checkText += ": " + pr.checks.failed.join(", ");
+    if (checks === "pending" && pr.checks.running) checkText += " (" + pr.checks.running + " running)";
+    if (checks === "unavailable") checkText += ". The GitHub token needs read access to Checks and Commit statuses.";
+    fact("Checks", el("span", "queue-check " + checks, checkText));
+    fact("Branch", el("code", "", pr.branch ? pr.branch + (pr.base ? " → " + pr.base : "") : "—"));
+    fact("Created", el("span", "", day(pr.created)));
+    fact("Updated", el("span", "", day(pr.updated)));
+    const w = waitLine(pr);
+    fact(w.label, w.at ? timeEl(w.at, w.text) : el("span", "", w.text || "—"));
+    grid.append(desc, facts);
+    return grid;
+  }
+
   function adminPrRow(pr) {
     const linked = pr.tickets && pr.tickets.length > 0;
-    const row = el("li", "queue-pr " + (linked ? "linked" : "unlinked") + (pr.draft ? " draft" : "") + " state-" + (QUEUE_STATE_LABEL[pr.state] ? pr.state : "unknown"));
-    const who = el("div", "queue-cell queue-pr-main");
+    const reasons = attentionReasons(pr);
+    const isOpen = expanded.has(pr.id);
+    const detailId = "pr-detail-" + pr.id.replace(/[^\w-]/g, "_");
+    const row = el("li", "queue-pr " + (linked ? "linked" : "unlinked") + (pr.draft ? " draft" : "") + (reasons.length ? " attention" : "") + " state-" + (QUEUE_STATE_LABEL[pr.state] ? pr.state : "unknown") + (isOpen ? " is-open" : ""));
+    row.dataset.pr = pr.id;
+
+    // Primary: the title, the repository and number, the author, the tickets, and why it needs attention.
+    const main = el("div", "queue-cell queue-pr-main");
     const title = el("span", "queue-pr-title", pr.title || "Untitled pull request");
     title.dir = "auto";
     if (pr.draft) title.prepend(el("span", "queue-draft", "Draft"), " ");
-    who.append(title);
     const ref = el("span", "queue-pr-ref");
     ref.append(el("span", "queue-repo", pr.repo + " #" + pr.number), " · by " + (pr.author || "unknown"));
-    who.append(ref);
     const links = el("span", "queue-pr-tickets");
     if (linked) {
       for (const t of pr.tickets) {
@@ -525,9 +581,16 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
       tag.title = "No ticket named. To link it, name the ticket (for example AION-12 or INT-5) in the pull request's title, description or branch.";
       links.append(tag);
     }
-    who.append(links);
+    main.append(title, ref, links);
+    if (reasons.length) {
+      const att = el("span", "queue-attention");
+      for (const r of reasons) att.append(el("span", "queue-attention-chip", r.text));
+      main.append(att);
+    }
 
-    const st = el("div", "queue-cell queue-state");
+    // Secondary: the review state and reviewers, and the waiting time.
+    const status = el("div", "queue-cell queue-status-cell");
+    const st = el("div", "queue-state");
     st.append(el("span", "review-status " + (QUEUE_STATE_LABEL[pr.state] ? pr.state : "unknown"), queueStateLabel(pr)));
     const reason = queueReasonText(pr);
     if (reason) st.append(el("span", "queue-reason", reason));
@@ -536,8 +599,7 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
       tag.title = "This repository couldn't be refreshed" + (pr.statusAt ? "; review data read " + exactTime(pr.statusAt) : "");
       st.append(tag);
     }
-
-    const rv = el("div", "queue-cell queue-reviewers");
+    const rv = el("div", "queue-reviewers");
     const names = pr.reviewers.map(reviewerText);
     if (!names.length) rv.append(el("span", "queue-none", noReviewerText(pr)));
     else {
@@ -552,6 +614,7 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
       }
       if (pr.reviewerState === "unavailable") rv.append(el("span", "queue-reason", "Review progress unavailable"));
     }
+    status.append(st, rv);
 
     const w = waitLine(pr);
     const wait = el("div", "queue-cell queue-wait" + (w.long ? " long" : ""));
@@ -570,7 +633,15 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     box.addEventListener("change", () => setRami(pr, box));
     flag.append(box, el("span", "", "Rami"));
 
+    // Actions: open the details here, and the pull request on GitHub in a new tab.
     const act = el("div", "queue-cell queue-pr-actions");
+    const expandBtn = el("button", "queue-expand");
+    expandBtn.type = "button";
+    expandBtn.setAttribute("aria-expanded", String(isOpen));
+    expandBtn.setAttribute("aria-controls", detailId);
+    expandBtn.setAttribute("aria-label", "Details for " + pr.repo + " #" + pr.number);
+    expandBtn.append(el("span", "queue-caret"), el("span", "", "Details"));
+    act.append(expandBtn);
     const href = safePrUrl(pr.url);
     if (href) {
       const link = el("a", "btn", "Open PR ↗");
@@ -579,12 +650,29 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
       act.append(link);
     } else act.append(el("span", "queue-none", "Link unavailable"));
 
-    row.append(who, st, rv, wait, flag, act);
+    const detail = el("div", "queue-detail");
+    detail.id = detailId;
+    detail.hidden = !isOpen;
+    detail.append(detailBody(pr));
+
+    const toggle = () => {
+      const on = !expanded.has(pr.id);
+      if (on) expanded.add(pr.id); else expanded.delete(pr.id);
+      row.classList.toggle("is-open", on);
+      detail.hidden = !on;
+      expandBtn.setAttribute("aria-expanded", String(on));
+    };
+    expandBtn.addEventListener("click", toggle);
+    // A click on the row's own text opens the details too; links, buttons and the Rami box keep their own action.
+    main.addEventListener("click", (e) => { if (!e.target.closest("a, button, input, summary, label")) toggle(); });
+
+    row.append(main, status, wait, flag, act, detail);
     return row;
   }
 
-  // Builds the admin page once: the head, the summary, the search box and filter menus, then the results, which are
-  // redrawn in place. A dashboard render keeps it (data-keep), so filters, folds and scroll stay as they are.
+  // Builds the admin page once: the head, the summary cards, the quick filters and view, the search with its filter
+  // menu and sort, then the results, which are redrawn in place. A dashboard render keeps it (data-keep), so filters,
+  // folds, open details and scroll stay as they are.
   function renderAdminQueue(target) {
     queueTarget = target;
     const root = el("div", "queue");
@@ -597,48 +685,98 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     refresh.setAttribute("aria-label", "Refresh the review queue from GitHub");
     head.append(updated, status, refresh);
 
+    const notices = el("div", "queue-notices");
     const stats = el("div", "queue-stats");
     stats.setAttribute("role", "group");
     stats.setAttribute("aria-label", "Summary");
 
-    const bar = el("div", "queue-bar");
-    bar.setAttribute("role", "search");
-    const search = el("input", "queue-search");
-    search.type = "search";
-    search.placeholder = "Search PR title, repository, author or ticket";
-    search.setAttribute("aria-label", "Search the review queue");
-    search.value = adminFilters.search;
-    search.addEventListener("input", () => { adminFilters.search = search.value; drawAdminQueue(); });
-    const menu = (label, name) => { const s = el("select", "queue-filter"); s.name = name; s.setAttribute("aria-label", label); s.addEventListener("change", () => { adminFilters[name] = s.value; drawAdminQueue(); }); return s; };
-    const client = menu("Project", "client"), repo = menu("Repository", "repo"), reviewer = menu("Reviewer", "reviewer"), state = menu("Review state", "state"), sort = menu("Sort", "sort");
-    state.replaceChildren(...[["", "Any review state"], ...Object.entries(QUEUE_STATE_LABEL)].map(([v, t]) => { const o = el("option", "", t); o.value = v; return o; }));
-    sort.replaceChildren(...SORTS.map(([v, t]) => { const o = el("option", "", t); o.value = v; return o; }));
-    bar.append(search, client, repo, reviewer, state, sort);
-
+    // Primary tabs, and the List / By ticket view beside them.
+    const tabRow = el("div", "queue-tabrow");
     const quickBar = el("div", "queue-quick");
     quickBar.setAttribute("role", "group");
     quickBar.setAttribute("aria-label", "Quick filters");
     const quick = QUICK_FILTERS.map(([v, t]) => {
-      const b = btn(t, "queue-chip", () => { adminFilters.quick = v; drawAdminQueue(); });
+      const b = btn(t, "queue-tab", () => { adminFilters.quick = v; drawAdminQueue(); });
       b.dataset.quick = v;
+      const count = el("span", "queue-count");
+      count.setAttribute("aria-hidden", "true");
+      b.append(count);
       return b;
     });
+    quickBar.append(...quick);
     const viewBar = el("div", "queue-views");
     viewBar.setAttribute("role", "group");
     viewBar.setAttribute("aria-label", "View");
     const views = VIEWS.map(([v, t]) => {
-      const b = btn(t, "queue-chip", () => { adminFilters.view = v; drawAdminQueue(); });
+      const b = btn(t, "queue-seg", () => { adminFilters.view = v; drawAdminQueue(); });
       b.dataset.view = v;
       return b;
     });
     viewBar.append(...views);
-    quickBar.append(...quick, viewBar);
+    tabRow.append(quickBar, viewBar);
+
+    // The search, the filter menu button, and the sort.
+    const bar = el("div", "queue-bar");
+    bar.setAttribute("role", "search");
+    const search = el("input", "queue-search");
+    search.type = "search";
+    search.placeholder = "Search title, repository, author or ticket";
+    search.setAttribute("aria-label", "Search the review queue");
+    search.value = adminFilters.search;
+    search.addEventListener("input", () => { adminFilters.search = search.value; drawAdminQueue(); });
+    const filterBtn = el("button", "btn queue-filter-btn");
+    filterBtn.type = "button";
+    filterBtn.setAttribute("aria-expanded", "false");
+    filterBtn.setAttribute("aria-controls", "queue-filters");
+    const filterBadge = el("span", "queue-badge");
+    filterBadge.hidden = true;
+    filterBtn.append(document.createTextNode("Filters"), filterBadge);
+    const sort = el("select", "queue-sort");
+    sort.name = "sort";
+    sort.setAttribute("aria-label", "Sort");
+    sort.replaceChildren(...SORTS.map(([v, t]) => { const o = el("option", "", t); o.value = v; return o; }));
+    sort.addEventListener("change", () => { adminFilters.sort = sort.value; drawAdminQueue(); });
+    bar.append(search, filterBtn, sort);
+
+    // The filter menu: project, repository, reviewer and review state. Opened from Filters; closes on Escape or Done.
+    const pop = el("div", "queue-pop");
+    pop.id = "queue-filters";
+    pop.setAttribute("role", "group");
+    pop.setAttribute("aria-label", "Filters");
+    pop.hidden = true;
+    const menu = (label, name) => {
+      const field = el("label", "queue-field");
+      field.append(el("span", "", label));
+      const s = el("select", "queue-filter");
+      s.name = name; s.setAttribute("aria-label", label);
+      s.addEventListener("change", () => { adminFilters[name] = s.value; drawAdminQueue(); });
+      field.append(s);
+      return [field, s];
+    };
+    const [clientField, client] = menu("Project", "client"), [repoField, repo] = menu("Repository", "repo");
+    const [reviewerField, reviewer] = menu("Reviewer", "reviewer"), [stateField, state] = menu("Review state", "state");
+    state.replaceChildren(...[["", "Any review state"], ...Object.entries(QUEUE_STATE_LABEL)].map(([v, t]) => { const o = el("option", "", t); o.value = v; return o; }));
+    const done = btn("Done", "btn primary", () => setPop(false));
+    const popFoot = el("div", "queue-pop-foot");
+    popFoot.append(btn("Clear menus", "linkbtn", () => {
+      Object.assign(adminFilters, { client: "", repo: "", reviewer: "", state: "" });
+      drawAdminQueue();
+    }), done);
+    pop.append(clientField, repoField, reviewerField, stateField, popFoot);
+    const setPop = (on) => {
+      pop.hidden = !on;
+      filterBtn.setAttribute("aria-expanded", String(on));
+      if (on) client.focus();
+    };
+    filterBtn.addEventListener("click", () => setPop(pop.hidden));
+    pop.addEventListener("keydown", (e) => { if (e.key === "Escape") { setPop(false); filterBtn.focus(); } });
+    closeFilters = (target) => { if (!pop.hidden && !pop.contains(target) && !filterBtn.contains(target)) setPop(false); };
+
     const active = el("div", "queue-active");
-    const notices = el("div", "queue-notices");
     const list = el("div", "queue-list");
-    root.append(head, notices, stats, bar, quickBar, active, list);
+    root.append(head, notices, stats, tabRow, bar, pop, active, list);
     target.append(root);
-    adminRoot = { root, controls: { search, client, repo, reviewer, state, sort, quick, views }, updated, status, refresh, stats, active, notices, list };
+    adminRoot = { root, controls: { search, client, repo, reviewer, state, sort, quick, views, filterBtn, filterBadge }, updated, status, refresh, stats, active, notices, list };
     drawAdminQueue();
     return loadQueue();
   }

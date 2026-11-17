@@ -503,6 +503,19 @@ function refreshInfo(env, index) {
   };
 }
 
+// What the checks say, from GitHub's status (see github.js): "failure" when a check failed, "pending" while some are
+// running, "success" when they passed, "none" when the pull request has none, and "unavailable" when the token can't
+// read checks (or they were never read). An unavailable result is never called a failure.
+export function checksOf(status) {
+  if (!status || status.checks == null) return { state: "unavailable", failed: [], running: 0 };
+  const failed = status.failed || [], running = status.running || 0;
+  let state = "none";
+  if (status.checks === "FAILURE" || status.checks === "ERROR" || failed.length) state = "failure";
+  else if (status.checks === "PENDING" || status.checks === "EXPECTED" || running) state = "pending";
+  else if (status.checks === "SUCCESS") state = "success";
+  return { state, failed, running };
+}
+
 // The administrators' queue: every open pull request in the configured repositories, one row each, whether or not it
 // names a ticket. Drafts are listed (draft: true; a draft nobody reviewed yet shows the "draft" state, not "awaiting").
 // Approved and changes-requested pull requests stay listed with that state. tickets lists the tickets it names that
@@ -551,7 +564,11 @@ async function adminQueue(env, deps, me, refresh = false) {
       id: pr.id, repo, number: pr.number, title: pr.title, url: pr.url, author: pr.author || "", created: pr.created || null, draft,
       state: review.state, reason: review.reason, since: review.since, sinceKind: review.sinceKind, reviewers, reviewerState: reviewerState(pr, reviewers),
       tickets: (pr.keys || []).filter((k) => tickets.has(k)).map((k) => tickets.get(k)),
-      rami: rami.has(pr.id), stale: !!failedRepos[repo], statusAt: pr.status?.at ? new Date(pr.status.at).toISOString() : null
+      rami: rami.has(pr.id), stale: !!failedRepos[repo], statusAt: pr.status?.at ? new Date(pr.status.at).toISOString() : null,
+      // For the details: the description (null until it has been read), the branches and times, the check results and
+      // the review conversation. Checks are "unavailable" when the token can't read them, never "success".
+      description: typeof pr.body === "string" ? pr.body : null, branch: pr.branch || "", base: pr.base || "", updated: pr.updated || null,
+      checks: checksOf(pr.status), comments: pr.status?.comments ?? null, unresolved: pr.status?.unresolved ?? null
     };
   }).sort((a, b) => byWait(a, b) || a.repo.localeCompare(b.repo) || a.number - b.number);
 
