@@ -111,9 +111,31 @@ const noReviewer = (pr) => (pr.reviewerState ? pr.reviewerState === "none" : !pr
 // means it is unlinked. pr.rami is the Rami reference flag. pr.draft says it is a draft.
 const linked = (pr) => (pr.tickets || []).length > 0;
 
-// The quick filters above the list, and what each keeps. They combine with the search and the menus.
-export const QUICK_FILTERS = [["", "All PRs"], ["linked", "Linked to ticket"], ["unlinked", "Unlinked PRs"], ["rami", "Rami flagged"], ["no_reviewer", "No reviewer"], ["changes", "Changes requested"]];
-const QUICK = { linked, unlinked: (pr) => !linked(pr), rami: (pr) => !!pr.rami, no_reviewer: noReviewer, changes: (pr) => pr.state === "changes_requested" };
+// Checks: what GitHub's check results say (pr.checks, from the proxy). "unavailable" is never shown as a failure.
+export const CHECKS_LABEL = { success: "Checks passed", failure: "Checks failing", pending: "Checks running", none: "No checks", unavailable: "Checks not available" };
+
+// Why a pull request needs attention. Only verified conditions count, and each one is said in words:
+//   changes requested; no reviewer asked (not for drafts, and not when GitHub's reviewer data is missing); no review for
+//   ATTENTION_WAIT_DAYS or more (a real review request or new-commit time); failing checks (not unavailable ones).
+// A pull request can have several reasons. now is passed in for tests.
+export const ATTENTION_WAIT_DAYS = 3;
+export function attentionReasons(pr, now = Date.now()) {
+  const out = [];
+  if (pr.state === "changes_requested") out.push({ key: "changes", text: "Changes requested" });
+  if (!pr.draft && noReviewer(pr) && pr.reviewerState !== "unavailable") out.push({ key: "no_reviewer", text: "No reviewer requested" });
+  const t = Date.parse(pr.since || "");
+  if (pr.state === "awaiting" && (pr.sinceKind === "requested" || pr.sinceKind === "commit") && !Number.isNaN(t) && now - t >= ATTENTION_WAIT_DAYS * 86400000) {
+    out.push({ key: "wait", text: "No review for " + waitingFor(pr.since, now) });
+  }
+  if (pr.checks && pr.checks.state === "failure") out.push({ key: "checks", text: "Checks failing" + (pr.checks.failed && pr.checks.failed.length ? ": " + pr.checks.failed.slice(0, 2).join(", ") : "") });
+  return out;
+}
+
+// The quick filters: the primary tabs above the list. "" is all of them. They combine with the search and the menus.
+export const QUICK_FILTERS = [["", "All PRs"], ["attention", "Needs attention"], ["unlinked", "Unlinked"], ["rami", "For Rami"]];
+// The names of every quick filter, for the chips (the cards can set the ones that aren't tabs, such as no reviewer).
+const QUICK_LABEL = { attention: "Needs attention", linked: "Linked to ticket", unlinked: "Unlinked PRs", rami: "For Rami", no_reviewer: "No reviewer requested", changes: "Changes requested" };
+const QUICK = { attention: (pr) => attentionReasons(pr).length > 0, linked, unlinked: (pr) => !linked(pr), rami: (pr) => !!pr.rami, no_reviewer: noReviewer, changes: (pr) => pr.state === "changes_requested" };
 
 export const SORTS = [["wait", "Longest wait first"], ["recent", "Most recent first"], ["key", "Ticket key"], ["repo", "Repository"]];
 
@@ -191,16 +213,19 @@ export function queueSummary(prs) {
     unlinked: prs.filter(QUICK.unlinked).length,
     noReviewer: prs.filter(noReviewer).length,
     rami: prs.filter(QUICK.rami).length,
+    attention: prs.filter(QUICK.attention).length,
     awaiting: prs.filter((pr) => pr.state === "awaiting").length
   };
 }
 
+// The menus that narrow the list (not the search, the quick filter, the sort or the view): how many are in use.
+export const menuFilterCount = (f = {}) => ["client", "repo", "reviewer", "state"].filter((k) => f[k]).length;
+
 // The filters in use, as removable chips: [{ name, text }]. The sort and the view aren't filters.
 export function activeFilters(f = {}) {
   const out = [];
-  const quick = QUICK_FILTERS.find(([v]) => v && v === f.quick);
   if ((f.search || "").trim()) out.push({ name: "search", text: "Search: " + f.search.trim() });
-  if (quick) out.push({ name: "quick", text: quick[1] });
+  if (f.quick && QUICK_LABEL[f.quick]) out.push({ name: "quick", text: QUICK_LABEL[f.quick] });
   if (f.client) out.push({ name: "client", text: "Project: " + f.client });
   if (f.repo) out.push({ name: "repo", text: "Repository: " + f.repo });
   if (f.reviewer) out.push({ name: "reviewer", text: "Reviewer: " + (f.reviewer === NO_REVIEWER ? "none requested" : f.reviewer) });

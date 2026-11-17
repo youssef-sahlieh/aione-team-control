@@ -10,8 +10,9 @@ const INDEX_KEY = "github:prs:v4", LOCK_KEY = "github:prs:lock";
 const MAX_PAGES_FIRST_SYNC = 40; // 4,000 PRs per repository
 // The index keeps every pull request that names a ticket, plus every open or draft one that names none (the Needs
 // review page lists all open pull requests). An index saved before that (no SCOPE) is read again from the start once,
-// so open pull requests it dropped come back.
-const SCOPE = "linked+open";
+// so open pull requests it dropped come back. "body": open pull requests keep their description (the Needs review
+// details show it), so an index saved before that is read again once too.
+const SCOPE = "linked+open+body";
 const keep = (r) => r.keys.length > 0 || r.state === "open" || r.state === "draft";
 
 export const githubConfigured = (env) => !!(env.GITHUB_TOKEN && repos(env).length);
@@ -55,6 +56,8 @@ function record(env, repo, pr, prev) {
     id: repo + "#" + pr.number, repo: repo.split("/")[1], number: pr.number, title: String(pr.title || "").slice(0, 300),
     state, url: pr.html_url, author: pr.user && pr.user.login, branch: pr.head && pr.head.ref, base: pr.base && pr.base.ref,
     created: pr.created_at || null, readyAt, updated: pr.updated_at, merged: pr.merged_at || null,
+    // The description, kept only while the pull request is open (the Needs review details show it); 2000 characters.
+    body: state === "open" || state === "draft" ? String(pr.body || "").slice(0, 2000) : "",
     keys: ticketKeys(env, { title: pr.title, body: pr.body, branch: pr.head && pr.head.ref })
   };
 }

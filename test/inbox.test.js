@@ -50,6 +50,16 @@ test('Jira account mentions map to dashboard people through the team settings',a
   assert.deepEqual(await notifyMentions(f.env,f.dev,{emails:['dev@aione.biz'],key:'AION-1',title:'T',text:'self'}),[]);
 });
 
+test('Rami gets a mention on his dashboard but never an email from it; others are still emailed',async()=>{
+  const f=await fixture();f.env.RAMI_EMAIL='dev@aione.biz';
+  const names=await notifyMentions(f.env,f.admin,{emails:['dev@aione.biz','other@aione.biz'],key:'AION-5',title:'T',text:'check this',sendMail:f.sendMail});
+  assert.deepEqual(names,['Rami Dev','Razan Other']);
+  assert.equal(f.mails.length,1);assert.deepEqual(f.mails[0].to,['other@aione.biz']);
+  const items=(await f.inbox(f.dev)).items;assert.equal(items.length,1);assert.equal(items[0].key,'AION-5');
+  await notifyMentions(f.env,f.admin,{emails:['dev@aione.biz'],key:'AION-6',title:'T',text:'only rami',sendMail:f.sendMail});
+  assert.equal(f.mails.length,1,'no email when Rami is the only person mentioned');
+});
+
 test('notifications stay unread until each one is read; new tickets are remembered as read',async()=>{
   const f=await fixture();await f.inbox(f.dev);
   await addToInbox(f.env.STORE,['dev@aione.biz'],{type:'note',key:'AION-1',title:'T',by:'Admin',text:'one'},'admin@aione.biz');

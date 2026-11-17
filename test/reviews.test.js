@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker, { makeToken } from "../proxy/src/handler.js";
 import { memoryStore, saveUser } from "../proxy/src/users.js";
-import { adfText, prReviewState, reviewStatus } from "../proxy/src/reviews.js";
+import { adfText, checksOf, prReviewState, reviewStatus } from "../proxy/src/reviews.js";
 
 const PR_ID = "KAD-org/flutter_pos#553";
 const now = new Date().toISOString();
@@ -546,4 +546,17 @@ test("Rami's internal notes on a flagged pull request: saved with author and tim
   assert.equal((await notes(rami)).status, 404, "closed: Rami loses access");
   assert.equal((await add(rami, { body: "late" })).status, 404);
   assert.equal((await (await notes(adminToken)).json()).notes.length, 2);
+});
+
+test("checks: GitHub's answer is shown as it is; a missing answer is unavailable, never a failure or a pass",()=>{
+  assert.deepEqual(checksOf(null), { state: "unavailable", failed: [], running: 0 }, "no status at all");
+  assert.deepEqual(checksOf({ checks: null }), { state: "unavailable", failed: [], running: 0 }, "token lacks Checks access");
+  assert.equal(checksOf({ checks: "SUCCESS", failed: [], running: 0 }).state, "success");
+  assert.equal(checksOf({ checks: "SUCCESS", failed: ["lint"], running: 0 }).state, "failure", "a named failed check wins over SUCCESS");
+  assert.equal(checksOf({ checks: "FAILURE", failed: [], running: 0 }).state, "failure");
+  assert.equal(checksOf({ checks: "ERROR", failed: [], running: 0 }).state, "failure");
+  assert.equal(checksOf({ checks: "PENDING", failed: [], running: 2 }).state, "pending");
+  assert.equal(checksOf({ checks: "EXPECTED", failed: [], running: 0 }).state, "pending");
+  assert.equal(checksOf({ checks: "NONE", failed: [], running: 0 }).state, "none");
+  assert.deepEqual(checksOf({ checks: "PENDING", failed: ["unit"], running: 1 }), { state: "failure", failed: ["unit"], running: 1 });
 });

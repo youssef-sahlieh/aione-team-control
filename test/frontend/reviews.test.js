@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {STATUS_LABEL, reviewLabel, sortQueue, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, queueStateLabel, queueReasonText, waitingFor, longestWaitFirst, filterQueue, queueOptions, NO_REVIEWER, waitLine, safePrUrl, reviewerText, noReviewerText, sortPrs, groupByTicket, QUICK_FILTERS, VIEWS, queueSummary, activeFilters, exactTime} from "../../public/assets/models/reviews.js";
+import {STATUS_LABEL, reviewLabel, sortQueue, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, queueStateLabel, queueReasonText, waitingFor, longestWaitFirst, filterQueue, queueOptions, NO_REVIEWER, waitLine, safePrUrl, reviewerText, noReviewerText, sortPrs, groupByTicket, QUICK_FILTERS, VIEWS, queueSummary, activeFilters, exactTime, attentionReasons, menuFilterCount, CHECKS_LABEL} from "../../public/assets/models/reviews.js";
 
 test("the queue puts what needs the reviewer first and finished work last, newest first within a status",()=>{
   const queue=sortQueue([
@@ -118,9 +118,29 @@ test("the project, repository, state, reviewer and quick filters all combine; an
   assert.equal(ids({ quick: "nonsense" }).length, 5, "an unknown quick filter keeps everything");
 });
 
-test("the quick filters are the six asked for, in order, and the list is the default view",()=>{
-  assert.deepEqual(QUICK_FILTERS.map(([, label]) => label), ["All PRs", "Linked to ticket", "Unlinked PRs", "Rami flagged", "No reviewer", "Changes requested"]);
+test("the primary tabs are the four asked for, in order, and the list is the default view",()=>{
+  assert.deepEqual(QUICK_FILTERS.map(([, label]) => label), ["All PRs", "Needs attention", "Unlinked", "For Rami"]);
   assert.deepEqual(VIEWS.map(([v]) => v), ["prs", "tickets"]);
+});
+
+test("attention reasons are only verified conditions, each said in words, and a unknown check state is never a failure",()=>{
+  const now = Date.parse("2026-11-08T12:00:00Z");
+  const base = { state: "awaiting", reviewers: [{ name: "Lee" }], reviewerState: "given", draft: false, since: "2026-11-07T12:00:00Z", sinceKind: "requested" };
+  assert.deepEqual(attentionReasons(base, now), [], "a recent request with a reviewer needs nothing");
+  assert.deepEqual(attentionReasons({ ...base, reviewers: [], reviewerState: "none" }, now).map((r) => r.key), ["no_reviewer"]);
+  assert.deepEqual(attentionReasons({ ...base, reviewers: [], reviewerState: "none", draft: true }, now), [], "drafts don't need a reviewer yet");
+  assert.deepEqual(attentionReasons({ ...base, reviewers: [], reviewerState: "unavailable" }, now), [], "missing reviewer data is not a verified gap");
+  assert.deepEqual(attentionReasons({ ...base, since: "2026-11-04T12:00:00Z" }, now).map((r) => r.text), ["No review for 4 days"]);
+  assert.deepEqual(attentionReasons({ ...base, since: "2026-11-07T12:00:00Z", sinceKind: "opened" }, now), [], "a pull request's age is not a review wait");
+  assert.deepEqual(attentionReasons({ ...base, state: "changes_requested" }, now).map((r) => r.key), ["changes"]);
+  assert.deepEqual(attentionReasons({ ...base, checks: { state: "failure", failed: ["lint", "unit", "e2e"] } }, now).map((r) => r.text), ["Checks failing: lint, unit"]);
+  assert.deepEqual(attentionReasons({ ...base, checks: { state: "unavailable", failed: [] } }, now), [], "checks GitHub couldn't report are not failures");
+  assert.equal(CHECKS_LABEL.unavailable, "Checks not available");
+});
+
+test("the Filters button counts only the four menus that are set",()=>{
+  assert.equal(menuFilterCount({ client: "", repo: "", reviewer: "", state: "" }), 0);
+  assert.equal(menuFilterCount({ client: "Acme", repo: "acme/web", reviewer: NO_REVIEWER, state: "", quick: "rami", search: "x" }), 3, "tabs and search are not menus");
 });
 
 test("the filter menus list each project, repository and reviewer once, in order",()=>{
@@ -159,8 +179,8 @@ test("the summary cards count pull requests, distinct linked tickets, unlinked, 
     pr({ id: "web#11", state: "unknown", reviewerState: "unavailable", tickets: [] }),
     pr({ id: "web#12", state: "draft", draft: true, reviewerState: "none", tickets: [], rami: true })
   ];
-  assert.deepEqual(queueSummary(prs), { prs: 4, tickets: 2, unlinked: 2, noReviewer: 2, rami: 2, awaiting: 1 });
-  assert.deepEqual(queueSummary([]), { prs: 0, tickets: 0, unlinked: 0, noReviewer: 0, rami: 0, awaiting: 0 });
+  assert.deepEqual(queueSummary(prs), { prs: 4, tickets: 2, unlinked: 2, noReviewer: 2, rami: 2, attention: 2, awaiting: 1 }, "attention: web#9 (no reviewer) and web#10 (changes requested)");
+  assert.deepEqual(queueSummary([]), { prs: 0, tickets: 0, unlinked: 0, noReviewer: 0, rami: 0, attention: 0, awaiting: 0 });
 });
 
 test("only a known request time is called waiting for review; otherwise the time says what it is",()=>{
