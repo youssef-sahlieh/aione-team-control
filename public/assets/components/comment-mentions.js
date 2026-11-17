@@ -33,8 +33,12 @@ export function createCommentMentions({textarea,search,enabled,local=()=>false,p
     sync();close();label();if(!enabled())return;
     const end=textarea.selectionStart;if(end!==textarea.selectionEnd||mentions.some(m=>end>m.start&&end<=m.end))return;
     const match=textarea.value.slice(0,end).match(/(?:^|\s)@([^@\n]{0,60})$/);if(!match)return;
+    // The @ of a mention that was already chosen is finished: text typed after its name is not a search.
+    // Names contain spaces, so only the @ position tells a finished mention from an unfinished one.
+    const at=end-match[1].length-1;
+    if(mentions.some(m=>m.start===at&&textarea.value.slice(m.start,m.end)===m.label))return;
     const own=local(),term=match[1].trim();if(term.length<(own?0:2))return;
-    query={start:end-match[1].length-1,end};box.hidden=false;textarea.setAttribute('aria-expanded','true');message('Searching people…');const version=turn;
+    query={start:at,end};box.hidden=false;textarea.setAttribute('aria-expanded','true');message('Searching people…');const version=turn;
     timer=setTimeout(async()=>{
       try{
         const found=own?await findPeople(term):await search(term);if(version!==turn||!enabled())return;
