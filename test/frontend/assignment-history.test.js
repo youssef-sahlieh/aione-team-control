@@ -17,12 +17,12 @@ test("internal and Odoo tickets are not applicable, never Never assigned", () =>
 
 test("a Jira ticket with no result yet is Unknown", () => {
   assert.equal(historyResultFor(jiraIssue, undefined).state, "unknown");
-  assert.equal(historyView(historyResultFor(jiraIssue, undefined)).label, "Mordi: unknown");
+  assert.equal(historyView(historyResultFor(jiraIssue, undefined)).label, "M: unknown");
 });
 
 test("the three states have their labels and tones", () => {
-  assert.deepEqual(historyView({ state: "ever" }), { state: "ever", label: "Mordi: assigned before", tone: "ever" });
-  assert.deepEqual(historyView({ state: "never" }), { state: "never", label: "Mordi: never assigned", tone: "never" });
+  assert.deepEqual(historyView({ state: "ever" }), { state: "ever", label: "M: checked", tone: "ever" });
+  assert.deepEqual(historyView({ state: "never" }), { state: "never", label: "M: notassigned", tone: "never" });
   assert.equal(historyView({ state: "unknown" }).tone, "unknown");
 });
 

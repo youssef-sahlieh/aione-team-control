@@ -16,12 +16,12 @@ export function historyResultFor(issue, entry) {
 
 export function historyView(result) {
   // Mordi as the reporter is a fact from the ticket itself, so it shows even when the assignee history is not known.
-  if (result && result.reporterIsMordi && result.state !== "ever") return { state: result.state, label: "Mordi: reporter", tone: "ever" };
+  if (result && result.reporterIsMordi && result.state !== "ever") return { state: result.state, label: "M: reporter", tone: "ever" };
   switch (result && result.state) {
-    case "ever": return { state: "ever", label: "Mordi: assigned before", tone: "ever" };
-    case "never": return { state: "never", label: "Mordi: never assigned", tone: "never" };
+    case "ever": return { state: "ever", label: "M: checked", tone: "ever" };
+    case "never": return { state: "never", label: "M: notassigned", tone: "never" };
     case "na": return { state: "na", label: "", tone: "" };
-    default: return { state: "unknown", label: "Mordi: unknown", tone: "unknown" };
+    default: return { state: "unknown", label: "M: unknown", tone: "unknown" };
   }
 }
 
