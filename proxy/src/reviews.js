@@ -612,10 +612,10 @@ export async function ticketsAwaitingReview(env) {
 const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const GITHUB_REVIEWERS_MAX = 10;
 
-function githubFailure(r) {
+function githubFailure(r, repo) {
   if (r.status === 422) return fail("not_eligible", r.data?.message || "GitHub won't let that account review this pull request.", 400);
   if (r.rateLimited) return fail("rate_limit", "GitHub's rate limit is reached. Nothing more was changed; retry later.", 429);
-  if (r.status === 403) return fail("github_access", "The GitHub token can't change review requests on this repository.", 502);
+  if (r.status === 403) return fail("github_access", "GitHub refused the change to " + repo + ". The dashboard's GitHub token needs write access to pull requests on that repository (and, for an organisation, must be authorised for it). Nothing was changed.", 502);
   if (r.status === 404) return fail("missing", "GitHub can't find this pull request.", 404);
   return fail("github", "GitHub answered " + r.status + ". Retry later.", 502);
 }
@@ -664,11 +664,11 @@ async function changeGithubReviewers(env, prId, pr, b) {
   // Removals first, so a failure part-way is visible in the refreshed list below.
   if (toRemove.length) {
     const r = await githubRequest(env, "DELETE", path, { reviewers: toRemove.map((l) => spelled.get(l)) });
-    if (!r.ok) return githubFailure(r);
+    if (!r.ok) return githubFailure(r, repo);
   }
   if (toAdd.length) {
     const r = await githubRequest(env, "POST", path, { reviewers: toAdd.map((l) => spelled.get(l)) });
-    if (!r.ok) return githubFailure(r);
+    if (!r.ok) return githubFailure(r, repo);
   }
   // Refresh the stored pull request so the queue shows the new requests; a refresh failure does not undo the change.
   await syncPulls(env, { force: true }).catch(() => null);
