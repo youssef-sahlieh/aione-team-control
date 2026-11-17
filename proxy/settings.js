@@ -31,7 +31,7 @@ export default {
   GITHUB_JIRA_ALIASES: "AIONE",
   // Rami's dashboard sign-in email. Pull requests an administrator flags "Rami" are listed for him on his Needs review
   // page, to check and comment on GitHub himself. The flag is not a review request. Empty: nobody gets that list.
-  RAMI_EMAIL: "rami@aione.biz",
+  RAMI_EMAIL: "ramia@nayax.com",
   // GitHub issues (not pull requests) that become internal tickets, by repository. Each names the developer its new tickets
   // go to (as on the Users page). Webhook: /github/webhook, secret in GITHUB_WEBHOOK_SECRET (at least 32 characters).
   GITHUB_ISSUE_SOURCES: { "KAD-org/flutter_pos": { developer: "bashar.k" } },
