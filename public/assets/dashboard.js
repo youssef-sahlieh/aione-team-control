@@ -29,6 +29,7 @@ import { replyPreview, commentAuthor, signatureNode, newSendId, keepSendId, repl
 import { mountHeaderTools } from "./app/header-tools.js";
 import { setNavCount } from "./app/nav.js";
 import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
+import "./app/keyboard.js";
 
   // The dashboard keeps loading after the page itself has loaded; the browser's own scroll restore could then
   // move you while you scroll, so it is off (redraws keep your place, see render).

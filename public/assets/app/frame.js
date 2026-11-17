@@ -7,6 +7,7 @@ import { mountHeaderTools } from "./header-tools.js";
 import { createAIAssistant } from "../ai-assistant.js";
 import { createInboxBell } from "../components/inbox-bell.js";
 import { fetchDateRequests, pendingDateCount } from "../components/date-requests.js";
+import "./keyboard.js";
 
 const $ = id => document.getElementById(id);
 let config = null;
