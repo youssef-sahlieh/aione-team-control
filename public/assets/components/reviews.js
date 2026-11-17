@@ -2,7 +2,7 @@
 // block). Reviewers get a "Needs review" queue with a read-only view of the tickets the pull request mentions. The
 // proxy keeps the assignments (proxy/src/reviews.js); GitHub is asked for the review when the reviewer has a GitHub
 // username set by an administrator (Users page). Nothing here changes a Jira ticket.
-import { reviewLabel, sortQueue, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, QUEUE_STATE_LABEL, queueStateLabel, queueReasonText, queueOptions, filterQueue, queueSummary, sortPrs, groupByTicket, activeFilters, menuFilterCount, attentionReasons, CHECKS_LABEL, waitLine, exactTime, safePrUrl, reviewerText, noReviewerText, QUICK_FILTERS, SORTS, VIEWS, NO_REVIEWER } from "../models/reviews.js";
+import { reviewLabel, sortQueue, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, QUEUE_STATE_LABEL, queueStateLabel, queueReasonText, queueOptions, filterQueue, queueSummary, sortPrs, groupByTicket, activeFilters, menuFilterCount, attentionReasons, CHECKS_LABEL, waitLine, exactTime, safePrUrl, reviewerText, noReviewerText, QUICK_FILTERS, SORTS, VIEWS, NO_REVIEWER, DEFAULT_SORT, REVIEWER_RELATIONS } from "../models/reviews.js";
 import { setNavCount } from "../app/nav.js";
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
@@ -25,7 +25,14 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
   // The administrators' queue: the last answer from the proxy, the last error, whether a read is under way, and what the
   // person chose (filters, sort, view). These live as long as the page, so a refresh or a dialog keeps them.
   let adminRoot = null, adminData = null, adminError = "", adminLoading = false;
-  const adminFilters = { search: "", client: "", repo: "", reviewer: "", state: "", quick: "", sort: "wait", view: "prs" };
+  const adminFilters = { search: "", client: "", repo: "", author: "", reviewer: "", relation: "any", state: "", quick: "", sort: savedSort(), view: "prs" };
+  // The sort is remembered on this device; a browser that refuses storage just starts from the default.
+  function savedSort() {
+    try { const v = localStorage.getItem("aione-review-sort"); return SORTS.some(([k]) => k === v) ? v : DEFAULT_SORT; } catch { return DEFAULT_SORT; }
+  }
+  function saveSort(v) {
+    try { localStorage.setItem("aione-review-sort", v); } catch { /* not kept: the choice lasts this page only */ }
+  }
   const collapsed = new Set();   // By ticket: the folded ticket groups
   const expanded = new Set();    // List: the pull requests whose details are open
   // The filter menu closes on a click outside it (set by renderAdminQueue).
@@ -103,6 +110,91 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     } catch (err) {
       open("Reviewers", el("p", "msg err", errorText(err)));
     }
+  }
+
+  // Administrators: GitHub's review requests on one pull request, changed here and nowhere else. The server decides who
+  // may be asked (GitHub's own list); the page only offers those people. A change is shown and confirmed before it is sent.
+  async function openGithubReviewers(pr) {
+    const title = "GitHub reviewers: " + pr.repo + " #" + pr.number;
+    open(title, el("div", "review-body", "Loading from GitHub…"));
+    try {
+      drawGithubReviewers(pr, await api("/reviews/github-reviewers?id=" + encodeURIComponent(pr.id)));
+    } catch (err) {
+      open(title, el("p", "msg err", errorText(err)));
+    }
+  }
+
+  function drawGithubReviewers(pr, data, notice = "") {
+    const body = el("div", "review-body");
+    body.append(el("p", "review-note", "These are GitHub's review requests on this pull request only. Nothing is requested from a ticket, and nothing changes when a ticket's status changes. You confirm each change before it is sent to GitHub."));
+    if (!data.canManage) body.append(el("p", "msg", "This pull request is closed or merged, so its reviewers can't change."));
+    if (notice) body.append(el("p", "msg", notice));
+    const requested = data.requested || [];
+    const requestedLower = new Set(requested.map((u) => u.login.toLowerCase()));
+    const asked = (data.eligible || []).filter((u) => !requestedLower.has(u.login.toLowerCase()));
+    const form = el("form", "review-picker");
+    if (requested.length) {
+      form.append(el("h3", "", "Requested now (tick to remove)"));
+      const list = el("div", "review-people");
+      for (const u of requested) list.append(checkRow("remove", u.login, u.login + " · review requested"));
+      form.append(list);
+    } else form.append(el("p", "review-note", "No review is requested from GitHub on this pull request."));
+    form.append(el("h3", "", "Ask for a review (tick to request)"));
+    const pick = el("div", "review-people");
+    if (asked.length) for (const u of asked) pick.append(checkRow("add", u.login, u.login));
+    else pick.append(el("p", "review-note", "Nobody else is available. GitHub lists only people with access to this repository, and the author can't review their own pull request."));
+    form.append(pick);
+    const msg = el("p", "msg");
+    const save = btn("Review changes…", "btn primary", () => {});
+    save.type = "submit";
+    save.disabled = !data.canManage;
+    const actions = el("div", "review-actions");
+    actions.append(save);
+    form.append(actions, msg);
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const add = [...form.querySelectorAll('input[name="add"]:checked')].map((b) => b.value);
+      const remove = [...form.querySelectorAll('input[name="remove"]:checked')].map((b) => b.value);
+      if (!add.length && !remove.length) { msg.textContent = "Tick someone to request or remove."; msg.className = "msg err"; return; }
+      confirmChanges(pr, data, add, remove);
+    });
+    body.append(form);
+    open("GitHub reviewers: " + pr.repo + " #" + pr.number, body);
+  }
+
+  function checkRow(name, value, text) {
+    const label = el("label", "review-person");
+    const box = el("input");
+    box.type = "checkbox"; box.name = name; box.value = value;
+    label.append(box, el("span", "", text));
+    return label;
+  }
+
+  // The second step: what will be sent to GitHub, and the only button that sends it.
+  function confirmChanges(pr, data, add, remove) {
+    const body = el("div", "review-body");
+    body.append(el("p", "review-note", "Confirm the change on GitHub for " + pr.repo + " #" + pr.number + ":"));
+    const list = el("ul", "review-confirm");
+    if (add.length) list.append(el("li", "", "Ask for a review: " + add.join(", ")));
+    if (remove.length) list.append(el("li", "", "Remove the review request: " + remove.join(", ")));
+    body.append(list);
+    const msg = el("p", "msg");
+    const confirm = btn("Confirm on GitHub", "btn primary", async () => {
+      confirm.disabled = true; back.disabled = true; msg.textContent = "Sending to GitHub…";
+      try {
+        const res = await api("/reviews/github-reviewers?id=" + encodeURIComponent(pr.id), { method: "POST", body: { confirmed: true, add, remove } });
+        toast("GitHub reviewers updated", [pr.repo + " #" + pr.number], false);
+        loadQueue(true);
+        drawGithubReviewers(pr, { ...data, requested: res.requested }, "Saved. The list below is what GitHub now shows.");
+      } catch (err) {
+        msg.textContent = errorText(err); msg.className = "msg err"; confirm.disabled = false; back.disabled = false;
+      }
+    });
+    const back = btn("Back", "btn", () => drawGithubReviewers(pr, data));
+    const actions = el("div", "review-actions");
+    actions.append(back, confirm);
+    body.append(actions, msg);
+    open("Confirm GitHub reviewers: " + pr.repo + " #" + pr.number, body);
   }
 
   // Read-only: the fields a developer needs to review, without history, edits or business fields.
@@ -371,10 +463,14 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     const prs = d && d.configured ? d.prs : [];
     const opts = queueOptions(prs);
     const f = adminFilters;
-    const { client, repo, reviewer, state, sort, quick, views, filterBtn, filterBadge } = adminRoot.controls;
+    const { client, repo, author, reviewer, relation, state, sort, quick, views, filterBtn, filterBadge } = adminRoot.controls;
     f.client = fillSelect(client, [["", "All projects"], ...opts.clients.map((c) => [c, c])], f.client);
     f.repo = fillSelect(repo, [["", "All repositories"], ...opts.repos.map((r) => [r, r])], f.repo);
+    f.author = fillSelect(author, [["", "Anyone"], ...opts.authors.map((a) => [a, a])], f.author);
     f.reviewer = fillSelect(reviewer, [["", "All reviewers"], [NO_REVIEWER, "No reviewer requested"], ...opts.reviewers.map((r) => [r, r])], f.reviewer);
+    // The relationship only applies to a named reviewer, so the menu is off until one is chosen.
+    relation.value = f.relation;
+    relation.disabled = !f.reviewer || f.reviewer === NO_REVIEWER;
     state.value = f.state;
     sort.value = f.sort;
     const sum = queueSummary(prs);
@@ -403,7 +499,7 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     const plural = (n) => n + (n === 1 ? " pull request" : " pull requests");
     chips.append(el("span", "queue-showing", active.length ? "Showing " + shown.length + " of " + plural(prs.length) : "Showing " + plural(shown.length)));
     for (const a of active) {
-      const chip = btn(a.text + " ×", "queue-chip", () => { f[a.name] = ""; if (a.name === "search") adminRoot.controls.search.value = ""; drawAdminQueue(); adminRoot.controls.search.focus(); });
+      const chip = btn(a.text + " ×", "queue-chip", () => { f[a.name] = ""; if (a.name === "reviewer") f.relation = "any"; if (a.name === "search") adminRoot.controls.search.value = ""; drawAdminQueue(); adminRoot.controls.search.focus(); });
       chip.setAttribute("aria-label", "Remove filter " + a.text);
       chips.append(chip);
     }
@@ -435,7 +531,7 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
   }
 
   function clearFilters() {
-    Object.assign(adminFilters, { search: "", client: "", repo: "", reviewer: "", state: "", quick: "" });
+    Object.assign(adminFilters, { search: "", client: "", repo: "", author: "", reviewer: "", relation: "any", state: "", quick: "" });
     adminRoot.controls.search.value = "";
     drawAdminQueue();
     adminRoot.controls.search.focus();
@@ -642,6 +738,10 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     expandBtn.setAttribute("aria-label", "Details for " + pr.repo + " #" + pr.number);
     expandBtn.append(el("span", "queue-caret"), el("span", "", "Details"));
     act.append(expandBtn);
+    const manage = btn("Reviewers", "btn", () => openGithubReviewers(pr));
+    manage.setAttribute("aria-label", "Manage GitHub reviewers for " + pr.repo + " #" + pr.number);
+    manage.title = "Ask GitHub for a review from someone, or remove a request. Changes ask for confirmation first.";
+    act.append(manage);
     const href = safePrUrl(pr.url);
     if (href) {
       const link = el("a", "btn", "Open PR ↗");
@@ -735,7 +835,7 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     sort.name = "sort";
     sort.setAttribute("aria-label", "Sort");
     sort.replaceChildren(...SORTS.map(([v, t]) => { const o = el("option", "", t); o.value = v; return o; }));
-    sort.addEventListener("change", () => { adminFilters.sort = sort.value; drawAdminQueue(); });
+    sort.addEventListener("change", () => { adminFilters.sort = sort.value; saveSort(sort.value); drawAdminQueue(); });
     bar.append(search, filterBtn, sort);
 
     // The filter menu: project, repository, reviewer and review state. Opened from Filters; closes on Escape or Done.
@@ -754,15 +854,19 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
       return [field, s];
     };
     const [clientField, client] = menu("Project", "client"), [repoField, repo] = menu("Repository", "repo");
-    const [reviewerField, reviewer] = menu("Reviewer", "reviewer"), [stateField, state] = menu("Review state", "state");
+    const [authorField, author] = menu("Opened by", "author");
+    const [reviewerField, reviewer] = menu("Reviewer", "reviewer");
+    const [relationField, relation] = menu("Reviewer's part", "relation");
+    relation.replaceChildren(...REVIEWER_RELATIONS.map(([v, t]) => { const o = el("option", "", t); o.value = v; return o; }));
+    const [stateField, state] = menu("Review state", "state");
     state.replaceChildren(...[["", "Any review state"], ...Object.entries(QUEUE_STATE_LABEL)].map(([v, t]) => { const o = el("option", "", t); o.value = v; return o; }));
     const done = btn("Done", "btn primary", () => setPop(false));
     const popFoot = el("div", "queue-pop-foot");
     popFoot.append(btn("Clear menus", "linkbtn", () => {
-      Object.assign(adminFilters, { client: "", repo: "", reviewer: "", state: "" });
+      Object.assign(adminFilters, { client: "", repo: "", author: "", reviewer: "", relation: "any", state: "" });
       drawAdminQueue();
     }), done);
-    pop.append(clientField, repoField, reviewerField, stateField, popFoot);
+    pop.append(clientField, repoField, authorField, reviewerField, relationField, stateField, popFoot);
     const setPop = (on) => {
       pop.hidden = !on;
       filterBtn.setAttribute("aria-expanded", String(on));
@@ -776,7 +880,7 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     const list = el("div", "queue-list");
     root.append(head, notices, stats, tabRow, bar, pop, active, list);
     target.append(root);
-    adminRoot = { root, controls: { search, client, repo, reviewer, state, sort, quick, views, filterBtn, filterBadge }, updated, status, refresh, stats, active, notices, list };
+    adminRoot = { root, controls: { search, client, repo, author, reviewer, relation, state, sort, quick, views, filterBtn, filterBadge }, updated, status, refresh, stats, active, notices, list };
     drawAdminQueue();
     return loadQueue();
   }

@@ -229,3 +229,25 @@ export async function requestedLogins(env, repo, number) {
   if (!r.ok) throw new Error("GitHub answered " + r.status);
   return (r.data?.users || []).map((u) => String(u.login).toLowerCase());
 }
+
+// Who GitHub currently has a review requested from on one pull request, with the login as GitHub spells it.
+// Throws when GitHub doesn't answer. (requestedLogins is the same list, lowercase, for comparisons.)
+export async function requestedUsers(env, repo, number) {
+  const r = await githubRequest(env, "GET", "/repos/" + repo + "/pulls/" + number + "/requested_reviewers");
+  if (!r.ok) throw new Error("GitHub answered " + r.status);
+  return (r.data?.users || []).map((u) => ({ login: String(u.login), avatar: u.avatar_url || "" }));
+}
+
+// The logins GitHub allows as reviewers on a repository (the people who can be assigned to its pull requests), read
+// from GitHub so nothing is taken from the AIONE directory. Throws when GitHub doesn't answer.
+export async function assignableLogins(env, repo) {
+  const out = [];
+  for (let page = 1; page <= 5; page++) {
+    const r = await githubRequest(env, "GET", "/repos/" + repo + "/assignees?per_page=100&page=" + page);
+    if (!r.ok) throw new Error("GitHub answered " + r.status);
+    const list = Array.isArray(r.data) ? r.data : [];
+    for (const u of list) if (u && u.login) out.push({ login: String(u.login), avatar: u.avatar_url || "" });
+    if (list.length < 100) break;
+  }
+  return out;
+}

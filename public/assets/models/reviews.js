@@ -137,7 +137,21 @@ export const QUICK_FILTERS = [["", "All PRs"], ["attention", "Needs attention"],
 const QUICK_LABEL = { attention: "Needs attention", linked: "Linked to ticket", unlinked: "Unlinked PRs", rami: "For Rami", no_reviewer: "No reviewer requested", changes: "Changes requested" };
 const QUICK = { attention: (pr) => attentionReasons(pr).length > 0, linked, unlinked: (pr) => !linked(pr), rami: (pr) => !!pr.rami, no_reviewer: noReviewer, changes: (pr) => pr.state === "changes_requested" };
 
-export const SORTS = [["wait", "Longest wait first"], ["recent", "Most recent first"], ["key", "Ticket key"], ["repo", "Repository"]];
+// The default is the newest pull request first, by when GitHub created it. The other orders stay available.
+export const SORTS = [["created", "Newest PR first"], ["wait", "Longest wait first"], ["recent", "Most recent first"], ["key", "Ticket key"], ["repo", "Repository"]];
+export const DEFAULT_SORT = "created";
+
+// What the Reviewer filter asks about the chosen reviewer: any of them, or one part of their review.
+export const REVIEWER_RELATIONS = [["any", "Any relationship"], ["requested", "Review requested"], ["reviewed", "Has reviewed"], ["approved", "Approved"], ["changes", "Changes requested"]];
+const RELATION_LABEL = Object.fromEntries(REVIEWER_RELATIONS.filter(([k]) => k !== "any").map(([k, label]) => [k, label]));
+const relationMatches = (r, relation) => {
+  if (!relation || relation === "any") return true;
+  if (relation === "requested") return !!r.pending;
+  if (relation === "reviewed") return !!r.review && !r.pending;
+  if (relation === "approved") return r.review === "APPROVED";
+  if (relation === "changes") return r.review === "CHANGES_REQUESTED";
+  return true;
+};
 
 // The views: one row per pull request (the default), or the pull requests under each ticket they name.
 export const VIEWS = [["prs", "List"], ["tickets", "By ticket"]];
@@ -148,7 +162,8 @@ export function queueOptions(prs) {
   return {
     clients: sorted(new Set(prs.flatMap((pr) => (pr.tickets || []).map((t) => t.client)))),
     repos: sorted(new Set(prs.map((pr) => pr.repo))),
-    reviewers: sorted(new Set(prs.flatMap((pr) => pr.reviewers.map((r) => r.name))))
+    reviewers: sorted(new Set(prs.flatMap((pr) => pr.reviewers.map((r) => r.name)))),
+    authors: sorted(new Set(prs.map((pr) => pr.author)))
   };
 }
 
@@ -164,7 +179,8 @@ export function filterQueue(prs, f = {}) {
     && (!f.repo || pr.repo === f.repo)
     && (!f.state || pr.state === f.state)
     && (!quick || quick(pr))
-    && (!f.reviewer || (f.reviewer === NO_REVIEWER ? noReviewer(pr) : pr.reviewers.some((r) => r.name === f.reviewer))));
+    && (!f.author || pr.author === f.author)
+    && (!f.reviewer || (f.reviewer === NO_REVIEWER ? noReviewer(pr) : pr.reviewers.some((r) => r.name === f.reviewer && relationMatches(r, f.relation)))));
 }
 
 // Orders the pull requests.
@@ -183,8 +199,10 @@ const byRecent = (a, b) => (time(b) ?? -Infinity) - (time(a) ?? -Infinity) || 0;
 const firstKey = (pr) => (pr.tickets || [])[0]?.key || "";
 const byKey = (a, b) => (!firstKey(a) - !firstKey(b)) || firstKey(a).localeCompare(firstKey(b), "en", { numeric: true });
 const byRepo = (a, b) => a.repo.localeCompare(b.repo) || a.number - b.number;
-export function sortPrs(prs, sort = "wait") {
-  const cmp = { recent: byRecent, key: byKey, repo: byRepo }[sort] || byWait;
+const createdAt = (x) => { const t = Date.parse(x.created || ""); return Number.isNaN(t) ? null : t; };
+const byCreated = (a, b) => (createdAt(b) ?? -Infinity) - (createdAt(a) ?? -Infinity) || b.number - a.number;
+export function sortPrs(prs, sort = DEFAULT_SORT) {
+  const cmp = { created: byCreated, recent: byRecent, key: byKey, repo: byRepo }[sort] || byWait;
   return [...prs].sort((a, b) => cmp(a, b) || byWait(a, b) || byRepo(a, b));
 }
 
@@ -219,7 +237,7 @@ export function queueSummary(prs) {
 }
 
 // The menus that narrow the list (not the search, the quick filter, the sort or the view): how many are in use.
-export const menuFilterCount = (f = {}) => ["client", "repo", "reviewer", "state"].filter((k) => f[k]).length;
+export const menuFilterCount = (f = {}) => ["client", "repo", "author", "reviewer", "state"].filter((k) => f[k]).length;
 
 // The filters in use, as removable chips: [{ name, text }]. The sort and the view aren't filters.
 export function activeFilters(f = {}) {
@@ -228,7 +246,11 @@ export function activeFilters(f = {}) {
   if (f.quick && QUICK_LABEL[f.quick]) out.push({ name: "quick", text: QUICK_LABEL[f.quick] });
   if (f.client) out.push({ name: "client", text: "Project: " + f.client });
   if (f.repo) out.push({ name: "repo", text: "Repository: " + f.repo });
-  if (f.reviewer) out.push({ name: "reviewer", text: "Reviewer: " + (f.reviewer === NO_REVIEWER ? "none requested" : f.reviewer) });
+  if (f.author) out.push({ name: "author", text: "Opened by: " + f.author });
+  if (f.reviewer) {
+    const rel = f.reviewer !== NO_REVIEWER && f.relation && f.relation !== "any" ? " (" + RELATION_LABEL[f.relation] + ")" : "";
+    out.push({ name: "reviewer", text: "Reviewer: " + (f.reviewer === NO_REVIEWER ? "none requested" : f.reviewer + rel) });
+  }
   if (f.state) out.push({ name: "state", text: "State: " + (QUEUE_STATE_LABEL[f.state] || f.state) });
   return out;
 }
