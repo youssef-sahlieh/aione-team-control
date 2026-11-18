@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mordiAccount, assigneeChanges, analyzeAssignments, readHistories, readRecentHistories, checkTickets, assignmentHistoryRoute } from "../proxy/src/assignment-history.js";
+import { MORDI_ACCOUNT, mordiAccount, assigneeChanges, analyzeAssignments, readHistories, readRecentHistories, checkTickets, assignmentHistoryRoute } from "../proxy/src/assignment-history.js";
 
-const MORDI = "mordi-acc-1", OTHER = "other-acc-2";
+const MORDI = MORDI_ACCOUNT.id, OTHER = "other-acc-2";
 const team = (people) => JSON.stringify({ people });
 const envWith = (people) => ({ TEAM_CONFIG: team(people) });
 const memoryStore = () => {
@@ -33,19 +33,10 @@ function fakeJira(histories, { fail = false } = {}) {
 
 const cfg = { TEAM_CONFIG: team({ mordi: { id: MORDI, name: "Mordi Levi", ini: "ML" }, ellen: { id: OTHER, name: "Ellen", ini: "E" } }) };
 
-test("Mordi is found by his Jira account id from TEAM_CONFIG, and a missing or ambiguous entry is explained, never guessed", () => {
-  assert.deepEqual(mordiAccount(cfg), { id: MORDI, name: "Mordi Levi" });
-  assert.equal(mordiAccount({ TEAM_CONFIG: team({ ellen: { id: OTHER, name: "Ellen" } }) }).id, null);
-  assert.match(mordiAccount({ TEAM_CONFIG: team({ ellen: { id: OTHER, name: "Ellen" } }) }).reason, /Add Mordi/);
-  assert.match(mordiAccount({ TEAM_CONFIG: team({ mordi: { id: MORDI, name: "Mordi" }, Mordi: { id: "x-1", name: "Mordi Two" } }) }).reason, /More than one/);
-  assert.match(mordiAccount({ TEAM_CONFIG: team({ mordi: { name: "Mordi" } }) }).reason, /no Jira account id/);
-  assert.match(mordiAccount({ TEAM_CONFIG: "{not json" }).reason, /not valid JSON/);
-  assert.equal(mordiAccount({}).id, null);
-});
-
-test("a person whose first name is Mordi is found, and the display name is never used to match an assignee", () => {
-  const found = mordiAccount({ TEAM_CONFIG: team({ dev7: { id: MORDI, name: "Mordi Cohen" } }) });
-  assert.equal(found.id, MORDI);
+test("Mordi's account is the fixed Jira id, whatever TEAM_CONFIG says", () => {
+  assert.deepEqual(mordiAccount(), { id: "712020:bbc71ba5-953f-4c66-be3a-bdfc9e1b1a44", name: "Mordi Kassab" });
+  assert.deepEqual(mordiAccount({ TEAM_CONFIG: team({ mordi: { id: "other-1", name: "Mordi Levi" } }) }), { id: MORDI, name: "Mordi Kassab" });
+  assert.deepEqual(mordiAccount({ TEAM_CONFIG: "{not json" }), { id: MORDI, name: "Mordi Kassab" });
 });
 
 test("currently assigned to Mordi with no changes: ever, dated from creation", () => {
@@ -200,12 +191,11 @@ test("a failed Jira read is Unknown with a reason, and is not cached as a verdic
   assert.equal(store._m.size, 0);
 });
 
-test("without a configured Mordi, every ticket is Unknown and Jira is never asked", async () => {
-  const f = fakeJira({});
-  const out = await checkTickets({ env: { TEAM_CONFIG: team({}) }, jira: f.jira, issues: [{ key: "AION-12", assigneeId: OTHER, updated: "u" }] });
-  assert.equal(out.configured, false);
-  assert.equal(out.results[0].state, "unknown");
-  assert.equal(f.calls.length, 0);
+test("tickets are checked against the fixed Mordi account, whatever TEAM_CONFIG holds", async () => {
+  const f = fakeJira({ "AION-12": [] });
+  const out = await checkTickets({ env: { TEAM_CONFIG: "{not json" }, jira: f.jira, issues: [{ key: "AION-12", assigneeId: OTHER, created: null, updated: "u" }] });
+  assert.equal(out.configured, true);
+  assert.equal(out.results[0].state, "never");
 });
 
 // Route tests: the caller's scoped search decides which tickets are checked.
