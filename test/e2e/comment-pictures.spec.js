@@ -397,7 +397,8 @@ test("on a phone, typing a comment keeps the ticket above the keyboard with a on
   await reply.focus();
   await page.waitForTimeout(450);
   // What iOS reports with the keyboard up: 400px visible. (A desktop browser has no on-screen keyboard to raise.)
-  await page.evaluate(() => { document.documentElement.classList.add("kb-open"); document.documentElement.style.setProperty("--vvh", "400px"); });
+  // No kb-open here: focus alone must shrink the header (some iPhones report the keyboard in a way that isn't detected).
+  await page.evaluate(() => document.documentElement.style.setProperty("--vvh", "400px"));
   await expect(page.locator("#d-title")).toBeHidden();
   await expect(page.locator("#drawer-tabs")).toBeHidden();
   await expect(page.locator("#d-close")).toBeVisible();
@@ -408,8 +409,8 @@ test("on a phone, typing a comment keeps the ticket above the keyboard with a on
   const r = await reply.boundingBox();
   expect(r.y).toBeGreaterThanOrEqual(head.y + head.height - 1);
   expect(r.y).toBeLessThan(400);
-  // Keyboard closed: the full header is back.
-  await page.evaluate(() => document.documentElement.classList.remove("kb-open"));
+  // Done typing: the full header is back.
+  await reply.blur();
   await expect(page.locator("#d-title")).toBeVisible();
   expect(mock.errors).toEqual([]);
 });

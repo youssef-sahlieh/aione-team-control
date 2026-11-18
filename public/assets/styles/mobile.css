@@ -95,10 +95,13 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
   /* The ticket dialog also fits above the keyboard (iOS keeps a fixed bottom:0 under it). While typing, its header
      shrinks to one line (key, status, Close): the title, breadcrumb, tabs and other buttons come back when the keyboard closes. */
   #drawer{top:var(--vvt,0px)!important;bottom:auto!important;height:100dvh;height:var(--vvh,100dvh)}
-  html.kb-open #drawer .dtitle,html.kb-open #drawer .dcrumb,html.kb-open #drawer .drawer-tabs,html.kb-open #drawer .dtop .sp>:not(#d-close){display:none!important}
-  html.kb-open #drawer .dhead{padding-block:6px;gap:0}
-  html.kb-open #drawer .dtop{flex-wrap:nowrap;align-items:center}
-  html.kb-open #drawer .dtop .sp{flex:none;width:auto;margin-left:auto}
+  /* "Typing": the keyboard is up (kb-open), or a text box in the ticket has focus (a phone always raises its keyboard
+     for one, and this works even when the keyboard can't be detected). */
+  html.kb-open #drawer .dtitle,html.kb-open #drawer .dcrumb,html.kb-open #drawer .drawer-tabs,html.kb-open #drawer .dtop .sp>:not(#d-close),
+  #drawer.typing .dtitle,#drawer.typing .dcrumb,#drawer.typing .drawer-tabs,#drawer.typing .dtop .sp>:not(#d-close){display:none!important}
+  html.kb-open #drawer .dhead,#drawer.typing .dhead{padding-block:6px;gap:0}
+  html.kb-open #drawer .dtop,#drawer.typing .dtop{flex-wrap:nowrap;align-items:center}
+  html.kb-open #drawer .dtop .sp,#drawer.typing .dtop .sp{flex:none;width:auto;margin-left:auto}
 }
 
 /* Tablets and phones (to 820px). Measured in a browser at 375-1024px; desktop rules are not changed here. */

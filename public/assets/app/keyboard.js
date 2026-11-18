@@ -14,7 +14,9 @@ function sync() {
   const top = vv ? vv.offsetTop : 0;
   root.style.setProperty("--vvh", Math.round(h) + "px");
   root.style.setProperty("--vvt", Math.round(top) + "px");
-  const open = vv ? window.innerHeight - vv.height - vv.offsetTop > 120 : false;
+  // The keyboard's height is what the visual viewport lost. (iOS also scrolls the page by about that much, so
+  // offsetTop is not subtracted: doing so made an open keyboard look closed.)
+  const open = vv ? window.innerHeight - vv.height > 120 : false;
   const opened = open && !root.classList.contains("kb-open");
   root.classList.toggle("kb-open", open);
   // The keyboard just opened (and the ticket header just shrank): bring the field being typed in back into view.
@@ -46,7 +48,19 @@ function revealFocused(target, dialog) {
   }, 320);
 }
 
+// The ticket dialog is "typing" while a text box in it has focus (not a list: a picker raises no keyboard). On phones
+// its header then shrinks to one line (styles/mobile.css), whether or not the keyboard can be detected.
+const TYPED = "input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=file]):not([type=range]):not([type=date]), textarea, [contenteditable=true]";
+function markTyping() {
+  const drawer = document.getElementById("drawer");
+  if (!drawer) return;
+  const t = document.activeElement;
+  drawer.classList.toggle("typing", !!(t instanceof HTMLElement && t.matches(TYPED) && drawer.contains(t)));
+}
+document.addEventListener("focusout", () => setTimeout(markTyping, 0));
+
 function onFocusIn(e) {
+  markTyping();
   const t = e.target;
   if (!(t instanceof HTMLElement) || !t.matches(EDITABLE)) return;
   const dialog = t.closest(DIALOG);
