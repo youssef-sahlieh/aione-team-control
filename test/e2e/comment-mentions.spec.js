@@ -66,6 +66,8 @@ test("the keyboard completes a mention with Enter and Escape closes the picker",
   await note.click();
   await page.keyboard.type("@Ada");
   await expect(box(page)).toBeVisible();
+  // Wait for the search result: Enter only picks a result that is on screen (slower machines take a moment).
+  await expect(page.getByRole("option", { name: "Ada Lovelace" })).toBeVisible();
   await page.keyboard.press("Enter");
   await expect(box(page)).toBeHidden();
   await expect(note).toHaveValue("@Ada Lovelace ");
