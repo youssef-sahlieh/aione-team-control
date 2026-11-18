@@ -4,7 +4,7 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import worker from "../proxy/src/handler.js";
 import { memoryStore } from "../proxy/src/users.js";
-import { wikiText, htmlText, excerpt, commentLink, replyAuthor, replyBody, QUOTE_CHARS } from "../proxy/src/comment-reply.js";
+import { wikiText, htmlText, excerpt, commentLink, replyAuthor, replyBody, jiraIdForDashboardUser, QUOTE_CHARS } from "../proxy/src/comment-reply.js";
 
 const ORIGIN = "https://youssef-sahlieh.github.io", SITE = "https://jira.test";
 const HEBREW = "שלום, הבדיקה עברה בהצלחה";
@@ -84,6 +84,17 @@ test("who is answered: a Jira author is mentioned by account id; an unavailable,
   assert.equal(replyAuthor({ author: { accountId: "app-1", displayName: "Automation", accountType: "app" } }, null).accountId, "");
   assert.equal(replyAuthor(COMMENTS[600], null, "bot@x").accountId, "");
   assert.deepEqual(replyAuthor(COMMENTS[600], { by: { name: "Ellen", email: "ellen@aione.biz" } }), { name: "Ellen", email: "ellen@aione.biz", accountId: "", viaDashboard: true });
+});
+
+test("a reply to a dashboard comment mentions the writer when TEAM_CONFIG gives their Jira account, and names them otherwise", () => {
+  const people = { ellen: { id: "acc-ellen", name: "Ellen Cohen" }, helena: { id: "acc-helena", name: "Helena Levin" }, dana: { id: "x", name: "Dana One" }, dan: { id: "y", name: "Dana Two" } };
+  assert.equal(jiraIdForDashboardUser(people, { name: "Helena Levin" }), "acc-helena");
+  assert.equal(jiraIdForDashboardUser(people, { name: "Ellen" }), "acc-ellen");
+  assert.equal(jiraIdForDashboardUser(people, { name: "Dana" }), "", "two people share the first name: not guessed");
+  assert.equal(jiraIdForDashboardUser(people, { name: "Rami" }), "");
+  assert.deepEqual(replyAuthor(COMMENTS[600], { by: { name: "Ellen", email: "e@x" } }, "", "acc-ellen"), { name: "Ellen", email: "e@x", accountId: "acc-ellen", viaDashboard: true });
+  assert.equal(replyBody({ site: SITE, key: "AION-7", commentId: "600", author: { name: "Ellen", accountId: "acc-ellen", viaDashboard: true }, quote: "Deployed", text: "Thanks!" }).split("\n")[0],
+    "In reply to [~accountid:acc-ellen] — [view comment|" + SITE + "/browse/AION-7?focusedCommentId=600]");
 });
 
 test("the reply's body: who and which comment, the quote, the reply, then the sender's name", () => {

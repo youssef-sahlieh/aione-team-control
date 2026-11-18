@@ -50,9 +50,19 @@ export const commentLink = (site, key, id) => String(site || "").replace(/\/+$/,
 //   a comment written from the dashboard (Jira shows the proxy's account): the person who wrote it, by name, and they
 //   get the dashboard's notification; any other comment: its Jira author, mentioned by account id when the account can
 //   still be mentioned (a deactivated, deleted or app account, or the proxy's own account, is named, not mentioned).
-export function replyAuthor(comment, logged, integrationEmail = "") {
+// A dashboard person's Jira account: the one entry in TEAM_CONFIG.people with their first name (or developer key). Only a
+// single match counts; two people who share a first name are named, not mentioned.
+export function jiraIdForDashboardUser(people, who) {
+  const first = (s) => String(s || "").trim().split(/\s+/)[0].toLowerCase();
+  const name = first(who?.name);
+  const hits = Object.entries(people || {}).filter(([k, p]) => /^[\w:-]{1,128}$/.test(p?.id || "") && name && (first(p.name) === name || k.toLowerCase() === name));
+  return hits.length === 1 ? hits[0][1].id : "";
+}
+
+export function replyAuthor(comment, logged, integrationEmail = "", dashboardJiraId = "") {
   const a = comment.author || {};
-  if (logged?.by) return { name: String(logged.by.name || logged.by.email || "someone"), email: String(logged.by.email || ""), accountId: "", viaDashboard: true };
+  // The mention is kept when the dashboard person has a Jira account in TEAM_CONFIG; the dashboard still notifies them.
+  if (logged?.by) return { name: String(logged.by.name || logged.by.email || "someone"), email: String(logged.by.email || ""), accountId: dashboardJiraId, viaDashboard: true };
   const mentionable = /^[\w:-]{1,128}$/.test(a.accountId || "") && a.active !== false && (a.accountType || "atlassian") === "atlassian" && !(integrationEmail && String(a.emailAddress || "").toLowerCase() === String(integrationEmail).toLowerCase());
   return { name: String(a.displayName || "a former user"), email: "", accountId: mentionable ? a.accountId : "", viaDashboard: false };
 }
@@ -68,7 +78,7 @@ export function replyBody({ site, key, commentId, author, quote, text, signature
 // Reads the comment being answered and checks it may be answered from here. Returns { target } or { error, status }.
 //   readJira(path): the proxy's Jira call ({ ok, data } or { ok: false, res }).
 //   log: this ticket's dashboard history (to know who wrote a comment sent from here).
-export async function readReplyTarget({ readJira, key, commentId, log = [], integrationEmail = "" }) {
+export async function readReplyTarget({ readJira, key, commentId, log = [], integrationEmail = "", people = {} }) {
   const gone = { status: 404, code: "reply_target_unavailable", error: "The comment you're replying to was deleted or can't be read any more. Cancel the reply to send your text as an ordinary comment." };
   if (!/^\d{1,20}$/.test(String(commentId || ""))) return { status: 400, code: "bad_request", error: "Choose the comment to reply to again." };
   const issue = await readJira("/rest/api/3/issue/" + key + "?fields=labels");
@@ -79,7 +89,7 @@ export async function readReplyTarget({ readJira, key, commentId, log = [], inte
   // The comment must be this ticket's: Jira's address for it names the issue's id.
   if (String(c.id) !== String(commentId) || !issue.data?.id || !new RegExp("/issue/" + issue.data.id + "/comment/" + commentId + "$").test(String(c.self || ""))) return gone;
   const logged = log.find((e) => e.action === "comment" && String(e.commentId) === String(commentId));
-  const author = replyAuthor(c, logged, integrationEmail);
+  const author = replyAuthor(c, logged, integrationEmail, logged?.by ? jiraIdForDashboardUser(people, logged.by) : "");
   let text = htmlText(c.renderedBody) || String(typeof c.body === "string" ? c.body : "");
   if (logged) text = text.replace(/\n*— [^\n]*$/, "");
   // Who may see the reply: never more people than could see the comment it quotes.
