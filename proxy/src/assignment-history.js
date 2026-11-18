@@ -1,8 +1,7 @@
 // Did a Jira ticket ever pass through Mordi? A read-only historical indicator for the All tickets page.
 //
-// Identity: Mordi's Jira account id comes from TEAM_CONFIG.people (the team setting that already links Jira account
-// ids to people). Nothing is hardcoded and no display name is matched against assignees. If Mordi is missing, listed
-// twice, or has no account id, every ticket is Unknown and the reason says what to configure.
+// Identity: Mordi's Jira account id is fixed here (MORDI_ACCOUNT, from Jira's people lookup). TEAM_CONFIG is not used
+// for it, and no display name is matched against assignees.
 //
 // Evidence: the last 6 assignee changes in the ticket's changelog, read from the newest page backwards. A ticket is
 // "ever" when any of those changes went to Mordi, the earliest of them was from Mordi, or Mordi is the current assignee.
@@ -19,23 +18,13 @@ const BUDGET_MS = 15000;         // a single request never waits on Jira longer 
 const MAX_KEYS = 50;
 const RECENT = 6;                // only the last 6 assignee changes decide the verdict
 const CACHE_PREFIX = "jira-assignment:v2:";
-const ACCOUNT_ID = /^[\w:-]{1,128}$/;
 const JIRA_KEY = /^[A-Z][A-Z0-9_]*-\d+$/;
 
-const isMordi = (key, person) =>
-  /^mordi$/i.test(String(key || "")) || /^mordi$/i.test(String(person?.name || "").trim().split(/\s+/)[0] || "");
+// Mordi Kassab's Jira account, from Jira's people lookup on the nayax-cloud site.
+export const MORDI_ACCOUNT = Object.freeze({ id: "712020:bbc71ba5-953f-4c66-be3a-bdfc9e1b1a44", name: "Mordi Kassab" });
 
-// Mordi's Jira account id from TEAM_CONFIG.people, or the reason it can't be used.
-export function mordiAccount(env) {
-  let people;
-  try { people = JSON.parse(env.TEAM_CONFIG || "{}").people || {}; }
-  catch { return { id: null, reason: "TEAM_CONFIG is not valid JSON, so Mordi's account can't be read." }; }
-  const hits = Object.entries(people).filter(([key, person]) => isMordi(key, person));
-  if (hits.length === 0) return { id: null, reason: "Add Mordi to TEAM_CONFIG.people with his Jira account id." };
-  if (hits.length > 1) return { id: null, reason: "More than one person named Mordi is in TEAM_CONFIG.people. Keep one." };
-  const [, person] = hits[0];
-  if (typeof person?.id !== "string" || !ACCOUNT_ID.test(person.id)) return { id: null, reason: "Mordi's entry in TEAM_CONFIG.people has no Jira account id." };
-  return { id: person.id, name: String(person.name || "Mordi") };
+export function mordiAccount() {
+  return { ...MORDI_ACCOUNT };
 }
 
 // Assignee changes from the changelog, oldest first. `fromKnown` is false when Jira didn't say who it was assigned to.
@@ -165,8 +154,7 @@ async function checkTicket(env, jira, issue, mordi, now) {
 
 // Results for the given Jira issues (already filtered to what the caller may see), in the same order.
 export async function checkTickets({ env, jira, issues, now = Date.now }) {
-  const mordi = mordiAccount(env);
-  if (!mordi.id) return { configured: false, reason: mordi.reason, results: issues.map((i) => ({ key: i.key, state: "unknown", events: [], assignedToMordi: false, reason: mordi.reason, verifiedAt: null })) };
+  const mordi = mordiAccount();
   const deadline = now() + BUDGET_MS, out = new Map(), queue = [...issues];
   const worker = async () => {
     while (queue.length) {
