@@ -57,11 +57,15 @@ function markTyping() {
   const t = document.activeElement;
   drawer.classList.toggle("typing", !!(t instanceof HTMLElement && t.matches(TYPED) && drawer.contains(t)));
 }
-document.addEventListener("focusout", () => setTimeout(markTyping, 0));
+// Leaving a text box brings the full header back a moment later, not at once: the tap that left it (on Post note,
+// Add comment…) must land on the button before the header pushes it down.
+let restore = 0;
+document.addEventListener("focusout", () => { clearTimeout(restore); restore = setTimeout(markTyping, 450); });
 
 function onFocusIn(e) {
-  markTyping();
   const t = e.target;
+  // Into a text box: shrink at once. Onto anything else (the button being pressed): the delayed restore decides.
+  if (t instanceof HTMLElement && t.matches(TYPED)) { clearTimeout(restore); markTyping(); }
   if (!(t instanceof HTMLElement) || !t.matches(EDITABLE)) return;
   const dialog = t.closest(DIALOG);
   if (!dialog) return;
