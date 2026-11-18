@@ -7,7 +7,7 @@
 const vv = window.visualViewport;
 const root = document.documentElement;
 const EDITABLE = "input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=file]):not([type=range]), textarea, select, [contenteditable=true]";
-const DIALOG = ".pop.modal, dialog, .wl-dialog, .followers-dialog, .date-dialog";
+const DIALOG = ".pop.modal, dialog, .wl-dialog, .followers-dialog, .date-dialog, #drawer";
 
 function sync() {
   const h = vv ? vv.height : window.innerHeight;
@@ -15,7 +15,11 @@ function sync() {
   root.style.setProperty("--vvh", Math.round(h) + "px");
   root.style.setProperty("--vvt", Math.round(top) + "px");
   const open = vv ? window.innerHeight - vv.height - vv.offsetTop > 120 : false;
+  const opened = open && !root.classList.contains("kb-open");
   root.classList.toggle("kb-open", open);
+  // The keyboard just opened (and the ticket header just shrank): bring the field being typed in back into view.
+  const t = document.activeElement;
+  if (opened && t instanceof HTMLElement && t.matches(EDITABLE) && t.closest(DIALOG)) revealFocused(t, t.closest(DIALOG));
   // iOS can leave the page scrolled when the keyboard closes; put it back while a dialog is open.
   if (!open && window.scrollY !== 0 && document.querySelector(".pop.modal:not([hidden])")) window.scrollTo(0, 0);
 }

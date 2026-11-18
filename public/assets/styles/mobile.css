@@ -92,6 +92,13 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
   /* --vvh (app/keyboard.js) is the height left above the on-screen keyboard; 100dvh is the fallback. */
   .pop.modal{inset:0!important;top:var(--vvt,0px)!important;transform:none;width:100%;max-height:none;height:100dvh;height:var(--vvh,100dvh);border-radius:0;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
   .pop.modal::before{display:none}
+  /* The ticket dialog also fits above the keyboard (iOS keeps a fixed bottom:0 under it). While typing, its header
+     shrinks to one line (key, status, Close): the title, breadcrumb, tabs and other buttons come back when the keyboard closes. */
+  #drawer{top:var(--vvt,0px)!important;bottom:auto!important;height:100dvh;height:var(--vvh,100dvh)}
+  html.kb-open #drawer .dtitle,html.kb-open #drawer .dcrumb,html.kb-open #drawer .drawer-tabs,html.kb-open #drawer .dtop .sp>:not(#d-close){display:none!important}
+  html.kb-open #drawer .dhead{padding-block:6px;gap:0}
+  html.kb-open #drawer .dtop{flex-wrap:nowrap;align-items:center}
+  html.kb-open #drawer .dtop .sp{flex:none;width:auto;margin-left:auto}
 }
 
 /* Tablets and phones (to 820px). Measured in a browser at 375-1024px; desktop rules are not changed here. */

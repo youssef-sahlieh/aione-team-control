@@ -387,3 +387,29 @@ test("a row's developer list can be searched", async ({ page }) => {
   await expect(opts.filter({ visible: true })).toHaveCount(2);
   expect(mock.errors).toEqual([]);
 });
+
+// Phones: with the keyboard open the ticket fits above it and its header shrinks to one line, so the comment box shows.
+test("on a phone, typing a comment keeps the ticket above the keyboard with a one-line header", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mock = await mockDashboard(page);
+  await page.goto("/dashboard.html#AION-101");
+  const reply = page.locator("#d-reply");
+  await reply.focus();
+  await page.waitForTimeout(450);
+  // What iOS reports with the keyboard up: 400px visible. (A desktop browser has no on-screen keyboard to raise.)
+  await page.evaluate(() => { document.documentElement.classList.add("kb-open"); document.documentElement.style.setProperty("--vvh", "400px"); });
+  await expect(page.locator("#d-title")).toBeHidden();
+  await expect(page.locator("#drawer-tabs")).toBeHidden();
+  await expect(page.locator("#d-close")).toBeVisible();
+  const box = await page.locator("#drawer").boundingBox(), head = await page.locator("#drawer .dhead").boundingBox();
+  expect(Math.round(box.height)).toBe(400);
+  expect(head.height).toBeLessThan(90);
+  await reply.scrollIntoViewIfNeeded();
+  const r = await reply.boundingBox();
+  expect(r.y).toBeGreaterThanOrEqual(head.y + head.height - 1);
+  expect(r.y).toBeLessThan(400);
+  // Keyboard closed: the full header is back.
+  await page.evaluate(() => document.documentElement.classList.remove("kb-open"));
+  await expect(page.locator("#d-title")).toBeVisible();
+  expect(mock.errors).toEqual([]);
+});
