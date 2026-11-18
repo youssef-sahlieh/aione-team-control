@@ -126,7 +126,7 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
 
   function drawGithubReviewers(pr, data, notice = "") {
     const body = el("div", "review-body");
-    body.append(el("p", "review-note", "These are GitHub's review requests on this pull request only. Nothing is requested from a ticket, and nothing changes when a ticket's status changes. You confirm each change before it is sent to GitHub."));
+    body.append(el("p", "review-note", "Requesting a reviewer whose GitHub username is saved on the Users page also adds this pull request to their Needs review list, even if GitHub cannot update. Removing a GitHub request keeps their dashboard assignment until the pull request closes. You confirm each change before it is sent to GitHub."));
     if (!data.canManage) body.append(el("p", "msg", "This pull request is closed or merged, so its reviewers can't change."));
     if (notice) body.append(el("p", "msg", notice));
     const requested = data.requested || [];
@@ -185,7 +185,7 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
         const res = await api("/reviews/github-reviewers?id=" + encodeURIComponent(pr.id), { method: "POST", body: { confirmed: true, add, remove } });
         toast("GitHub reviewers updated", [pr.repo + " #" + pr.number], false);
         loadQueue(true);
-        drawGithubReviewers(pr, { ...data, requested: res.requested }, "Saved. The list below is what GitHub now shows.");
+        drawGithubReviewers(pr, { ...data, requested: res.requested }, "Saved. The list below is what GitHub now shows." + (res.dashboardAssigned?.length ? " Matching dashboard users can also see it in Needs review." : ""));
       } catch (err) {
         msg.textContent = errorText(err); msg.className = "msg err"; confirm.disabled = false; back.disabled = false;
       }

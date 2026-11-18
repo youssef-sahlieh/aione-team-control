@@ -9,16 +9,20 @@ const PR_ID = "KAD-org/flutter_pos#553";
 const URL_PATH = "/reviews/github-reviewers?id=" + encodeURIComponent(PR_ID);
 const now = new Date().toISOString();
 
-function setup({ author = "dev1", state = "open", requested = [], assignees = ["bashar-gh", "sam-gh", "dev1"], writeStatus = 201, syncedAt = Date.now() } = {}) {
+function setup({ author = "dev1", state = "open", requested = [], assignees = ["bashar-gh", "sam-gh", "dev1"], writeStatus = 201, readFails = false, syncedAt = Date.now() } = {}) {
   const STORE = memoryStore(), github = [];
   const gh = { requested: requested.map((login) => ({ login, avatar_url: "" })) };
   globalThis.fetch = async (url, init = {}) => {
     const u = new URL(url);
     if (u.hostname !== "api.github.com") return new Response("not mocked: " + url, { status: 599 });
-    if (u.pathname === "/repos/KAD-org/flutter_pos/pulls/553/requested_reviewers" && (!init.method || init.method === "GET")) return Response.json({ users: gh.requested });
+    if (u.pathname === "/repos/KAD-org/flutter_pos/pulls/553/requested_reviewers" && (!init.method || init.method === "GET")) {
+      if (readFails) throw new Error("GitHub unavailable");
+      return Response.json({ users: gh.requested });
+    }
     if (u.pathname === "/repos/KAD-org/flutter_pos/pulls/553/requested_reviewers") {
       const body = JSON.parse(init.body || "{}");
       github.push({ method: init.method, reviewers: body.reviewers, auth: init.headers.Authorization });
+      if (writeStatus === "timeout") throw new Error("GitHub unavailable");
       if (writeStatus !== 201 && writeStatus !== 200) return Response.json({ message: writeStatus === 422 ? "Review cannot be requested from pull request author." : "refused" }, { status: writeStatus });
       if (init.method === "POST") for (const r of body.reviewers) gh.requested.push({ login: r, avatar_url: "" });
       if (init.method === "DELETE") gh.requested = gh.requested.filter((x) => !body.reviewers.includes(x.login));
@@ -31,8 +35,8 @@ function setup({ author = "dev1", state = "open", requested = [], assignees = ["
   const prs = { [PR_ID]: { id: PR_ID, repo: "flutter_pos", number: 553, title: "feat: forecourt", state, url: "https://github.com/KAD-org/flutter_pos/pull/553", author, branch: "x", base: "main", updated: now, merged: null, keys: ["AION-71"], status: { reviews: [], requested: [], decision: null, comments: 0, unresolved: 0 } } };
   STORE.set("github:prs:v4", JSON.stringify({ prs, cursors: {}, syncedAt }));
   const env = { JIRA_PROJECT: "AION", JIRA_SITE: "https://jira.test", JIRA_EMAIL: "bot", JIRA_API_TOKEN: "t", SESSION_SECRET: "s", STORE, GITHUB_TOKEN: "gh-token", GITHUB_REPOS: "KAD-org/flutter_pos", GITHUB_JIRA_ALIASES: "AIONE" };
-  const seed = async (id, email, name, role) => {
-    await saveUser(STORE, { id, email, name, role, dev: email.split("@")[0], pw: null, v: 1, createdAt: now });
+  const seed = async (id, email, name, role, extra = {}) => {
+    await saveUser(STORE, { id, email, name, role, dev: email.split("@")[0], pw: null, v: 1, createdAt: now, ...extra });
     return (await makeToken(env, email, Date.now(), 1)).token;
   };
   const call = (method, path, token, body) => worker.fetch(new Request("https://p" + path, {
@@ -134,3 +138,35 @@ test("a GitHub 403 names the repository and the token permission to check, and c
   assert.match(body.error, /Nothing was changed/);
   assert.deepEqual(t.gh.requested, []);
 });
+
+for (const options of [{}, { writeStatus: 403 }, { writeStatus: 422 }, { writeStatus: "timeout" }, { readFails: true }, { assignees: [] }]) {
+  test("review-page requests create a personal dashboard assignment independently of GitHub: " + JSON.stringify(options), async () => {
+    const t = setup(options);
+    const admin = await t.seed("admin-1", "admin@aione.test", "Ellen", "admin");
+    const reviewer = await t.seed("u-sam", "sam@aione.test", "Sam", "user", { githubLogin: "Sam-GH" });
+    const outsider = await t.seed("u-other", "other@aione.test", "Other", "user");
+    const res = await t.call("POST", URL_PATH, admin, { confirmed: true, add: ["sam-gh"] });
+    const body = await res.json();
+    assert.deepEqual(body.dashboardAssigned, ["u-sam"]);
+    const success = Object.keys(options).length === 0;
+    assert.equal(res.status === 200, success);
+    if (!success) assert.match(body.error, /Dashboard review assignments saved/);
+    let queue = await (await t.call("GET", "/reviews/me", reviewer)).json();
+    assert.equal(queue.items.length, 1);
+    assert.equal(queue.items[0].prId, PR_ID);
+    assert.equal(queue.items[0].status, "needs_review");
+    assert.equal(queue.items[0].github.state, success ? "requested" : "failed");
+    const viewPath = "/reviews/pr?id=" + encodeURIComponent(PR_ID);
+    assert.equal((await t.call("GET", viewPath, reviewer)).status, 200);
+    assert.equal((await t.call("GET", viewPath, outsider)).status, 404);
+    assert.deepEqual((await (await t.call("GET", "/reviews/me", outsider)).json()).items, []);
+    await t.call("POST", URL_PATH, admin, { confirmed: true, add: ["SAM-GH"] });
+    queue = await (await t.call("GET", "/reviews/me", reviewer)).json();
+    assert.equal(queue.items.length, 1, "retries must not duplicate dashboard assignments");
+    if (success) {
+      assert.equal(t.github.length, 1, "already requested reviewers do not trigger a second GitHub write");
+      await t.call("POST", URL_PATH, admin, { confirmed: true, remove: ["sam-gh"] });
+      assert.equal((await (await t.call("GET", "/reviews/me", reviewer)).json()).items.length, 1);
+    }
+  });
+}

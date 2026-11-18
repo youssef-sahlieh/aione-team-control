@@ -291,7 +291,7 @@ async function accountsWithIds(store) {
 // Adds the chosen reviewers to one pull request. Nobody is ever removed: a reviewer already on the pull request stays,
 // whether or not they are in the list. Each new reviewer gets one assignment; a repeated request finds the assignment
 // already there and adds nothing.
-async function addReviewers(env, me, prId, pr, wanted, byId) {
+async function addReviewers(env, me, prId, pr, wanted, byId, { sendGithub = true } = {}) {
   const at = nowIso(), actor = { email: me.email, name: me.name || me.email };
   // byId holds the full account records (GitHub login included), so the actions below need no second read.
   const adds = await mutate(env, prId, (d) => {
@@ -315,7 +315,7 @@ async function addReviewers(env, me, prId, pr, wanted, byId) {
   const title = pr.title, key = pr.keys?.[0] || "", repo = prId.split("#")[0] + " #" + pr.number;
   await notify(env, adds.map((a) => a.reviewerEmail), { type: "review", key, title: "Review requested: " + title, by: actor.name, text: repo });
   // A reviewer without a GitHub login waits for one (see requestWaitingReviews); the others are asked now.
-  await Promise.all(adds.filter((a) => a.github.state === "pending").map(async (a) => {
+  await Promise.all(adds.filter((a) => sendGithub && a.github.state === "pending").map(async (a) => {
     const github = await requestOnGitHub(env, prId, pr, byId.get(a.reviewerId).githubLogin);
     await editAssignment(env, prId, a.id, (x) => { x.github = github; });
   }));
@@ -632,7 +632,7 @@ async function githubReviewers(env, prId, pr) {
   }
 }
 
-async function changeGithubReviewers(env, prId, pr, b) {
+async function changeGithubReviewers(env, me, prId, pr, b) {
   if (!githubConfigured(env)) return fail("github", "GitHub isn't set up for this dashboard.", 503);
   if (!isOpen(pr)) return fail("conflict", "Closed or merged pull requests can't get reviewers.", 409);
   // The page sends confirmed only after the person has agreed in its confirmation step.
@@ -645,13 +645,33 @@ async function changeGithubReviewers(env, prId, pr, b) {
   if (add.includes(lc(pr.author || ""))) return fail("bad_request", "This person wrote the pull request, so GitHub can't ask them to review it.", 400);
   if (add.some((l) => remove.includes(l))) return fail("bad_request", "Someone can't be both requested and removed in one change.", 400);
 
+  // Save dashboard assignments before talking to GitHub. The Users page's login links the two identities;
+  // a refused request or an unavailable GitHub API must not hide the work from the reviewer.
+  const users = await accountsWithIds(env.STORE);
+  const matched = users.filter((u) => u.githubLogin && add.includes(lc(u.githubLogin)));
+  await addReviewers(env, me, prId, pr, matched.map((u) => u.id), new Map(users.map((u) => [u.id, u])), { sendGithub: false });
+  const saveGithub = async (github) => {
+    if (!matched.length) return;
+    const ids = new Set(matched.map((u) => u.id));
+    await mutate(env, prId, (d) => {
+      for (const a of d.assignments) if (ids.has(a.reviewerId)) a.github = github;
+      return { doc: d };
+    });
+  };
+  const reportFailure = async (response) => {
+    if (!matched.length) return response;
+    const body = await response.json();
+    await saveGithub(failed(body.code, body.error));
+    return json({ ...body, error: "Dashboard review assignments saved; reviewers can see them in Needs review. " + body.error, dashboardAssigned: matched.map((u) => u.id) }, response.status);
+  };
+
   const repo = prId.split("#")[0];
   const path = "/repos/" + repo + "/pulls/" + pr.number + "/requested_reviewers";
   let requested, eligible;
   try {
     [requested, eligible] = await Promise.all([requestedUsers(env, repo, pr.number), assignableLogins(env, repo)]);
   } catch {
-    return fail("github", "GitHub didn't answer. Nothing was changed.", 502);
+    return reportFailure(fail("github", "GitHub didn't answer. No GitHub change was confirmed.", 502));
   }
   const current = new Set(requested.map((u) => lc(u.login)));
   const allowed = new Set(eligible.map((u) => lc(u.login)));
@@ -659,17 +679,22 @@ async function changeGithubReviewers(env, prId, pr, b) {
   const toAdd = add.filter((l) => !current.has(l));
   const toRemove = remove.filter((l) => current.has(l));
   const refused = toAdd.filter((l) => !allowed.has(l));
-  if (refused.length) return fail("not_eligible", "GitHub doesn't list " + refused.join(", ") + " as a reviewer for this repository.", 400);
+  if (refused.length) return reportFailure(fail("not_eligible", "GitHub doesn't list " + refused.join(", ") + " as a reviewer for this repository.", 400));
 
   // Removals first, so a failure part-way is visible in the refreshed list below.
-  if (toRemove.length) {
-    const r = await githubRequest(env, "DELETE", path, { reviewers: toRemove.map((l) => spelled.get(l)) });
-    if (!r.ok) return githubFailure(r, repo);
+  try {
+    if (toRemove.length) {
+      const r = await githubRequest(env, "DELETE", path, { reviewers: toRemove.map((l) => spelled.get(l)) });
+      if (!r.ok) return reportFailure(githubFailure(r, repo));
+    }
+    if (toAdd.length) {
+      const r = await githubRequest(env, "POST", path, { reviewers: toAdd.map((l) => spelled.get(l)) });
+      if (!r.ok) return reportFailure(githubFailure(r, repo));
+    }
+  } catch {
+    return reportFailure(fail("github", "GitHub didn't confirm the change. Check GitHub before retrying.", 502));
   }
-  if (toAdd.length) {
-    const r = await githubRequest(env, "POST", path, { reviewers: toAdd.map((l) => spelled.get(l)) });
-    if (!r.ok) return githubFailure(r, repo);
-  }
+  await saveGithub({ state: "requested", error: "", code: "", at: nowIso() });
   // Refresh the stored pull request so the queue shows the new requests; a refresh failure does not undo the change.
   await syncPulls(env, { force: true }).catch(() => null);
   const now = await requestedUsers(env, repo, pr.number).catch(() => null);
@@ -677,6 +702,7 @@ async function changeGithubReviewers(env, prId, pr, b) {
     requested: now ?? requested.filter((u) => !toRemove.includes(lc(u.login))).concat(toAdd.map((l) => ({ login: spelled.get(l), avatar: "" }))),
     added: toAdd.map((l) => spelled.get(l)),
     removed: toRemove.map((l) => spelled.get(l)),
+    dashboardAssigned: matched.map((u) => u.id),
     skipped: { alreadyRequested: add.filter((l) => current.has(l)), notRequested: remove.filter((l) => !current.has(l)) }
   });
 }
@@ -786,7 +812,7 @@ export async function reviewRoutes(request, env, url, me, deps) {
     const pr = await prRecord(env, prId);
     if (!pr) return fail("not_found", "Pull request unavailable.", 404);
     if (method === "GET") return githubReviewers(env, prId, pr);
-    if (method === "POST") return changeGithubReviewers(env, prId, pr, await readJson());
+    if (method === "POST") return changeGithubReviewers(env, user, prId, pr, await readJson());
     return fail("method", "Use GET or POST here.", 405);
   }
 
