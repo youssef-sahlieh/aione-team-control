@@ -50,9 +50,33 @@ export const commentLink = (site, key, id) => String(site || "").replace(/\/+$/,
 //   a comment written from the dashboard (Jira shows the proxy's account): the person who wrote it, by name, and they
 //   get the dashboard's notification; any other comment: its Jira author, mentioned by account id when the account can
 //   still be mentioned (a deactivated, deleted or app account, or the proxy's own account, is named, not mentioned).
-export function replyAuthor(comment, logged, integrationEmail = "") {
+// The Jira account of a dashboard person, from Jira's user search (users matched by email; when Jira hides emails, by
+// one exact display name). Only a single match counts: anyone else is named, not mentioned.
+export function pickJiraUser(users, who, integrationEmail = "") {
+  const email = String(who?.email || "").trim().toLowerCase(), name = String(who?.name || "").trim().toLowerCase();
+  const usable = (users || []).filter((u) => /^[\w:-]{1,128}$/.test(u?.accountId || "") && u.active !== false && (u.accountType || "atlassian") === "atlassian"
+    && !(integrationEmail && String(u.emailAddress || "").toLowerCase() === String(integrationEmail).toLowerCase()));
+  if (email) {
+    const byEmail = usable.filter((u) => String(u.emailAddress || "").trim().toLowerCase() === email);
+    if (byEmail.length) return byEmail.length === 1 ? byEmail[0].accountId : "";
+  }
+  const byName = name ? usable.filter((u) => !u.emailAddress && String(u.displayName || "").trim().toLowerCase() === name) : [];
+  return byName.length === 1 ? byName[0].accountId : "";
+}
+
+async function dashboardJiraId(readJira, who, integrationEmail) {
+  for (const q of [who?.email, who?.name].filter(Boolean)) {
+    const r = await readJira("/rest/api/3/user/search?query=" + encodeURIComponent(String(q)) + "&maxResults=20");
+    const id = r.ok && Array.isArray(r.data) ? pickJiraUser(r.data, who, integrationEmail) : "";
+    if (id) return id;
+  }
+  return "";
+}
+
+export function replyAuthor(comment, logged, integrationEmail = "", dashboardJiraId = "") {
   const a = comment.author || {};
-  if (logged?.by) return { name: String(logged.by.name || logged.by.email || "someone"), email: String(logged.by.email || ""), accountId: "", viaDashboard: true };
+  // The mention is kept when the dashboard person has a Jira account in TEAM_CONFIG; the dashboard still notifies them.
+  if (logged?.by) return { name: String(logged.by.name || logged.by.email || "someone"), email: String(logged.by.email || ""), accountId: dashboardJiraId, viaDashboard: true };
   const mentionable = /^[\w:-]{1,128}$/.test(a.accountId || "") && a.active !== false && (a.accountType || "atlassian") === "atlassian" && !(integrationEmail && String(a.emailAddress || "").toLowerCase() === String(integrationEmail).toLowerCase());
   return { name: String(a.displayName || "a former user"), email: "", accountId: mentionable ? a.accountId : "", viaDashboard: false };
 }
@@ -79,7 +103,7 @@ export async function readReplyTarget({ readJira, key, commentId, log = [], inte
   // The comment must be this ticket's: Jira's address for it names the issue's id.
   if (String(c.id) !== String(commentId) || !issue.data?.id || !new RegExp("/issue/" + issue.data.id + "/comment/" + commentId + "$").test(String(c.self || ""))) return gone;
   const logged = log.find((e) => e.action === "comment" && String(e.commentId) === String(commentId));
-  const author = replyAuthor(c, logged, integrationEmail);
+  const author = replyAuthor(c, logged, integrationEmail, logged?.by ? await dashboardJiraId(readJira, logged.by, integrationEmail) : "");
   let text = htmlText(c.renderedBody) || String(typeof c.body === "string" ? c.body : "");
   if (logged) text = text.replace(/\n*— [^\n]*$/, "");
   // Who may see the reply: never more people than could see the comment it quotes.

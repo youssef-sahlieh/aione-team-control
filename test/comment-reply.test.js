@@ -4,7 +4,7 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import worker from "../proxy/src/handler.js";
 import { memoryStore } from "../proxy/src/users.js";
-import { wikiText, htmlText, excerpt, commentLink, replyAuthor, replyBody, QUOTE_CHARS } from "../proxy/src/comment-reply.js";
+import { wikiText, htmlText, excerpt, commentLink, replyAuthor, replyBody, pickJiraUser, QUOTE_CHARS } from "../proxy/src/comment-reply.js";
 
 const ORIGIN = "https://youssef-sahlieh.github.io", SITE = "https://jira.test";
 const HEBREW = "שלום, הבדיקה עברה בהצלחה";
@@ -19,7 +19,7 @@ const COMMENTS = {
   600: { author: { accountId: "acc-bot", displayName: "AION Bot", emailAddress: "bot@x", active: true, accountType: "atlassian" }, body: "Deployed\n\n— Ellen", renderedBody: "<p>Deployed</p><p>— Ellen</p>" },
   700: { author: { accountId: "acc-dana", displayName: "Dana Client", active: true, accountType: "atlassian" }, body: "jsd", renderedBody: "<p>Agent-only note</p>", jsdPublic: false }
 };
-let calls = [], nextId = 900, postFails = null;
+let calls = [], nextId = 900, postFails = null, userSearch = [];
 globalThis.fetch = async (url, init = {}) => {
   const u = new URL(url), method = init.method || "GET", body = init.body ? JSON.parse(init.body) : undefined;
   calls.push({ path: u.pathname + u.search, method, body });
@@ -35,6 +35,7 @@ globalThis.fetch = async (url, init = {}) => {
     if (postFails) return postFails();
     return Response.json({ id: String(nextId++), body: body.body }, { status: 201 });
   }
+  if (u.pathname === "/rest/api/3/user/search" && method === "GET") return Response.json(userSearch);
   return Response.json({});
 };
 
@@ -84,6 +85,26 @@ test("who is answered: a Jira author is mentioned by account id; an unavailable,
   assert.equal(replyAuthor({ author: { accountId: "app-1", displayName: "Automation", accountType: "app" } }, null).accountId, "");
   assert.equal(replyAuthor(COMMENTS[600], null, "bot@x").accountId, "");
   assert.deepEqual(replyAuthor(COMMENTS[600], { by: { name: "Ellen", email: "ellen@aione.biz" } }), { name: "Ellen", email: "ellen@aione.biz", accountId: "", viaDashboard: true });
+});
+
+test("a dashboard writer is matched to their Jira account by email, or by an exact name when Jira hides emails; ambiguity is never guessed", () => {
+  const users = [
+    { accountId: "acc-helena", displayName: "Helena Levin", emailAddress: "helena@aione.biz", accountType: "atlassian", active: true },
+    { accountId: "acc-dana1", displayName: "Dana Levi", emailAddress: "", accountType: "atlassian", active: true },
+    { accountId: "acc-bot", displayName: "AION Bot", emailAddress: "bot@x", accountType: "atlassian", active: true },
+    { accountId: "acc-old", displayName: "Rami", emailAddress: "rami@aione.biz", accountType: "atlassian", active: false },
+    { accountId: "acc-ellen-a", displayName: "Ellen", emailAddress: "a@x", accountType: "atlassian", active: true },
+    { accountId: "acc-ellen-b", displayName: "Ellen", emailAddress: "b@x", accountType: "atlassian", active: true }
+  ];
+  assert.equal(pickJiraUser(users, { name: "Helena Levin", email: "HELENA@aione.biz" }), "acc-helena");
+  assert.equal(pickJiraUser(users, { name: "dana levi" }), "acc-dana1", "Jira hides emails: one exact name match");
+  assert.equal(pickJiraUser(users, { name: "Dana Levi", email: "dana@aione.biz" }), "acc-dana1", "no email match: falls back to the one hidden-email name match");
+  assert.equal(pickJiraUser(users, { name: "Ellen", email: "x@x" }), "", "two Ellens with other emails: named, not mentioned");
+  assert.equal(pickJiraUser(users, { name: "Rami", email: "rami@aione.biz" }), "", "deactivated account is not mentioned");
+  assert.equal(pickJiraUser(users, { name: "AION Bot", email: "bot@x" }, "bot@x"), "", "the proxy's own account is never mentioned");
+  assert.deepEqual(replyAuthor(COMMENTS[600], { by: { name: "Ellen", email: "e@x" } }, "", "acc-ellen"), { name: "Ellen", email: "e@x", accountId: "acc-ellen", viaDashboard: true });
+  assert.equal(replyBody({ site: SITE, key: "AION-7", commentId: "600", author: { name: "Ellen", accountId: "acc-ellen", viaDashboard: true }, quote: "Deployed", text: "Thanks!" }).split("\n")[0],
+    "In reply to [~accountid:acc-ellen] — [view comment|" + SITE + "/browse/AION-7?focusedCommentId=600]");
 });
 
 test("the reply's body: who and which comment, the quote, the reply, then the sender's name", () => {
@@ -150,6 +171,15 @@ test("a long Hebrew comment is quoted short; a blank reply is refused", async ()
   const quote = /\{quote\}\n([\s\S]*)\n\{quote\}/.exec(posted()[0].body.body)[1];
   assert.ok(quote.startsWith(HEBREW)); assert.ok(quote.endsWith("…")); assert.ok([...quote].length < 340);
   assert.equal((await send({ text: "   ", replyTo: "500" })).status, 400);
+});
+
+test("a reply to a dashboard comment mentions its writer, found in Jira by their email, with no TEAM_CONFIG", async () => {
+  calls = [];
+  userSearch = [{ accountId: "acc-ellen", displayName: "Ellen", emailAddress: "ellen@aione.biz", accountType: "atlassian", active: true }];
+  await send({ text: "Thanks!", replyTo: "600" });
+  userSearch = [];
+  assert.match(posted()[0].body.body, /^In reply to \[~accountid:acc-ellen\] — \[view comment\|/);
+  assert.ok(calls.some((c) => c.path.startsWith("/rest/api/3/user/search?query=ellen%40aione.biz")));
 });
 
 test("a reply to a comment sent from the dashboard names its sender, not the proxy account, and notifies them", async () => {
