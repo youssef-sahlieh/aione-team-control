@@ -29,7 +29,7 @@ import { replyPreview, commentAuthor, signatureNode, newSendId, keepSendId, repl
 import { mountHeaderTools } from "./app/header-tools.js";
 import { setNavCount } from "./app/nav.js";
 import { isOverdue, hasNoDueDate, hasNoDeveloper } from "./models/workload.js";
-import { HISTORY_FILTERS, historyResultFor, historyView, passesHistoryFilter, historyDetails } from "./models/assignment-history.js";
+import { HISTORY_FILTERS, historyResultFor, historyView, passesHistoryFilter, historyDetails, parseMordiSearch } from "./models/assignment-history.js";
 import "./app/keyboard.js";
 
   // The dashboard keeps loading after the page itself has loaded; the browser's own scroll restore could then
@@ -1136,7 +1136,8 @@ import "./app/keyboard.js";
   $("ticket-filters-toggle").addEventListener("click",()=>{ticketFiltersOpen=!ticketFiltersOpen;try{localStorage.setItem(ticketFiltersKey,ticketFiltersOpen?"1":"0");}catch{}renderFilters();});
   $("ftoggle").addEventListener("click",()=>{ state.fopen=!state.fopen; try{localStorage.setItem("aion.fopen",state.fopen?"1":"0");}catch(e){} renderFilters(); });
   $("fclear").addEventListener("click",()=>{ state.f=defaultFilters();state.businessFilter={}; state.mordiFilter=""; state.q=""; $("q").value=""; state.sel.clear(); render(); });
-  let qt=null; $("q").addEventListener("input",e=>{ clearTimeout(qt); qt=setTimeout(()=>{ state.q=e.target.value.trim(); render(); },150); });
+  // "mordi:ever" / "mordi:never" / "mordi:unknown" in the search sets the Mordi history filter; removing the word clears it.
+  let qt=null, mordiWord=""; $("q").addEventListener("input",e=>{ clearTimeout(qt); qt=setTimeout(()=>{ const text=e.target.value.trim(), hit=parseMordiSearch(text); if(hit){ state.mordiFilter=hit.filter; state.q=hit.rest; } else { if(mordiWord) state.mordiFilter=""; state.q=text; } mordiWord=hit?hit.filter:""; render(); },150); });
 
   const dz={key:null,labels:[],devs:new Set()};
   // An open ticket is a step in the browser's history (#KEY), so Back closes it instead of leaving the dashboard.

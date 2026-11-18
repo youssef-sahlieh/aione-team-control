@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { HISTORY_FILTERS, historyResultFor, historyView, passesHistoryFilter, historyDetails } from "../../public/assets/models/assignment-history.js";
+import { HISTORY_FILTERS, historyResultFor, historyView, passesHistoryFilter, historyDetails, parseMordiSearch } from "../../public/assets/models/assignment-history.js";
 
 const jiraIssue = { key: "AION-5", internal: false, odoo: false };
 
@@ -59,4 +59,13 @@ test("a never verdict says the complete history was checked; an unknown one give
   assert.match(historyDetails({ state: "never" })[0], /complete Jira history was checked/);
   assert.equal(historyDetails({ state: "unknown", reason: "The history is longer than the check reads." })[0], "Unknown: The history is longer than the check reads.");
   assert.match(historyDetails({ state: "na" })[0], /not created in Jira/);
+});
+
+test("typing mordi:ever, mordi:never or mordi:unknown in the search picks that filter and keeps the rest of the search", () => {
+  assert.deepEqual(parseMordiSearch("mordi:ever"), { filter: "ever", rest: "" });
+  assert.deepEqual(parseMordiSearch("login bug mordi:NEVER"), { filter: "never", rest: "login bug" });
+  assert.deepEqual(parseMordiSearch("mordi:unknown AION-5"), { filter: "unknown", rest: "AION-5" });
+  assert.equal(parseMordiSearch("mordi:"), null);
+  assert.equal(parseMordiSearch("mordi:sometimes"), null);
+  assert.equal(parseMordiSearch("ask mordi about it"), null);
 });

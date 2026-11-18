@@ -55,3 +55,13 @@ export function historyDetails(result) {
   if (result.verifiedAt) lines.push("Jira history checked " + when(result.verifiedAt) + ".");
   return lines;
 }
+
+// "mordi:ever", "mordi:never" or "mordi:unknown" typed in the search box pick the Mordi history filter. The rest of
+// the text is the normal search. Returns null when the text has no such word.
+export function parseMordiSearch(text) {
+  const src = String(text || "");
+  const m = /(?:^|\s)mordi:(ever|never|unknown)(?=\s|$)/i.exec(src);
+  if (!m) return null;
+  const rest = (src.slice(0, m.index) + " " + src.slice(m.index + m[0].length)).replace(/\s+/g, " ").trim();
+  return { filter: m[1].toLowerCase(), rest };
+}
