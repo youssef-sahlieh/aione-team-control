@@ -936,9 +936,7 @@ async function route(request, env, url) {
       // A reply to one comment (see comment-reply.js): Jira has no threads, so it is a comment that links and quotes it.
       let target = null;
       if (b.replyTo !== undefined && b.replyTo !== null && b.replyTo !== "") {
-        let people = {};
-        try { people = JSON.parse(env.TEAM_CONFIG || "{}").people || {}; } catch {}
-        const r = await readReplyTarget({ readJira: (p) => jira(env, p, { signal: AbortSignal.timeout(15000) }), key, commentId: String(b.replyTo), log: await readTicketLog(env, key), integrationEmail: env.JIRA_EMAIL, people });
+        const r = await readReplyTarget({ readJira: (p) => jira(env, p, { signal: AbortSignal.timeout(15000) }), key, commentId: String(b.replyTo), log: await readTicketLog(env, key), integrationEmail: env.JIRA_EMAIL });
         if (!r.target) return r.res || fail(r.code, r.error, r.status);
         target = r.target;
       }

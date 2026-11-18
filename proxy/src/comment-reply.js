@@ -50,13 +50,27 @@ export const commentLink = (site, key, id) => String(site || "").replace(/\/+$/,
 //   a comment written from the dashboard (Jira shows the proxy's account): the person who wrote it, by name, and they
 //   get the dashboard's notification; any other comment: its Jira author, mentioned by account id when the account can
 //   still be mentioned (a deactivated, deleted or app account, or the proxy's own account, is named, not mentioned).
-// A dashboard person's Jira account: the one entry in TEAM_CONFIG.people with their first name (or developer key). Only a
-// single match counts; two people who share a first name are named, not mentioned.
-export function jiraIdForDashboardUser(people, who) {
-  const first = (s) => String(s || "").trim().split(/\s+/)[0].toLowerCase();
-  const name = first(who?.name);
-  const hits = Object.entries(people || {}).filter(([k, p]) => /^[\w:-]{1,128}$/.test(p?.id || "") && name && (first(p.name) === name || k.toLowerCase() === name));
-  return hits.length === 1 ? hits[0][1].id : "";
+// The Jira account of a dashboard person, from Jira's user search (users matched by email; when Jira hides emails, by
+// one exact display name). Only a single match counts: anyone else is named, not mentioned.
+export function pickJiraUser(users, who, integrationEmail = "") {
+  const email = String(who?.email || "").trim().toLowerCase(), name = String(who?.name || "").trim().toLowerCase();
+  const usable = (users || []).filter((u) => /^[\w:-]{1,128}$/.test(u?.accountId || "") && u.active !== false && (u.accountType || "atlassian") === "atlassian"
+    && !(integrationEmail && String(u.emailAddress || "").toLowerCase() === String(integrationEmail).toLowerCase()));
+  if (email) {
+    const byEmail = usable.filter((u) => String(u.emailAddress || "").trim().toLowerCase() === email);
+    if (byEmail.length) return byEmail.length === 1 ? byEmail[0].accountId : "";
+  }
+  const byName = name ? usable.filter((u) => !u.emailAddress && String(u.displayName || "").trim().toLowerCase() === name) : [];
+  return byName.length === 1 ? byName[0].accountId : "";
+}
+
+async function dashboardJiraId(readJira, who, integrationEmail) {
+  for (const q of [who?.email, who?.name].filter(Boolean)) {
+    const r = await readJira("/rest/api/3/user/search?query=" + encodeURIComponent(String(q)) + "&maxResults=20");
+    const id = r.ok && Array.isArray(r.data) ? pickJiraUser(r.data, who, integrationEmail) : "";
+    if (id) return id;
+  }
+  return "";
 }
 
 export function replyAuthor(comment, logged, integrationEmail = "", dashboardJiraId = "") {
@@ -78,7 +92,7 @@ export function replyBody({ site, key, commentId, author, quote, text, signature
 // Reads the comment being answered and checks it may be answered from here. Returns { target } or { error, status }.
 //   readJira(path): the proxy's Jira call ({ ok, data } or { ok: false, res }).
 //   log: this ticket's dashboard history (to know who wrote a comment sent from here).
-export async function readReplyTarget({ readJira, key, commentId, log = [], integrationEmail = "", people = {} }) {
+export async function readReplyTarget({ readJira, key, commentId, log = [], integrationEmail = "" }) {
   const gone = { status: 404, code: "reply_target_unavailable", error: "The comment you're replying to was deleted or can't be read any more. Cancel the reply to send your text as an ordinary comment." };
   if (!/^\d{1,20}$/.test(String(commentId || ""))) return { status: 400, code: "bad_request", error: "Choose the comment to reply to again." };
   const issue = await readJira("/rest/api/3/issue/" + key + "?fields=labels");
@@ -89,7 +103,7 @@ export async function readReplyTarget({ readJira, key, commentId, log = [], inte
   // The comment must be this ticket's: Jira's address for it names the issue's id.
   if (String(c.id) !== String(commentId) || !issue.data?.id || !new RegExp("/issue/" + issue.data.id + "/comment/" + commentId + "$").test(String(c.self || ""))) return gone;
   const logged = log.find((e) => e.action === "comment" && String(e.commentId) === String(commentId));
-  const author = replyAuthor(c, logged, integrationEmail, logged?.by ? jiraIdForDashboardUser(people, logged.by) : "");
+  const author = replyAuthor(c, logged, integrationEmail, logged?.by ? await dashboardJiraId(readJira, logged.by, integrationEmail) : "");
   let text = htmlText(c.renderedBody) || String(typeof c.body === "string" ? c.body : "");
   if (logged) text = text.replace(/\n*— [^\n]*$/, "");
   // Who may see the reply: never more people than could see the comment it quotes.
