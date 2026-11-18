@@ -53,6 +53,10 @@ People log time on Jira, internal and Odoo Helpdesk tickets with **Log work** (i
   and **Open in Odoo**. Dashboard entries, direct Odoo entries, native Odoo tasks and "No task." entries are all
   listed once; a synced entry is matched by its entry id and Odoo line id, never by description or duration.
   The worker is the mapped Users field, not the integration employee.
+  - Refresh checks referenced projects and posted timesheet lines directly in Odoo. Deleted projects and lines are
+    excluded from the overview, filters, totals, groups and CSV export, including stored dashboard copies. Archived
+    projects remain visible. Unsent and held work stays visible while its project exists. Stored work history is kept;
+    these checks only read Odoo. A failed check reports an error instead of treating records as deleted.
   - Filters default to **This month** (Israel time). Other periods: Last month, Last 30 days, Custom (both dates
     inclusive) and All dates. Search, person, client, project, sync status and grouping by
     day, person, client or project. The period filters by work date; filtering happens before paging, and the

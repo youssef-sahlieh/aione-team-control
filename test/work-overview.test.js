@@ -16,8 +16,8 @@ const daysAgo=n=>new Date(Date.parse(todayIn()+'T12:00:00Z')-n*86400000).toISOSt
 const P='tw:AION:';
 
 // A mocked Odoo: timesheet lines with the domain operators the overview uses, and project tasks.
-function fakeOdoo({lines=[],tasks=[],down=false,count=null}={}){
-  const o={lines,tasks,calls:[],down,countOverride:count};
+function fakeOdoo({lines=[],tasks=[],projects=[{id:10},{id:12},{id:20}],down=false,count=null,projectsDown=false}={}){
+  const o={lines,tasks,projects,calls:[],down,countOverride:count,projectsDown};
   const value=v=>Array.isArray(v)?v[0]:v;
   const ok=(row,domain)=>domain.every(([f,op,v])=>{
     const x=value(row[f]??false);
@@ -38,6 +38,10 @@ function fakeOdoo({lines=[],tasks=[],down=false,count=null}={}){
       if(m==='search_read'){const off=kw.offset||0,lim=kw.limit||rows.length;return reply(rows.slice(off,off+lim).map(l=>pick(l,kw.fields)));}
     }
     if(model==='project.task'&&m==='search_read')return reply(o.tasks.filter(t=>ok(t,a[0])).map(t=>pick(t,kw.fields)));
+    if(model==='project.project'&&m==='search_read'){
+      if(o.projectsDown)throw new TypeError('project read failed');
+      return reply(o.projects.filter(p=>ok(p,a[0])).map(p=>pick(p,kw.fields)));
+    }
     return reply(false);
   };
   return o;
@@ -166,6 +170,66 @@ test('buildRows: a dashboard entry already in Odoo is one row, matched by entry 
 });
 
 // ---- The route, with a mocked Odoo ----
+test('refresh hides deleted Odoo lines and projects from rows, totals, groups, options and CSV without deleting stored work',async()=>{
+  const s=baseScenario();
+  const {get,odoo,store}=await setup(s);
+  const path='/time-entries/overview?'+range()+'&groupBy=project';
+  assert.equal((await get(path,admin)).data.totals.count,8);
+  // Delete the posted e1 line and a native line; also delete project 12 while its cached name remains.
+  odoo.lines=odoo.lines.filter(l=>![501,502].includes(l.id));
+  odoo.projects=odoo.projects.filter(p=>p.id!==12);
+  const result=await get(path,admin);
+  assert.equal(result.status,200,JSON.stringify(result.data));
+  const rows=result.data.rows;
+  assert.ok(!rows.some(r=>r.entryId==='e1'||r.entryId==='e3'||r.lineId===502));
+  assert.equal(result.data.totals.count,5);
+  assert.equal(result.data.totals.minutes,rows.reduce((n,r)=>n+r.minutes,0));
+  assert.equal(result.data.groups.reduce((n,g)=>n+g.minutes,0),result.data.totals.minutes);
+  assert.ok(!result.data.options.projects.includes('Support'));
+  assert.ok(rows.some(r=>r.entryId==='e2'),'unsent work on an existing project stays visible');
+  assert.ok(rows.some(r=>r.entryId==='e5'),'held work on an existing project stays visible');
+  const csv=await get('/time-entries/overview/export?'+range(),admin);
+  assert.equal(csv.status,200);
+  assert.ok(!csv.data.includes('Investigated'));
+  assert.ok(!csv.data.includes('Client call'));
+  assert.ok(!csv.data.includes('Printer queue'));
+  assert.ok(await store.get(P+'e:e1'),'stored history is preserved');
+  assert.ok(await store.get(P+'e:e3'));
+  assert.ok(odoo.calls.every(c=>['search_read','search_count','fields_get'].includes(c.method)),'refresh only reads Odoo');
+});
+
+test('live project checks hide orphan native and agreed lines while retaining archived and newly discovered projects',async()=>{
+  const s=baseScenario();
+  const {get,odoo}=await setup({...s,odooOpts:{projects:[{id:20,active:false}]}});
+  const r=await get('/time-entries/overview?'+range(),admin);
+  assert.equal(r.status,200,JSON.stringify(r.data));
+  assert.deepEqual(r.data.rows.filter(x=>x.origin==='odoo').map(x=>x.lineId).sort(),[502,505]);
+  assert.equal(r.data.agreed.count,0,'agreed line on a deleted project is excluded');
+  assert.ok(!r.data.rows.some(x=>[10,12].includes(x.projectId)));
+  assert.ok(odoo.calls.filter(c=>c.model==='project.project').every(c=>c.kw.context.active_test===false));
+  odoo.projects.push({id:30});
+  odoo.lines.push({id:600,date:todayIn(),unit_amount:1,name:'New project work',project_id:[30,'New'],task_id:false,x_studio_users:user.name});
+  assert.ok((await get('/time-entries/overview?'+range(),admin)).data.rows.some(r=>r.lineId===600),'snapshot absence is not treated as a deletion');
+});
+
+test('a posted line moved outside the selected period is not mistaken for a deleted line',async()=>{
+  const s=baseScenario();
+  s.lines.find(l=>l.id===501).date=daysAgo(10);
+  const {get}=await setup(s);
+  const r=await get('/time-entries/overview?'+range(),admin);
+  assert.equal(r.status,200,JSON.stringify(r.data));
+  assert.ok(r.data.rows.some(r=>r.entryId==='e1'));
+});
+
+test('failed existence checks report an error instead of treating projects or lines as deleted',async()=>{
+  const s=baseScenario();
+  const {get}=await setup({...s,odooOpts:{projectsDown:true}});
+  const r=await get('/time-entries/overview?'+range(),admin);
+  assert.equal(r.status,503);
+  assert.equal(r.data.code,'odoo');
+  assert.equal((await get('/time-entries/overview/export?'+range(),admin)).status,503);
+});
+
 test('the overview lists dashboard and Odoo work once each, newest first, with totals that match the rows',async()=>{
   const s=baseScenario();
   const {get}=await setup({entries:s.entries,lines:s.lines,tasks:s.tasks});

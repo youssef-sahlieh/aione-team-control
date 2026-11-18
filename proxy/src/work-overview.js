@@ -104,6 +104,38 @@ async function lineFieldNames(env, wanted) {
   return wanted.filter(f => f && all[f]);
 }
 
+// Check existence live: the project snapshot and stored dashboard entries can outlive deletions in Odoo.
+// Include archived projects, and check line ids outside the date range too: moving a line isn't deleting it.
+async function existingIds(env, model, ids) {
+  const found = new Set();
+  const unique = [...new Set(ids.filter(Boolean))];
+  for (let i = 0; i < unique.length; i += PAGE) {
+    const rows = await odoo(env, model, 'search_read', [[['id', 'in', unique.slice(i, i + PAGE)]]], {
+      fields: ['id'], limit: PAGE, context: { active_test: false }
+    });
+    for (const row of rows) found.add(row.id);
+  }
+  return found;
+}
+
+async function currentSources(env, entries, lines, metas, cfg) {
+  const projectOf = e => e.projectId || e.hdProjectId || metas.get(e.ticket)?.odooProjectId || null;
+  const [projects, postedLines] = await Promise.all([
+    existingIds(env, 'project.project', [...entries.map(projectOf), ...lines.map(l => m2oId(l.project_id))]),
+    existingIds(env, 'account.analytic.line', entries.map(e => e.lineId))
+  ]);
+  const currentLines = lines.filter(l => projects.has(m2oId(l.project_id)));
+  const byEntry = new Set(currentLines.map(l => cfg.fields.entryUuid && l[cfg.fields.entryUuid]).filter(Boolean));
+  return {
+    lines: currentLines,
+    entries: entries.filter(e => {
+      const projectId = projectOf(e);
+      if (projectId && !projects.has(projectId)) return false;
+      return !e.lineId || postedLines.has(e.lineId) || byEntry.has(e.id);
+    })
+  };
+}
+
 // ---- Rows ----
 // Every row has the same keys. Fields starting with "_" stay on the server.
 function rowOf(base) {
@@ -285,7 +317,7 @@ export function sortRows(rows, by) {
 // ---- Loading everything for one request ----
 export async function loadOverview(env, me, period) {
   const cfg = await readConfig(env);
-  const [entries, metas, catalog, projects, billingCfg, hd, snapshot] = await Promise.all([
+  const [storedEntries, metas, catalog, projects, billingCfg, hd, snapshot] = await Promise.all([
     dashboardEntries(env, period.from, period.to),
     readAllMetadata(env),
     readCatalog(env),
@@ -297,12 +329,14 @@ export async function loadOverview(env, me, period) {
   const known = projectIndex(snapshot);
   const odooInfo = { configured: odooConfigured(env), complete: true, error: null };
   let lines = [];
+  let entries = storedEntries;
   const taskBilling = new Map();
   if (odooInfo.configured) {
     try {
       const wanted = [...new Set([cfg.fields.users, cfg.fields.entryUuid, 'date', 'unit_amount', 'name', 'project_id', 'task_id', 'employee_id'].filter(Boolean))];
       const fields = await lineFieldNames(env, wanted);
       lines = await odooLines(env, period.from, period.to, fields);
+      ({ entries, lines } = await currentSources(env, entries, lines, metas, cfg));
       // Task-level billing, read only for the tasks in these lines (when a task billing field is set up).
       if (billingCfg.fields?.task) {
         const taskIds = [...new Set(lines.map(l => m2oId(l.task_id)).filter(Boolean))];
