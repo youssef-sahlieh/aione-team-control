@@ -80,23 +80,28 @@ the page, so the queue isn't read again.
 ## GitHub reviewers on a pull request
 
 Each row has a **Reviewers** button (administrators only). It manages GitHub's own review requests on that pull request.
-It never touches a ticket: a ticket's status change requests nothing, and a dashboard assignment (the "Reviewers" picker
-in the row's details) is a separate thing that stays as it was.
+When an added login matches a user's GitHub username in Users settings (case-insensitively), it also saves a dashboard
+review assignment before calling GitHub. That user sees the pull request in **Needs review** even if GitHub refuses or
+doesn't answer. Repeating the request keeps one assignment and sends no duplicate dashboard notification. Removing a
+GitHub request keeps the dashboard assignment until the pull request closes or merges. It never touches a ticket.
 
 - **Read.** `GET /reviews/github-reviewers?id=owner/repo#number` returns who GitHub has a review requested from now
   (`requested`), and who GitHub allows as a reviewer on the repository (`eligible`, from GitHub's assignee list). The
-  author is never offered. Nothing comes from the dashboard's own directory.
+  author is never offered. The choices come from GitHub; saved dashboard usernames link the chosen logins to users.
 - **Change.** `POST /reviews/github-reviewers?id=…` with `{ "confirmed": true, "add": [logins], "remove": [logins] }`.
   Removals go first (`DELETE .../requested_reviewers`), then requests (`POST .../requested_reviewers`), both with
   GitHub's REST API. Logins are matched case-insensitively and sent with GitHub's own spelling.
 - **Confirmation.** The page shows what will be sent and sends it only from **Confirm on GitHub**. The server refuses
   any change without `confirmed: true`, so the step can't be skipped by calling the route directly.
-- **Refused before GitHub is called:** a non-administrator (403); a closed or merged pull request (409); a malformed
-  login; the author; someone both added and removed; more than 10 changes at once; a login GitHub doesn't list for the
-  repository (400, `not_eligible`). Someone already requested is skipped, and someone not requested isn't removed.
+- **Refused before any assignment or GitHub call:** a non-administrator (403); a closed or merged pull request (409); a malformed
+  login; the author; someone both added and removed; more than 10 changes at once.
+  A login GitHub doesn't list for the repository is refused before a GitHub write (400, `not_eligible`), but a matching
+  dashboard user's assignment is kept.
+  Someone already requested is skipped on GitHub and still gets a dashboard assignment if missing; someone not requested isn't removed.
 - **Afterwards.** The stored pull request is refreshed (`syncPulls` with `force`), so the queue shows the new requests.
   A failed refresh doesn't undo the change. If GitHub refuses or doesn't answer, nothing more is sent and the message
-  says which.
+  says which. If dashboard assignments were saved, the error also says reviewers can see them in Needs review, and their
+  assignment records the GitHub failure for the existing retry action.
 - **GitHub token.** The token is read on the server only and is never sent to the page. It needs read access to pull
   requests and metadata to read the lists, and write access to pull requests (review requests) to change them.
 
