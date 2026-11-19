@@ -102,6 +102,9 @@ export function buildNav(nav, { onPage } = {}) {
 // Puts the links in order and shows what this role may open.
 export function arrangeNav(nav, { admin }) {
   const item = id => nav.querySelector(id === "databases" ? "#dbreport-link" : id === "monitor" ? "#ai1-monitor-link" : id === "knowledge" ? "#knowledge-link" : `[data-page="${id}"]`);
+  const reviews = item("reviews");
+  reviews.querySelector("span:not(.nav-icon):not(.nav-count)").textContent = admin ? "Needs review" : "My reviews";
+  reviews.title = admin ? "Needs review" : "My reviews";
   const label = nav.querySelector("#nav-admin-label");
   label.hidden = !admin;
   // Hidden pages have no link, so the ADMIN label goes above the first administrator link that is shown.

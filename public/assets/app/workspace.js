@@ -206,7 +206,11 @@ export function createWorkspace({ state, context, render, openIssue, today, allo
     document.body.dataset.workspacePage = route.page;
     // The tickets page is named after the view it shows (All open, Closed, Overdue…), so the heading never disagrees with the list.
     $("page-heading").textContent = route.page === "tickets" ? context().focusLabel() : page[1]; $("page-description").textContent = route.page==="tickets"&&!context().admin?"The tickets you’re authorized to work on.":route.page==="reviews"&&context().admin?"Monitor and manage code changes":page[2];
-    if(route.page==="reviews"&&context().admin) $("page-heading").textContent="Pull Requests"; $("breadcrumbs").textContent = adminPages.has(route.page) ? "Admin" : "Workspace";
+    if(route.page==="reviews") {
+      $("page-heading").textContent = context().admin ? "Pull Requests" : "My reviews";
+      if (!context().admin) $("page-description").textContent = "Pull requests assigned to you. Review code on GitHub and read linked tickets here.";
+    }
+    $("breadcrumbs").textContent = adminPages.has(route.page) ? "Admin" : "Workspace";
     for (const link of nav.querySelectorAll("a[data-page]")) { if (link.dataset.page === route.page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); }
     // Pending date requests (null until they have loaded once: the last known count stays until then).
     setNavCount("requests", context().pendingDates);

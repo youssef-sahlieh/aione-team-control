@@ -1,10 +1,20 @@
 /* Pull request reviews: the Needs review page, the reviewers picker and the read-only ticket dialog (components/reviews.js). */
 body[data-workspace-page=reviews] #create-ticket,body[data-workspace-page=reviews] #team{display:none}
+body[data-workspace-page=reviews] .sync-line{display:none}
 /* The reviewer's own list stays narrow; the administrators' queue uses the full width. */
 body[data-workspace-page=reviews] #workspace-content{max-width:920px}
 body[data-workspace-page=reviews] #workspace-content:has(> .queue){max-width:none}
 /* The queue has its own Refresh (it asks GitHub again), so the dashboard's would be a second, weaker button. */
 body[data-workspace-page=reviews]:has(#workspace-content > .queue) #refresh{display:none}
+body[data-workspace-page=reviews]:has(#workspace-content > .personal-reviews) #refresh{display:none}
+.personal-reviews{display:grid;gap:16px;min-width:0}
+.review-personal-head,.review-personal-filters{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
+.review-personal-head{justify-content:space-between}
+.review-personal-head .review-note{flex:1 1 240px}
+.review-personal-filters select{max-width:100%;min-width:0}
+.personal-reviews .queue-quick{border-bottom:1px solid var(--line)}
+.personal-reviews .review-head-line{flex-wrap:wrap}
+.personal-reviews .review-flagged-list{border-top:1px solid var(--line);padding-top:18px;margin-top:8px}
 
 .review-list{display:grid;gap:12px}
 .review-card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px 18px}

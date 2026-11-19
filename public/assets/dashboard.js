@@ -93,7 +93,7 @@ import "./app/keyboard.js";
   function applyBuiltIn(id){ const b=BUILT_IN_VIEWS[id]; Object.assign(state,{f:b.filters(),businessFilter:{},focus:b.focus,view:"list",q:"",...b.range}); state.sel.clear(); $("q").value=""; if(b.range.closedDays) loadClosed(); workspace.navigate("tickets"); render(); }
   const teamNames=()=>{ const n=Object.values(PEOPLE).map(p=>p.name); return n.length>1?n.slice(0,-1).join(", ")+" or "+n[n.length-1]:n.join(""); };
   let lastLoad=0;
-  const MANUAL_REFRESH=new Set(["clients","workload","reports","analytics"]);
+  const MANUAL_REFRESH=new Set(["clients","workload","reports","analytics","reviews"]);
   const NEW_STATUSES=["open","pending approval"];
   const HIST={};
 
@@ -1071,8 +1071,6 @@ import "./app/keyboard.js";
       // Show the tickets straight away; their client and hours fill in a moment later (unless a client filter needs them).
       if(!Object.values(state.businessFilter||{}).some(Boolean)) renderIfIdle();
       setTimeout(()=>loadClosed(),0); loadPrs([...issues.map(i=>i.key),...state.internalIssues.map(i=>i.key)]);
-      // The administrators' Needs review queue and its sidebar count refresh with the tickets (same button, same 120 s).
-      if(IS_ADMIN) REVIEWS.refreshQueue(); else setNavCount("reviews",0);
       await businessReady; await business.load([...issues.map(i=>i.key),...state.internalIssues.map(i=>i.key)]);
       mergeIssues(); saveCache(); renderIfIdle();
       if(dz.key)dateRequests.renderDrawer(dz.key);
@@ -1687,6 +1685,8 @@ import "./app/keyboard.js";
     const openFromHash=()=>{ try{const h=decodeURIComponent(location.hash.slice(1));if(/^[A-Z][A-Z0-9_]*-\d+$/.test(h)&&issueByKey(h)&&dz.key!==h)openDrawer(h);}catch(_){} };
     const opened=cached&&(openFromHash(),dz.key!==null);
     await reload(); BELL.start();
+    // Review assignments load once for the badge; their own page refreshes only on entry or an explicit action.
+    if (workspace.route().page !== "reviews") REVIEWS.refreshQueue();
     // Show how many changes failed (and, for administrators, API key problems) next to Sync errors.
     syncErrors.reload(); if(IS_ADMIN) syncErrors.loadKeys();
     if(!opened) openFromHash();

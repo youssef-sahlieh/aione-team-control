@@ -2,7 +2,7 @@
 // block). Reviewers get a "Needs review" queue with a read-only view of the tickets the pull request mentions. The
 // proxy keeps the assignments (proxy/src/reviews.js); GitHub is asked for the review when the reviewer has a GitHub
 // username set by an administrator (Users page). Nothing here changes a Jira ticket.
-import { reviewLabel, sortQueue, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, QUEUE_STATE_LABEL, queueStateLabel, queueReasonText, queueOptions, filterQueue, queueSummary, sortPrs, groupByTicket, activeFilters, menuFilterCount, attentionReasons, CHECKS_LABEL, waitLine, exactTime, safePrUrl, reviewerText, noReviewerText, QUICK_FILTERS, DEFAULT_QUICK, SORTS, VIEWS, NO_REVIEWER, DEFAULT_SORT, REVIEWER_RELATIONS } from "../models/reviews.js";
+import { reviewLabel, PERSONAL_FILTERS, filterPersonalQueue, personalSummary, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, QUEUE_STATE_LABEL, queueStateLabel, queueReasonText, queueOptions, filterQueue, queueSummary, sortPrs, groupByTicket, activeFilters, menuFilterCount, attentionReasons, CHECKS_LABEL, waitLine, exactTime, safePrUrl, reviewerText, noReviewerText, QUICK_FILTERS, DEFAULT_QUICK, SORTS, VIEWS, NO_REVIEWER, DEFAULT_SORT, REVIEWER_RELATIONS } from "../models/reviews.js";
 import { setNavCount } from "../app/nav.js";
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
@@ -22,6 +22,8 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
   document.body.appendChild(dialog);
   dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
   let queueTarget = null;
+  let personalRoot = null, personalData = null, personalLoading = false, personalError = "";
+  const personalFilters = { status: "to_review", search: "", repo: "" };
   // The administrators' queue: the last answer from the proxy, the last error, whether a read is under way, and what the
   // person chose (filters, sort, view). These live as long as the page, so a refresh or a dialog keeps them.
   let adminRoot = null, adminData = null, adminError = "", adminLoading = false;
@@ -255,18 +257,20 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
   function card(item) {
     const c = el("article", "review-card review-" + item.status);
     const head = el("div", "review-head-line");
-    const title = el("a", "review-title", item.pr ? item.pr.title : "Pull request no longer available");
-    if (item.pr) { title.href = item.pr.url; title.target = "_blank"; title.rel = "noopener"; }
-    head.append(title, el("span", "review-status " + item.status, reviewLabel(item.status)));
+    const url = safePrUrl(item.pr?.url);
+    const draft = item.pr?.state === "draft";
+    const active = ["open", "draft"].includes(item.pr?.state);
+    const title = el(url ? "a" : "span", "review-title", item.pr ? item.pr.title : "Pull request no longer available");
+    if (url) { title.href = url; title.target = "_blank"; title.rel = "noopener"; }
+    head.append(title, el("span", "review-status " + item.status, draft ? "Draft" : reviewLabel(item.status)));
     c.append(head);
     if (item.rami) c.append(el("span", "queue-rami-tag", "Flagged for Rami"));
     const repo = item.pr ? item.pr.repo + " #" + item.pr.number : item.prId;
     c.append(el("p", "review-meta", repo + " · " + assignedLine(item) + (item.pr && item.pr.author ? " · by " + item.pr.author : "")));
-    const gh = githubNote(item.github);
-    if (gh.text) c.append(el("p", "review-gh " + gh.tone, gh.text));
     const actions = el("div", "review-actions");
-    if (item.status === "needs_review" && !item.startedAt) actions.append(btn("Start review", "btn primary", () => startReview(item)));
-    for (const key of ticketKeysOf(item.pr)) actions.append(btn("Read " + key, "btn", () => openTicket(key)));
+    if (active && !draft && item.status === "needs_review" && !item.startedAt) actions.append(btn("Start review", "btn primary", () => startReview(item)));
+    if (url) { const link = el("a", "btn", "Open PR ↗"); link.href = url; link.target = "_blank"; link.rel = "noopener"; actions.append(link); }
+    if (active) for (const key of ticketKeysOf(item.pr)) actions.append(btn("Read " + key, "btn", () => openTicket(key)));
     if (actions.childElementCount) c.append(actions);
     return c;
   }
@@ -332,30 +336,87 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     return box;
   }
 
-  // The reviewer's "Needs review" page. Rami also gets the pull requests flagged for him, above his reviews.
-  async function renderPersonalQueue(target) {
-    queueTarget = target;
-    target.replaceChildren();
-    const list = el("div", "review-list", "Loading…");
-    target.append(list);
-    try {
-      const data = await api("/reviews/me");
-      if (data.prError) target.insertBefore(el("p", "msg err", "Pull requests can't be refreshed right now: " + data.prError), list);
-      if (Array.isArray(data.flagged)) {
-        const section = el("section", "review-flagged-list");
-        section.append(el("h2", "", "Flagged for you to check (" + data.flagged.length + ")"), el("p", "review-note", "An administrator flagged these pull requests for you to check. Comment on GitHub. This isn't a review request."));
-        if (data.ticketsError) section.append(el("p", "msg err", data.ticketsError));
-        if (!data.flagged.length) section.append(el("p", "empty-copy", "Nothing is flagged for you right now."));
-        for (const pr of data.flagged) section.append(flaggedCard(pr));
-        target.insertBefore(section, list);
-        list.before(el("h2", "review-list-heading", "Your reviews"));
-      }
-      list.replaceChildren();
-      if (!data.items.length) { list.append(el("p", "empty-copy", "Nothing needs your review right now.")); return; }
-      for (const item of sortQueue(data.items)) list.appendChild(card(item));
-    } catch (err) {
-      list.replaceChildren(el("p", "msg err", errorText(err)));
+  function drawPersonalQueue() {
+    if (!personalRoot?.root.isConnected) return;
+    const { root, stats, tabs, repo, refresh, notices, flagged, showing, list } = personalRoot;
+    root.setAttribute("aria-busy", String(personalLoading));
+    refresh.disabled = personalLoading;
+    refresh.textContent = personalLoading ? "Refreshing…" : "Refresh";
+    const data = personalData, items = data?.items || [], counts = personalSummary(items);
+    notices.replaceChildren();
+    if (personalError) notices.append(el("p", "msg err", "Couldn't load your assignments. Use Retry to try again."));
+    else if (data?.prError) notices.append(el("p", "review-note", "Showing your saved assignments."));
+    if (personalError) notices.append(btn("Retry", "btn", loadPersonalQueue));
+    stats.replaceChildren(...[["to_review", "To review"], ["in_review", "In progress"], ["drafts", "Drafts"], ["completed", "Completed"]].map(([status, label]) => {
+      const b = btn("", "queue-stat", () => { personalFilters.status = status; drawPersonalQueue(); });
+      b.dataset.personalStat = status;
+      b.setAttribute("aria-pressed", String(personalFilters.status === status));
+      b.append(el("b", "", String(counts[status])), el("span", "", label));
+      return b;
+    }));
+    for (const b of tabs.children) {
+      b.setAttribute("aria-pressed", String(b.dataset.status === personalFilters.status));
+      b.querySelector(".queue-count").textContent = String(counts[b.dataset.status]);
     }
+    personalFilters.repo = fillSelect(repo, [["", "All repositories"], ...[...new Set(items.map(i => i.pr?.repo).filter(Boolean))].sort().map(r => [r, r])], personalFilters.repo);
+    flagged.replaceChildren();
+    if (Array.isArray(data?.flagged)) {
+      flagged.append(el("h2", "", "Flagged for you to check (" + data.flagged.length + ")"), el("p", "review-note", "An administrator flagged these pull requests for you to check. Comment on GitHub. This isn't a review request."));
+      if (data.ticketsError) flagged.append(el("p", "msg err", data.ticketsError));
+      if (!data.flagged.length) flagged.append(el("p", "empty-copy", "Nothing is flagged for you right now."));
+      for (const pr of data.flagged) flagged.append(flaggedCard(pr));
+    }
+    flagged.hidden = !Array.isArray(data?.flagged);
+    const shown = filterPersonalQueue(items, personalFilters);
+    showing.textContent = data ? "Showing " + shown.length + " of " + items.length + " assigned pull requests" : "";
+    list.replaceChildren();
+    if (!data) {
+      if (!personalError) list.append(el("p", "empty-copy", "Loading your reviews…"));
+      return;
+    }
+    if (!shown.length) list.append(el("p", "empty-copy", personalFilters.status === "to_review" && !personalFilters.search && !personalFilters.repo ? "Nothing needs your review right now." : "No assigned pull requests match these filters."));
+    for (const item of shown) list.append(card(item));
+  }
+
+  async function loadPersonalQueue() {
+    if (personalLoading) return;
+    personalLoading = true;
+    drawPersonalQueue();
+    try {
+      personalData = await api("/reviews/me");
+      personalError = "";
+      setNavCount("reviews", personalSummary(personalData.items).to_review);
+    } catch (err) { personalError = errorText(err); }
+    personalLoading = false;
+    drawPersonalQueue();
+  }
+
+  // A separate page for reviewers. Only their assignments come from /reviews/me; the admin queue is never read.
+  function renderPersonalQueue(target) {
+    queueTarget = target;
+    const root = el("section", "personal-reviews"); root.dataset.keep = "reviews";
+    const head = el("div", "review-personal-head");
+    const refresh = btn("Refresh", "btn", loadPersonalQueue); refresh.setAttribute("aria-label", "Refresh my reviews");
+    head.append(el("p", "review-note", "Updates when you open this page or click Refresh."), refresh);
+    const stats = el("div", "queue-stats"), notices = el("div"), flagged = el("section", "review-flagged-list");
+    const tabs = el("div", "queue-quick"); tabs.setAttribute("role", "group"); tabs.setAttribute("aria-label", "My review status");
+    for (const [status, label] of PERSONAL_FILTERS) {
+      const b = btn(label, "queue-tab", () => { personalFilters.status = status; drawPersonalQueue(); }); b.dataset.status = status;
+      const count = el("span", "queue-count"); count.setAttribute("aria-hidden", "true"); b.append(count); tabs.append(b);
+    }
+    const filters = el("div", "review-personal-filters");
+    const search = el("input", "queue-search"); search.type = "search"; search.placeholder = "Search your assigned PRs"; search.setAttribute("aria-label", "Search my reviews"); search.value = personalFilters.search;
+    search.addEventListener("input", () => { personalFilters.search = search.value; drawPersonalQueue(); });
+    const repo = el("select", "queue-filter"); repo.setAttribute("aria-label", "My review repository");
+    repo.addEventListener("change", () => { personalFilters.repo = repo.value; drawPersonalQueue(); });
+    const reset = btn("Reset filters", "btn", () => { Object.assign(personalFilters, { status: "to_review", search: "", repo: "" }); search.value = ""; drawPersonalQueue(); });
+    filters.append(search, repo, reset);
+    const showing = el("p", "review-note"), list = el("div", "review-list"); list.setAttribute("aria-live", "polite");
+    root.append(head, notices, stats, tabs, filters, showing, list, flagged);
+    personalRoot = { root, stats, tabs, repo, refresh, notices, flagged, showing, list };
+    target.replaceChildren(root);
+    drawPersonalQueue();
+    return loadPersonalQueue();
   }
 
   // The sidebar's count for administrators: the pull requests awaiting review.
@@ -890,5 +951,5 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     return isAdmin() ? renderAdminQueue(target) : renderPersonalQueue(target);
   }
 
-  return { openPicker, openTicket, renderQueue, refreshQueue: loadQueue };
+  return { openPicker, openTicket, renderQueue, refreshQueue: (...args) => isAdmin() ? loadQueue(...args) : loadPersonalQueue() };
 }
