@@ -232,7 +232,7 @@ async function customerRpc(base, service, method, args, signal) {
 // database names (from Audit & Deploy, or the server's list) are tried before the production ones.
 // Signs in and returns { loginOk, db, kw } (kw calls the database's models), or why it couldn't.
 // only: try exactly these database names (one row per database on a server that hosts several).
-async function loginToDatabase(slot, dbHint, section = "main", only = null) {
+async function loginToDatabase(slot, dbHint, section = "main", only = null, deadline = Infinity) {
   const base = (slot.url.match(/^https?:\/\/[^/]+/) || [])[0];
   if (!base) return { loginOk: false, error: "no url" };
   // Short per-request timeout so one slow/unreachable server can't stall the whole build.
@@ -276,7 +276,7 @@ async function loginToDatabase(slot, dbHint, section = "main", only = null) {
   let db = "", uid = 0, password = "", attempts = 0;
   outer: for (const c of slot.candidates) {
     for (const d of tryDbs) {
-      if (++attempts > 60) break outer;
+      if (++attempts > 60 || Date.now() > deadline) break outer;
       const id = await customerRpc(base, "common", "authenticate", [d, c.user, c.password, {}], signal()).catch((e) => (e.offline ? -1 : 0));
       // The server stopped answering: no point trying more logins (each would wait for the timeout).
       if (id === -1) return { loginOk: false, loginFound: true, offline: true };
@@ -292,19 +292,21 @@ async function loginToDatabase(slot, dbHint, section = "main", only = null) {
 // only when that isn't possible (a site Audit & Deploy doesn't list, Monitor refused, or Monitor sign-in isn't set up).
 // MONITOR_ODOO_LOGIN=off turns the Monitor way off. Returns a login ({ loginOk, db, kw, close?, via }) or why not.
 const monitorLoginOn = (env) => !!(env.MONITOR_SIGNING_KEY && env.STORE && String(env.MONITOR_ODOO_LOGIN || "").toLowerCase() !== "off");
-async function signIn(env, f, slot, only) {
-  let monitorError = "";
+async function signIn(env, f, slot, only, deadline = Infinity) {
+  let monitorError = "", slow = false;
   if (monitorLoginOn(env) && f.instance && !f.fromKnowledge) {
     const want = f.multi ? f.database : "";
     try { return await openOdoo(env, f.instance, want); }
     catch (e) {
       monitorError = String((e && e.message) || e).slice(0, 160);
+      slow = /timeout|aborted/i.test(monitorError);
       console.warn("open_odoo_failed", f.instance, monitorError);
       // Several databases on the instance: Monitor needs the name.
-      if (!want && f.database) { try { return await openOdoo(env, f.instance, f.database); } catch (e2) { monitorError = String((e2 && e2.message) || e2).slice(0, 160); } }
+      if (!want && f.database && !slow && Date.now() < deadline - 25000) { try { return await openOdoo(env, f.instance, f.database); } catch (e2) { monitorError = String((e2 && e2.message) || e2).slice(0, 160); } }
     }
   }
-  if (slot) return { ...(await loginToDatabase(slot, f.databases, f.section, only)), via: "knowledge", monitorError };
+  // A server too slow for Open Odoo would make every Knowledge login wait too: it is tried again on the next refresh.
+  if (slot && !slow && Date.now() < deadline - 8000) return { ...(await loginToDatabase(slot, f.databases, f.section, only, deadline - 8000)), via: "knowledge", monitorError };
   return { loginOk: false, loginFound: !!monitorError, monitorError };
 }
 
@@ -519,6 +521,10 @@ export async function buildReport(env, { force = false } = {}) {
       let batch = progress.instances.slice(progress.done, progress.done + POOL);
       const cut = batch.findIndex((i) => isMain(i) !== isMain(batch[0]));
       if (cut > 0) batch = batch.slice(0, cut);
+      // Every row is answered by 50s: Vercel stops the function at 60s, and the page then can't reach the server.
+      const deadline = started + 50000;
+      let timer;
+      const outOfTime = new Promise((done) => { timer = setTimeout(() => done({ loginFound: true, loginOk: false, monitorError: "took too long this time; tried again on the next refresh" }), Math.max(0, deadline - Date.now())); });
       const rows = await pool(batch, POOL, async (inst) => {
         const facts = await instanceFacts(env, inst);
         const slot = slotFor(creds, facts, prodDbs);
@@ -526,7 +532,7 @@ export async function buildReport(env, { force = false } = {}) {
           let inside = { loginOk: false, loginFound: !!slot };
           // A server that didn't answer is shown as offline, without waiting on login attempts.
           if (!f.online) inside = { ...inside, offline: true };
-          else { try { inside = await readInsideDatabase(await signIn(env, f, slot, only)); } catch (e) { inside = { loginFound: true, loginOk: false, error: String(e.message || e).slice(0, 80) }; } }
+          else { try { inside = await Promise.race([(async () => readInsideDatabase(await signIn(env, f, slot, only, deadline)))(), outOfTime]); } catch (e) { inside = { loginFound: true, loginOk: false, error: String(e.message || e).slice(0, 80) }; } }
           // The company name only ever comes from inside the database (never from Knowledge text).
           return { ...f, ...inside, company: inside.company || "", companySource: inside.company ? "database" : "" };
         };
@@ -537,6 +543,7 @@ export async function buildReport(env, { force = false } = {}) {
         if (many.length < 2) return [await read(facts)];
         return Promise.all(many.map((db) => read({ ...facts, database: db, databases: [db], multi: true, section: facts.section === "main" ? sectionOf("prod", db) : facts.section }, [db])));
       });
+      clearTimeout(timer);
       progress.rows.push(...rows.flat());
       progress.done += batch.length;
       await env.STORE.set(PROGRESS_KEY, JSON.stringify(progress), 3600);
