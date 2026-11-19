@@ -3,9 +3,10 @@
 // expiry, flutter installed, and installed add-ons.
 //
 // The production list comes from Audit & Deploy (no customer login needed), so new clients appear on
-// their own. The six in-database numbers need a login to that database; those logins live in the Odoo
-// knowledge base ("Our Customers") and are read server-side at build time only. A password is NEVER
-// stored and NEVER sent to the browser - the report connects read-only and keeps only the numbers.
+// their own. The six in-database numbers need a sign-in to that database: AI1 Monitor's Open Odoo first (an
+// administrator session, no password - see monitor-odoo.js), and the logins in the Odoo knowledge base ("Our
+// Customers") only when that isn't possible. A password is NEVER stored and NEVER sent to the browser - the
+// report reads only and keeps only the numbers.
 // The one write is the "Extend database" action (database.expiration_date), meant for test databases.
 //
 // The whole report is cached in the store. A build runs incrementally (resumable) to stay within the
@@ -15,6 +16,7 @@ import { odoo, odooConfigured } from "./odoo.js";
 import { act } from "./monitor.js";
 import { addToInbox } from "./inbox.js";
 import { listUsers } from "./users.js";
+import { openOdoo, rememberMonitorAccount } from "./monitor-odoo.js";
 
 const REPORT_KEY = "dbreport:v1";          // the finished/most-recent report
 const PROGRESS_KEY = "dbreport:progress";  // an in-flight incremental build
@@ -24,7 +26,8 @@ const LOCK_KEY = "dbreport:lock";
 const REPORT_FORMAT = 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STALE_MS = 60 * 60 * 1000;           // rebuild on view when the cached report is older than an hour
-const BUILD_BUDGET_MS = 45000;             // leave headroom under the 60s function limit
+// No new batch after 15s: opening a database through AI1 Monitor can take up to ~25s more, and the function stops at 60s.
+const BUILD_BUDGET_MS = 15000;
 const POOL = 8;
 
 const json = (data, status = 200) => Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
@@ -285,9 +288,31 @@ async function loginToDatabase(slot, dbHint, section = "main", only = null) {
   return { loginOk: true, loginFound: true, db, kw };
 }
 
-async function readInsideDatabase(slot, dbHint, section = "main", only = null) {
-  const login = await loginToDatabase(slot, dbHint, section, only);
+// Open Odoo through AI1 Monitor first (no username or password, like its Open Odoo button); the logins in Knowledge
+// only when that isn't possible (a site Audit & Deploy doesn't list, Monitor refused, or Monitor sign-in isn't set up).
+// MONITOR_ODOO_LOGIN=off turns the Monitor way off. Returns a login ({ loginOk, db, kw, close?, via }) or why not.
+const monitorLoginOn = (env) => !!(env.MONITOR_SIGNING_KEY && env.STORE && String(env.MONITOR_ODOO_LOGIN || "").toLowerCase() !== "off");
+async function signIn(env, f, slot, only) {
+  let monitorError = "";
+  if (monitorLoginOn(env) && f.instance && !f.fromKnowledge) {
+    const want = f.multi ? f.database : "";
+    try { return await openOdoo(env, f.instance, want); }
+    catch (e) {
+      monitorError = String((e && e.message) || e).slice(0, 160);
+      // Several databases on the instance: Monitor needs the name.
+      if (!want && f.database) { try { return await openOdoo(env, f.instance, f.database); } catch (e2) { monitorError = String((e2 && e2.message) || e2).slice(0, 160); } }
+    }
+  }
+  if (slot) return { ...(await loginToDatabase(slot, f.databases, f.section, only)), via: "knowledge", monitorError };
+  return { loginOk: false, loginFound: !!monitorError, monitorError };
+}
+
+async function readInsideDatabase(login) {
   if (!login.loginOk) return login;
+  try { return { ...(await readWith(login)), loginVia: login.via || "knowledge" }; }
+  finally { if (login.close) await login.close(); }
+}
+async function readWith(login) {
   const { db, kw } = login;
   const one = async (p, dflt) => { try { return await p; } catch { return dflt; } };
   // active_test:false so a login by a since-deactivated user still counts (last login by ANY user).
@@ -500,7 +525,7 @@ export async function buildReport(env, { force = false } = {}) {
           let inside = { loginOk: false, loginFound: !!slot };
           // A server that didn't answer is shown as offline, without waiting on login attempts.
           if (!f.online) inside = { ...inside, offline: true };
-          else if (inside.loginFound) { try { inside = await readInsideDatabase(slot, f.databases, f.section, only); } catch (e) { inside = { loginFound: true, loginOk: false, error: String(e.message || e).slice(0, 80) }; } }
+          else { try { inside = await readInsideDatabase(await signIn(env, f, slot, only)); } catch (e) { inside = { loginFound: true, loginOk: false, error: String(e.message || e).slice(0, 80) }; } }
           // The company name only ever comes from inside the database (never from Knowledge text).
           return { ...f, ...inside, company: inside.company || "", companySource: inside.company ? "database" : "" };
         };
@@ -578,10 +603,13 @@ export function expiryDate(value) {
   return t > today && t <= today + 366 * DAY_MS ? s : null;
 }
 
-// Extend database: signs in to the database with the logins from Knowledge (the same way the report
-// does) and sets the system parameter database.expiration_date, then reads it back to be sure.
+// Extend database: signs in to the database the same way the report does (AI1 Monitor's Open Odoo first, then the
+// logins from Knowledge) and sets the system parameter database.expiration_date, then reads it back to be sure.
 // The login needs Settings administrator rights in that database.
 async function signInToRow(env, report, row, creds) {
+  if (monitorLoginOn(env) && row.instance && !row.fromKnowledge) {
+    try { return await openOdoo(env, row.instance, row.multi ? row.database : (row.db || "")); } catch { /* the logins in Knowledge next */ }
+  }
   const prodDbs = (num) => [...new Set((report.rows || []).filter((r) => (r.section || "main") === "main" && r.num === num).flatMap((r) => [r.db, ...(r.databases || [])]).filter(Boolean))];
   const slot = slotFor(creds || await readCredentialIndex(env), { ...row, section: row.section || "main" }, prodDbs);
   if (!slot) throw new Error("There's no login for this database in Knowledge.");
@@ -591,7 +619,7 @@ async function signInToRow(env, report, row, creds) {
   return login;
 }
 async function extendDatabase(env, report, row, date, login) {
-  login = login || await signInToRow(env, report, row);
+  if (!login) { const own = await signInToRow(env, report, row); try { return await extendDatabase(env, report, row, date, own); } finally { if (own.close) await own.close(); } }
   const value = date + " 00:00:00";
   try { await login.kw("ir.config_parameter", "set_param", ["database.expiration_date", value]); }
   catch (e) { throw new Error("Signed in, but this login can't change system parameters (it needs Settings administrator rights). " + String(e.message || "").slice(0, 120)); }
@@ -618,12 +646,14 @@ export async function autoExtend(env, { deadline = Date.now() + 50000 } = {}) {
     let login;
     try { login = await signInToRow(env, report, row, creds); }
     catch (e) { out.failed.push({ database: name, error: String(e.message || e).slice(0, 160) }); return; }
+    try {
     const now = await login.kw("ir.config_parameter", "get_param", ["database.expiration_date"]).catch(() => null);
     if (now !== null && !expiresSoon(now)) { out.current.push(name); changes.push([row, { expires: now || null, expired: now ? false : null }]); return; }
     const when = String(now || row.expires || "").slice(0, 10), past = isExpired(now || row.expires);
     const res = await act(env, AUTOMATIC, { action: "Extend database", target: row.instance, details: (past ? "Expired" : "Expires") + (when ? " on " + when : "") + ": expiry date → " + date + " (automatic, Databases page)", run: () => extendDatabase(env, report, row, date, login) });
     if (res.ok) { out.extended.push({ database: name, expires: date }); changes.push([row, { expires: date + " 00:00:00", expired: false, expiryMovedEarlier: null }]); }
     else out.failed.push({ database: name, error: String((await res.clone().json().catch(() => ({}))).error || "").slice(0, 160) });
+    } finally { if (login.close) await login.close(); }
   });
   // The saved report gets the new dates in one write (the extends run side by side).
   if (changes.length) {
@@ -650,6 +680,7 @@ export async function dbReportRoutes(request, env, url, me) {
     return json({ report: report || null, building: !report || outdated || Date.now() - report.builtAt > STALE_MS });
   }
   if (path === "/db-report/refresh" && request.method === "POST") {
+    await rememberMonitorAccount(env, me);
     const first = url.searchParams.get("continue") !== "1";
     const r = await buildReport(env, { force: first });
     if (r.busy) return json({ busy: true });
@@ -667,6 +698,7 @@ export async function dbReportRoutes(request, env, url, me) {
     if (action === "restart" && row.fromKnowledge) return fail("not_in_monitor", "This site isn't in Audit & Deploy, so it can't be restarted from here.", 400);
     if (action === "restart") return act(env, me, { action: "Restart instance", target: instance, details: "Databases page", run: () => odoo(env, "file.hosting.service", "call_api", ["/api/docker/odoo/restart", "POST", { instances: [instance] }]) });
     if (action === "extend") {
+      await rememberMonitorAccount(env, me);
       const date = expiryDate(b.date);
       if (!date) return fail("bad_date", "Choose a date after today, at most a year ahead.", 400);
       const res = await act(env, me, { action: "Extend database", target: instance, details: "Expiry date → " + date + " (Databases page)", run: () => extendDatabase(env, report, row, date) });
@@ -681,19 +713,19 @@ export async function dbReportRoutes(request, env, url, me) {
 // GET /cron/db-report - daily rebuild from Vercel cron (no user session). The secret comes only in the
 // Authorization header (Vercel cron sends "Bearer CRON_SECRET"), never in the address, which ends up in logs.
 export async function dbReportCron(request, env, url) {
-  const token = env.CRON_SECRET || "";
+  // Vercel cron sends CRON_SECRET; the GitHub workflow that carries the build on sends TIME_SYNC_SECRET.
   const auth = request.headers.get("Authorization") || "";
-  const ok = token && auth === "Bearer " + token;
+  const ok = [env.CRON_SECRET, env.TIME_SYNC_SECRET].some((t) => t && auth === "Bearer " + t);
   if (!ok) return fail("forbidden", "Invalid cron token.", 403);
   if (!odooConfigured(env) || !env.STORE) return json({ skipped: "not configured" });
-  // Run slices to completion within this invocation (force a fresh build on the first slice, then continue).
-  const deadline = Date.now() + 55000;
-  let r = await buildReport(env, { force: true });
-  while (!r.done && !r.busy && Date.now() < deadline) r = await buildReport(env, { force: false });
+  // One slice per call (a slice can take up to ~45s). The first call starts a fresh build; ?continue=1 carries it
+  // on (the GitHub workflow "Database report" calls it until done).
+  const r = await buildReport(env, { force: url.searchParams.get("continue") !== "1" });
   const rep = await readReport(env);
   const rows = (rep && rep.rows) || [];
   const summary = { total: rows.length, loggedIn: rows.filter((x) => x.loginOk).length, noAccess: rows.filter((x) => x.loginFound && !x.loginOk).map((x) => x.database || x.instance) };
-  return json({ ok: true, done: !!r.done, busy: !!r.busy, summary });
+  summary.viaMonitor = rows.filter((x) => x.loginVia === "monitor").length;
+  return json({ ok: true, done: !!r.done, busy: !!r.busy, progress: r.progress || null, summary });
 }
 
 // GET /cron/db-extend - daily from Vercel cron, after the report rebuild: extends the expired Tests and Dev

@@ -1,0 +1,36 @@
+# Database report: every night after Vercel's 03:00 cron starts the rebuild, carries it on to the end. Each database is
+# opened through AI1 Monitor's Open Odoo, which takes several seconds, so one call can't do them all within Vercel's
+# time limit; this calls /cron/db-report?continue=1 until the report says done (at most about 25 minutes).
+# Needs the repository secret TIME_SYNC_SECRET (the same value as the Vercel environment variable).
+# Without it, the job does nothing. GitHub may delay scheduled runs by a few minutes.
+name: Database report
+
+on:
+  schedule:
+    - cron: '3 3 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: db-report
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Carry the database report build on until it is done
+        env:
+          SECRET: ${{ secrets.TIME_SYNC_SECRET }}
+        run: |
+          if [ -z "$SECRET" ]; then echo "TIME_SYNC_SECRET is not set; nothing to do."; exit 0; fi
+          for i in $(seq 1 40); do
+            out=$(curl -sS --max-time 70 -H "Authorization: Bearer $SECRET" "https://aione-team-proxy.vercel.app/cron/db-report?continue=1" || true)
+            # Only the progress, never database names (the summary lists them).
+            echo "$out" | grep -oE '"done":[a-z]+|"progress":\{[^}]*\}|"error":"[^"]*"' | tr '\n' ' '; echo
+            case "$out" in *'"done":true'*) echo "Report done."; exit 0;; esac
+            sleep 5
+          done
+          echo "The report didn't finish in 40 steps; the Databases page carries it on when opened."

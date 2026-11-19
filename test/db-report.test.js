@@ -609,3 +609,49 @@ test("the report reads Odoo's expiry reason, and a date moved earlier alerts eve
   assert.match(inbox[0].text, /^Expiry moved earlier: was 2027-03-01, now 2026-12-01\. Reason: renewal\.$/);
   assert.equal(await env.STORE.get("inbox:dev@aione.biz"), null, "administrators only");
 });
+
+test("databases open through AI1 Monitor's Open Odoo first (no password); Knowledge logins only when Monitor can't", async () => {
+  const { env, call } = setup();
+  Object.assign(env, { MONITOR_SIGNING_KEY: "{}", MONITOR_PUBLIC_ORIGIN: "https://monitor.example.invalid" });
+  const { forgetMonitorSignIn } = await import("../proxy/src/monitor-odoo.js");
+  forgetMonitorSignIn();
+  const admin = { email: "admin@aione.biz", name: "Admin", role: "admin", dev: "", v: 1 };
+  await saveUser(env.STORE, admin);
+  const { token } = await makeToken(env, admin.email, Date.now(), 1);
+  const inner = globalThis.fetch, opened = [], destroyed = [];
+  const SID = "z".repeat(70);
+  globalThis.fetch = async (url, init = {}) => {
+    const u = new URL(String(url)), headers = new Headers(init.headers || {});
+    const redirect = (status, location, cookie) => { const h = new Headers({ location }); if (cookie) h.append("set-cookie", cookie); return new Response(null, { status, headers: h }); };
+    if (u.origin === "https://monitor.example.invalid") {
+      if (u.pathname === "/auth/aione/start") return redirect(302, "https://dashboard.example.invalid/dashboard.html?ai1-monitor=" + "q".repeat(43), "aione_state=" + "q".repeat(43) + "; Path=/auth/aione/callback");
+      if (u.pathname === "/auth/aione/callback") return redirect(302, "/dashboard", "session=monitor-session; Path=/");
+      const m = /^\/api\/monitor\/instances\/([^/]+)\/open-odoo$/.exec(u.pathname);
+      if (m) { opened.push(m[1]); return m[1] === "odoo100" ? redirect(303, "https://100.ai1.host/__ai1_sso#token=tok100") : Response.json({ success: false, error: "Infrastructure Operator access is required" }, { status: 403 }); }
+    }
+    if (u.origin === "https://100.ai1.host" && u.pathname !== "/xmlrpc/2/common" && !u.pathname.startsWith("/jsonrpc")) {
+      if (u.pathname === "/__ai1_sso") return new Response(JSON.stringify({ success: true }), { status: 200, headers: { "set-cookie": "session_id=" + SID + "; Path=/" } });
+      assert.equal(headers.get("cookie"), "session_id=" + SID);
+      const p = JSON.parse(init.body || "{}").params || {};
+      if (u.pathname === "/web/session/get_session_info") return Response.json({ result: { db: "100_hcc" } });
+      if (u.pathname === "/web/session/destroy") { destroyed.push("100"); return Response.json({ result: null }); }
+      if (p.model === "res.users" && p.method === "search_count") return Response.json({ result: 12 });
+      if (p.model === "res.company") return Response.json({ result: [{ id: 1, name: "HCC Ltd" }] });
+      return Response.json({ result: p.method === "search_count" ? 0 : [] });
+    }
+    return inner(url, init);
+  };
+  try {
+    let r; for (let i = 0; i < 10; i++) { r = await (await call("/db-report/refresh", { method: "POST", token })).json(); if (r.done) break; }
+    assert.equal(r.done, true);
+    const rows = r.report.rows;
+    const hcc = rows.find((x) => x.instance === "odoo100");
+    assert.equal(hcc.loginOk, true, "no Knowledge login for 100, but Open Odoo signs in");
+    assert.equal(hcc.loginVia, "monitor"); assert.equal(hcc.users, 12); assert.equal(hcc.company, "HCC Ltd"); assert.equal(hcc.db, "100_hcc");
+    const ronit = rows.find((x) => x.instance === "odoo503");
+    assert.equal(ronit.loginOk, true, "Monitor refused 503, so its Knowledge login was used");
+    assert.equal(ronit.loginVia, "knowledge");
+    assert.ok(opened.includes("odoo503") && opened.includes("odoo100"));
+    assert.deepEqual(destroyed, ["100"], "the Odoo session is signed out after reading");
+  } finally { globalThis.fetch = inner; forgetMonitorSignIn(); }
+});
