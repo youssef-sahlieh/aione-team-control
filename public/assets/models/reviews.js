@@ -132,10 +132,12 @@ export function attentionReasons(pr, now = Date.now()) {
 }
 
 // The quick filters: the primary tabs above the list. "" is all of them. They combine with the search and the menus.
-export const QUICK_FILTERS = [["", "All PRs"], ["attention", "Needs attention"], ["unlinked", "Unlinked"], ["rami", "For Rami"]];
+export const DEFAULT_QUICK = "awaiting";
+export const QUICK_FILTERS = [["awaiting", "Awaiting review"], ["changes", "Changes requested"], ["approved", "Approved"], ["drafts", "Drafts"], ["", "All PRs"], ["attention", "Needs attention"], ["unlinked", "Unlinked"], ["rami", "For Rami"]];
 // The names of every quick filter, for the chips (the cards can set the ones that aren't tabs, such as no reviewer).
-const QUICK_LABEL = { attention: "Needs attention", linked: "Linked to ticket", unlinked: "Unlinked PRs", rami: "For Rami", no_reviewer: "No reviewer requested", changes: "Changes requested" };
-const QUICK = { attention: (pr) => attentionReasons(pr).length > 0, linked, unlinked: (pr) => !linked(pr), rami: (pr) => !!pr.rami, no_reviewer: noReviewer, changes: (pr) => pr.state === "changes_requested" };
+const QUICK_LABEL = { awaiting: "Awaiting review", approved: "Approved", drafts: "Drafts", attention: "Needs attention", linked: "Linked to ticket", unlinked: "Unlinked PRs", rami: "For Rami", no_reviewer: "No reviewer requested", changes: "Changes requested" };
+const isDraft = pr => pr.draft || pr.state === "draft";
+const QUICK = { awaiting: pr => !isDraft(pr) && pr.state === "awaiting", approved: pr => !isDraft(pr) && pr.state === "approved", drafts: isDraft, attention: (pr) => attentionReasons(pr).length > 0, linked, unlinked: (pr) => !linked(pr), rami: (pr) => !!pr.rami, no_reviewer: noReviewer, changes: (pr) => !isDraft(pr) && pr.state === "changes_requested" };
 
 // The default is the newest pull request first, by when GitHub created it. The other orders stay available.
 export const SORTS = [["created", "Newest PR first"], ["wait", "Longest wait first"], ["recent", "Most recent first"], ["key", "Ticket key"], ["repo", "Repository"]];
@@ -177,7 +179,7 @@ export function filterQueue(prs, f = {}) {
   return prs.filter((pr) => (!q || has(pr.title) || has(pr.repo + "#" + pr.number) || has(pr.author) || (pr.tickets || []).some((t) => has(t.key) || has(t.title)))
     && (!f.client || (pr.tickets || []).some((t) => t.client === f.client))
     && (!f.repo || pr.repo === f.repo)
-    && (!f.state || pr.state === f.state)
+    && (!f.state || (f.state === "draft" ? isDraft(pr) : !isDraft(pr) && pr.state === f.state))
     && (!quick || quick(pr))
     && (!f.author || pr.author === f.author)
     && (!f.reviewer || (f.reviewer === NO_REVIEWER ? noReviewer(pr) : pr.reviewers.some((r) => r.name === f.reviewer && relationMatches(r, f.relation)))));
@@ -232,7 +234,10 @@ export function queueSummary(prs) {
     noReviewer: prs.filter(noReviewer).length,
     rami: prs.filter(QUICK.rami).length,
     attention: prs.filter(QUICK.attention).length,
-    awaiting: prs.filter((pr) => pr.state === "awaiting").length
+    awaiting: prs.filter(QUICK.awaiting).length,
+    approved: prs.filter(QUICK.approved).length,
+    drafts: prs.filter(QUICK.drafts).length,
+    changes: prs.filter(QUICK.changes).length
   };
 }
 
