@@ -88,8 +88,7 @@ function databaseCell(r) {
 }
 function linkCell(url) { const a = el("a", "db-link", url.replace(/^https?:\/\//, "")); a.href = url; a.target = "_blank"; a.rel = "noopener"; return a; }
 // "no access" says why on hover: what Open Odoo (AI1 Monitor) answered, then that Knowledge had no working login.
-function noAccessWhy(r) { return ["Open Odoo: " + (r.monitorError || "not tried"), r.via === "knowledge" || r.loginFound ? "Knowledge: no working login" : "Knowledge: no login stored"].join("
-"); }
+function noAccessWhy(r) { return ["Open Odoo: " + (r.monitorError || "not tried"), r.via === "knowledge" || r.loginFound ? "Knowledge: no working login" : "Knowledge: no login stored"].join(" · "); }
 function numCell(r, key) {
   if (!r.loginOk) { if (key !== "users") return el("span", "db-muted", "—"); const c = el("span", "db-muted", r.offline ? "offline" : "no access"); if (!r.offline) c.title = noAccessWhy(r); return c; }
   return el("span", "", num(r[key]));
