@@ -34,20 +34,24 @@ existing deployments pick up their unlinked pull requests without any manual ste
 
 ## Summary cards
 
-The six cards always count every open pull request. Filters don't change them.
+The four cards count each review state across all open pull requests. Filters don't change the counts; clicking a card
+selects its matching status filter.
 
 | Card | Counts |
 | --- | --- |
-| Open PRs | open pull requests, drafts included |
-| Linked tickets | distinct tickets named by them |
-| Unlinked PRs | pull requests that name no ticket |
-| No reviewer | nobody asked and no review given (`reviewerState` `none`) |
-| Flagged for Rami | pull requests with the Rami flag |
 | Awaiting review | pull requests in the Awaiting review state (never drafts) |
+| Changes requested | non-draft pull requests waiting for the author to address review changes |
+| Approved | approved non-draft pull requests |
+| Drafts | all draft pull requests, including those with existing approvals |
 
 The navigation badge is the Awaiting review count.
 
 ## Filters, sort and views
+
+The page opens on **Awaiting review**. Separate tabs with counts show **Changes requested**, **Approved**, and **Drafts**.
+Drafts are excluded from the other review-state tabs, including drafts that already received an approval. **All PRs**
+shows everything, and **Needs attention**, **Unlinked**, and **For Rami** remain available. Picking a tab clears the
+Review state menu so an earlier state selection cannot hide that tab's results.
 
 Quick filters: All PRs, Linked to ticket, Unlinked PRs, Rami flagged, No reviewer, Changes requested. They combine with:
 

@@ -2,7 +2,7 @@
 // block). Reviewers get a "Needs review" queue with a read-only view of the tickets the pull request mentions. The
 // proxy keeps the assignments (proxy/src/reviews.js); GitHub is asked for the review when the reviewer has a GitHub
 // username set by an administrator (Users page). Nothing here changes a Jira ticket.
-import { reviewLabel, sortQueue, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, QUEUE_STATE_LABEL, queueStateLabel, queueReasonText, queueOptions, filterQueue, queueSummary, sortPrs, groupByTicket, activeFilters, menuFilterCount, attentionReasons, CHECKS_LABEL, waitLine, exactTime, safePrUrl, reviewerText, noReviewerText, QUICK_FILTERS, SORTS, VIEWS, NO_REVIEWER, DEFAULT_SORT, REVIEWER_RELATIONS } from "../models/reviews.js";
+import { reviewLabel, sortQueue, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, QUEUE_STATE_LABEL, queueStateLabel, queueReasonText, queueOptions, filterQueue, queueSummary, sortPrs, groupByTicket, activeFilters, menuFilterCount, attentionReasons, CHECKS_LABEL, waitLine, exactTime, safePrUrl, reviewerText, noReviewerText, QUICK_FILTERS, DEFAULT_QUICK, SORTS, VIEWS, NO_REVIEWER, DEFAULT_SORT, REVIEWER_RELATIONS } from "../models/reviews.js";
 import { setNavCount } from "../app/nav.js";
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
@@ -25,7 +25,7 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
   // The administrators' queue: the last answer from the proxy, the last error, whether a read is under way, and what the
   // person chose (filters, sort, view). These live as long as the page, so a refresh or a dialog keeps them.
   let adminRoot = null, adminData = null, adminError = "", adminLoading = false;
-  const adminFilters = { search: "", client: "", repo: "", author: "", reviewer: "", relation: "any", state: "", quick: "", sort: savedSort(), view: "prs" };
+  const adminFilters = { search: "", client: "", repo: "", author: "", reviewer: "", relation: "any", state: "", quick: DEFAULT_QUICK, sort: savedSort(), view: "prs" };
   // The sort is remembered on this device; a browser that refuses storage just starts from the default.
   function savedSort() {
     try { const v = localStorage.getItem("aione-review-sort"); return SORTS.some(([k]) => k === v) ? v : DEFAULT_SORT; } catch { return DEFAULT_SORT; }
@@ -441,16 +441,16 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
 
   // The four summary cards. Each one is a button that sets the matching quick filter; the cards always count every
   // open pull request (the filters don't change them).
-  const CARDS = [["Open PRs", "", false], ["No reviewer", "no_reviewer", true], ["Unlinked PRs", "unlinked", false], ["Flagged for Rami", "rami", false]];
+  const CARDS = [["Awaiting review", "awaiting", true], ["Changes requested", "changes", true], ["Approved", "approved", false], ["Drafts", "drafts", false]];
   function drawStats(target, s, quick) {
-    const count = { "Open PRs": s.prs, "No reviewer": s.noReviewer, "Unlinked PRs": s.unlinked, "Flagged for Rami": s.rami };
+    const count = { "Awaiting review": s.awaiting, "Changes requested": s.changes, "Approved": s.approved, "Drafts": s.drafts };
     target.replaceChildren(...CARDS.map(([label, value, notable]) => {
       const b = el("button", "queue-stat" + (notable && count[label] ? " notable" : ""));
       b.type = "button";
       b.dataset.stat = label;
       b.setAttribute("aria-pressed", String(quick === value));
       b.append(el("b", "", String(count[label])), el("span", "", label));
-      b.addEventListener("click", () => { adminFilters.quick = value; drawAdminQueue(); });
+      b.addEventListener("click", () => { adminFilters.quick = value; adminFilters.state = ""; drawAdminQueue(); });
       return b;
     }));
   }
@@ -474,7 +474,7 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     state.value = f.state;
     sort.value = f.sort;
     const sum = queueSummary(prs);
-    const tabCount = { "": sum.prs, attention: sum.attention, unlinked: sum.unlinked, rami: sum.rami };
+    const tabCount = { awaiting: sum.awaiting, approved: sum.approved, drafts: sum.drafts, changes: sum.changes, "": sum.prs, attention: sum.attention, unlinked: sum.unlinked, rami: sum.rami };
     const live = !!(d && d.configured);
     for (const b of quick) {
       b.setAttribute("aria-pressed", String(b.dataset.quick === f.quick));
@@ -796,7 +796,7 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
     quickBar.setAttribute("role", "group");
     quickBar.setAttribute("aria-label", "Quick filters");
     const quick = QUICK_FILTERS.map(([v, t]) => {
-      const b = btn(t, "queue-tab", () => { adminFilters.quick = v; drawAdminQueue(); });
+      const b = btn(t, "queue-tab", () => { adminFilters.quick = v; adminFilters.state = ""; drawAdminQueue(); });
       b.dataset.quick = v;
       const count = el("span", "queue-count");
       count.setAttribute("aria-hidden", "true");
@@ -849,7 +849,7 @@ export function createReviews({ api, apiFile, toast, errorText, isAdmin = () => 
       field.append(el("span", "", label));
       const s = el("select", "queue-filter");
       s.name = name; s.setAttribute("aria-label", label);
-      s.addEventListener("change", () => { adminFilters[name] = s.value; drawAdminQueue(); });
+      s.addEventListener("change", () => { adminFilters[name] = s.value; if (name === "state" && ["awaiting", "approved", "drafts", "changes"].includes(adminFilters.quick)) adminFilters.quick = ""; drawAdminQueue(); });
       field.append(s);
       return [field, s];
     };

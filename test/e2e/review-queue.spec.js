@@ -95,18 +95,44 @@ const ramiBox = (page, ref) => prRow(page, ref).first().locator(".queue-rami inp
 const openFilters = async (page) => { const b = page.locator(".queue-filter-btn"); if ((await b.getAttribute("aria-expanded")) !== "true") await b.click(); };
 const ALL_DEFAULT = ["acme/api #7", "acme/web #20", "acme/web #15", "acme/web #12", "acme/api #31", "acme/web #30", "acme/mobile #3"];
 
+test("Awaiting review is the default, with approved pull requests and drafts in separate tabs",async({page})=>{
+  const prs=[...PRS(),row("acme/web",40,{title:"Already approved",state:"approved"}),
+    row("acme/web",41,{title:"Approved draft",state:"approved",draft:true})];
+  const calls=await mockReviews(page,{queueBody:healthy({prs})});
+  await page.goto("/dashboard.html?page=reviews");
+  await expect(tab(page,"awaiting")).toHaveAttribute("aria-pressed","true");
+  await expect(tab(page,"awaiting")).toHaveText("Awaiting review4");
+  await expect(page.locator(".queue-pr")).toHaveCount(4);
+  const reads=calls.queue;
+  await expect(page.locator(".queue-pr.draft, .queue-pr.state-approved")).toHaveCount(0);
+  await page.locator('.queue-stat[data-stat="Approved"]').click();
+  await expect(refs(page)).toHaveText(["acme/web #40"]);
+  await page.locator('.queue-stat[data-stat="Drafts"]').click();
+  await expect(page.locator(".queue-pr")).toHaveCount(2);
+  await expect(page.locator(".queue-pr.draft")).toHaveCount(2);
+  await page.locator('.queue-stat[data-stat="Changes requested"]').click();
+  await expect(refs(page)).toHaveText(["acme/web #12"]);
+  await page.locator('.queue-stat[data-stat="Awaiting review"]').click();
+  await openFilters(page);
+  await page.getByRole("combobox",{name:"Review state",exact:true}).selectOption("approved");
+  await expect(refs(page)).toHaveText(["acme/web #40"]);
+  await expect(tab(page,"")).toHaveAttribute("aria-pressed","true");
+  expect(calls.queue).toBe(reads);
+});
+
 test("an administrator sees every open pull request once, linked or not, longest real wait first, with honest counts", async ({ page }) => {
   const calls = await mockReviews(page, { queueBody: healthy() });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   await expect(page.locator("#page-heading")).toHaveText("Pull Requests");
   await expect(page.locator("#page-description")).toHaveText("Monitor and manage code changes");
   // The default is newest first now; this test checks the longest-wait order, so it asks for that.
   await page.getByRole("combobox", { name: "Sort" }).selectOption("wait");
   // The four cards and their counts.
-  await expect(stat(page, "Open PRs")).toHaveText("7");
-  await expect(stat(page, "No reviewer")).toHaveText("4");
-  await expect(stat(page, "Unlinked PRs")).toHaveText("2");
-  await expect(stat(page, "Flagged for Rami")).toHaveText("1");
+  await expect(stat(page, "Awaiting review")).toHaveText("4");
+  await expect(stat(page, "Changes requested")).toHaveText("1");
+  await expect(stat(page, "Approved")).toHaveText("0");
+  await expect(tab(page, "rami").locator(".queue-count")).toHaveText("1");
   // The tabs and their counts: attention is web#20 (5 days waiting), web#12 (changes), web#15, web#30, api#7 (no reviewer).
   await expect(tab(page, "")).toHaveText("All PRs7");
   await expect(tab(page, "attention")).toHaveText("Needs attention5");
@@ -169,7 +195,7 @@ test("an administrator sees every open pull request once, linked or not, longest
   await expect(ramiBox(page, "acme/web #20")).toBeChecked();
   await expect(ramiBox(page, "acme/web #12")).not.toBeChecked();
   // Nothing here merges, approves, assigns reviewers or makes a ticket.
-  for (const name of [/merge/i, /approve/i, /assign/i, /request changes/i, /create ticket/i]) await expect(page.locator(".queue").getByRole("button", { name })).toHaveCount(0);
+  for (const name of [/merge/i, /approve/i, /assign/i, /request changes/i, /create ticket/i]) await expect(page.locator(".queue-pr").getByRole("button", { name })).toHaveCount(0);
   expect(calls.writes).toBe(0);
 });
 
@@ -177,6 +203,7 @@ test("a row opens its details: the description, tickets, reviewers, checks as Gi
   const prs = PRS().map((p) => p.id === "acme/web#20" ? { ...p, description: "Shares the rounding helper.\n\n- step one", branch: "feat/rounding", base: "main", checks: { state: "unavailable", failed: [], running: 0 }, comments: 3, unresolved: 1, created: "2026-11-03T09:00:00Z", updated: "2026-11-07T10:00:00Z" } : p);
   await mockReviews(page, { queueBody: healthy({ prs }) });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   const r = prRow(page, "acme/web #20");
   const details = r.getByRole("button", { name: "Details for acme/web #20" });
   await expect(details).toHaveAttribute("aria-expanded", "false");
@@ -206,12 +233,13 @@ test("a row opens its details: the description, tickets, reviewers, checks as Gi
 test("ticking Rami saves only the flag, keyed by the pull request, and the counts and filter follow", async ({ page }) => {
   const calls = await mockReviews(page, { queueBody: healthy() });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   const box = ramiBox(page, "acme/web #12");
   await expect(box).toHaveAttribute("aria-label", "Rami: flag acme/web #12 for Rami's reference");
   await expect(box).toHaveAttribute("title", /Reference only/);
   await box.check();
   await expect.poll(() => calls.rami).toEqual([{ method: "PUT", id: "acme/web#12", flagged: true }]);
-  await expect(stat(page, "Flagged for Rami")).toHaveText("2");
+  await expect(tab(page, "rami").locator(".queue-count")).toHaveText("2");
   await expect(ramiBox(page, "acme/web #12")).toBeChecked();
   await expect(ramiBox(page, "acme/web #12")).toBeFocused();
   await tab(page, "rami").click();
@@ -220,7 +248,7 @@ test("ticking Rami saves only the flag, keyed by the pull request, and the count
   await expect.poll(() => calls.rami.length).toBe(2);
   expect(calls.rami[1]).toEqual({ method: "PUT", id: "acme/web#20", flagged: false });
   await expect(refs(page)).toHaveText(["acme/web #12"]);
-  await expect(stat(page, "Flagged for Rami")).toHaveText("1");
+  await expect(tab(page, "rami").locator(".queue-count")).toHaveText("1");
   // Nothing else was written: no reviewer, no GitHub request, no ticket, no notification.
   expect(calls.other).toEqual([]);
   // Unchanged review state and reviewers.
@@ -232,17 +260,19 @@ test("ticking Rami saves only the flag, keyed by the pull request, and the count
 test("a Rami flag that couldn't be saved goes back and says so", async ({ page }) => {
   await mockReviews(page, { queueBody: healthy(), ramiStatus: 503 });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   const box = ramiBox(page, "acme/web #12");
   await box.click();
   await expect(page.getByText("Couldn't save the Rami flag")).toBeVisible();
   await expect(box).not.toBeChecked();
   await expect(box).toBeEnabled();
-  await expect(stat(page, "Flagged for Rami")).toHaveText("1");
+  await expect(tab(page, "rami").locator(".queue-count")).toHaveText("1");
 });
 
 test("without permission to flag, the Rami boxes show the flags but can't be changed", async ({ page }) => {
   const calls = await mockReviews(page, { queueBody: healthy({ canFlag: false }) });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   await expect(ramiBox(page, "acme/web #20")).toBeChecked();
   await expect(ramiBox(page, "acme/web #20")).toBeDisabled();
   await expect(ramiBox(page, "acme/web #12")).toBeDisabled();
@@ -252,6 +282,7 @@ test("without permission to flag, the Rami boxes show the flags but can't be cha
 test("long reviewer lists fold into an accessible disclosure", async ({ page }) => {
   await mockReviews(page, { queueBody: healthy() });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   const more = prRow(page, "acme/web #20").locator("details.queue-more");
   await expect(more.locator("summary")).toHaveText("+1 more");
   await expect(more.getByText("Ana · requested")).toBeHidden();
@@ -263,6 +294,7 @@ test("long reviewer lists fold into an accessible disclosure", async ({ page }) 
 test("a partly failed refresh keeps the last results and says so briefly, with the details folded away", async ({ page }) => {
   const calls = await mockReviews(page);
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   const alert = page.locator(".queue-alert");
   await expect(alert.locator(".queue-alert-title")).toHaveText("Some pull requests could not be refreshed. Showing the last available results.");
   await expect(alert.locator(".queue-alert-facts")).toContainText("Last refresh attempt: 8 Nov 2026");
@@ -285,6 +317,7 @@ test("a partly failed refresh keeps the last results and says so briefly, with t
 test("search, tabs, cards, the Filters menu and sort combine on the page, and Clear all brings it back", async ({ page }) => {
   const calls = await mockReviews(page, { queueBody: healthy() });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   await expect(page.locator(".queue-pr")).toHaveCount(7);
   await page.getByRole("combobox", { name: "Sort" }).selectOption("wait");
   const reads = calls.queue;
@@ -294,7 +327,7 @@ test("search, tabs, cards, the Filters menu and sort combine on the page, and Cl
   await expect(refs(page)).toHaveText(["acme/api #7"]);
   await expect(page.locator(".queue-showing")).toHaveText("Showing 1 of 7 pull requests");
   // The cards always count every open pull request.
-  await expect(stat(page, "Open PRs")).toHaveText("7");
+  await expect(stat(page, "Awaiting review")).toHaveText("4");
   await search.fill("refund");
   await expect(refs(page)).toHaveText(["acme/web #20", "acme/web #15"], { timeout: 5000 });
   await search.fill("dev-three");
@@ -317,14 +350,14 @@ test("search, tabs, cards, the Filters menu and sort combine on the page, and Cl
   await tab(page, "").click();
 
   // A card is a filter too, and shows it is set.
-  await page.locator('.queue-stat[data-stat="No reviewer"]').click();
-  await expect(page.locator('.queue-stat[data-stat="No reviewer"]')).toHaveAttribute("aria-pressed", "true");
-  await expect(refs(page)).toHaveText(["acme/api #7", "acme/web #15", "acme/api #31", "acme/web #30"]);
+  await page.locator('.queue-stat[data-stat="Awaiting review"]').click();
+  await expect(page.locator('.queue-stat[data-stat="Awaiting review"]')).toHaveAttribute("aria-pressed", "true");
+  await expect(refs(page)).toHaveText(["acme/api #7", "acme/web #20", "acme/web #15", "acme/web #30"]);
 
   // Tab, card and menus combine.
   await openFilters(page);
   await page.getByRole("combobox", { name: "Repository" }).selectOption("acme/api");
-  await expect(refs(page)).toHaveText(["acme/api #7", "acme/api #31"]);
+  await expect(refs(page)).toHaveText(["acme/api #7"]);
   await page.getByRole("combobox", { name: "Review state" }).selectOption("draft");
   await expect(refs(page)).toHaveText(["acme/api #31"]);
   await expect(page.locator(".queue-chip", { hasText: "Repository: acme/api" })).toBeVisible();
@@ -356,6 +389,7 @@ test("search, tabs, cards, the Filters menu and sort combine on the page, and Cl
 test("the Filters menu closes with Escape and its Done button, and the cards and tabs stay put", async ({ page }) => {
   await mockReviews(page, { queueBody: healthy() });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   const filters = page.locator(".queue-filter-btn");
   await openFilters(page);
   await expect(page.getByRole("group", { name: "Filters", exact: true })).toBeVisible();
@@ -371,6 +405,7 @@ test("the Filters menu closes with Escape and its Done button, and the cards and
 test("the By ticket view groups the same pull requests under their tickets, with the unlinked last", async ({ page }) => {
   await mockReviews(page, { queueBody: healthy() });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   await page.getByRole("combobox", { name: "Sort" }).selectOption("wait");
   const views = page.getByRole("group", { name: "View" });
   await expect(views.getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "true");
@@ -407,6 +442,7 @@ test("the By ticket view groups the same pull requests under their tickets, with
 test("filters, the view and folded tickets stay through Refresh and the read-only ticket view, and the list stays on screen while it refreshes", async ({ page }) => {
   const calls = await mockReviews(page, { queueBody: (n, forced) => ({ json: healthy(), delay: forced ? 600 : 0 }) });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   await page.getByRole("searchbox", { name: "Search the review queue" }).fill("AION-7");
   await page.getByRole("combobox", { name: "Sort" }).selectOption("key");
   await page.getByRole("group", { name: "View" }).getByRole("button", { name: "By ticket" }).click();
@@ -446,6 +482,7 @@ test("filters, the view and folded tickets stay through Refresh and the read-onl
 test("the ticket groups open and close from the keyboard", async ({ page }) => {
   await mockReviews(page, { queueBody: healthy() });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   await page.getByRole("group", { name: "View" }).getByRole("button", { name: "By ticket" }).click();
   const toggle = page.getByRole("button", { name: "Pull requests for AION-84" });
   await toggle.focus();
@@ -463,6 +500,7 @@ test("wide screens line the pull request cells up; narrow screens stack them wit
   await mockReviews(page, { queueBody: healthy() });
   await page.setViewportSize({ width: 1400, height: 900 });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   const r = prRow(page, "acme/web #15");
   await expect(r.locator(".queue-state")).toBeVisible();
   const wide = { main: await r.locator(".queue-pr-main").boundingBox(), state: await r.locator(".queue-state").boundingBox(), wait: await r.locator(".queue-wait").boundingBox(), rami: await r.locator(".queue-rami").boundingBox() };
@@ -487,6 +525,7 @@ test("wide screens line the pull request cells up; narrow screens stack them wit
 test("a read that fails with nothing to show is a failure with Retry, never an empty queue", async ({ page }) => {
   const calls = await mockReviews(page, { queueBody: (n, forced) => (forced ? { json: healthy() } : { status: 503 }) });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   await expect(page.getByText(/The review queue couldn't be loaded: /)).toBeVisible();
   await expect(page.getByText("No open pull requests right now.")).toHaveCount(0);
   await expect(page.locator(".queue-stats")).toBeHidden();
@@ -499,6 +538,7 @@ test("a read that fails with nothing to show is a failure with Retry, never an e
 test("a failed refresh keeps the last list on screen", async ({ page }) => {
   await mockReviews(page, { queueBody: (n, forced) => (forced ? { status: 503 } : { json: healthy() }) });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   await expect(page.locator(".queue-pr")).toHaveCount(7);
   await page.getByRole("button", { name: "Refresh the review queue from GitHub" }).click();
   await expect(page.getByText("Refresh failed. Showing the last available results.")).toBeVisible();
@@ -508,6 +548,7 @@ test("a failed refresh keeps the last list on screen", async ({ page }) => {
 test("a sync failure with no pull requests says the list can't be trusted, not that there are none", async ({ page }) => {
   await mockReviews(page, { queueBody: queue(EMPTY) });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   await expect(page.getByText("Some pull requests could not be refreshed. Showing the last available results.")).toBeVisible();
   await expect(page.getByText("No pull requests to show. Some data couldn't be read, see above.")).toBeVisible();
   await expect(page.getByText("No open pull requests right now.")).toHaveCount(0);
@@ -516,13 +557,15 @@ test("a sync failure with no pull requests says the list can't be trusted, not t
 test("an empty queue says there are no open pull requests, with every card at zero", async ({ page }) => {
   await mockReviews(page, { queueBody: healthy(EMPTY) });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   await expect(page.getByText("No open pull requests right now.")).toBeVisible();
-  for (const label of ["Open PRs", "No reviewer", "Unlinked PRs", "Flagged for Rami"]) await expect(stat(page, label)).toHaveText("0");
+  for (const label of ["Awaiting review", "Changes requested", "Approved", "Drafts"]) await expect(stat(page, label)).toHaveText("0");
 });
 
 test("when GitHub isn't set up, the page says so", async ({ page }) => {
   await mockReviews(page, { queueBody: queue({ configured: false, syncError: "", refresh: null, ...EMPTY }) });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   await expect(page.getByText("Pull requests aren't connected, so no reviews can be listed.")).toBeVisible();
   await expect(page.locator("#nav-review-count")).toBeHidden();
 });
@@ -530,6 +573,7 @@ test("when GitHub isn't set up, the page says so", async ({ page }) => {
 test("Open ticket shows the shared read-only ticket view, with no way to save changes", async ({ page }) => {
   await mockReviews(page);
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   await prRow(page, "acme/web #15").getByRole("button", { name: "Open ticket AION-84 (read-only)" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("Read-only.");
@@ -583,6 +627,7 @@ test("at phone width the queue, its tabs and the open Filters menu fit with no s
   await mockReviews(page, { queueBody: healthy() });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   await expect(page.locator(".queue-pr")).toHaveCount(7);
   const fits = () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
   expect(await fits()).toBe(true);
@@ -604,6 +649,7 @@ test("at phone width the queue, its tabs and the open Filters menu fit with no s
 test("GitHub reviewers: a change is shown and confirmed before anything is sent, and only the confirmed change goes to GitHub", async ({ page }) => {
   const calls = await mockReviews(page, { queueBody: healthy() });
   await page.goto("/dashboard.html?page=reviews");
+  await tab(page, "").click();
   await expect(page.locator(".queue-pr")).toHaveCount(7);
   await page.getByRole("button", { name: "Manage GitHub reviewers for acme/api #7" }).click();
   const dialog = page.locator("dialog.review-dialog[open]");
