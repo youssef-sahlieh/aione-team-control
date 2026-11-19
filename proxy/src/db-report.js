@@ -299,6 +299,7 @@ async function signIn(env, f, slot, only) {
     try { return await openOdoo(env, f.instance, want); }
     catch (e) {
       monitorError = String((e && e.message) || e).slice(0, 160);
+      console.warn("open_odoo_failed", f.instance, monitorError);
       // Several databases on the instance: Monitor needs the name.
       if (!want && f.database) { try { return await openOdoo(env, f.instance, f.database); } catch (e2) { monitorError = String((e2 && e2.message) || e2).slice(0, 160); } }
     }
