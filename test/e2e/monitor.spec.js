@@ -35,6 +35,7 @@ async function mockMonitor(page, { role = "user" } = {}) {
     // The shared top bar and sidebar: the bell and the date requests count.
     if (path === "/inbox") return json({ items: [], seenAt: null, readTickets: [] });
     if (path === "/date-requests") return json({ requests: [], isLast: true });
+    if (path === "/reviews/me" && method === "GET") return json({ items: [], prError: "" });
     unexpected.push({ path, method });
     return route.fulfill({ status: 403, json: { code: "forbidden", error: "Unconfigured test request" } });
   });
