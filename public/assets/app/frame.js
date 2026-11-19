@@ -7,6 +7,7 @@ import { mountHeaderTools } from "./header-tools.js";
 import { createAIAssistant } from "../ai-assistant.js";
 import { createInboxBell } from "../components/inbox-bell.js";
 import { fetchDateRequests, pendingDateCount } from "../components/date-requests.js";
+import { personalSummary } from "../models/reviews.js";
 import "./keyboard.js";
 
 const $ = id => document.getElementById(id);
@@ -40,7 +41,7 @@ function toast(text) {
 function refreshCounts(cfg, admin) {
   fetchDateRequests(api).then(all => setNavCount("requests", pendingDateCount(all, { admin, email: cfg.email || "" })), () => {});
   if (admin) api("/reviews/queue").then(q => setNavCount("reviews", q.configured ? q.counts.awaiting : 0), () => {});
-  else setNavCount("reviews", 0);
+  else api("/reviews/me").then(q => setNavCount("reviews", personalSummary(q.items).to_review), () => {});
 }
 
 // current: the nav link's data-link ("databases", "knowledge") or "users"; nothing is marked for other pages.

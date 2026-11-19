@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {STATUS_LABEL, reviewLabel, sortQueue, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, queueStateLabel, queueReasonText, waitingFor, longestWaitFirst, filterQueue, queueOptions, NO_REVIEWER, waitLine, safePrUrl, reviewerText, noReviewerText, sortPrs, groupByTicket, QUICK_FILTERS, VIEWS, queueSummary, activeFilters, exactTime, attentionReasons, menuFilterCount, CHECKS_LABEL, DEFAULT_SORT, SORTS} from "../../public/assets/models/reviews.js";
+import {STATUS_LABEL, reviewLabel, sortQueue, filterPersonalQueue, personalSummary, githubNote, ticketKeysOf, activeReviewerIds, assignedLine, queueStateLabel, queueReasonText, waitingFor, longestWaitFirst, filterQueue, queueOptions, NO_REVIEWER, waitLine, safePrUrl, reviewerText, noReviewerText, sortPrs, groupByTicket, QUICK_FILTERS, VIEWS, queueSummary, activeFilters, exactTime, attentionReasons, menuFilterCount, CHECKS_LABEL, DEFAULT_SORT, SORTS} from "../../public/assets/models/reviews.js";
 
 test("the queue puts what needs the reviewer first and finished work last, newest first within a status",()=>{
   const queue=sortQueue([
@@ -17,6 +17,18 @@ test("every status has a readable label, and an unknown one is not shown raw",()
   assert.equal(reviewLabel("needs_review"),STATUS_LABEL.needs_review);
   assert.equal(reviewLabel("approved"),"Approved on GitHub");
   assert.equal(reviewLabel("something_new"),"Unknown");
+});
+
+test("personal review filters separate actionable assignments, drafts, author changes and completed history",()=>{
+  const item=(id,status,state="open")=>({id,prId:"acme/web#"+id,status,assignedAt:"2026-11-01",assignedBy:"Manager",pr:{title:"Fix totals",repo:"acme/web",state,keys:["AION-1"]}});
+  const items=[item("1","needs_review"),item("2","in_review"),item("3","needs_review","draft"),item("4","approved"),item("5","closed","merged"),item("6","changes_requested"),{...item("7","unlinked"),pr:null}];
+  assert.deepEqual(filterPersonalQueue(items).map(i=>i.id),["1","2"]);
+  assert.deepEqual(filterPersonalQueue(items,{status:"drafts"}).map(i=>i.id),["3"]);
+  assert.deepEqual(filterPersonalQueue(items,{status:"completed"}).map(i=>i.id),["4","5"]);
+  assert.deepEqual(filterPersonalQueue(items,{status:"changes_requested"}).map(i=>i.id),["6"]);
+  assert.equal(filterPersonalQueue(items,{search:"AION-1",repo:"acme/web"}).length,2);
+  assert.equal(filterPersonalQueue(items,{repo:"acme/other"}).length,0);
+  assert.deepEqual(personalSummary(items),{to_review:2,in_review:1,changes_requested:1,drafts:1,completed:2,all:7});
 });
 
 test("a reviewer without a GitHub username is told the administrator adds it, and only administrators can retry a refusal",()=>{

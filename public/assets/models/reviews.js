@@ -19,6 +19,22 @@ export function sortQueue(items) {
   return [...items].sort((a, b) => (RANK[a.status] ?? 9) - (RANK[b.status] ?? 9) || (a.assignedAt < b.assignedAt ? 1 : a.assignedAt > b.assignedAt ? -1 : 0));
 }
 
+export const PERSONAL_FILTERS = [["to_review", "To review"], ["in_review", "In progress"], ["changes_requested", "Waiting for author"], ["drafts", "Drafts"], ["completed", "Completed"], ["all", "All assignments"]];
+const personalDraft = item => item.pr?.state === "draft" && !["closed", "unlinked"].includes(item.status);
+export function filterPersonalQueue(items, { status = "to_review", search = "", repo = "" } = {}) {
+  const query = search.trim().toLowerCase();
+  return sortQueue(items).filter(item => {
+    const draft = personalDraft(item);
+    const matches = status === "all" || (status === "drafts" ? draft
+      : status === "completed" ? !draft && ["approved", "closed"].includes(item.status)
+      : status === "to_review" ? !draft && ["needs_review", "in_review"].includes(item.status)
+      : !draft && item.status === status);
+    return matches && (!repo || item.pr?.repo === repo) && (!query ||
+      [item.pr?.title, item.prId, item.pr?.author, item.assignedBy, ...(item.pr?.keys || [])].join(" ").toLowerCase().includes(query));
+  });
+}
+export const personalSummary = items => Object.fromEntries(PERSONAL_FILTERS.map(([status]) => [status, filterPersonalQueue(items, { status }).length]));
+
 // What to say about the GitHub side of one assignment: text, a tone for its colour, and the one action it offers.
 // admin: administrators can retry a refused request.
 export function githubNote(github = {}, { admin = false } = {}) {

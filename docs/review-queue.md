@@ -4,6 +4,22 @@ The page administrators see at **Needs review** (`GET /reviews/queue`, `proxy/sr
 `public/assets/components/reviews.js`, rules in `public/assets/models/reviews.js`). Developers keep their personal list
 (`GET /reviews/me`) and never receive the administrators' queue (403).
 
+## Reviewers' My reviews page
+
+Users see **My reviews** in the sidebar and page heading, with a dedicated personal view from `GET /reviews/me`.
+It opens on **To review**: their open, non-draft assignments in Needs review or In review. The sidebar badge counts
+that same set. **In progress**, **Waiting for author**, **Drafts**, **Completed**, and **All assignments** keep the other
+states separate. Closed and approved PRs appear in Completed; unavailable PRs can be found under All assignments.
+Search and repository filters apply to the user's assignments only. Refresh keeps the selected filters and preserves
+the last result if a read fails. The page loads on entry and updates only on its own Refresh or an explicit review
+action. Ticket auto-refresh does not reload reviews, and the review pages have no auto-refresh countdown.
+
+Each card offers **Open PR** and, while the PR is open, read-only links to its tickets. **Start review** marks an active
+non-draft assignment as In review. GitHub request failures do not remove dashboard assignments, and GitHub request
+errors are shown only to administrators in the assignment picker. Users see their saved assignments without token or
+permission errors. Completed PRs do not show ticket links whose reviewer access has ended. Rami's flagged PRs remain
+a separate section.
+
 ## What is listed
 
 Every open pull request in the repositories named in `GITHUB_REPOS`, one row each, whether or not it names a ticket.

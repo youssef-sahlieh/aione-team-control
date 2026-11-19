@@ -34,10 +34,11 @@ const EMPTY = { prs: [], counts: { prs: 0, tickets: 0, awaiting: 0 } };
 
 // queueBody: an answer, or a function of the call (n from 1, forced: ?refresh=1) that returns { status, json, delay }.
 // ramiStatus: the answer to PUT /reviews/rami. calls.rami lists what each PUT asked for.
-async function mockReviews(page, { role = "admin", queueBody = queue(), queueStatus = 200, ramiStatus = 200, meItems = [], meExtra = {} } = {}) {
+async function mockReviews(page, { role = "admin", queueBody = queue(), queueStatus = 200, ramiStatus = 200, meItems = [], meExtra = {}, clockTimers = false } = {}) {
   const calls = { queue: 0, forced: 0, me: 0, writes: 0, rami: [], other: [], github: [] };
   const email = role === "admin" ? "admin@example.invalid" : "user@example.invalid";
-  await page.clock.setFixedTime(NOW);
+  if (clockTimers) await page.clock.install({time:NOW});
+  else await page.clock.setFixedTime(NOW);
   await page.addInitScript(({ role, email }) => { localStorage.setItem("aione-session", JSON.stringify({ token: "t", email, expiresAt: Date.now() + 3600000, role })); }, { role, email });
   await page.route("**/*", async (route) => {
     const req = route.request(), url = new URL(req.url());
@@ -76,6 +77,11 @@ async function mockReviews(page, { role = "admin", queueBody = queue(), queueSta
       return route.fulfill({ json: { pr: {}, author: "dev1", requested: [{ login: "sam-gh", avatar: "" }], eligible: [{ login: "bashar-gh", avatar: "" }, { login: "sam-gh", avatar: "" }], canManage: true } });
     }
     if (path === "/reviews/me") { calls.me++; return route.fulfill({ json: { items: meItems, prError: "", ...meExtra } }); }
+    if (path === "/reviews/start") {
+      const item=meItems.find(i=>i.id===url.searchParams.get("assignment"));
+      if(item){item.status="in_review";item.startedAt=NOW.toISOString();}
+      return route.fulfill({json:{}});
+    }
     if (path === "/reviews/ticket") return route.fulfill({ json: { pr: null, ticket: { key: "AION-84", title: "Refund rounding", status: "To Do", priority: "High", type: "Bug", epic: "", assignee: "", reporter: "Ellen", devs: ["builder"], due: null, created: "2026-10-01T10:00:00.000+0000", updated: "2026-10-14T10:00:00.000+0000", description: "Rounds the refund down.", attachments: [], comments: [], commentsTotal: 0 } } });
     if (path === "/internal") return route.fulfill({ json: { tickets: [] } });
     if (path === "/date-requests") return route.fulfill({ json: { requests: [] } });
@@ -470,10 +476,11 @@ test("filters, the view and folded tickets stay through Refresh and the read-onl
   await expect(page.getByRole("searchbox", { name: "Search the review queue" })).toHaveValue("AION-7");
   await expect(page.getByRole("button", { name: "Pull requests for AION-71" })).toHaveAttribute("aria-expanded", "false");
 
-  // The page has one Refresh: the dashboard's is hidden here. Its timed reload doesn't rebuild the page either.
+  // The page has one manual Refresh, and another refresh preserves the chosen filters and view.
   await expect(page.locator("#refresh")).toBeHidden();
-  await page.evaluate(() => document.getElementById("refresh").click());
-  await expect.poll(() => calls.queue).toBeGreaterThan(2);
+  const beforeRefresh=calls.queue;
+  await refresh.click();
+  await expect.poll(() => calls.queue).toBe(beforeRefresh+1);
   await expect(page.getByRole("searchbox", { name: "Search the review queue" })).toHaveValue("AION-7");
   await expect(page.getByRole("group", { name: "View" }).getByRole("button", { name: "By ticket" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: "Pull requests for AION-71" })).toHaveAttribute("aria-expanded", "false");
@@ -592,6 +599,74 @@ test("a developer keeps the personal list and never asks for the administrators'
   await expect(page.locator("#nav-review-count")).toBeHidden();
 });
 
+for (const role of ["user", "admin"]) test(role+" review page stays unchanged until a manual refresh",async({page})=>{
+  const meItems=[{id:"a1",prId:"acme/web#1",status:"needs_review",github:{state:"failed",error:"The GitHub token needs write access."},pr:{state:"open",title:"Assigned work",repo:"acme/web",number:1,url:"https://github.com/acme/web/pull/1",keys:[]}}];
+  const calls=await mockReviews(page,{role,queueBody:healthy(),meItems,meExtra:{prError:"GitHub access refused"},clockTimers:true});
+  await page.goto("/dashboard.html?page=reviews");
+  await expect(page.locator(role==="user"?".personal-reviews .review-card":".queue-pr")).toHaveCount(role==="user"?1:4);
+  await expect(page.locator(".sync-line")).toBeHidden();
+  const before={queue:calls.queue,me:calls.me};
+  await page.clock.fastForward(5*60*1000);
+  expect(calls.queue).toBe(before.queue);
+  expect(calls.me).toBe(before.me);
+  if(role==="user") {
+    await expect(page.locator(".review-gh")).toHaveCount(0);
+    await expect(page.getByText(/GitHub access refused|token needs write/)).toHaveCount(0);
+    await page.getByRole("button",{name:"Refresh my reviews"}).click();
+    await expect.poll(()=>calls.me).toBe(before.me+1);
+  } else {
+    await page.getByRole("button",{name:"Refresh the review queue from GitHub"}).click();
+    await expect.poll(()=>calls.queue).toBe(before.queue+1);
+  }
+});
+
+test("users land on their actionable PRs with separate drafts and history, search, repository filters and working review actions",async({page})=>{
+  const assigned=(id,status,state="open",repo="acme/web")=>({id:"assignment-"+id,prId:repo+"#"+id,status,assignedAt:"2026-11-05T10:00:00Z",assignedBy:"Ellen",startedAt:status==="in_review"?NOW.toISOString():null,
+    github:{state:"failed",error:"The GitHub token can't request reviews on this repository."},
+    pr:{id:repo+"#"+id,repo,number:id,title:"Assigned PR "+id,url:"https://github.com/"+repo+"/pull/"+id,author:"writer",state,keys:["AION-84"]}});
+  const items=[assigned(1,"needs_review"),assigned(2,"in_review","open","acme/api"),assigned(3,"needs_review","draft"),assigned(4,"approved"),assigned(5,"closed","merged"),assigned(6,"changes_requested")];
+  const calls=await mockReviews(page,{role:"user",meItems:items});
+  await page.setViewportSize({width:390,height:844});
+  await page.goto("/dashboard.html?page=reviews");
+  await expect(page.locator("#page-heading")).toHaveText("My reviews");
+  await expect(page.locator('[data-page="reviews"]')).toContainText("My reviews");
+  await expect(page.locator(".personal-reviews .review-card")).toHaveCount(2);
+  await expect(page.locator("#nav-review-count")).toHaveText("2");
+  await expect(page.getByText("The GitHub token can't request reviews on this repository.",{exact:true})).toHaveCount(0);
+  await expect(page.getByRole("link",{name:"Open PR ↗"})).toHaveCount(2);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:test.info().outputPath("my-reviews-mobile.png"),fullPage:true});
+  await page.getByRole("searchbox",{name:"Search my reviews"}).fill("PR 1");
+  await expect(page.locator(".personal-reviews .review-card")).toHaveCount(1);
+  await page.getByRole("button",{name:"Start review",exact:true}).click();
+  await expect(page.locator(".review-card .review-status")).toHaveText("In review");
+  await page.getByRole("button",{name:"Reset filters"}).click();
+  await page.getByRole("combobox",{name:"My review repository"}).selectOption("acme/api");
+  await expect(page.locator(".review-card .review-title")).toHaveText("Assigned PR 2");
+  await page.getByRole("button",{name:"Refresh my reviews"}).click();
+  await expect(page.getByRole("combobox",{name:"My review repository"})).toHaveValue("acme/api");
+  await page.getByRole("button",{name:"Reset filters"}).click();
+  await page.locator('[data-personal-stat="drafts"]').click();
+  await expect(page.locator(".review-card .review-title")).toHaveText("Assigned PR 3");
+  await expect(page.getByRole("button",{name:"Start review",exact:true})).toHaveCount(0);
+  await page.locator('[data-personal-stat="completed"]').click();
+  await expect(page.locator(".personal-reviews .review-card")).toHaveCount(2);
+  const closed=page.locator(".review-card").filter({hasText:"Assigned PR 5"});
+  await expect(closed.locator(".review-gh")).toHaveCount(0);
+  await expect(closed.getByRole("button",{name:"Read AION-84"})).toHaveCount(0);
+  await page.getByRole("group",{name:"My review status"}).getByRole("button",{name:"Waiting for author"}).click();
+  await expect(page.locator(".review-card .review-title")).toHaveText("Assigned PR 6");
+  await page.getByRole("button",{name:"Read AION-84"}).click();
+  await expect(page.getByRole("dialog")).toContainText("Rounds the refund down.");
+  await page.getByRole("dialog").getByRole("button",{name:"Close",exact:true}).click();
+  await page.route("**/reviews/me",route=>route.fulfill({status:503,json:{error:"Unavailable"}}));
+  await page.getByRole("button",{name:"Refresh my reviews"}).click();
+  await expect(page.getByText("Couldn't load your assignments. Use Retry to try again.")).toBeVisible();
+  await expect(page.locator(".review-card .review-title")).toHaveText("Assigned PR 6");
+  await expect(page.getByRole("group",{name:"My review status"}).getByRole("button",{name:"Waiting for author"})).toHaveAttribute("aria-pressed","true");
+  expect(calls.queue).toBe(0);
+});
+
 test("Rami sees the pull requests flagged for him to check, apart from his reviews, and opens them on GitHub to comment", async ({ page }) => {
   const flagged = [
     { id: "acme/web#15", repo: "acme/web", number: 15, title: "Round refunds", url: "https://github.com/acme/web/pull/15", author: "dev-one", draft: false, updated: "2026-11-08T10:00:00Z", tickets: [{ key: "AION-84", title: "Refund rounding" }] },
@@ -607,7 +682,7 @@ test("Rami sees the pull requests flagged for him to check, apart from his revie
   await expect(cards.nth(0).getByRole("link", { name: "Open on GitHub to comment" })).toHaveAttribute("href", "https://github.com/acme/web/pull/15");
   await expect(cards.nth(1)).toContainText("Draft");
   await expect(cards.nth(1)).toContainText("No linked ticket");
-  await expect(page.getByRole("heading", { name: "Your reviews" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "My reviews" })).toBeVisible();
   await expect(page.getByText("Nothing needs your review right now.")).toBeVisible();
   await cards.nth(0).getByRole("button", { name: "Read AION-84" }).click();
   await expect(page.getByRole("dialog")).toContainText("Rounds the refund down.");
@@ -619,7 +694,7 @@ test("someone who isn't Rami gets no flagged section", async ({ page }) => {
   await mockReviews(page, { role: "user" });
   await page.goto("/dashboard.html?page=reviews");
   await expect(page.getByText("Nothing needs your review right now.")).toBeVisible();
-  await expect(page.locator(".review-flagged-list")).toHaveCount(0);
+  await expect(page.locator(".review-flagged-list")).toBeHidden();
   await expect(page.getByRole("heading", { name: "Your reviews" })).toHaveCount(0);
 });
 
