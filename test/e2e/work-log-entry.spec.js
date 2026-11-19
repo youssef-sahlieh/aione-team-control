@@ -33,6 +33,7 @@ async function mockWorkLog(page, { canLog = true, failFirstPost = false } = {}) 
     if (path === "/jira/search") return json({ issues: [{ key: "AION-7", fields: { summary: "Fix login redirect", status: { name: "To Do", statusCategory: { key: "new" } }, labels: ["ai1_builder"], assignee: { accountId: "acc-b", displayName: "Builder" }, updated: "2026-10-14T10:00:00.000+0000", created: "2026-10-01T10:00:00.000+0000" } }], isLast: true });
     if (path === "/internal" || path === "/odoo/tickets") return json({ tickets: [] });
     if (path === "/date-requests") return json({ requests: [] });
+    if (path === "/reviews/me" && method === "GET") return json({ items: [], prError: "" });
     if (path === "/inbox") return json({ items: [], seenAt: null, readTickets: [] });
     if (path === "/time-entries/timer" && method === "GET") return json({ timer: null });
     if (path === "/time-entries/overview") return json(overviewOf(rows, canLog));
